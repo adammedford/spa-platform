@@ -610,6 +610,73 @@ try {
     if (((resultOf(208, result).mutations || [])[0] || {}).result !== 'reproduced') fail('PR 208: a nominated row reproduced with no failing names did not stay reproduced')
   }
 
+  // A unittest subtest's printed name, 'test_x (pkg.Class) (k='v')', is read without its parameters
+  // parenthesis (#793): on #792 a candidate red on its own subtest read as caught elsewhere and held.
+  // Red on its own subtest, in either printed form, the candidate reproduces with no caught cell and
+  // merges; red only on another class's subtest of the same method it is still a catch, and holds.
+  checks++
+  {
+    const T = 'test_every_closing_keyword_is_read'
+    const SUB = { 209: pr(209, ['tools/land_tests.py'], { candidates: [{ test: `ClosesTests.${T}`, project: 'tools/land_tests.py', file: 'tools/land_tests.py', guards: 'every closing keyword', breaks: 'tools/land.sh' }] }) }
+    for (const [names, want, verdict] of [
+      [[`test_a_closing_reference_anywhere_in_a_line_is_read (__main__.ClosesTests) (description='\\tResolved: #352\\r')`, `${T} (__main__.ClosesTests) (keyword='resolved')`], 'reproduced', 'merge'],
+      [[`${T} (__main__.ClosesTests.${T}) (keyword='resolved')`], 'reproduced', 'merge'],
+      [[`${T} (__main__.ClosesTests) (keyword='(re)solved')`], 'reproduced', 'merge'],
+      [[`${T} (__main__.ClosesTests) [a message (with a parenthesis)]`], 'reproduced', 'merge'],
+      [[`${T} (__main__.ClosesTests.${T}) [a message] (keyword='resolved')`], 'reproduced', 'merge'],
+      [[`${T} (__main__.OtherTests) (keyword='resolved')`], 'did-not-fail', 'hold'],
+    ]) {
+      env = run({ prs: [209] }, SUB, { mutate: { [`ClosesTests.${T}`]: { ...row('reproduced', names.length, 85), failingNames: names } } })
+      result = await execute(env)
+      const c = resultOf(209, result)
+      const m = (c.mutations || []).find((x) => x.test === `ClosesTests.${T}`) || {}
+      if (m.result !== want || c.verdict !== verdict || (want === 'reproduced' && (m.caughtBy || []).length)) fail(`PR 209 with the candidate ClosesTests.${T} failing as ${JSON.stringify(names)}: row ${JSON.stringify({ result: m.result, caughtBy: m.caughtBy })}, verdict ${c.verdict}, expected ${want} with no caught cell and ${verdict}`)
+    }
+  }
+
+  // A candidate that is its whole file, a Python companion listed as one row (#793): on #791 no
+  // failing name matched 'overnight_answers_tests.py (companion)', so the companion red on its own test
+  // read as caught elsewhere and held. A candidate whose project is its file and whose test is that
+  // path or basename, and nothing else, owns every failing name in its run: reproduced, no caught
+  // cell, merge, with no catch accepted, and it keeps its own row beside a candidate in the same file.
+  // Anything else red only on another test is a catch the verdict did not accept, did-not-fail, and
+  // holds (#794): a test that adds to the name; a file-shaped test that is not its file; and a
+  // Terraform test file, whose project is its directory, red on a sibling file's run.
+  checks++
+  {
+    const F = 'tools/overnight_answers_tests.py'
+    const ONE = 'ConfirmTests.test_every_confirm_comment_counts'
+    const RED = ['test_a_confirm_from_another_account_or_not_opening_confirm_does_not_count (__main__.ConfirmTests)']
+    const comp = (test, project = F, file = F) => ({ test, project, file, guards: 'every rule of the reader', breaks: 'tools/overnight_answers.py' })
+    const verdictOf = async (cands, mutate) => {
+      env = run({ prs: [210] }, { 210: pr(210, [F], { candidates: cands }) }, { mutate })
+      result = await execute(env)
+      return resultOf(210, result)
+    }
+    for (const whole of [F, 'overnight_answers_tests.py']) {
+      const c = await verdictOf([comp(whole), comp(ONE)], { [whole]: { ...row('reproduced', 1, 18), failingNames: RED }, [ONE]: row('reproduced', 1, 18) })
+      const m = (c.mutations || []).find((x) => x.test === whole) || {}
+      if (m.result !== 'reproduced' || (m.caughtBy || []).length || c.verdict !== 'merge') fail(`PR 210 with the whole-file candidate ${JSON.stringify(whole)} red on ${RED[0]}: row ${JSON.stringify({ result: m.result, caughtBy: m.caughtBy })}, verdict ${c.verdict}, expected reproduced with no caught cell and merge`)
+      if ((c.mutations || []).filter((x) => x.test === whole).length !== 1 || !(c.mutations || []).some((x) => x.test === ONE)) fail(`PR 210 with the whole-file candidate ${JSON.stringify(whole)}: mutations ${JSON.stringify((c.mutations || []).map((x) => x.test))}, expected one row for it and one for ${ONE}`)
+    }
+    const TF = 'infra/modules/cell/tests/module.tftest.hcl'
+    const TF_RED = ['tests/network.tftest.hcl', 'run "a_network_run"']
+    for (const [cand, red] of [
+      [comp(ONE), RED],
+      [comp('overnight_answers_tests.py (check: every Confirm comment counts)'), RED],
+      [comp('overnight_answers_tests.py (companion)'), RED],
+      [comp(`${F} (check: every Confirm comment counts)`), RED],
+      [comp('other_tests.py'), RED],
+      [comp('tools/other_tests.py'), RED],
+      [comp('module.tftest.hcl', 'infra/modules/cell', TF), TF_RED],
+      [comp(TF, 'infra/modules/cell', TF), TF_RED],
+    ]) {
+      const c = await verdictOf([cand], { [cand.test]: { ...row('reproduced', red.length, 18), failingNames: red } })
+      const m = (c.mutations || []).find((x) => x.test === cand.test) || {}
+      if (m.result !== 'did-not-fail' || c.verdict !== 'hold') fail(`PR 210 with the candidate ${JSON.stringify(cand.test)} (project ${cand.project}) red only on another test: row ${m.result}, verdict ${c.verdict}, expected did-not-fail and hold`)
+    }
+  }
+
   // 14. The moved head (#85). gh serves another head when the post agent re-reads it: the comment is
   //     still posted, its record names the head the inventory read, and the return flags the move,
   //     per pull request and at run level, so the operator runs again.
