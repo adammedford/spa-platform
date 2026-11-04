@@ -1523,6 +1523,21 @@ try {
       if (!windowOf(r).includes('coverage incomplete') || !names.test(windowOf(r))) fail(`#514 box 8: ${what} is not reported incomplete:\n${windowOf(r)}`)
       if (!(env.filed || []).some((i) => i.title === F_OK)) fail(`#514 box 8: beside ${what}, the well-formed PR's finding was not filed`)
     }
+    // A discovery start earlier than the checkpoint (a clock read that went backwards, or a boundary
+    // recorded from a clock ahead of this one) would move the checkpoint back if advanced to, so judgeWindow
+    // refuses it: the checkpoint is kept, the line names both times, and what was read is still filed
+    // (#743). A start equal to the checkpoint is no regression, since windows overlap by design, and advances.
+    {
+      const EARLY = '2026-10-29T09:59:59Z'
+      const env = newRepo()
+      const r = await execute(env, { date: DATE }, { handovers: PRIOR, startedAt: EARLY, followUps: { prs: [good], filed: [] } })
+      if (!keptAt(r, CP)) fail(`#743: a discovery start before the checkpoint did not keep the checkpoint at ${CP}:\n${windowOf(r)}`)
+      if (!windowOf(r).includes('coverage incomplete')) fail(`#743: a discovery start before the checkpoint reads as complete coverage:\n${windowOf(r)}`)
+      if (!windowOf(r).includes(`the discovery start ${EARLY} is before the checkpoint ${CP}`)) fail(`#743: the window line does not name the discovery start that is before the checkpoint:\n${windowOf(r)}`)
+      if (!(env.filed || []).some((i) => i.title === F_OK)) fail('#743: beside a discovery start before the checkpoint, the finding that was read was not filed')
+      const same = await execute(newRepo(), { date: DATE }, { handovers: PRIOR, startedAt: CP, followUps: { prs: [good], filed: [] } })
+      if (!advanced(same, CP)) fail(`#743: a discovery start equal to the checkpoint did not advance:\n${windowOf(same)}`)
+    }
 
     // Box 9: with no checkpoint, the morning backfills every PR into main, not the open ones only.
     const F_OLD = 'A finding on a PR merged long ago'
