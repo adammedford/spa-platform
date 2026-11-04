@@ -49,9 +49,29 @@ public sealed class PipelineContractTests
         // from its acquire's send (change request P2-3, second amendment, decision 2).
         string section = Section(ContractFiles.ReadText("pipeline.md"), ShutdownHeading);
 
-        Assert.Contains("20-second write deadline", section);
+        Assert.Contains("The shutdown timeout exceeds the refresh holder's 20-second write deadline", section);
         Assert.Contains("durable write", section);
-        Assert.DoesNotContain("bounded by the 21-second lease", section);
+
+        // Every "21-second lease" the section spells sits in the deadline's derivation, so a
+        // sentence that names the lease by that phrase cannot also make it the bound the shutdown
+        // timeout is set against (#707's review). The check matches the phrase and no more: a
+        // sentence that makes the lease the bound without spelling "21-second lease" stays green,
+        // and only review catches it (#718).
+        int leases = Occurrences(section, "21-second lease");
+        Assert.True(leases > 0, "The section no longer derives the write deadline from the 21-second lease.");
+        Assert.Equal(leases, Occurrences(section, "(the 21-second lease less 1 second of clock skew"));
+    }
+
+    private static int Occurrences(string text, string phrase)
+    {
+        int count = 0;
+        for (int at = text.IndexOf(phrase, StringComparison.Ordinal); at >= 0;
+             at = text.IndexOf(phrase, at + phrase.Length, StringComparison.Ordinal))
+        {
+            count++;
+        }
+
+        return count;
     }
 
     private static string Section(string text, string heading)

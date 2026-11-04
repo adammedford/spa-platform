@@ -29,8 +29,9 @@ file whose changes equal its origin/main content, with nothing staged, may first
 `git restore <path>` or `git checkout -- <path>`, as a call of its own, since once `main` is
 fast-forwarded that restore has changed nothing (#376). In a Claude Code session started in a
 checkout that holds it, the tracked `.claude/settings.json` runs `tools/main_checkout_guard.py`
-before each Bash call, and in the main checkout it refuses the branch-moving git commands and those
-that change files or the index (`git rm`, `mv`, `add`, `restore`, `clean`, `apply`, and `git
+as it stands on `origin/main`, or the checkout's own copy when that ref does not resolve or holds
+none, before each Bash call, and in the main checkout it refuses the branch-moving git commands and
+those that change files or the index (`git rm`, `mv`, `add`, `restore`, `clean`, `apply`, and `git
 checkout -- <path>`), admits that one fast-forward and that one restore, and names this route (#114,
 #200). A person's terminal runs no such hook.
 
@@ -152,8 +153,18 @@ line for each of them and one `Ticket: #n` line for each ticket it only advances
 `tools/land.sh` merges the pull request into `main`, GitHub closes each ticket a `Closes` line
 names; `Ticket:` is not a closing keyword, so its ticket stays open
 (https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/linking-a-pull-request-to-an-issue).
+`gh pr view <pr> --json closingIssuesReferences --jq '.closingIssuesReferences[].number'` prints
+the tickets the description will close; read it before landing.
 A complete ticket stays open and assigned until then. The lines go in the description, not in the
-merge body passed with `--body-file`.
+merge body passed with `--body-file`, and that body puts no closing keyword (close, fix or resolve,
+in any form) before a `#n`, because GitHub reads it there too: a keyword in a commit message closes
+its issue once the commit is on the default branch, and the merge body becomes the merge commit's
+message (https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/linking-a-pull-request-to-an-issue).
+A keyword in a commit on the branch does the same once that commit reaches `main`, a part-landing
+included, so a task commit names its ticket on a `Ticket: #n` line too. A keyword in the merge
+body closes its ticket at the merge, whatever the description says: 83f53f0, the merge of #120,
+closed #105, which #120's description named on a `Ticket: #105` line and never after a closing
+keyword, through a sentence in its body saying a later session would close it.
 
 The body says what was verified and how; write it to a file and pass `--body-file <path>`, so it
 rides in the merge commit rather than staying on the pull request. A named pipe or a process
@@ -201,9 +212,9 @@ rebuild, and the lane worktrees it would move, and writes nothing. Read that, th
 `--apply`: it moves each clean lane worktree under the root to its rebuilt tip, names each dirty one
 and leaves it to its owner, writes the body, and comments the map on the issue.
 
-**`tools/land.sh` deletes it**, after a merge into `main`, by running `tools/prune_branches.py
---delete` (#71), and when that deletes anything, land.sh's last line names the file holding the
-commands that recreate each deleted branch at its old tip:
+**`tools/land.sh` deletes a finished branch**, after a merge into `main`, by running
+`tools/prune_branches.py --delete` (#71), and when that deletes anything, land.sh's last line names
+the file holding the commands that recreate each deleted branch at its old tip:
 `pruned-branches/<UTC date>-<12-hex HEAD sha>.txt` in the repository's common git directory,
 `git rev-parse --git-common-dir`, which outlives the worktree a landing ran in; a cleanup that
 cannot write that file stops deleting, and the last line says it stopped (#115). A command
@@ -216,13 +227,22 @@ ticket, left from the archived tracker, claims nothing and is held to the rest o
 alone; an `overnight/*` branch goes once its pull request has merged. Either goes only when its
 current tip's work is on `main`, as an ancestor or as patch-equivalent commits with no merge
 carrying changes of its own, and no worktree has it checked out or is rebasing it, and a push to it
-on `origin` since it was checked keeps it there. Everything else is listed with the reason it stays.
+on `origin` since it was checked keeps it there. Everything else stays: a `--delete` run counts
+what it keeps under each reason, and `--verbose` or a dry run lists each with its reason (#524).
 A part-landed row keeps its claim, because the claim is how the next session knows the row is
 taken. Run without `--delete` from a checkout at `origin/main`, the script says what it would do,
 deletes nothing and writes no file; with it, it clears what an earlier landing left, by the same
 rule, and when it deletes anything its own last line names that file.
 
 A task is **done** as `GLOSSARY.md` → "Done" defines it.
+
+## Preparing the overnight launch
+
+The session that will launch the overnight run prepares it, and launches `.claude/workflows/overnight.js` with the Workflow tool by `scriptPath`, so the landed file runs. The previous run's pull request has landed and its after pass, the third of the morning's launches below, has finished first, never beside the new run: it unassigns the partial tickets and removes the worktrees that the next collect would otherwise read as claims.
+
+`tools/overnight_preflight.sh --fixture <path> <date>` judges each launch precondition and prints the launch arguments; its header says what each line checks, and `<date>` is the morning the run ends. Set `standingAnswer` to the grant the human gave for this launch, which is off unless given (ADR-0021 decision 3). The printed `skip` already holds the candidates of the demoted, shape, adr and decision lines. Name with `--skip`, and run again, each other ticket a lane cannot finish, so the arguments and the fixture both carry it. A ticket the claims line lists as held is read as claimed, so no lane takes it; one with an open box a lane can build is freed by the rename that line prints, once its remaining local and remote claims are checked, since the rename frees no same-id branch origin still holds; the rest stay held.
+
+`node .claude/workflows/overnight_harness.mjs .claude/workflows/overnight.js <path>` runs the script on that fixture with every agent mocked, and passes before the launch. The file is git-ignored, and today only the main checkout holds it: a fresh clone or a worktree has none. Check that it is there and is the intended mock before running it; if it is absent, stop and resolve that first, and report no mock pass without it. A landing on `main` or a tracker edit moves the forecast, so after either, run preflight and the mock run again, last before the launch.
 
 ## The morning's launches
 
@@ -251,8 +271,16 @@ Workflow({ scriptPath: "/Users/adammedford/Projects/spa-platform/.claude/workflo
 ```
 
 The after pass, once `tools/land.sh` has merged the pull request: it refuses until `origin/main`
-contains the integration tip, then closes the landed tickets, unassigns, removes the worktrees whose
-tips are on `origin/main`, the integration worktree last, and prunes.
+contains the integration tip identified from the merged landing pull request, then closes the
+landed tickets, unassigns, removes the worktrees whose tips are on `origin/main`, the integration
+worktree last, and prunes.
+
+The after pass also applies every confirmed answer the morning pass could not. It closes the
+Overnight issue once every question on it is settled: answered no, applied, or held by a ticket
+its `## After <date>` comment names. A commit answer counts as applied only once its commit is on
+`origin/main`; an unlanded commit answer keeps the issue open and is not settled merely by naming
+its source ticket. Any unsettled question or refusal in that pass keeps the issue open, and that
+comment lists what is left. Relaunch the after pass after a later Confirm or landing.
 
 ```js
 Workflow({ scriptPath: "/Users/adammedford/Projects/spa-platform/.claude/workflows/morning.js", args: { "repo": "/Users/adammedford/Projects/spa-platform", "date": "2026-10-29", "wt": "/Users/adammedford/.worktrees/overnight-2026-10-29", "after": true } })
@@ -279,7 +307,7 @@ A review covers exactly the head its record names, and `tools/land.sh` refuses a
 clears ("Land it" above). The check sits in the merge script rather than in branch protection
 because this repository has one GitHub account, which can neither approve its own pull request nor
 be held to a required review without `--admin`, and `--admin` would skip the required CI checks too.
-#67 records that choice and when it reopens.
+ADR-0022 records that choice and when it reopens.
 
 Only one kind of change reaches `main` without a pull request: a generated roadmap refresh, the one
 `tools/land.sh` pushes after a merge or the one made after a gate tag. Everything else arrives

@@ -35,14 +35,26 @@ this work".
 Nothing of the platform belongs in it. Not "the wrong account", "the other project" or "the
 default project".
 
+**Sample image** — the public stand-in image a cell's service runs until its first gateway deployment, so that the service, its target and the tunnel can be proven before a gateway image exists. It runs in the platform project and has nothing to do with the sample project. _Avoid_: placeholder image, hello-world, and "the sample" alone.
+
 **Sitting** — a human's hands-on session in the platform project: the applies, imports and AWS
 reads that no agent session runs, usually walked through by a wizard. _Avoid_: bare "session", which
 the glossary keeps for agent sessions and the gateway's session records.
+
+**Observation box** — an acceptance box whose evidence is a count reported by a later run's retro,
+such as #109's per-run refusal count. A ticket whose open boxes are all observation boxes is an
+observation ticket. Its ticket's routing, dependencies and how it is ticked:
+`docs/agents/tracker-policy.md` → "This repository's additions", ticket-shape rule 2. _Avoid_:
+"sitting box" for a criterion that needs later run evidence rather than a hands-on sitting.
 
 **Unattended run** — one invocation of a script with its documented arguments only, from a shell
 that meets the script's stated preconditions, that ends with exit 0 and the script's own pass line,
 with nothing done by hand before or during it. _Avoid_: calling a run unattended because a
 read-back by hand showed the result right.
+
+**Platform tag** — `Platform = spa-platform`, matched exactly. Every taggable resource the three roots create carries it, and so does the imported certificate; teardown's proof looks for it. Bootstrap's resources carry `spa-platform-bootstrap` instead, so they never match it. _Avoid_: a key-only or prefix match, and "the tag" where `Cell` or `ManagedBy` could be meant.
+
+**Teardown** — removing a cell from the platform project: its three roots, its imported certificate and what its deployments left behind, ending with proof that nothing carrying the platform tag remains. The bootstrap root's resources survive it and are removed by hand. _Avoid_: "emptying the account", "the account is empty".
 
 **App** — one SPA. An app exists only as a registry entry, a release prefix in S3 and an OAuth
 client. It has no runtime resource of its own. Not "tenant": tenancy here is the cell, and an app is
@@ -100,6 +112,9 @@ _Avoid_: "immutable prefix". The prefix can grow; only its keys are fixed.
 **Release key** — the key of one object under a release. It is the unit the platform bucket keeps
 write-once, and the unit P-04 tests.
 _Avoid_: "release" on its own when one object is meant.
+
+**Platform bucket** — a cell's one private bucket, holding the registry and every release. It is not the state bucket, which holds Terraform state and no platform data.
+_Avoid_: "the bucket" where the state bucket could be meant; "assets bucket".
 
 ## The request path
 
@@ -161,9 +176,9 @@ point, `UsePlatformRequestGate`, never "stage 6" (`CODING_STANDARDS.md` → A st
 numbered).
 
 **Rejection** — a response a stage ends the request with **under a rule id**: a 400, 403, 404 or
-405, a 401 that `contracts/request-gate.md` has an id for, or the shell gate's challenge of a
-navigation whose cookie resolves to no session. Ended once by `Rejection`; where another writer ends
-the response, the rule is noted. The rule id is what makes it one, not the status: a 404 for an
+405, a 401 or a 503 that `contracts/request-gate.md` has an id for, or the shell gate's challenge
+of a navigation whose cookie resolves to no session. Ended once by `Rejection`; where another writer
+ends the response, the rule is noted. The rule id is what makes it one, not the status: a 404 for an
 asset that is simply absent carries no id and is an answer, not a rejection. Every rejection reaches
 the request line under its rule id and is counted under that id in `security.rejections`. What
 Kestrel refuses before any stage runs, the 431 for oversized headers, is the server's answer and not
@@ -171,8 +186,9 @@ a rejection. The code's log messages say "refused"; the contracts and the metric
 _Avoid_: refusal in contracts, tests and metric names; error.
 
 **Answer** — a response the application ends a request with under no rule id: an absent asset's
-404, the proxy's 401 `session_ended`, 503, 502 and 504, and the 401 for a request that presented
-no cookie. _Avoid_: "rejection" for any of these; "error" where a problem body is meant.
+404, the proxy's 401 `session_ended`, the 503 `idp_unavailable`, 502 and 504, and the 401 for a
+request that presented no cookie. The 503 `session_store_unavailable` is not one: it ends under
+`auth.store`. _Avoid_: "rejection" for any of these; "error" where a problem body is meant.
 
 **Problem body** — the `application/problem+json` body the browser contract gives an error: a
 status and a stable `code` from `contracts/http-contract.md` → Errors, and nothing that describes
@@ -262,8 +278,9 @@ contract, a package, a project, an ADR or a steering document. It is how a sessi
 change its own ticket does not authorise. Anyone may file one. The human decides it in a
 decision comment, the integrator makes the edit, and a task that needs it waits on it until it
 closes. Requests filed before ADR-0032 are files under `contracts/changes/`, closed to new files
-and edited only under an authority, cited by their id, and are change requests all the same.
-_Avoid_: "CR" in prose, "proposal", "change-request file" for a new one.
+and edited only under an authority, cited by their id, and are change requests all the same. Its
+lifecycle and decision form: `docs/agents/tracker-policy.md` → "Change requests". _Avoid_: "CR" in
+prose, "proposal", "change-request file" for a new one.
 
 **Ticket** — one unit of work with its acceptance criteria, held as an issue on this repository and
 cited as `#NNN`, and closed when its work lands. The tickets of one feature are sub-issues of its
@@ -313,7 +330,8 @@ integrate run behind it. The integrator has a lane and no workstream. _Avoid_: "
 workstream.
 
 **Integration conflict** — a ticket whose first merge into its overnight run's branch,
-`overnight/<date>`, stops because the ticket and that branch changed the same lines. It is
+`overnight/<date>`, stops on at least one file git could not merge on its own: for example, both
+sides changed the same or neighbouring lines, or one side changed a file the other deleted. It is
 *resolved* when the ticket still integrates that night, after its own branch takes in the run's
 branch, and *unresolved* when it is reported and not merged. Not two tickets that merely changed
 one file and merged cleanly. _Avoid_: "merge failure" for a red check after a clean merge.
@@ -339,6 +357,37 @@ changes or decline, and whether the decision gets an ADR. It is the confirmed an
 landing the change request cites. A draft an agent posts is not one until the human accepts it as
 drafted. _Avoid_: "approval", "Status" for this, "decision" alone where an ADR's decision could be
 meant, and "decision" for a draft.
+
+**Decision given in a session** — Adam's answer to an open question that no grill numbered, given in
+a foreground session and posted by that session on the issue the question belongs to, ending with
+the line that says so. On a change request it is the decision comment; on any other issue it is a
+confirmed answer the ticket's work may rest on, and it authorises no steering change the ticket's
+acceptance criteria do not ask for. Its form and what it covers:
+`docs/agents/tracker-policy.md` → "A decision Adam gives in a session". _Avoid_: "decision comment"
+for one on a ticket, "verbal decision", and "in-session decision" where the gateway's session could
+be read.
+
+**Draft decision** — a scripted session's recommendation on a change request, posted as a comment
+headed `## Draft decision`. It decides nothing. Its form and how the human adopts it:
+`docs/agents/tracker-policy.md` → "Change requests" → "Deciding". _Avoid_: "proposed decision" as
+the comment's name, "decision" for a draft.
+
+**Decision layer** — a place in the repository's reading order for statements about a decision.
+Which statements belong where, including the plan's role as background: `docs/adr/README.md` →
+"Where a decision lives".
+
+**Status-line pointer** — one sentence on an accepted ADR's Status line that names where a fact the
+ADR states is now held, when a later change made that fact stale without changing any decision. It
+amends nothing and restates no rule; the body stays as accepted. How an ADR is amended instead:
+`docs/adr/README.md` → "Where a decision lives". _Avoid_: "body note", "postscript", "amendment"
+for one.
+
+**Write file** — one file holding one tracker write ahead of its posting: a frontmatter block
+naming the target issue and the action, then the body that is posted verbatim. A sub-agent of an
+audit or a cleanup drafts them and the session that posts reads only their index and the ones
+marked for the human. Its keys and how it is posted: `docs/agents/tracker-policy.md` -> "Drafting
+tracker writes". Not a line of the pending-writes file, which queues a write GitHub refused.
+_Avoid_: bare "draft" for this, "batch file".
 
 **Steering document** — a document a session steers by, so a change to it lands only on a cited
 authority. Which documents are in the set, and what counts as authority:
@@ -376,10 +425,11 @@ that closes it. It is **part-landed** when a merge into `main` advances it witho
 Landed is not done (see **Done**). _Avoid_: "merged" for landed, "landed" for done, and
 "half-landed" for part-landed.
 
-**Done** — the state of a plan row or a ticket that has landed, whose tests pass in CI, that
-touched only its owner's paths, and that no open change request waits on. Landed is not done, and
-merged is not done. _Avoid_: "landed", "merged" or "closed" for done: a ticket declined or withdrawn
-is closed and not done.
+**Done** — the state of a plan row or a ticket that has landed, whose own done-when holds, shown by
+its tests in CI or, where it needs AWS, by a read-back on its ticket; that touched only its owner's
+paths; and that no open change request waits on. Landed is not done, and merged is not done.
+_Avoid_: "landed", "merged" or "closed" for done: a ticket declined or withdrawn is closed and not
+done.
 
 **Gate** — a named checkpoint with an exit test: G1a skeleton frozen, G0 mechanism confirmed, G1b
 identity contracts frozen, G2 local vertical slice, G3 deployed slice, G4 negative suite green, G5
@@ -490,18 +540,25 @@ the composed suites, except `B-`, which the startup benchmark's verdict proves o
 test project. The ids in the frozen export are listed there; an id named after it continues its
 prefix's sequence and is listed in the test id register.
 
-**Test id register** — the live list of test ids named after the frozen export, each with its
-tier and the decision that named it, and the tiers of the export's rows that carry none, and the
-checks still owed an id. Kept by the integrator; an id is added by deciding a request, never by
-the workstream that needs it. Holds no evidence ids and no rule ids. _Avoid_: post-export ids,
-test catalogue.
+**Plan policy** — the assertions on what a Terraform root's plan may contain: P-01 (the platform plan allowlist), P-02 (the apps plan allowlist), P-03 (the task role policy) and P-07 (the identity root's allowlist). Mock-provider `terraform test` runs that read the configuration (ADR-0016), so they prove the configuration and never the account; P-04 to P-06 are the deployed checks. _Avoid_: plan check, for a credentialed plan nothing runs.
 
-**Retired test id** — a test id whose check was dropped. It keeps its number, and its row in the
-test id register is marked retired (an export id gains a row there to be marked), so earlier
-records stay true; no exit test may name it. _Avoid_: deleted, removed id.
+**Test id register** — the live list of test ids named after the frozen export, each with its
+tier and the decision that named it, the tiers of the export's rows that carry none, and the checks
+still owed an id. Kept by the integrator, who adds a row by landing a decided change request, never
+by the workstream that needs it. How ids are added, numbered and retired: `contracts/test-ids.md`.
+Holds no evidence ids and no rule ids. _Avoid_: post-export ids, test catalogue.
+
+**Retired test id** — a test id whose check was dropped, distinguished from an active test id, so
+that records citing it stay true. Its register row and its number: `contracts/test-ids.md` →
+"Numbering". The exit tests that may not name it: `contracts/gates.md` → "How a gate is added".
+_Avoid_: deleted, removed id, freed number, reused id.
 
 **Evidence ids** — `S-` the stand-in spike run, `R-` the real-handler run, `T-` the token-and-proxy
 harness (G0 items 4 and 5), `C-` the Cognito run (G0 items 2 and 3). `S-`, `R-` and `T-` are listed in `docs/plan/07-evidence.md`; the `C-` ids are the Cognito report's own, in `spikes/g0/cognito/report-cognito.md`. Separate from test ids.
+
+**Read-back** — what AWS's own API reports about an applied root's resources, recorded on a ticket as a row's evidence. It is the account-side counterpart of a plan assertion against the mock provider, which proves configuration and not the account (ADR-0016). _Avoid_: "check", which is a pre-push or CI guard, and "verification" unqualified.
+
+**Applied** — of a Terraform root in a project: a plan of the root against that project's state reports no changes. An apply's exit code shows that an apply ran, and a state object that something was written; neither alone means applied. _Avoid_: "applied" where only an apply ran.
 
 **Gap register** — the live list of known gaps between what Phase 1 delivers and what an enterprise
 adoption would need, `docs/gaps.md`: one numbered entry (`GAP-n`) per gap, saying what is missing,

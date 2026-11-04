@@ -19,9 +19,13 @@
        relaxed tier's relaxations are .editorconfig's last *.cs section.
        The level is pinned at 10, not latest, so that global.json's rollForward cannot add rules unseen.
        AnalysisLevelStyle must not equal AnalysisLevel: the SDK's code-style targets add the style
-       rules' config only when the two differ (or the modes do), so equal values turn every IDE rule
-       off without a word (#588). 10.0-all is the same level and bucket as 10-all, written so it
-       differs.
+       rules' config only when the two differ (or the modes do, or the style level is 11 or later),
+       so equal values turn every IDE rule off without a word (#588 measured it). The condition is
+       the EditorConfigFiles item in Microsoft.CodeAnalysis.CSharp.CodeStyle.targets, under the
+       SDK's Sdks/Microsoft.NET.Sdk/codestyle/cs/build/; SDK 10.0.401 builds that file from Roslyn's
+       generator at the commit its csc names:
+       https://github.com/dotnet/dotnet/blob/e34a38d2ae1fc26406a317517196e55c68ff83ab/src/roslyn/src/CodeStyle/Tools/Program.cs#L262-L266
+       10.0-all is the same level and bucket as 10-all, written so it differs.
        The settings apply only where the root .globalconfig is beside this file. Every checkout has
        it, and tools/analysis_guard.py fails a tree without it, so no build here runs without them;
        an image build that copies this file and not the analyzer configs, as fixtures/MockApi's and

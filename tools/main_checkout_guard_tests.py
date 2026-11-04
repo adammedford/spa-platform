@@ -23,9 +23,13 @@ system or user one.
 
 **The settings entry runs as written.** Its command is read from this checkout's
 `.claude/settings.json` and run through a shell with CLAUDE_PROJECT_DIR naming the fixture, as
-Claude Code runs it (https://code.claude.com/docs/en/hooks), because the entry runs the guard only
-when the file is there, and a mistyped path in it would otherwise be a guard that silently never
-runs.
+Claude Code runs it (https://code.claude.com/docs/en/hooks), because the entry runs the guard as
+origin/main holds it, or the checkout's own copy only when the file is there, and a mistyped path
+or ref in it would otherwise be a guard that silently never runs. For that read (#298), a `main`
+one commit behind an origin/main that holds this guard keeps an older copy of its own, which refuses
+the fast-forward and lets `git rm` through, with a linked worktree. Three more are one commit behind
+an origin/main: one that holds no guard, the same with the own copy deleted, and one whose guard
+crashes.
 
 Run: python3 -I tools/main_checkout_guard_tests.py
 """
@@ -218,6 +222,22 @@ NOT_MAIN = "HEAD is not `main`"
 CHANGED = "tracked files have changes"
 
 
+# What a trunk guard that crashes holds: any exit but 2 lets the call run (#298 Q4).
+BROKEN_GUARD = 'raise RuntimeError("a broken trunk guard")\n'
+
+
+def stale_guard():
+    """This guard as a checkout older than trunk might hold it: the fast-forward refused as plain
+    branch work, as before #200, and `git rm` let through. Each change must apply exactly once, so a
+    rewrite of the guard that moves either line fails here rather than leaving the copy current."""
+    text = (ROOT / GUARD).read_text()
+    for old, new in (('return "fast-forward"', "return True"), ('CHANGES = {"rm", ', "CHANGES = {")):
+        if text.count(old) != 1:
+            raise AssertionError(f"{GUARD} holds {old!r} {text.count(old)} times, not once")
+        text = text.replace(old, new)
+    return text
+
+
 def settings_entry():
     """The tracked settings' PreToolUse matcher and hook that run the guard."""
     settings = json.loads((ROOT / SETTINGS).read_text())
@@ -330,6 +350,37 @@ class Fixture:
         (self.links / "pointer").write_text("README.md")
         (self.links / "copy.md").unlink()
         os.symlink("README.md", self.links / "copy.md")
+
+        # The checkout #298 was raised on: a clean `main` one commit behind origin/main, whose own
+        # guard predates trunk's. Its copy refuses the fast-forward as plain branch work and lets
+        # `git rm` through, so each answer the settings entry gives here says which guard ran; a
+        # linked worktree of it starts a session there too.
+        self.stale_guard = stale_guard()
+        self.stale = self.trunk_ahead("stale", self.stale_guard, (ROOT / GUARD).read_text())
+        self.stale_linked = top / "stale-linked"
+        git(self.stale, "worktree", "add", "-q", "-b", "task/stale-linked", str(self.stale_linked), env=self.env)
+        # An origin/main that holds no guard, with the checkout's own copy beside it, and the same
+        # with the own copy deleted too, for the two fallbacks.
+        self.guardless = self.trunk_ahead("guardless", (ROOT / GUARD).read_text(), None)
+        self.neither = self.trunk_ahead("neither", (ROOT / GUARD).read_text(), None)
+        (self.neither / GUARD).unlink()
+        # A trunk guard that crashes, which lets the call run rather than fall back (#298 Q4).
+        self.broken = self.trunk_ahead("broken", (ROOT / GUARD).read_text(), BROKEN_GUARD)
+
+    def trunk_ahead(self, name, own, trunk):
+        """A clean `main` whose guard is own, one commit behind an origin/main whose guard is trunk,
+        or holds none when trunk is None."""
+        path = self.checkout(name)
+        (path / GUARD).write_text(own)
+        git(path, "commit", "-qam", "own guard", "--allow-empty", env=self.env)
+        if trunk is None:
+            git(path, "rm", "-q", GUARD, env=self.env)
+        else:
+            (path / GUARD).write_text(trunk)
+        git(path, "commit", "-qam", "trunk guard", "--allow-empty", env=self.env)
+        git(path, "update-ref", "refs/remotes/origin/main", "HEAD", env=self.env)
+        git(path, "reset", "-q", "--hard", "HEAD~1", env=self.env)
+        return path
 
     def behind_checkout(self, name):
         """A `main` one commit behind its origin/main, whose README.md holds origin/main's content."""
@@ -802,6 +853,76 @@ class Settings(GuardCase):
             with self.subTest(shell=shell):
                 self.assertEqual((0, ""), self.fx.entry(shell, self.fx.plain, "git rebase origin/main",
                                                         self.fx.main))
+
+
+SHELLS = ("/bin/sh", "/bin/bash")
+
+
+class Trunk(GuardCase):
+    """#298: the entry runs the guard as it stands on origin/main, read from git, and the checkout's
+    own copy only when origin/main does not resolve or holds no guard."""
+
+    def test_the_stale_copy_refuses_the_fast_forward_and_trunk_holds_this_guard(self):
+        # What makes each case below say which guard ran: run as a file, the stale copy refuses the
+        # fast-forward and lets `git rm` through, and origin/main holds this checkout's guard.
+        stale = self.fx.stale
+        self.assertEqual(2, self.fx.hook("git merge --ff-only origin/main", stale, stale)[0])
+        self.assertEqual((0, ""), self.fx.hook("git rm README.md", stale, stale))
+        self.assertEqual((ROOT / GUARD).read_text().rstrip("\n"),
+                         git(stale, "show", f"refs/remotes/origin/main:{GUARD}", env=self.fx.env))
+
+    def test_a_stale_checkout_is_admitted_the_fast_forward_trunks_guard_admits(self):
+        # #298's third box.
+        for shell in SHELLS:
+            for project in (self.fx.stale, self.fx.stale_linked):
+                with self.subTest(shell=shell, project=project.name):
+                    self.assertEqual((0, ""), self.fx.entry(shell, project, "git merge --ff-only origin/main",
+                                                            self.fx.stale))
+
+    def test_the_entry_runs_trunks_guard_when_origin_main_holds_one(self):
+        # #298's first box: only trunk's guard refuses `git rm`, so a refusal is trunk's.
+        for shell in SHELLS:
+            for project in (self.fx.stale, self.fx.stale_linked):
+                with self.subTest(shell=shell, project=project.name):
+                    status, stderr = self.fx.entry(shell, project, "git rm README.md", self.fx.stale)
+                    self.assertEqual(2, status, stderr)
+                    self.assertIn(ROUTE, stderr)
+            with self.subTest(shell=shell, project="linked of stale", cwd="linked of stale"):
+                # Trunk's guard keeps the checkout the entry's project belongs to, and no other.
+                self.assertEqual((0, ""), self.fx.entry(shell, self.fx.stale_linked, "git rm README.md",
+                                                        self.fx.stale_linked))
+                self.assertEqual((0, ""), self.fx.entry(shell, self.fx.stale, "git rm README.md", self.fx.main))
+
+    def test_reading_trunks_guard_leaves_the_checkouts_files_alone(self):
+        for shell in SHELLS:
+            self.fx.entry(shell, self.fx.stale, "git rm README.md", self.fx.stale)
+            self.fx.entry(shell, self.fx.stale, "git merge --ff-only origin/main", self.fx.stale)
+        self.assertEqual(self.fx.stale_guard, (self.fx.stale / GUARD).read_text())
+        self.assertEqual("", git(self.fx.stale, "status", "--porcelain", "--untracked-files=all", env=self.fx.env))
+
+    def test_without_trunks_guard_the_entry_runs_the_checkouts_own_copy(self):
+        # #298's second box: no origin/main, and an origin/main that holds no guard.
+        for shell in SHELLS:
+            for repository in (self.fx.no_remote, self.fx.guardless):
+                with self.subTest(shell=shell, repository=repository.name):
+                    status, stderr = self.fx.entry(shell, repository, "git rebase origin/main", repository)
+                    self.assertEqual(2, status, stderr)
+                    self.assertIn(ROUTE, stderr)
+
+    def test_with_neither_guard_the_entry_runs_every_call(self):
+        for shell in SHELLS:
+            with self.subTest(shell=shell):
+                self.assertEqual((0, ""), self.fx.entry(shell, self.fx.neither, "git rebase origin/main",
+                                                        self.fx.neither))
+
+    def test_a_trunk_guard_that_crashes_lets_the_call_run(self):
+        # #298 Q4: the entry does not fall back after trunk's guard has run, and an exit that is not 2
+        # is Claude Code's non-blocking error, so the checkout's own copy, which would refuse, never runs.
+        for shell in SHELLS:
+            with self.subTest(shell=shell):
+                status, stderr = self.fx.entry(shell, self.fx.broken, "git rebase origin/main", self.fx.broken)
+                self.assertEqual(1, status, stderr)
+                self.assertNotIn(ROUTE, stderr)
 
 
 if __name__ == "__main__":

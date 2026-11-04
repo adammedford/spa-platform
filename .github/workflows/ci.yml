@@ -258,9 +258,10 @@ jobs:
 
       - name: The analyzer configs and every suppression keep ADR-0035's rules
         # The build enforces each analyzer severity but not the shape of the files that set them: a
-        # relaxed security rule, a later .editorconfig section overriding the relaxed tier's, a
-        # category line or a suppression citing nothing all build green (#606). tools/check.sh runs
-        # the guard before every push; here it runs on what reaches main, after its companion.
+        # security rule relaxed in any section of any analyzer config (#671), a later .editorconfig
+        # section overriding the relaxed tier's, a category line or a suppression citing nothing all
+        # build green (#606). tools/check.sh runs the guard before every push; here it runs on what
+        # reaches main, after its companion.
         run: |
           python3 -I tools/analysis_guard_tests.py
           python3 -I tools/analysis_guard.py

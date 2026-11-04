@@ -5,7 +5,7 @@ export const meta = {
   phases: [
     { title: 'Collect', detail: 'open issues labelled ready-for-agent / ready-for-human become tonight\'s tickets; plan rows with no issue yet get one' },
     { title: 'Route', detail: 'needs-triage tickets routed with ask-matt; routing is a comment and a label swap' },
-    { title: 'Implement', detail: 'one lane per owner, one worktree per ticket, so a lane implements its next ticket while its last is in review or integrating (#136); a ticket whose Touches paths overlap an earlier ticket\'s of the night waits to start until that one settles, and one with no readable path waits on every earlier ticket of its lane (#665); every fork takes the run branch\'s last verified tip, or the run base before any gate has passed (#665); implement skill text with tdd, one check; the issue is claimed, commented and ticked, and stays open until the landing closes it (#100)' },
+    { title: 'Implement', detail: 'one lane per owner, one worktree per ticket, so a lane implements its next ticket while its last is in review or integrating (#136); a ticket whose Touches paths overlap an earlier ticket\'s of the night waits to start until that one settles, and one with no readable path waits on every earlier ticket of its lane (#665); every fork takes the run branch\'s last verified tip, or the run base before any gate has passed (#665); implement skill text with tdd, one check; the issue is claimed, commented and ticked, and stays open until the landing closes it (#100); first a resume probe asks whether the ticket\'s branch is already on the run branch, and one that is skips implement and review for the gate alone, which passes on the record or runs once (#712); then a live read of the issue\'s labels, so a ticket relabelled since collect, ready-for-human above all, is not built again on a resume\'s cached snapshot (#721)' },
     { title: 'Review', detail: 'code-review against the fork point, reusing the implement gate; findings as a comment' },
     { title: 'Integrate', detail: 'serialized merge into overnight/<date>, integration gate with smoke; the merge body cites #<n>; a complete lane\'s subject is asked of tools/landing_subjects.py, so a row with an open part ticket merges in part and a row\'s last open part names it (#388, #457); tickets whose branches changed the same file integrate in order (#279); a conflict sends the ticket back to its lane, which back-merges the run branch, resolves, re-runs the check and passes a second review, and integrate retries once (#136, #279); a gate red only on test projects the change cannot reach re-runs them once, alone, then the rest of the check, and keeps the merge when both pass (#375), read from the pass recorded for each project on the head the gate ran, not from the ok the re-run agent answers, resetting the run branch when it keeps none (#397)' },
     { title: 'Grill', detail: 'grilling + domain-modeling on paper, record and questions as comments on the issue; a change request gets a draft decision and no questions (#436)' },
@@ -147,11 +147,14 @@ const FOREGROUND_WHY = '**Touches:** none, a tracker edit no lane can make; work
 // The change-request route (#409, #421, #436): an integrator need, or a steering change, is filed as an issue
 // labelled change-request, never written as a file. The lane searches first, so two lanes needing one change add
 // edges to one request; it files blocking its ticket only when the ticket needs the change; and when GitHub is
-// unreachable it queues a pending create line in the shape morning.js replays (#433; #421 Q2). Filing one does not
-// depend on the standing answer (#436 Q4): a request asks for a change and decides nothing.
+// unreachable it queues a pending create line in the shape morning.js replays (#433; #421 Q2). Just before it files,
+// tools/ticket_shape.py --since lists what was filed since its search began, so a request another lane filed in
+// between is folded, not filed twice; on exit 2 nothing was searched and the lane queues the line instead, which
+// carries the search's time for the morning's own --since check (#678). Filing one does not depend on the standing
+// answer (#436 Q4): a request asks for a change and decides nothing.
 const REQUEST_LABEL = 'change-request,ready-for-human'
 const REQUEST_ROUTE = (t) => `THE CHANGE-REQUEST ROUTE (#409, #436). A change request is an issue labelled change-request, filed ready-for-human, that asks for a change on an integrator path (OWNERSHIP.md) or to a steering document; it decides nothing, so you file one whether or not a standing answer was granted. Never write it as a file.
-1. Search first: \`cd ${REPO} && gh issue list --state open --label change-request --limit 500 --json number,title,body\`. If an open request already asks for the same change, it is yours: when ticket #${t.issue} needs it, add the edge, \`cd ${REPO} && gh issue edit ${t.issue} --add-blocked-by <its number>\`; otherwise change nothing and report nothing for it. File no second one.
+1. Search first. Run \`date -u +%FT%TZ\` just before it and keep what it prints as <searched>, the time this search began: \`cd ${REPO} && gh issue list --state open --label change-request --limit 500 --json number,title,body\`. If an open request already asks for the same change, it is yours: when ticket #${t.issue} needs it, add the edge, \`cd ${REPO} && gh issue edit ${t.issue} --add-blocked-by <its number>\`; otherwise change nothing and report nothing for it. File no second one.
 2. Only when none asks for it, file one. Write its body to ${LOG}/${t.id}-cr.md (${LOG}/${t.id}-cr2.md for a second, and so on), in this shape:
    **Owner:** integrator
    **Touches:** <each integrator path it changes>
@@ -161,8 +164,8 @@ const REQUEST_ROUTE = (t) => `THE CHANGE-REQUEST ROUTE (#409, #436). A change re
    <what is missing, and where ticket #${t.issue} meets it>
    ## The change
    <the change as it would land, each changed paragraph whole as it will read, with its neighbours when one is inserted or removed>
-   Its title is plain prose with no id prefix. File it: \`cd ${REPO} && gh issue create --title "<title>" --label ${REQUEST_LABEL} --blocking ${t.issue} --body-file ${LOG}/${t.id}-cr.md\`, leaving out \`--blocking ${t.issue}\` when it blocks nothing.
-3. When \`gh\` fails because GitHub is unreachable, queue a create line for the morning instead of filing: \`cd ${REPO} && jq -cn --arg t "<title>" --argjson k <${t.issue}, or 0 when it blocks nothing> --rawfile b ${LOG}/${t.id}-cr.md '{issue: 0, action: "create", title: $t, label: "${REQUEST_LABEL}", blocking: $k, body: $b}' >> ${PENDING}\`. The morning searches for its title, files it, adds the edge and comments its number on #${t.issue}. Its line number, \`wc -l < ${PENDING}\` read right after the append, is its "queued".
+   Its title is plain prose with no id prefix. Just before filing, search for what was filed since your search (docs/agents/tracker-policy.md; #678), since another lane can file the same request in between: \`cd ${REPO} && python3 -I tools/ticket_shape.py --since <searched> --title "<title>"\`, adding \`--not-duplicate-of <n>[,<n>...]\` for each request you filed earlier tonight. On exit 0, its last line starting "ticket-shape: pass:", file it: \`cd ${REPO} && gh issue create --title "<title>" --label ${REQUEST_LABEL} --blocking ${t.issue} --body-file ${LOG}/${t.id}-cr.md\`, leaving out \`--blocking ${t.issue}\` when it blocks nothing. On exit 1, read each issue a "ticket-shape: possible-duplicate:" line names (\`cd ${REPO} && gh issue view <n> --json title,body,labels,state\`, since the search lists closed issues too): one that asks for the same change is the request, filed since your search, so treat it as step 1 treats an open one and file nothing; name each that does not with \`--not-duplicate-of\` and run the check again, filing only on its exit 0. On any other exit nothing was searched, so file nothing: queue it as step 3 does, and the morning searches again before it files.
+3. When \`gh\` fails because GitHub is unreachable, queue a create line for the morning instead of filing: \`cd ${REPO} && jq -cn --arg t "<title>" --arg s "<searched>" --argjson k <${t.issue}, or 0 when it blocks nothing> --rawfile b ${LOG}/${t.id}-cr.md '{issue: 0, action: "create", title: $t, label: "${REQUEST_LABEL}", blocking: $k, searched: $s, body: $b}' >> ${PENDING}\`. The morning searches for its title and for what was filed since <searched>, files it, adds the edge and comments its number on #${t.issue}. Its line number, \`wc -l < ${PENDING}\` read right after the append, is its "queued".
 A request blocks ticket #${t.issue} only when the ticket cannot be finished without it; a steering change the ticket does not need blocks nothing. Each request you filed, queued or added an edge to is one entry of "changeRequests": {number (0 when queued), title, blocking (#${t.issue}'s number when it blocks it, else 0), queued (its pending line's number, else 0), filed (true only when you filed it tonight; false when you added an edge to an open one, or queued it)}.`
 
 // ---------------------------------------------------------------- schemas
@@ -274,6 +277,32 @@ const RESET = {
   type: 'object',
   properties: { ok: { type: 'boolean' }, head: { type: 'string' }, notes: { type: 'string' } },
   required: ['ok', 'head', 'notes'],
+}
+// The resume probe (#712), before a lane implements a ticket: merged when the ticket's branch, with a "Task <id>:"
+// commit of its own since the run base, is already on the run branch; mergeSha is its merge there and subject that
+// merge's subject, "" when not merged.
+const PROBE = {
+  type: 'object',
+  properties: { merged: { type: 'boolean' }, mergeSha: { type: 'string' }, subject: { type: 'string' }, notes: { type: 'string' } },
+  required: ['merged', 'mergeSha', 'subject', 'notes'],
+}
+// The live read (#721), before a lane implements a ticket: the issue's state, label names and assignee logins as gh
+// prints them now, "UNREAD" for a state gh did not give. The script, not the agent, judges them (liveRule below).
+const LIVE = {
+  type: 'object',
+  properties: {
+    state: { type: 'string', enum: ['OPEN', 'CLOSED', 'UNREAD'] },
+    labels: { type: 'array', items: { type: 'string' } }, assignees: { type: 'array', items: { type: 'string' } },
+    notes: { type: 'string' },
+  },
+  required: ['state', 'labels', 'assignees', 'notes'],
+}
+// The gate alone (#712), for a ticket whose merge is already on the run branch: ran is false when the integrate log
+// already records a pass on a head holding the merge, true when the gate ran now; headSha the head it passed on.
+const GATED = {
+  type: 'object',
+  properties: { ok: { type: 'boolean' }, ran: { type: 'boolean' }, mergeSha: { type: 'string' }, headSha: { type: 'string' }, notes: { type: 'string' } },
+  required: ['ok', 'ran', 'mergeSha', 'headSha', 'notes'],
 }
 // The closing check (#629): ok as the agent read it, the head it ran on, and its log's last line unchanged; the
 // script reads the verdict from that line.
@@ -477,6 +506,66 @@ ${REQUEST_ROUTE(t)}
 Return outcome, headSha, findingsFixed, findingsSkipped (with reasons), summary, question ("" if none), changeRequests (each change request the route above filed, queued or added an edge to, held changes included; [] if none), changedFiles (after your commit, every path \`git -C ${WT(t)} diff --no-renames --name-only ${fork} HEAD\` prints: the files this branch changed, which the integrate step locks so that two tickets that changed one file integrate one after the other, #279; --no-renames lists both sides of a rename, where git's default lists only the new path and would leave the old one unlocked).`
 }
 
+// A resumed lane whose work is already on the run branch (#712). On 2026-11-01, after two resumes, #677's merge
+// 02d755d was on the branch while its result read "skipped": its lane's STEP 0 found no "Task" commit outside the run
+// branch, since the run branch held them all, so it re-forked from a tip holding its own merge and saw head equal to
+// fork. #634's merge fd8c797 was on the branch while its result read "failed": its integrate agent had died before the
+// gate finished, and the replayed one took the run branch's latest merge, #553's 1435e21, for its own, and judged that.
+// So before a lane implements a ticket the probe asks git whether its work is already in, and a ticket whose merge is
+// there skips implement and review and goes to the gate alone. A resume replays the cached prefix of agent calls and
+// runs the rest live (the Workflow tool's resume), so the probe is asked per ticket, just before its implement: a
+// probe asked once at the start would be replayed from the first attempt, when nothing had merged.
+// <merge>, the ticket's own merge on the run branch: the oldest first-parent merge since the run base that holds the
+// branch, never the latest, which is another ticket's once a later merge has landed on it.
+const MERGE_OF = (branch, dir = INT_WT, head = 'HEAD') => `the first sha \`git -C ${dir} rev-list --first-parent --merges --reverse ${BASE}..${head}\` prints for which \`git -C ${dir} merge-base --is-ancestor ${branch} <that sha>\` succeeds`
+const probePrompt = (t) => `Resume probe for ticket ${t.n} (task ${t.id}, issue #${t.issue}), before its lane implements it (#712): is its work already on ${INT_BRANCH}, from an earlier attempt of this run? Read only: no checkout, no worktree, no commit, no gh call, and write no file.
+1. \`git -C ${REPO} rev-parse -q --verify refs/heads/task/${t.id}-${t.slug}\`. If it prints nothing, the branch does not exist: return merged false.
+2. The work is on the run branch only when both hold: \`git -C ${REPO} merge-base --is-ancestor task/${t.id}-${t.slug} ${INT_BRANCH}\` succeeds, and \`git -C ${REPO} log ${BASE}..task/${t.id}-${t.slug} --format=%s\` prints a subject starting "Task ${t.id}:". So a branch forked from the run branch with no commit of its own yet, and an earlier night's branch already on main, are not merged. Otherwise return merged false.
+3. When both hold, mergeSha is ${MERGE_OF(`task/${t.id}-${t.slug}`, REPO, INT_BRANCH)}, and subject is \`git -C ${REPO} log -1 --format=%s <mergeSha>\`. When no merge holds the branch (it reached ${INT_BRANCH} some other way), return merged false and say so in notes.
+Return merged, mergeSha and subject ("" when not merged), and notes (what each command printed, in a line).`
+// The live read (#721). A resume (resumeFromRunId) replays collect's cached answer, so tonight's statuses are the
+// first launch's: on 2026-11-01 #544 and #562 were each dispatched for implement three times after an earlier launch's
+// lane had relabelled them ready-for-human, and each lane stopped on the same status note. So, after the resume probe
+// and just before its implement, a ticket's labels are read live, for the reason the probe is asked there (#712): a
+// read asked once at the start would itself be replayed from the first attempt. The script judges what it prints.
+const livePrompt = (t) => `Live labels for ticket ${t.n} (task ${t.id}, issue #${t.issue}), before its lane implements it (#721): collect read it ready-for-agent, and a resumed run replays that snapshot. Read only: this one gh call, no other command, no gh write, and write no file.
+  cd ${REPO} && gh issue view ${t.issue} --json state,labels,assignees --jq '{state, labels: [.labels[].name], assignees: [.assignees[].login]}'
+Return state, labels and assignees exactly as it prints them, and notes "". Judge nothing: the script decides from them. When gh fails, return state "UNREAD", labels [], assignees [], and notes its last line of error.`
+// The live verdict (#721): proceed only on an open issue labelled ready-for-agent and not ready-for-human, as collect's
+// own precedence reads the labels. A closed issue settles as met, as the implementer's closed case does (#108). An
+// assignee is reported, never judged: every session posts under one account, so a resumed lane's own claim reads as
+// anyone else's. A read that died or that the script cannot parse fails the ticket (CODING_STANDARDS.md, "A check
+// fails closed"). Returns {go}, {closed}, {status, why} for a ticket relabelled since collect, or {fail}.
+const liveRule = (live) => {
+  if (!live) return { fail: 'the live read of its labels died, so whether it is still ready-for-agent is unknown (#721)' }
+  const labels = Array.isArray(live.labels) ? live.labels : null
+  if (!labels || !Array.isArray(live.assignees) || !['OPEN', 'CLOSED'].includes(live.state)) return { fail: `the live read of its labels gave no state or label list: ${live.notes || 'no notes'} (#721)` }
+  if (live.state === 'CLOSED') return { closed: true }
+  const status = labels.includes('ready-for-human') ? 'ready-for-human' : labels.includes('needs-triage') ? 'needs-triage'
+    : labels.includes('ready-for-agent') ? 'ready-for-agent' : 'unlabelled'
+  if (status === 'ready-for-agent') return { go: true }
+  const who = live.assignees.length ? `, assigned to ${live.assignees.join(', ')}` : ''
+  return { status, why: `relabelled since collect: its live labels are ${labels.length ? labels.join(', ') : 'none'}${who}, so no lane builds it (#721)` }
+}
+// The gate alone (#712): the ticket's merge is already on the run branch, so nothing merges and nothing is fixed. A
+// pass already recorded on a head holding the merge stands, since each integrate judges its merge alone against its
+// first parent (#629); otherwise the gate runs once. A red gate resets the branch only when nothing has been built on
+// the merge: a merge with later merges on it stays, unverified, and the closing check and the landing's CI judge it.
+const GATE_ALONE = (t, merge) => `THE GATE ALONE (#712), for ${merge}, ${t.id}'s merge, already on ${INT_BRANCH}. Merge, resolve and fix nothing.
+a. Recorded: if the first line of ${LOG}/${t.id}-integrate.txt is "HEAD=<h>", its last line starts "check: pass:", and both \`git -C ${INT_WT} merge-base --is-ancestor ${merge} <h>\` and \`git -C ${INT_WT} merge-base --is-ancestor <h> HEAD\` succeed, the gate passed on an earlier attempt: do not run it again; return ok true, ran false, headSha <h>.
+b. Otherwise run it once, judged against <old>, the merge's first parent, \`git -C ${INT_WT} rev-parse ${merge}^1\`. In the command below, write <old>'s 40-character sha where it says <old>, and nothing else changes: in bash, \`<old>\` itself is a redirect from a file named old.
+${GATE({ dir: INT_WT, log: `${LOG}/${t.id}-integrate.txt`, kind: 'integration, the merge already in', fork: '<old>', port: PORT(t.n) })}
+Green: return ok true, ran true, headSha the sha after "HEAD=" on the log's first line.
+Red: read \`git -C ${INT_WT} log --format=%s ${merge}..HEAD\`. When it prints nothing, or only "Refresh the generated roadmap blocks after merging ${t.id}", nothing is built on the merge: \`git -C ${INT_WT} reset --hard <old>\`, and notes say so. Otherwise later merges sit on it, so reset nothing: notes begin "the merge stays on ${INT_BRANCH}, unverified: later merges sit on it." Either way notes quote the log's last line unchanged, and you return ok false, ran true, headSha "".`
+const gatePrompt = (t, probe) => `Gate ticket ${t.n} (task ${t.id}, issue #${t.issue}), whose merge is already on ${INT_BRANCH} (#712). You are the only integrator running.
+${HOUSE}
+
+Integration worktree ${INT_WT} (branch ${INT_BRANCH}). The resume probe found task/${t.id}-${t.slug} on ${INT_BRANCH}, merged by ${probe.mergeSha} ("${probe.subject}"), so its lane skipped implement and review.
+STEP 0 — durable state: if \`git -C ${INT_WT} rev-parse -q --verify MERGE_HEAD\` succeeds, \`git -C ${INT_WT} merge --abort\`. If \`git -C ${INT_WT} merge-base --is-ancestor ${probe.mergeSha} HEAD\` fails, the merge is not on the branch the worktree holds: change nothing, and return ok false, ran false, headSha "", notes "${probe.mergeSha} is not on ${INT_BRANCH} at <HEAD>".
+${GATE_ALONE(t, probe.mergeSha)}
+
+Return ok, ran, mergeSha (${probe.mergeSha}), headSha and notes.`
+
 const integratePrompt = (t, impl, rev, retry) => `Integrate ticket ${t.n} (task ${t.id}, issue #${t.issue}) into ${INT_BRANCH}. You are the only integrator running.
 ${HOUSE}
 ${retry ? `
@@ -488,7 +577,8 @@ The reviewer's summary: ${rev.summary}
 Findings the review fixed: ${(rev.findingsFixed || []).join(' | ') || 'none'}.
 These, the task branch's own commit messages and the gate logs under ${LOG} are the merge body's sources.${impl.complete ? '' : ` For the "Outstanding test ids:" line, read the issue body's acceptance list alone: \`cd ${REPO} && gh issue view ${t.issue} --json body --jq .body | awk '/^## /{p=($0=="## Acceptance")} p'\`; an unticked box naming a test id is outstanding.`}
 
-STEP 0 — durable state: if \`git -C ${INT_WT} rev-parse -q --verify MERGE_HEAD\` succeeds, \`git -C ${INT_WT} merge --abort\`. If \`git -C ${INT_WT} merge-base --is-ancestor ${impl.branch} HEAD\` succeeds, the merge is already in: if the last line of ${LOG}/${t.id}-integrate.txt starts "check: pass:" and its first line is "HEAD=" the current HEAD, return ok with that merge's sha; otherwise old is that merge's first parent (\`git -C ${INT_WT} rev-parse "$(git -C ${INT_WT} rev-list --merges --first-parent -n 1 HEAD)^1"\`), and skip to the gate.
+STEP 0 — durable state: if \`git -C ${INT_WT} rev-parse -q --verify MERGE_HEAD\` succeeds, \`git -C ${INT_WT} merge --abort\`. If \`git -C ${INT_WT} merge-base --is-ancestor ${impl.branch} HEAD\` succeeds, the merge is already in, and STEP 1 and STEP 2 do not run: <merge> is ${MERGE_OF(impl.branch)}, never the run branch's latest merge, which may be another ticket's (#712). Follow THE GATE ALONE below for <merge>, and return what it returns, with mergeSha <merge>, conflictFiles [], and old, redHead and reach "", so a red gate there is never re-run or reset by the script.
+${GATE_ALONE(t, '<merge>')}
 
 STEP 1 — merge. Record old=\`git -C ${INT_WT} rev-parse HEAD\`. ${impl.complete ? `The lane is complete, but its ticket is not its row (#388): before writing the message, ask the subject's head of the run branch as it stands, \`cd ${INT_WT} && python3 -I tools/landing_subjects.py --subject-for ${t.id} --ticket ${t.issue}\`. <head> is its last line after "landing-subjects: subject: ", taken as printed: "Merge task ${t.id}" when nothing more is owed; "Merge part of task ${t.id}" while an open part ticket declares itself part of the row, each named on a "landing-subjects: open part: " line; or "Merge tasks ${t.id} and <row>" when this ticket is the last open part of a row landed in part, which names the row (#388 Q6). The integration gate's tools/landing_subjects.py holds a full subject this question would not have given, so never write one it did not give. When it exits non-zero, <head> is "Merge task ${t.id}", and notes quote its last line. ` : ''}The merge message is the one docs/agents/landing-work.md "Land it" gives:
 - subject "${impl.complete ? '<head>: <what landed>' : `Merge part of task ${t.id}: <what landed>`}"
@@ -644,7 +734,7 @@ The results JSON already holds what the lanes returned (#129): each grill's full
    - Closing check (#629): the run results' "closingCheck", under its own heading \`### Closing check\`, the same text every night: its status, its log and its last line quoted unchanged, the head it ran on and the run base it was judged against. "pass" says the whole run was judged once against the run base and passed. "fail" says so plainly, and that every merge was kept, since each passed its own check against its first parent and this one cannot name the merge that broke it, and that there is no morning hold: the landing pull request's CI and required checks hold the landing as the existing rules say. "not-run" gives its why. Never call it a gate;
    - Close in the morning: every entry of the run results' "closeInMorning", the tickets collect gave the status close-in-morning, whose result's "why" is "${CLOSE_WHY}": no lane ran, because collect found no open acceptance box on its issue (#129, #379); list them with the issues to close, each as #<issue>, so Adam closes it, or reopens a box if one is not met;
    - Foreground (#480): every entry of the run results' "foreground", the tickets collect gave the status foreground, whose "why" is "${FOREGROUND_WHY}": no lane, Route or grill ran, because a tracker edit is worked in a foreground session the next day. List them under a "## Foreground" heading, each as #<issue>, its title and the issue it edits (the #<m> its title or body names as the edit's target, as in "Apply Q4 of Overnight <date> to #248"; "target not named" when neither names one), so Adam opens one session for them; "none" under the heading when the list is empty;
-   - Partial (Outstanding) (a partial whose outstanding work is a choice for Adam also gets a numbered question in step 1b, so a Confirm can cover it, as #482's did not on 2026-10-29), Skipped (its "why", Close in the morning tickets excepted: closed before its lane started, or a lane that changed nothing, #108), Failed (the last lines of its check log, the issue's "## Status note" comment), Needs you, Blocked (what each waits on, as #issue), Claimed branches to merge (for each open pull request it names, \`git -C ${REPO} merge-tree --write-tree ${INT_BRANCH} <its head>\`, its head being the headRefOid \`cd ${REPO} && gh pr view <n> --json headRefOid\` gives: list every file that conflicts, or "none conflict"; git prints the merged tree's id on its first line, then, on a conflict, the conflicting files (https://git-scm.com/docs/git-merge-tree), and a head not among ${REPO}'s objects exits 1 as a conflict does, so a run whose first line is not a tree id, such as "not something we can merge", reads "not checked: <that line>", never "none conflict" and never a conflict; and when a file conflicts, the Morning steps say which pull request lands first and that the other back-merges main before its review, since GitHub runs no CI on a pull request CONFLICTING with main, as #529 met on 2026-10-29); every ticket cited as #<issue>;
+   - Partial (Outstanding) (a partial whose outstanding work is a choice for Adam also gets a numbered question in step 1b, so a Confirm can cover it, as #482's did not on 2026-10-29), Skipped (its "why", Close in the morning tickets excepted: closed before its lane started, or a lane that changed nothing, #108), Failed (the last lines of its check log, the issue's "## Status note" comment), Stopped by the usage limit (#710: every entry of the run results' "stopped", each as #<issue> with the stage its agent died at or was not started at, listed apart from Failed and counted as no failure, since the ticket kept the state it had and a resume runs it again; "halted" names when to resume; "none" when the list is empty), Needs you, Blocked (what each waits on, as #issue), Claimed branches to merge (for each open pull request it names, \`git -C ${REPO} merge-tree --write-tree ${INT_BRANCH} <its head>\`, its head being the headRefOid \`cd ${REPO} && gh pr view <n> --json headRefOid\` gives: list every file that conflicts, or "none conflict"; git prints the merged tree's id on its first line, then, on a conflict, the conflicting files (https://git-scm.com/docs/git-merge-tree), and a head not among ${REPO}'s objects exits 1 as a conflict does, so a run whose first line is not a tree id, such as "not something we can merge", reads "not checked: <that line>", never "none conflict" and never a conflict; and when a file conflicts, the Morning steps say which pull request lands first and that the other back-merges main before its review, since GitHub runs no CI on a pull request CONFLICTING with main, as #529 met on 2026-10-29); every ticket cited as #<issue>;
    - Decisions taken overnight: every delegatedDecisions entry, grouped by task, the "Human-owned:" ones first, each with the alternatives it was weighed against (from the issue's "## Decisions taken" comment) and whether the review upheld or reversed it (its "## Review" comment);
    - Change requests (#421 Q7, #436 Q11): five lists, from the run results' "changeRequests", each reading "none" when empty. "Filed tonight" (its "filed"): one line per request, \`#<n> <title> — blocks #<ticket>\`, or \`#<n> <title> — blocks nothing (raised by #<ticket>)\` when its blocking is 0, the ticket being the one whose lane, review or grill filed it. "Edges added to an existing request" (its "edges"): the same line form. "Queued for the morning" (its "queued"): \`queued for the morning: <title> (pending line <k>, body ${LOG}/<task id>-cr.md)\`. "Awaiting a decision" (its "awaiting"): an open change request grilled tonight with no decision comment, each as #<issue>, its title and its draft's link. "Decided, not yet labelled ready-for-agent or closed" (its "decided"): each as #<issue>, its title and its decision's first line. A change request adds no numbered question: Adam decides it on the request itself;
    - Pending tracker writes: if ${PENDING} exists, how many lines it holds, by action, and that the morning session replays them (a comment, label change or close that GitHub refused tonight, or a change request's create line); otherwise "none";
@@ -652,7 +742,7 @@ The results JSON already holds what the lanes returned (#129): each grill's full
    - Morning steps: answer the questions (the comments below) as comments on this issue; \`git -C ${INT_WT} push -u origin ${INT_BRANCH}\` with the pre-push hook running (it reads a branch that merges single-owner lanes commit by commit; never --no-verify); open one PR with the description above; a fresh top-level agent session, never a sub-agent of the session that launched this run, reviews its exact head and posts the review record, and \`tools/land.sh <pr> --subject "..." --body-file <path>\` merges it (ADR-0022; docs/agents/landing-work.md). Each ticket's task merge on ${INT_BRANCH} is that ticket's merge body, so a box asking for something "in the merge body" is met by the task merge: the landing body cites those merges by sha and copies none of their lists; merge the claimed branches in their own PRs, in the order "Claimed branches to merge" gives: when none conflicts, after this PR; when one does, the pull request it names first lands first and the other back-merges main and is reviewed again on its new head (#628); close the issue of every landed row that is still open, the fallback when a \`Closes\` line was missed, and unassign the partial rows' issues once their branches are merged; \`git worktree remove\` each worktree under ${WTROOT}, then \`git -C ${REPO} worktree prune\`.
    - Leftovers: \`lsof -nP -iTCP -sTCP:LISTEN | grep -E 'dotnet|Gateway|MockApi'\` and \`pgrep -fl ${WTROOT}\`; kill nothing, list it.
 1b. The questions, as comments on the report issue (#104), one comment per ticket that has any, \`cd ${REPO} && gh issue comment <report issue> --body-file - <<'EOF' ... EOF\`, posted in the order that puts the questions unblocking the most work first. Each comment is headed "## Questions: #<issue>, <task id>, <title>", and the questions are numbered Q1..Qn continuously across all the comments so that one "Confirm" comment names them as before (ADR-0021 decision 2). Each question opens with its night-wide number, then, in parentheses, the number it carries in its ticket's own comment, taken unchanged from that comment, as in "**Q94.** (#244 Q9)"; a question its source does not number (a status note's question) opens with the night-wide number alone, as in "**Q95.**". So an answer that cites another question as "#244 Q9" turns into the number a Confirm names without counting down a comment. Each comment lists that ticket's questions from its "## Questions for Adam" and "## Status note" comments tonight, each as the question, "Recommended:", and the "Answer:" line as the comment records it ("Answer: yes, pre-accepted under the standing answer granted <date>" when one was granted; "Answer: open" when none was, and for a status note's question), and, for a partial whose outstanding work is a choice for Adam, that choice as one question, its options as its outstanding line words them, "Recommended:" the lane's recommendation or "none recorded", and "Answer: open", numbered as a status note's question is (#632). A steering change is a change request now, listed in the Change requests section and never a question here (#436), and a change request's draft decision adds none either. A grill whose summary says "carried from an earlier night" contributes none: name those tickets in one closing comment headed "## Carried, already answered". Before filing anything, measure the body and every comment: GitHub refuses a body or comment over 65,536 characters, so split any that would pass 60,000 into consecutive parts headed "(part k of m)", dropping nothing. "questions" in your return is the count across every comment.
-2. Check \`git -C ${REPO} status --porcelain --untracked-files=no\` is empty (the lanes write no tracked file in the main checkout any more; a modified tracked file is a finding: list it), that \`git -C ${REPO} status --porcelain --untracked-files=all\` lists nothing ${LOG}/untracked-at-start.txt does not (an untracked file the run left is a finding: list it, and delete nothing; ${LOG} and ${RESEARCH} are not findings when git ignores them), and that \`git -C ${REPO} rev-parse HEAD\` is ${BASE}; record the result in the report body before you create the issue.
+2. Check \`git -C ${REPO} status --porcelain --untracked-files=no\` is empty (the lanes write no tracked file in the main checkout any more; a modified tracked file is a finding: list it), that \`git -C ${REPO} status --porcelain --untracked-files=all\` lists nothing ${LOG}/untracked-at-start.txt does not, judged by where each new path sits (#714): a new untracked path under .scratch/ but outside .scratch/overnight/ is a note, not a finding, because foreground sessions write their scratch there while a run goes on and no lane writes there (331 such files on 2026-11-01): list it as a note naming its directories, each directory one level below .scratch/ (or .scratch/ itself for a file directly in it) with how many new files it holds, not file by file, and a note alone leaves mainCheckoutClean true; any other untracked path untracked-at-start.txt does not list is a finding: list it, since the run left it, .scratch/overnight/ included; delete nothing either way; ${LOG} and ${RESEARCH} are not findings when git ignores them, and that \`git -C ${REPO} rev-parse HEAD\` is ${BASE}; record the result in the report body before you create the issue.
 Return questions (the count), mainCheckoutClean, leftovers, issue (the report issue's number) and url.`
 
 // ---------------------------------------------------------------- concurrency helpers
@@ -684,9 +774,40 @@ const lockFiles = async (t, files) => {
   return me.release
 }
 
+// The usage limit (#710). An agent that dies on the account's usage limit is no failure: the next agent would die the
+// same way until the limit resets, so the first such death stops the run. On 2026-11-01 the error read "You've hit
+// your weekly limit · resets 10pm (America/Chicago)", and each death went through fail() toward maxFailures, so the
+// run halted at "8 failures" with 4 real ones, and a resume before the reset lost 18 more agents. Every agent of the
+// run starts through ask(): once the limit is met it starts none, and throws a stop instead, so each caller records
+// its ticket as stopped, not failed, keeping the state it had, and a resume runs it again. Only an error the runtime
+// throws carries the message; an agent() that returns null is a death with no message, and stays one.
+const USAGE_LIMIT = /\bhit your (?:\w+ )?limit\b/i
+const RESETS = /\bresets\s+(.+?)\s*$/i
+let halted = null
+let usageLimit = null   // {message, reset, label}, from the first agent that died on the limit
+// died: this agent was the one that died on the limit, mid-task, rather than one refused before it started.
+const limitStop = (died = false) => Object.assign(new Error(`stopped by the usage limit: ${usageLimit.message}`), { usageLimit: true, died })
+const isStop = (e) => !!(e && e.usageLimit)
+const ask = async (prompt, opts) => {
+  if (usageLimit) throw limitStop()
+  try { return await agent(prompt, opts) } catch (e) {
+    const message = String((e && e.message) || e || '')
+    if (!USAGE_LIMIT.test(message)) throw e
+    if (!usageLimit) {
+      const reset = (RESETS.exec(message) || [])[1] || ''
+      usageLimit = { message, reset, label: opts.label }
+      // It replaces any earlier halt in front, since the time to resume is what the launching session needs first.
+      halted = `usage limit; resume after ${reset || 'the reset (the message names no time)'}${halted ? `; earlier: ${halted}` : ''}`
+      log(`${opts.label}: ${message}; ${halted}; no new agent starts`)
+    }
+    throw limitStop(true)
+  }
+}
+
 // ---------------------------------------------------------------- run
 phase('Collect')
-const col = await agent(collectPrompt, { label: 'collect', phase: 'Collect', schema: COLLECT })
+let col
+try { col = await ask(collectPrompt, { label: 'collect', phase: 'Collect', schema: COLLECT }) } catch (e) { if (isStop(e)) return { halted }; throw e }
 if (!col) return { halted: 'collect agent died' }
 if (col.outcome !== 'ok') return { halted: `dirty-start: ${col.reason}` }
 // The Bash tool must be bash (#129): on 2026-10-19 every agent ran /bin/zsh. Halt before Route, as the bad-launch
@@ -705,12 +826,15 @@ const byId = Object.fromEntries(tickets.map((t) => [t.id, t]))
 // Read from collect's statuses before any route returns, so the batch routes on the labels collect read (#379).
 const held = triage.map((t) => heldBy(t, byId))
 const routed = await parallel(triage.map((t, i) => () =>
-  agent(held[i].length ? heldRoutePrompt(t, held[i]) : routePrompt(t), { label: `route:${t.id}`, phase: 'Route', schema: ROUTE })))
+  ask(held[i].length ? heldRoutePrompt(t, held[i]) : routePrompt(t), { label: `route:${t.id}`, phase: 'Route', schema: ROUTE })
+    .catch((e) => { if (isStop(e)) return null; throw e })))
 // A ticket routed to a human stopped at route, with the router's reason (#280). One held by a ready-for-human blocker
 // goes to a human whatever its route agent returned (#379).
 const humanStage = {}, humanWhy = {}
+const routeStopped = []   // stopped by the usage limit at route (#710): each keeps needs-triage, so a resume routes it
 triage.forEach((t, i) => {
   const r = routed[i]
+  if (!r && usageLimit) { routeStopped.push(t); return }
   t.status = !held[i].length && r && r.flow === 'agent' ? 'ready-for-agent' : 'ready-for-human'
   if (t.status === 'ready-for-human') {
     humanStage[t.id] = 'route'
@@ -735,11 +859,18 @@ const forkFrom = () => verifiedTip
   : { sha: BASE, why: `the run base, since no integration gate has passed in this run yet` }
 const conflicts = []    // {id, issue, files, resolved}, one per ticket whose first merge conflicted (#136)
 const flakes = []       // {id, issue, projects: [{project, log, passed}], gateLog, rerunLog, kept, notes, why, reset}, one per re-run (#375); why and reset are "" when the merge was kept (#397)
-let halted = null
+// A ticket the usage limit stopped (#710): its agent died on the limit, or was not started after it. It counts as no
+// failure and keeps the state it had, so a resume runs it again.
+const stop = (t, stage, info) => {
+  results[t.id] = { ...(results[t.id] || {}), stage, outcome: 'stopped', why: `stopped by the usage limit at ${stage}: ${usageLimit.message}${info && info.note ? `; ${info.note}` : ''}`, ...info }
+  return false
+}
+routeStopped.forEach((t) => stop(t, 'route'))
 
 const grill = (t, context) => {
-  const p = agent(grillPrompt(t, context), { label: `grill:${t.id}`, phase: 'Grill', schema: GRILL })
-    .then((g) => { results[t.id] = { ...(results[t.id] || {}), grill: g ? { questions: g.questions, changeRequests: g.changeRequests || [], adrCandidates: g.adrCandidates, draftDecision: g.draftDecision || '', decided: g.decided || '', summary: g.summary } : 'grill agent died' } })
+  const p = ask(grillPrompt(t, context), { label: `grill:${t.id}`, phase: 'Grill', schema: GRILL })
+    .then((g) => { results[t.id] = { ...(results[t.id] || {}), grill: g ? { questions: g.questions, changeRequests: g.changeRequests || [], adrCandidates: g.adrCandidates, draftDecision: g.draftDecision || '', decided: g.decided || '', summary: g.summary } : 'grill agent died' } },
+      (e) => { if (!isStop(e)) throw e; results[t.id] = { ...(results[t.id] || {}), grill: `grill stopped by the usage limit: ${usageLimit.message}` } })
   grillQueue.push(p)
   return p
 }
@@ -757,7 +888,8 @@ humanT.forEach((t) => grill(t, ''))
 // order, a ticket blocked on another lane at the head of its lane idled the lane's unblocked work behind it
 // (ws3's free #164 chain behind #151, which waited on the integrator's #145). A ticket is ready when every
 // blocker that is itself one of tonight's agent tickets has settled, integrated or not; a lane with nothing
-// ready waits for the first of its queue's blockers to settle, then looks again. Order among the ready: by n.
+// ready waits for the first of its queue's blockers to settle, then looks again. Order among the ready: the most of
+// tonight's lane tickets downstream first, ties by n (#662; see the sort after the close-in-morning tickets leave).
 const done = {}      // id -> Promise<boolean integrated>, one per agent ticket, created before any lane starts
 const settled = {}   // id -> boolean, once its promise settled
 const resolveDone = {}
@@ -782,6 +914,30 @@ closeT.forEach((t) => {
   else resolveDone[t.id](true)
   settled[t.id] = true
 })
+
+// Among a lane's ready tickets, the one with the most of tonight's lane tickets downstream runs first, ties by n
+// (#662). Collect's n orders by plan row and then issue number, which says nothing of what waits: on 2026-10-31 the
+// static-analysis head #605 had 18 of the night's tickets downstream, the five workstream lanes' only work (#615 to
+// #619) among them, and sat at n=70 behind 19 ready integrator tickets with nothing downstream, so the prep held ten
+// of those back for a night to bring it forward. Downstream is counted once, here, after Route and after the
+// close-in-morning tickets left their lanes: through blockedBy edges, transitively and across lanes, but only through
+// tickets a lane will implement, since a ticket waiting on one that no lane runs is skipped and gains nothing. Each
+// ticket downstream counts once, however many paths reach it.
+{
+  const laneT = Object.values(lanes).flat()
+  const inLane = new Set(laneT.map((t) => t.id))
+  const waiters = {}   // id -> the lane tickets whose blockedBy names it
+  laneT.forEach((d) => d.blockedBy.filter((b) => inLane.has(b)).forEach((b) => { (waiters[b] = waiters[b] || []).push(d.id) }))
+  const downstream = {}
+  laneT.forEach((t) => {
+    const seen = new Set(), stack = [...(waiters[t.id] || [])]
+    while (stack.length) { const d = stack.pop(); if (d === t.id || seen.has(d)) continue; seen.add(d); stack.push(...(waiters[d] || [])) }
+    downstream[t.id] = seen.size
+  })
+  Object.values(lanes).forEach((q) => q.sort((a, b) => downstream[b.id] - downstream[a.id] || a.n - b.n))
+  const ahead = laneT.filter((t) => downstream[t.id]).sort((a, b) => downstream[b.id] - downstream[a.id] || a.n - b.n)
+  if (ahead.length) log(`downstream first: ${ahead.map((t) => `${t.id} (${downstream[t.id]})`).join(', ')}`)
+}
 
 // The forecast (#228), before any lane starts: a lane ticket whose shape collect says will end partial (another owner
 // on its Owner line, or an open box only a sitting, a push or a landing can tick). A ticket with no list (a collect
@@ -885,7 +1041,33 @@ const implement = async (t) => {
     if (unmet.length) { results[t.id] = { stage: 'implement', outcome: 'skipped', why: `blocker not integrated: ${unmet.join(', ')}` }; return false }
     if (halted) { results[t.id] = { stage: 'implement', outcome: 'skipped', why: halted }; return false }
 
-    const impl = await withSlot(() => agent(implPrompt(t), { label: `implement:${t.id}`, phase: 'Implement', schema: IMPL }))
+    // The resume probe (#712): a ticket whose work is already on the run branch skips implement and review, and its
+    // tail runs the gate alone. A probe that died fails the ticket: whether its work is in is unknown, and an implement
+    // on that guess is how #677 read as skipped (CODING_STANDARDS.md, "A check fails closed").
+    const probe = await withSlot(() => ask(probePrompt(t), { label: `resume:${t.id}`, phase: 'Implement', schema: PROBE, effort: 'low' }))
+    if (!probe) return fail(t, 'implement', { why: 'the resume probe died, so whether its work is already on the run branch is unknown (#712)' })
+    if (probe.merged) {
+      if (!SHA.test(probe.mergeSha || '')) return fail(t, 'implement', { why: `the resume probe found its branch on ${INT_BRANCH} but gave no merge sha: ${probe.notes}` })
+      log(`${t.id}: its merge ${probe.mergeSha} is already on ${INT_BRANCH}; implement and review skipped, the gate alone (#712)`)
+      return { resumed: probe }
+    }
+
+    // The live read (#721), after the probe, so a merge already on the run branch still has its gate whatever its labels
+    // now say. A ticket relabelled since collect takes its live status: ready-for-human joins the human tickets, whose
+    // grill may still run (with no context its STEP 0 carries an earlier record and writes nothing); any other is
+    // skipped. Neither counts as met for the tickets it blocks, since nothing of it landed.
+    const live = liveRule(await withSlot(() => ask(livePrompt(t), { label: `live:${t.id}`, phase: 'Implement', schema: LIVE, effort: 'low' })))
+    if (live.fail) return fail(t, 'implement', { why: live.fail })
+    if (live.closed) { results[t.id] = { stage: 'implement', outcome: 'skipped', why: 'closed before the lane started' }; log(`${t.id}: skipped, closed before the lane started`); return true }
+    if (!live.go) {
+      log(`${t.id}: not implemented, ${live.why}`)
+      t.status = live.status
+      if (live.status === 'ready-for-human') { humanT.push(t); humanStage[t.id] = 'implement'; humanWhy[t.id] = live.why; grill(t, '') }
+      else results[t.id] = { stage: 'implement', outcome: 'skipped', why: live.why }
+      return false
+    }
+
+    const impl = await withSlot(() => ask(implPrompt(t), { label: `implement:${t.id}`, phase: 'Implement', schema: IMPL }))
     if (!impl) return fail(t, 'implement', { why: 'agent died; worktree may be mid-change' })
     // A ticket closed since collect has no work tonight; it counts as met for the tickets it blocked, as GitHub's
     // blocked-by count, which reads open blockers only, already says (#108).
@@ -932,10 +1114,32 @@ const keepRule = (rr, red, projects) => {
   return { kept: true }
 }
 
+// The tail of a ticket whose merge the resume probe found on the run branch (#712): the gate alone, under the
+// integration lock, so no merge lands while it runs, and no file lock, since nothing merges. A "Merge part of task"
+// subject is a partial row, as the integrate step's subject was when it merged. The gate's red is the ticket's
+// failure, never re-run as a flake nor reset by the script: the gate alone resets only a merge nothing is built on.
+const gateAlone = async (t, probe, at) => {
+  at.stage = 'integrate'
+  const g = await serial(() => withSlot(async () => {
+    const out = await ask(gatePrompt(t, probe), { label: `gate:${t.id}`, phase: 'Integrate', schema: GATED })
+    if (out && out.ok && out.ran && out.headSha) verifiedTip = out.headSha
+    return out
+  }))
+  if (!g || !g.ok) return fail(t, 'integrate', { why: g ? g.notes : 'the gate agent died', resumed: probe })
+  const complete = !/^Merge part of task/.test(probe.subject)
+  results[t.id] = { stage: 'integrated', outcome: complete ? 'integrated' : 'partial', mergeSha: probe.mergeSha,
+    outstanding: complete ? '' : `its merge ${probe.mergeSha} is "Merge part of task": the Outstanding lines are in that merge's body`,
+    summary: `on ${INT_BRANCH} from an earlier attempt of this run, merge ${probe.mergeSha} ("${probe.subject}"); implement and review skipped, and the gate ${g.ran ? 'ran once and passed' : 'had already passed'} (#712)`,
+    findingsFixed: [], delegatedDecisions: [], resumed: { mergeSha: probe.mergeSha, gateRan: !!g.ran }, changeRequests: { implement: [], review: [] } }
+  log(`${t.id}: integrated ${probe.mergeSha}, already on ${INT_BRANCH}; the gate ${g.ran ? 'ran once' : 'was on record'}`)
+  return true
+}
+
 // Review and integrate, in the ticket's own worktree, while its lane implements the next ticket (#136). at.stage
 // names the stage it is in, so a throw from the tail is reported against that stage, not always review.
 const finish = async (t, impl, at) => {
-    const rev = await withSlot(() => agent(reviewPrompt(t, impl), { label: `review:${t.id}`, phase: 'Review', schema: REVIEW }))
+    if (impl.resumed) return gateAlone(t, impl.resumed, at)
+    const rev = await withSlot(() => ask(reviewPrompt(t, impl), { label: `review:${t.id}`, phase: 'Review', schema: REVIEW }))
     if (!rev) return fail(t, 'review', { why: 'agent died', impl })
     if (rev.outcome === 'needs-human') { results[t.id] = { stage: 'review', ...rev, impl }; grill(t, `The reviewer stopped on: ${rev.question}`); return false }
     if (rev.outcome !== 'committed') return fail(t, 'review', { ...rev, impl })
@@ -946,12 +1150,17 @@ const finish = async (t, impl, at) => {
     // A red gate on test projects the change cannot reach is re-run inside the same lock and slot (#375); the script's
     // keep rule, not the re-run agent's ok, decides whether its merge stays, and a reset inside that lock undoes one
     // it does not keep (#397).
+    // A stop that may leave this ticket's merge on the run branch says so in the ticket's why (#710): after the limit
+    // no reset agent can start, so the branch stays as the agent that died left it, and a resume must check it first.
+    const mayHold = (why, when) => (e) => { if (isStop(e) && when(e)) e.note = `${INT_BRANCH} may hold ${t.id}'s unverified merge (${why}): check it before a resume`; throw e }
     const merge = (retry, head, r) => serial(() => withSlot(async () => {
-      let out = await agent(integratePrompt(t, head, r, retry), { label: `integrate:${t.id}`, phase: 'Integrate', schema: INT })
+      let out = await ask(integratePrompt(t, head, r, retry), { label: `integrate:${t.id}`, phase: 'Integrate', schema: INT })
+        .catch(mayHold('integrate died on the limit mid-merge', (e) => e.died))
       const rule = rerunRule(out)
       if (rule.projects) {
         log(`${t.id}: integration gate red on ${rule.projects.join(', ')}, which its change cannot reach; re-running them once, alone (#375)`)
-        const rr = await agent(rerunPrompt(t, head, out, rule.projects), { label: `rerun:${t.id}`, phase: 'Integrate', schema: RERUN })
+        const rr = await ask(rerunPrompt(t, head, out, rule.projects), { label: `rerun:${t.id}`, phase: 'Integrate', schema: RERUN })
+          .catch(mayHold(`re-run died on the limit; no reset to ${out.old} ran`, (e) => e.died))
         const ran = Object.fromEntries(((rr && rr.projects) || []).map((p) => [p.project, p])) // empty-ok: a null rr, or one naming no project, records each project as not passed, and the keep rule keeps no merge
         const projects = rule.projects.map((p) => ({ project: p, log: rerunLog(t, p), passed: !!(ran[p] && ran[p].passed) }))
         // The script's verdict, not the agent's ok (#397).
@@ -964,7 +1173,8 @@ const finish = async (t, impl, at) => {
         // the merge in, so the script puts the branch back before the lock is released (#397).
         if (!kept && (!rr || rr.ok)) {
           log(`flake: ${t.id} ${rule.projects.join(', ')} -> not kept: ${keep.why}; resetting ${INT_BRANCH} to ${out.old}`)
-          const rs = await agent(resetPrompt(t, out, keep.why), { label: `reset:${t.id}`, phase: 'Integrate', schema: RESET })
+          const rs = await ask(resetPrompt(t, out, keep.why), { label: `reset:${t.id}`, phase: 'Integrate', schema: RESET })
+            .catch(mayHold(`re-run not kept; the limit stopped the reset to ${out.old}`, () => true))
           // The reset is read from the head it reports, not from its ok alone, as the keep rule reads the re-run (#397).
           const back = !!(rs && rs.ok && rs.head === out.old)
           flake.reset = back ? `${INT_BRANCH} reset to ${out.old}`
@@ -989,14 +1199,14 @@ const finish = async (t, impl, at) => {
         // integration lock, holding its file locks, and the retry merges once; a second conflict fails the ticket.
         at.stage = 'resolve'
         log(`${t.id}: conflict at integrate in ${files.join(', ')}; back to its lane to back-merge ${INT_BRANCH} into ${impl.branch}`)
-        const res = await withSlot(() => agent(resolvePrompt(t, impl, rev, files, verifiedTip), { label: `resolve:${t.id}`, phase: 'Integrate', schema: RESOLVE }))
+        const res = await withSlot(() => ask(resolvePrompt(t, impl, rev, files, verifiedTip), { label: `resolve:${t.id}`, phase: 'Integrate', schema: RESOLVE }))
         if (!res || res.outcome !== 'resolved') {
           integ = { ok: false, mergeSha: '', notes: `conflict in ${files.join(', ')} not resolved: ${res ? res.notes : 'resolve agent died'}`, conflictFiles: files }
           conflict = { files, resolved: false }
         } else {
           at.stage = 'review'
           const head = { ...impl, headSha: res.headSha }
-          rev2 = await withSlot(() => agent(reviewPrompt(t, head, { tip: res.tip, files, notes: res.notes }), { label: `review:${t.id}`, phase: 'Review', schema: REVIEW }))
+          rev2 = await withSlot(() => ask(reviewPrompt(t, head, { tip: res.tip, files, notes: res.notes }), { label: `review:${t.id}`, phase: 'Review', schema: REVIEW }))
           if (!rev2 || rev2.outcome !== 'committed') {
             conflict = { files, resolved: false }
             if (rev2 && rev2.outcome === 'needs-human') { results[t.id] = { stage: 'review', ...rev2, impl, rev1: rev, conflict }; grill(t, `The second review, after a conflict at integrate, stopped on: ${rev2.question}`); return false }
@@ -1035,7 +1245,8 @@ const runLane = async (owner, queue) => {
     settled[t.id] = ok === true   // set here, before the promise's own handler runs, so this lane's next pick sees it
     resolveDone[t.id](ok === true)
   }
-  const guard = (t, at, p) => p.catch((e) => fail(t, at.stage, { why: `lane threw: ${e && e.message ? e.message : e}` }))
+  // A stop is the usage limit's (#710), not a lane that threw: the ticket is stopped, and counts as no failure.
+  const guard = (t, at, p) => p.catch((e) => isStop(e) ? stop(t, at.stage, e.note ? { note: e.note } : undefined) : fail(t, at.stage, { why: `lane threw: ${e && e.message ? e.message : e}` }))
   while (queue.length) {
     // The ticket this lane would take now but for the path waits (#665): if a path predecessor holds it, its wait
     // starts here, when the lane is free for it.
@@ -1069,9 +1280,12 @@ log(`path waits: ${pathWaits.length}` + pathWaits.map((w) => `\n  ${w.id} behind
 // there is nothing to judge.
 const closeRun = async () => {
   const base = { log: CLOSING_LOG, base: BASE, headSha: '', lastLine: '' }
+  const limited = { ...base, log: '', status: 'not-run', why: `${halted}, so no closing check started (#710)` }
+  if (usageLimit) return limited
   if (!Object.values(results).some((r) => r.stage === 'integrated')) return { ...base, log: '', status: 'not-run', why: 'nothing integrated tonight, so the run branch is its base' }
   phase('Closing check')
-  const c = await withSlot(() => agent(closingPrompt(), { label: 'closing', phase: 'Closing check', schema: CLOSING }))
+  let c
+  try { c = await withSlot(() => ask(closingPrompt(), { label: 'closing', phase: 'Closing check', schema: CLOSING })) } catch (e) { if (isStop(e)) return limited; throw e }
   if (!c) return { ...base, status: 'not-run', why: `the closing-check agent died; its log, if it wrote one, is ${CLOSING_LOG}` }
   const lastLine = String(c.lastLine || '')
   const status = /^check: pass:/.test(lastLine) ? 'pass' : 'fail'
@@ -1118,9 +1332,13 @@ const summary = {
   conflicts, flakes, changeRequests,
   pathWaits,
   closingCheck,
+  stopped: Object.entries(results).filter(([, r]) => r.outcome === 'stopped').map(([id, r]) => ({ id, issue: byId[id].issue, stage: r.stage })),
   results,
 }
-const rep = await agent(reportPrompt(summary), { label: 'report', phase: 'Report', schema: REPORT })
+// After the usage limit (#710) the report is one more agent, so it starts only on a run the limit did not stop; the
+// return value lists the stopped tickets for the launching session either way.
+let rep = null
+try { rep = await ask(reportPrompt(summary), { label: 'report', phase: 'Report', schema: REPORT }) } catch (e) { if (!isStop(e)) throw e }
 
 const ids = (pred) => Object.entries(results).filter(([, r]) => pred(r)).map(([id]) => id)
 // Why, in the return value (#280): one entry per failed, skipped and needs-human ticket, with the stage it stopped
@@ -1137,7 +1355,8 @@ const fromResults = (outcome) => ids((r) => r.outcome === outcome).map((id) => e
 const grillNote = (id) => {
   const g = results[id] && results[id].grill
   if (!g) return 'grilled on paper'
-  if (typeof g !== 'object') return 'grilled on paper: the grill agent died'
+  // A grill the usage limit stopped (#710) did not die: it keeps its state, and a resume grills it again.
+  if (typeof g !== 'object') return String(g).startsWith('grill stopped by the usage limit') ? 'not grilled: the usage limit stopped its grill' : 'grilled on paper: the grill agent died'
   const n = (g.questions || []).length, issue = byId[id].issue
   // The clause before the comma, as the report's rule reads it, so a grill that drops "not re-grilled" still counts.
   return String(g.summary || '').toLowerCase().includes(CARRIED_GRILL.split(',')[0])
@@ -1147,6 +1366,7 @@ const grillNote = (id) => {
 const humanWithoutOutcome = humanT.map((t) => t.id).filter((id) => !(results[id] && results[id].outcome))
 const reasons = [
   ...fromResults('failed'),
+  ...fromResults('stopped'),
   ...fromResults('skipped'),
   ...humanWithoutOutcome.map((id) => entry(id, 'needs-human', humanStage[id] || 'collect',
     oneLine(`${humanWhy[id] || byId[id].why || 'labelled ready-for-human'}; ${grillNote(id)}`))),
@@ -1158,6 +1378,8 @@ return {
   partial: ids((r) => r.outcome === 'partial'),
   skipped: ids((r) => r.outcome === 'skipped'),
   failed: ids((r) => r.outcome === 'failed'),
+  failures,
+  stopped: summary.stopped,
   needsHuman: [...new Set([...humanT.map((t) => t.id), ...ids((r) => r.outcome === 'needs-human')])],
   blocked: summary.blocked.map((b) => b.id),
   closeInMorning: closeT.map((t) => t.id),
