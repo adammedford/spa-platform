@@ -68,7 +68,23 @@ spikes/g0/real-handler/vendor/ref/
 # ADR-0020"), tracked rather than ignored: it holds the tickets filed before ADR-0020 and their specs,
 # which merge bodies, ADRs and contracts cite by path. While the tracker was ignored those citations
 # resolved on one machine and nowhere else -- ADR-0015 promised three adoption tickets no second
-# session could open. Only the session logs stay out, a transcript rather than a spec.
+# session could open. The archive is read-only, so its directories are a closed list: the ten named
+# below are opened, and everything else under .scratch/ stays ignored, because foreground sessions
+# write their scratch there while a run goes on (#714) and a `git add -A` would otherwise stage it
+# (#935); a session's own scratch belongs in its scratchpad directory. A negation cannot reach
+# inside an ignored directory, so the ten are opened one by one, and each one's log/, a transcript
+# rather than a spec, is closed again after them.
+.scratch/*
+!.scratch/agent-environment/
+!.scratch/cell-ecs-terraform/
+!.scratch/cross-reference-checks/
+!.scratch/functional-suite-no-identity/
+!.scratch/g1a-and-landing-work/
+!.scratch/hidden-worktree-config/
+!.scratch/negative-suite-no-identity/
+!.scratch/overnight/
+!.scratch/phase-2/
+!.scratch/sitting/
 .scratch/*/log/
 
 # Agent session scratch: worktrees and anything else a session leaves behind. Three exceptions:
