@@ -552,7 +552,7 @@ OUTPUT FILE: ${DIR(n)}/inventory.json
 6. cites: the plan row id, the issue numbers and the merge subject the body proposes (empty when absent). bodyClaims: every claim the body makes about what it did or proved, quoted, mutation statements with their counts included. statedMutations: one entry per mutation the body states: the test it names, the project that runs it, the mutation as stated, failed and total as the body gives them (-1 for a count it does not give), and the sentence quoted.
 6a. statedHeads: one entry per sha the body gives as this pull request's head, the head it says it describes ("head \`76704c5\`"): sha exactly as written, full or abbreviated, and quote, the sentence that gives it. Leave out the fork point, the base, a listed commit, and a sha the body names as an earlier head or as history ("the earlier head \`ed8d063\`"). [] when the body gives none. Do not compare it with the head: the script does.
 6c. description: the body exactly as gh serves it, byte for byte ("" when it is empty). commitMessages: one entry per commit of commits, in that order: sha, and message = \`git -C ${REPO} log -1 --format=%B <sha>\`, copied byte for byte, and parents = the number of shas \`git -C ${REPO} log -1 --format=%P <sha>\` prints (2 or more for a merge). Do not look for dates or Closes lines in them: the script does.
-6b. candidates: every candidate invariant test the diff adds or changes: each xUnit fact or theory (test = its class and method name, project = its test project's directory), each Terraform test file (project = its directory), each Python test companion (project = its path). file: the repository path of the file the test is written in. guards: one sentence on what it guards. breaks: the source file it would take to break that, never the test itself.
+6b. candidates: every candidate invariant test the diff adds or changes: each xUnit fact or theory (test = its class and method name, project = its test project's directory), each Terraform test file (project = its directory), each Python test companion (test and project = its path, and nothing added to the test). file: the repository path of the file the test is written in. guards: one sentence on what it guards. breaks: the source file it would take to break that, never the test itself.
 7. comments: \`cd ${REPO} && gh api --paginate --slurp repos/{owner}/{repo}/issues/${n}/comments\`, flattened, each entry's body, author_association, html_url and created_at exactly as served. reviews: the same for \`repos/{owner}/{repo}/pulls/${n}/reviews\`, with body, state, author_association, html_url and submitted_at. Copy bodies byte for byte: the script reads review records from them.
 8. Write the whole result as JSON to the OUTPUT FILE, then return it. error is "" when nothing stopped you.`
 
@@ -730,8 +730,13 @@ const sinceHeadsOf = (records, inv) => {
 // dotted name in the parenthesis after a bare method is the whole name (#695). withClass false
 // reads only the first form: in a cell someone wrote, 'Nom (Assert.Null)' has the second form's
 // shape and names no class, so there the parenthesis names the whole test only when it ends in it.
+// A unittest subtest prints its message in brackets, its parameters in a parenthesis or both after
+// the class one, 'test_x (pkg.Class) [msg] (k='v')', and is read without them (#793): on #792 the
+// greedy parenthesis took both groups, the name read as the bare test_x, and a candidate Class.test_x
+// red on its own subtest read as caught elsewhere.
 const dotted = (f, withClass = true) => {
-  const [, head, inner] = /^\s*([^(]*?)\s*(?:\((.*)\))?\s*$/.exec(f) || [, f.trim(), undefined]
+  const sub = /^\s*([A-Za-z_]\w*)\s*\(([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+)\)\s*(?:\[.*?\])?\s*(?:\(.*\))?\s*$/.exec(f)
+  const [, head, inner] = sub || /^\s*([^(]*?)\s*(?:\((.*)\))?\s*$/.exec(f) || [, f.trim(), undefined]
   if (!/^[A-Za-z_]\w*$/.test(head) || !/^[A-Za-z_]\w*(\.[A-Za-z_]\w*)+$/.test(inner || '')) return head
   return inner.endsWith(`.${head}`) ? inner : withClass ? `${inner}.${head}` : head
 }
@@ -756,9 +761,19 @@ const mutationList = (inv, standards, d, prior = { held: null, clearers: [] }) =
   const byTest = new Map(candidates.map((c) => [c.test, c]))
   // Newest first, so a test two records held on is mutated by the latest one's break; one a later
   // record reproduced is answered and drops out.
+  // A held cell in the spelling the inventory gave a whole companion before #794, '<file>
+  // (companion)', is held on the whole-file candidate whose path or basename is <file> (#801): on
+  // #791 that cell named no candidate's test, now the bare path, so its row had no file and its red
+  // run read as caught elsewhere. Only that spelling, and only a candidate whose project is its file:
+  // a cell that scopes one check is matched by the test it names, as before.
+  const wholeFor = (cell) => {
+    const [, f] = /^(\S+) \(companion\)$/.exec((cell || '').trim()) || []
+    return f ? candidates.filter((c) => c.file && c.project === c.file && [c.file, c.file.split('/').pop()].includes(c.test) && [c.file, c.file.split('/').pop()].includes(f)) : []
+  }
   const held = prior.held ? [...prior.held.rows].reverse().flatMap((h) => {
     const base = { mutation: h.broken, quote: h.broken, failed: -1, total: -1, kind: 'held', heldBy: h.url, cell: h.test }
-    const named = candidates.filter((c) => names(h.test, c.test))
+    const byName = candidates.filter((c) => names(h.test, c.test))
+    const named = byName.length ? byName : wholeFor(h.test)
     const answered = (test) => h.later.some((t) => t === test || names(t, test))
     return named.length ? named.filter((c) => !answered(c.test)).map((c) => ({ ...c, ...base }))
       : answered(h.test) ? [] : [{ test: h.test, project: '', file: '', guards: '', breaks: '', ...base }]
@@ -814,8 +829,17 @@ const mutationRow = (n, m, i, got) => {
   // stays as reported. A failing name is the named test when it ends in the named test's whole dotted
   // name at a dot. A name shorter than that, a bare method or a class-qualified name under a
   // namespace-qualified cell, could be a same-named method of another class, so it is a catch, which
-  // fails closed to the verdict's check (#695). dotted() above reads each name.
-  const isNamed = (f) => `.${dotted(f)}`.endsWith(`.${m.test}`)
+  // fails closed to the verdict's check (#695). dotted() above reads each name. A test that is its
+  // whole file owns every test in that file: any failing name is its own (#793). That is a candidate
+  // whose project is its file, so its run is that file alone, as a Python companion's is, and whose
+  // test is that path or its basename and nothing else. On #791 no failing name could match the cell,
+  // so the companion red on its own test read as caught elsewhere and held. Anything else stays a
+  // catch, failing closed to the verdict (#794): a test that adds to the name, 'x_tests.py (check:
+  // ...)' scoping one check of it or 'x_tests.py (companion)', and a Terraform test file, whose run
+  // is its whole directory, so a sibling file's red run would read as its own.
+  const cell = (m.test || '').trim()
+  const wholeFile = !!m.file && m.project === m.file && (cell === m.file || cell === m.file.split('/').pop())
+  const isNamed = (f) => wholeFile || `.${dotted(f)}`.endsWith(`.${m.test}`)
   const caughtElsewhere = row.result === 'reproduced' && row.failingNames.length > 0 && !row.failingNames.some(isNamed)
   if (caughtElsewhere && (m.kind === 'stated' || m.kind === 'nominated')) {
     row.why = `the project went red only on ${row.failingNames.join(', ')}, and a ${m.kind} mutation keeps its own test: ${row.why}`
