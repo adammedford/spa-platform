@@ -144,13 +144,121 @@ class OnlyTheGateClassesCount(TestCase):
         self.assertEqual(["N-08.md"], run.drafts())
 
     def test_n28_is_not_defined_by_the_register_prose_that_names_it_as_next(self):
-        # contracts/test-ids.md names N-28 as the next number in a sentence. Only a table row
-        # defines an id, so a gate test claiming N-28 is refused today.
-        run = self.run_script([case(NEGATIVE + "CookiePlantingTests", "N28_plant_a_d_cookie")])
+        # Only a table row defines an id. Keep the prose-only register in this case's fixture
+        # so the check still proves that distinction after N-28 is numbered on the trunk (#538).
+        with tempfile.TemporaryDirectory() as d:
+            root = register(pathlib.Path(d), "| N-07 | Foreign origin | 403 | H, D | 4 |\n")
+            run = self.run_script([case(NEGATIVE + "CookiePlantingTests", "N28_plant_a_d_cookie")], root=root)
         self.assertEqual(2, run.code, run.stdout)
         self.assertIn("N-28", run.stderr)
         self.assertIn("CookiePlantingTests.N28_plant_a_d_cookie", run.stderr)
         self.assertEqual([], run.drafts())
+
+
+CONTINUITY = DEPLOYED + "ContinuityTests"
+
+
+class RegisteredContinuityFactsCount(TestCase):
+    """The deployed continuity Facts are the register's test for F-19 to F-23 and N-32 (#538, #539), so
+    a G6 sitting's report must draft evidence for those ids and not tally them as meta-tests."""
+
+    def test_the_real_registers_credit_the_continuity_facts_to_their_ids(self):
+        run = self.run_script([
+            case(CONTINUITY, "Row3_a_session_created_on_one_task_is_decrypted_and_used_on_the_other"),
+            case(CONTINUITY, "Row4_after_stop_task_on_the_other_task_the_session_continues_on_the_survivor_and_the_replacement"),
+            case(CONTINUITY, "Row5_login_state_and_the_antiforgery_token_cross_tasks"),
+            case(CONTINUITY, "Row6_a_rolling_deployment_refreshes_once_inside_the_interval_with_no_401_and_no_5xx"),
+            case(CONTINUITY, "Row7_a_cross_task_login_to_an_onboarded_app_after_convergence"),
+            case(CONTINUITY, "Row8_fifty_calls_on_a_due_token_across_two_tasks_refresh_once"),
+            case(CONTINUITY, "Row9_a_session_ended_on_one_task_is_refused_by_the_other"),
+            case(NEGATIVE + "HostTests", "N08_an_unknown_host_is_404"),
+        ])
+        self.assertEqual(0, run.code, run.stderr)
+        self.assertEqual(["F-19.md", "F-20.md", "F-21.md", "F-22.md", "F-23.md", "N-08.md", "N-32.md"], run.drafts())
+        self.assertIn("N-32: 1 test, 1 passed, 0 failed, 0 skipped: passed", run.stdout)
+        # Row7 names no row, so it stays a meta-test: counted in the totals, credited to no id.
+        self.assertIn("8 tests in the report", run.draft("N-32"))
+        self.assertIn("7 are gate tests", run.draft("N-32"))
+        self.assertIn("1 are meta-tests", run.draft("N-32"))
+
+    def test_a_failed_or_skipped_continuity_fact_leaves_its_id_failed(self):
+        run = self.run_script([
+            case(CONTINUITY, "Row8_fifty_calls_on_a_due_token_across_two_tasks_refresh_once", outcome="failed", message="two Refreshed lines"),
+            case(CONTINUITY, "Row9_a_session_ended_on_one_task_is_refused_by_the_other", outcome="skipped"),
+        ])
+        self.assertEqual(1, run.code, run.stderr)
+        self.assertIn("F-23: 1 test, 0 passed, 1 failed, 0 skipped: FAILED", run.stdout)
+        self.assertIn("N-32: 1 test, 0 passed, 0 failed, 1 skipped: FAILED", run.stdout)
+
+    def test_only_the_continuity_class_counts_and_only_for_a_method_a_row_names(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = register(
+                pathlib.Path(d), "| N-07 | Foreign origin | 403 | H, D | 4 |\n",
+                "| N-32 | Replay: `tests/e2e/Deployed/ContinuityTests.cs`: `ContinuityTests.Row9_replay` | Refused | D | #539 |\n")
+            run = self.run_script([
+                case(NEGATIVE + "OriginTests", "N07_a_foreign_origin_is_403"),
+                case(CONTINUITY, "Row9_replay"),
+                case(CONTINUITY, "Row7_no_row_names_it"),
+                case(DEPLOYED + "ContinuityObserverTests", "Row9_replay"),
+                case(DEPLOYED + "ContinuityTestsLookalike", "Row9_replay"),
+            ], root=root)
+        self.assertEqual(0, run.code, run.stderr)
+        self.assertEqual(["N-07.md", "N-32.md"], run.drafts())
+        self.assertIn("N-32: 1 test, 1 passed", run.stdout)
+        self.assertIn("3 meta-tests", run.stdout)
+
+    def test_a_report_of_only_continuity_facts_is_a_report_with_gate_tests(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = register(
+                pathlib.Path(d), "| N-07 | Foreign origin | 403 | H, D | 4 |\n",
+                "| N-32 | Replay: `tests/e2e/Deployed/ContinuityTests.cs`: `ContinuityTests.Row9_replay` | Refused | D | #539 |\n")
+            run = self.run_script([case(CONTINUITY, "Row9_replay")], root=root)
+        self.assertEqual(0, run.code, run.stderr)
+        self.assertEqual(["N-32.md"], run.drafts())
+
+    def test_a_row_naming_a_continuity_fact_must_be_a_table_row_beside_the_file(self):
+        # The prose line names the method, and a row without the file's path beside it names none.
+        with tempfile.TemporaryDirectory() as d:
+            root = register(
+                pathlib.Path(d), "| N-07 | Foreign origin | 403 | H, D | 4 |\n",
+                "Prose: `tests/e2e/Deployed/ContinuityTests.cs`: `ContinuityTests.Row9_replay`\n"
+                "| N-32 | Replay `ContinuityTests.Row9_replay` | Refused | D | #539 |\n")
+            run = self.run_script([case(CONTINUITY, "Row9_replay")], root=root)
+        self.assertEqual(2, run.code, run.stdout)
+        self.assertEqual([], run.drafts())
+
+    def test_two_rows_naming_one_continuity_fact_are_refused(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = register(
+                pathlib.Path(d), "| N-07 | Foreign origin | 403 | H, D | 4 |\n",
+                "| N-32 | A: `tests/e2e/Deployed/ContinuityTests.cs`: `ContinuityTests.Row9_replay` | Refused | D | #539 |\n"
+                "| N-33 | B: `tests/e2e/Deployed/ContinuityTests.cs`: `ContinuityTests.Row9_replay` | Refused | D | #539 |\n")
+            run = self.run_script([case(NEGATIVE + "OriginTests", "N07_a_foreign_origin_is_403")], root=root)
+        self.assertEqual(2, run.code, run.stdout)
+        self.assertIn("N-32 and N-33 both name ContinuityTests.Row9_replay", run.stderr)
+        self.assertEqual([], run.drafts())
+
+    def test_a_row_naming_two_continuity_facts_is_refused(self):
+        # Crediting the first and dropping the second would leave the second unproved, so the row is refused.
+        with tempfile.TemporaryDirectory() as d:
+            root = register(
+                pathlib.Path(d), "| N-07 | Foreign origin | 403 | H, D | 4 |\n",
+                "| N-32 | `tests/e2e/Deployed/ContinuityTests.cs`: `ContinuityTests.Row9_replay`, "
+                "`ContinuityTests.Row9_other` | Refused | D | #539 |\n")
+            run = self.run_script([case(CONTINUITY, "Row9_replay"), case(CONTINUITY, "Row9_other")], root=root)
+        self.assertEqual(2, run.code, run.stdout)
+        self.assertIn("N-32 names more than one continuity Fact: ContinuityTests.Row9_other and ContinuityTests.Row9_replay", run.stderr)
+        self.assertEqual([], run.drafts())
+
+    def test_a_row_naming_one_continuity_fact_twice_names_one(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = register(
+                pathlib.Path(d), "| N-07 | Foreign origin | 403 | H, D | 4 |\n",
+                "| N-32 | `tests/e2e/Deployed/ContinuityTests.cs`: `ContinuityTests.Row9_replay`, again "
+                "`ContinuityTests.Row9_replay` | Refused | D | #539 |\n")
+            run = self.run_script([case(CONTINUITY, "Row9_replay")], root=root)
+        self.assertEqual(0, run.code, run.stderr)
+        self.assertEqual(["N-32.md"], run.drafts())
 
 
 class Refusals(TestCase):
@@ -197,7 +305,7 @@ class Refusals(TestCase):
     def test_a_report_with_no_gate_test_fails_the_run(self):
         run = self.run_script([case(DEPLOYED + "TokenShapeTests", "Text_with_no_jwt_passes_the_search")])
         self.assertEqual(2, run.code, run.stdout)
-        self.assertIn("no Functional or Negative test", run.stderr)
+        self.assertIn("no Functional, Negative or registered continuity test", run.stderr)
 
     def test_a_report_that_does_not_parse_fails_the_run(self):
         run = self.run_script([case(NEGATIVE + "HostTests", "N08_x")])
@@ -253,7 +361,7 @@ class Drafts(TestCase):
         self.assertIn(CONTEXT.strip(), n07)
         # 11 tests: 7 gate tests (6 passed, 1 failed) and 4 meta-tests (all passed).
         self.assertIn("11 tests in the report: 10 passed, 1 failed, 0 skipped.", n07)
-        self.assertIn("7 are Functional and Negative gate tests (6 passed, 1 failed, 0 skipped)", n07)
+        self.assertIn("7 are gate tests, Functional, Negative and registered continuity (6 passed, 1 failed, 0 skipped)", n07)
         self.assertIn("4 are meta-tests (4 passed, 0 failed, 0 skipped)", n07)
         self.assertIn("**N-07's tests** (3 of 3 passed):", n07)
         self.assertIn(

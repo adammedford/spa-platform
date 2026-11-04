@@ -8,7 +8,8 @@ namespace Gateway.IntegrationTests.Continuity;
 /// The two-host composed harness of plan row P2-5 (#345; #332, T7): two gateway hosts in one test
 /// process over one bucket, one set of client secrets, one session store, one lease table and the
 /// real <c>AddPlatformHosting</c> key ring over one Parameter Store stub, each naming its own
-/// deterministic instance on <c>/readyz</c>.
+/// deterministic instance on <c>/readyz</c>. Both tests here prove F-12 (contracts/test-ids.md): the hosts
+/// start over the shared doubles and the real ring, and the stand-in balancer alternates between them.
 /// </summary>
 public sealed class TwoHostHarnessTests
 {

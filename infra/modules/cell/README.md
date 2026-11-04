@@ -58,6 +58,13 @@ opts in: the suffix alone does not.
 
 ## What the network does not have
 
+The cell has two shapes, set by one input, `multi_task` (#347). On its default,
+`false`, the cell is Phase 1's: one task with a public address in the two public
+subnets. Set to `true`, which needs `session_store = "dynamodb"`, it is #332 D6's
+two-task cell: two tasks over two private subnets in two zones with no public
+address, behind one NAT gateway. What follows is Phase 1's shape; the next section
+is what the switch adds.
+
 - **No NAT gateway.** The task sends 443 out from a public address. A NAT gateway
   costs more per month than everything else in the cell together.
 - **No ingress from the internet.** The load balancer is internal and accepts 443
@@ -65,9 +72,11 @@ opts in: the suffix alone does not.
   and the task security group accepts the gateway's port from the ALB security group
   alone. Those are two of the cell's four rules. `tests/network.tftest.hcl` fails on
   a fifth rule, an inline rule, a third group, or an address range on any rule but
-  the task's 443 out, and the resource-type allowlist in `tests/module.tftest.hcl`
-  fails on a NAT gateway, an instance or a database. Both read the configuration
-  (ADR-0016). P-06's deployed half, a connection from outside to the task's port
+  the task's 443 out, and P-01 in the platform root's tests fails on a NAT gateway,
+  an instance or a database outside the gated forms it admits. The resource-type
+  allowlist in `tests/module.tftest.hcl` fails on an instance, but names the gated
+  types, so it cannot tell a gated one from an ungated one. All of them read the
+  configuration (ADR-0016). P-06's deployed half, a connection from outside to the task's port
   timing out, runs against the applied cell at G3 (task 6.9).
 - **No rule in the default security group.** AWS creates one in every VPC, admitting
   all traffic from its own members, and puts some resources created without a group of
@@ -82,12 +91,42 @@ opts in: the suffix alone does not.
   The task's 443 goes out through its public address, and the S3 gateway endpoint
   belongs with Phase 2's private subnets.
 
+## What the two-task cell adds
+
+Under `multi_task = true` (#347, #332 D6):
+
+- **Two private subnets**, at `cidrsubnet` indices 2 and 3 of `vpc_cidr`, one per
+  zone, giving no public address on launch, so `vpc_cidr` must be /22 or larger. The
+  service runs two tasks over them with no public address and with
+  availability-zone rebalancing on; the load balancer stays in the public subnets.
+  Fargate takes no placement strategy, so that one task runs in each zone is shown
+  on the deployed cell (#348), not by the plan.
+- **One NAT gateway** with its Elastic IP in the first zone's public subnet, and a
+  private route table per zone routing `0.0.0.0/0` to it. It carries what has no
+  gateway endpoint: Parameter Store, ECR, CloudWatch Logs, `ssmmessages` for the
+  tunnel and the provider's OAuth endpoints. Zone failure is out of G6's scope
+  (#332 F15); a NAT gateway per zone, or a regional one, is a new gateway and a
+  route change on the tables that are already per zone. A regional one needs no
+  public subnet ([AWS](https://docs.aws.amazon.com/vpc/latest/userguide/nat-gateways-regional.html)).
+- **The S3 and DynamoDB gateway endpoints** on both private tables, with AWS's
+  default policy, at no charge
+  ([AWS](https://docs.aws.amazon.com/vpc/latest/privatelink/gateway-endpoints.html)).
+  They are not a destination allowlist, which is P2-9's.
+- **The task's egress stays 443 alone**, and `ForwardedHeaders:TrustedNetworks` still
+  names only the load balancer's public subnets, so no private subnet is trusted.
+- **About $70.50 a month** for the whole cell left running, $0.10 an hour applied
+  (#347 Q10), most of it the NAT gateway and its address: tear it down the same day.
+  `tools/scripts/verify-teardown.sh` counts the NAT gateway, its address and the
+  endpoints among what must be gone.
+- **P-06's second sentence** reads, under this shape, as "the task has no public
+  address" (#583): the first sentence holds under both.
+
 Every rule and group description keeps to the characters EC2 accepts, which exclude
 the apostrophe. EC2 refuses any other at apply, where no plan reaches.
 
 ## One gap the shared subnets leave
 
-The task sits in the load balancer's two subnets, so its own address falls inside
+In Phase 1's shape the task sits in the load balancer's two subnets, so its own address falls inside
 `ForwardedHeaders:TrustedNetworks`, which names those subnets. Whoever can open a
 Session Manager session on the task can forward a port to the task's own address on
 the gateway's port. That connection never leaves the task, so no security group sees
@@ -124,10 +163,10 @@ needs credentials, a state bucket and the first-deployment order in
 
 - **The task.** ARM64, 0.25 vCPU, 1 GB, Fargate only, in this cell's two public
   subnets with a public address, because the no-NAT design leaves that as the task's
-  only route out. ECS Exec is on and the root filesystem stays writable: those are two
+  only route out; under `multi_task`, two of them in the private subnets with none. ECS Exec is on and the root filesystem stays writable: those are two
   of the three conditions the Session Manager tunnel comes with, and the third is the
   four `ssmmessages` permissions below.
-- **The deployment.** One service, desired count 1, circuit breaker on with rollback,
+- **The deployment.** One service, desired count 1 (2 under `multi_task`), circuit breaker on with rollback,
   minimum healthy 100% and maximum 200%, so a roll starts the replacement before it
   stops a task. Both images are variables with no default that names a tag:
   `deploy.sh` passes a digest and every other apply passes the digest already in
@@ -137,10 +176,17 @@ needs credentials, a state bucket and the first-deployment order in
 - **The shutdown** (#332 F1, #347). A roll stops a task in this order: the target
   group's `deregistration_delay`, 30 s, drains it, then ECS sends SIGTERM, then after
   the gateway container's `stopTimeout`, 30 s, SIGKILL. The gateway's own
-  `ShutdownTimeout` is 25 s (`Platform.Hosting`, #363). The drain covers the 21 s a
-  session refresh is bounded by, and `stopTimeout` covers `ShutdownTimeout`, so the
-  process ends its shutdown on its own terms; an `/api` call longer than the window can
-  be cut by a roll. `stopTimeout` is on the gateway container only.
+  `ShutdownTimeout` is 25 s (`Platform.Hosting`, #363). Requests drain from the task
+  during the 30 s, and the drain promises no refresh's completion. `ShutdownTimeout`
+  exceeds the refresh holder's 20 s durable-write deadline, timed from its acquire's
+  send (the 21 s lease less 1 s of skew), so a successful refresh admitted before the
+  host is told to stop writes its rotated token before the host stops. The durable
+  write is the promise, not every request's completion: F3b's failed or unknown write
+  and F4's check-to-send pause are its exceptions, and a loser's wait is F2's and
+  F3's, which no number here bounds (#332 F1; P2-3's second amendment, decision 2).
+  `stopTimeout` covers `ShutdownTimeout`, so the process ends its shutdown on its own
+  terms; an `/api` call longer than the window can be cut by a roll. `stopTimeout` is
+  on the gateway container only.
 - **The task environment** is generated from `contracts/platform-config.schema.json`
   in the form that contract names: a colon becomes a double underscore and every value
   is a string. The bucket, the registry key, the poll interval and the cell name come
@@ -202,9 +248,12 @@ account.
   `infra/envs/poc/platform/tests/root.tftest.hcl`. It holds this module to being the
   platform root's whole plan, counts every type in that plan against the plan rows'
   numbers, and fails on a NAT gateway, an EC2 instance or a database whatever the
-  allowlist says, save the gated session table, which it holds at no instance on the
-  default inputs and one under `dynamodb`. This module's own type allowlist, in
-  `tests/module.tftest.hcl`, fails on any of them as well, and names the session table.
+  allowlist says, save the gated session table and the two-task cell's gated NAT
+  gateway (#583), which it holds at no instance on the default inputs, the table at
+  one under `dynamodb` and the gateway at one under `multi_task`. This module's own
+  type allowlist, in `tests/module.tftest.hcl`, fails on an instance, and names the
+  session table and the two-task cell's three egress types, so it cannot tell their
+  gated forms from ungated ones: P-01 is what holds them to their gates.
 - **P-03, the task role policy,** is the task role's runs above.
 - **The two security groups** are `tests/network.tftest.hcl`: exactly four rules, each
   admitting one port between the two groups, and only the task's 443 out naming an

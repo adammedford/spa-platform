@@ -19,9 +19,13 @@
        relaxed tier's relaxations are .editorconfig's last *.cs section.
        The level is pinned at 10, not latest, so that global.json's rollForward cannot add rules unseen.
        AnalysisLevelStyle must not equal AnalysisLevel: the SDK's code-style targets add the style
-       rules' config only when the two differ (or the modes do), so equal values turn every IDE rule
-       off without a word (#588). 10.0-all is the same level and bucket as 10-all, written so it
-       differs.
+       rules' config only when the two differ (or the modes do, or the style level is 11 or later),
+       so equal values turn every IDE rule off without a word (#588 measured it). The condition is
+       the EditorConfigFiles item in Microsoft.CodeAnalysis.CSharp.CodeStyle.targets, under the
+       SDK's Sdks/Microsoft.NET.Sdk/codestyle/cs/build/; SDK 10.0.401 builds that file from Roslyn's
+       generator at the commit its csc names:
+       https://github.com/dotnet/dotnet/blob/e34a38d2ae1fc26406a317517196e55c68ff83ab/src/roslyn/src/CodeStyle/Tools/Program.cs#L262-L266
+       10.0-all is the same level and bucket as 10-all, written so it differs.
        The settings apply only where the root .globalconfig is beside this file. Every checkout has
        it, and tools/analysis_guard.py fails a tree without it, so no build here runs without them;
        an image build that copies this file and not the analyzer configs, as fixtures/MockApi's and
@@ -45,6 +49,24 @@
     <SpaRelaxedTier>false</SpaRelaxedTier>
     <SpaRelaxedTier Condition="$(_SpaProjectFolder.StartsWith('tests/')) or $(_SpaProjectFolder.StartsWith('fixtures/')) or $(_SpaProjectFolder.StartsWith('tools/spactl/')) or $(_SpaProjectFolder.StartsWith('tools/bench/floor/')) or $(_SpaProjectFolder.StartsWith('src/Platform.Testing/'))">true</SpaRelaxedTier>
   </PropertyGroup>
+
+  <!-- The banned-symbol lists, strict tier only (ADR-0035 decision 10; #608). BannedApiAnalyzers reads
+       every AdditionalFile named BannedSymbols.*.txt and reports a use as RS0030, at its default
+       warning, which TreatWarningsAsErrors makes an error. The relaxed tier carries none: its code
+       never ships, and fixtures/TestIdp and tests/e2e need the primitives.
+       The lists apply where the analysis does, beside the root .globalconfig; the gateway's image
+       copies them with it. No list is guarded by its own Exists: a missing one fails the compile
+       (CS2001) rather than dropping its bans unseen. The file names, the // comments and the
+       T:/N:/M: ids are the analyzer's documented format:
+       https://github.com/dotnet/roslyn/blob/main/src/RoslynAnalyzers/Microsoft.CodeAnalysis.BannedApiAnalyzers/BannedApiAnalyzers.Help.md
+       That page does not say a namespace ban reaches child namespaces or that a type ban misses
+       derived types; #608's throwaway calls showed both, which is why each HMAC subclass is listed. -->
+  <ItemGroup Condition="'$(SpaRelaxedTier)' != 'true' and Exists('$(MSBuildThisFileDirectory).globalconfig')">
+    <AdditionalFiles Include="$(MSBuildThisFileDirectory)BannedSymbols.Shipping.txt" />
+    <AdditionalFiles Include="$(MSBuildThisFileDirectory)BannedSymbols.NotIdentity.txt" Condition="'$(MSBuildProjectName)' != 'Platform.Identity'" />
+    <AdditionalFiles Include="$(MSBuildThisFileDirectory)BannedSymbols.NotProxy.txt" Condition="'$(MSBuildProjectName)' != 'Platform.Proxy'" />
+    <AdditionalFiles Include="$(MSBuildThisFileDirectory)BannedSymbols.NoToken.txt" Condition="'$(MSBuildProjectName)' == 'Platform.Registry' or '$(MSBuildProjectName)' == 'Platform.Hosting' or '$(MSBuildProjectName)' == 'Platform.Security' or '$(MSBuildProjectName)' == 'Platform.Telemetry' or '$(MSBuildProjectName)' == 'Gateway'" />
+  </ItemGroup>
 
   <!-- The admitted analyzer packages, in every project of the solution (ADR-0035 decision 9; #607).
        Each is an unconditional PackageReference rather than a GlobalPackageReference, which the pins

@@ -34,7 +34,7 @@ they copy, OUTPUTS_DOCUMENT's ignore files or CELL_COMMON, and tools/check_tests
 the line must cover from those names and fails while a path they reach is missing from it. A case
 that starts reading another file reads it through such a name, and the file joins the line.
 
-Checkout inputs: .dockerignore Dockerfile */Dockerfile global.json nuget.config Directory.Build.props Directory.Packages.props .editorconfig .globalconfig contracts/*.schema.json src/* fixtures/MockApi/* tools/bench/floor/* .gitignore */.gitignore tools/scripts/cell-common.sh
+Checkout inputs: .dockerignore Dockerfile */Dockerfile global.json nuget.config Directory.Build.props Directory.Packages.props .editorconfig .globalconfig BannedSymbols.*.txt contracts/*.schema.json src/* fixtures/MockApi/* tools/bench/floor/* .gitignore */.gitignore tools/scripts/cell-common.sh
 
 Run: python3 -I tools/image_build_tests.py
 """

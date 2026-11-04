@@ -9,15 +9,23 @@ naming each finding on its own line before a count, when:
 
 - the relaxed tier's section of the root `.editorconfig`, the one headed
   `[{tests,fixtures,tools/spactl,tools/bench/floor,src/Platform.Testing}/**.cs]`, is missing, names a
-  security rule, has an entry with no reason comment, or is not the last section that matches a C#
-  file (#589-Q8; ADR-0035 decisions 5 and 13). A later section that matches a relaxed-tier file
-  would override it, and the build would stay green while a relaxation, or a strict rule, silently
-  changed; one that matches only a strict-tier file is held to the same rule, because the ADR names
-  the last `*.cs` section and a narrower glob is one edit from overriding the tier. A section matches
-  a C# file when it matches a tracked `.cs` file or a probe path in each relaxed folder;
-- any analyzer config, an `.editorconfig`, `.globalconfig` or `*.globalconfig` at any depth, has a
-  `dotnet_analyzer_diagnostic.category-*` line (X4; decision 5): under `AnalysisMode=All` it adds
-  nothing, and its reach into a package's rules that share the category name is undocumented;
+  security rule at any severity, has an entry with no reason comment, or is not the last section
+  that matches a C# file (#589-Q8; ADR-0035 decisions 5 and 13). A later section that matches a
+  relaxed-tier file would override it, and the build would stay green while a relaxation, or a
+  strict rule, silently changed; one that matches only a strict-tier file is held to the same rule,
+  because the ADR names the last `*.cs` section and a narrower glob is one edit from overriding the
+  tier. A section matches a C# file when it matches a tracked `.cs` file or a probe path in each
+  relaxed folder;
+- any analyzer config, an `.editorconfig`, `.globalconfig` or `*.globalconfig` at any depth, sets a
+  security rule's severity to anything but `error` or `warning`, in any of its sections (#671;
+  decision 4). An earlier `[tests/**.cs]` section, an earlier copy of the relaxed header or a nested
+  `.editorconfig` relaxes a rule as surely as the relaxed tier's section would, so no glob decides
+  which lines are read. The one exception is a pending line (decision 6), which lives in the root
+  `.globalconfig` alone: `suggestion` with `# pending #N` on the same line. `default` is a relaxation,
+  since it hands the rule back to an analyzer that ships most security rules off;
+- any analyzer config has a `dotnet_analyzer_diagnostic.category-*` line (X4; decision 5): under
+  `AnalysisMode=All` it adds nothing, and its reach into a package's rules that share the category
+  name is undocumented;
 - a `[SuppressMessage]` has no `Justification`, or one that cites no id (decision 12);
 - a `#pragma warning disable` cites no id on its own line (decision 12);
 - any `GlobalSuppressions.cs` exists (#594-Q7; decision 4);
@@ -76,7 +84,9 @@ MA0009 MA0039
 
 CITATION = re.compile(r"(?<![A-Za-z0-9_-])(?:[SR]-[A-Z0-9]+|[FNPA]-[0-9]+|ADR-[0-9]+)(?![A-Za-z0-9_])"
                       r"|(?<![A-Za-z0-9_&])#[0-9]+\b")
-SEVERITY = re.compile(r"^\s*dotnet_diagnostic\.([A-Za-z0-9_]+)\.severity\s*=", re.IGNORECASE)
+SEVERITY = re.compile(r"^\s*dotnet_diagnostic\.([A-Za-z0-9_]+)\.severity\s*=\s*([^#;\s]*)", re.IGNORECASE)
+HELD = ("error", "warning")
+PENDING = re.compile(r"[#;]\s*pending\s+#[0-9]+\b", re.IGNORECASE)
 CATEGORY = re.compile(r"^\s*dotnet_analyzer_diagnostic\.category-", re.IGNORECASE)
 SECTION = re.compile(r"^\s*(\[.*\])\s*(?:[#;].*)?$")
 COMMENT = re.compile(r"^\s*[#;]")
@@ -187,14 +197,34 @@ def judge_relaxed_section(path: str, text: str, csharp: list[str], findings: lis
         entry = SEVERITY.match(line)
         if entry:
             diagnostic = entry.group(1).upper()
-            if diagnostic in SECURITY_IDS:
-                findings.append(f"{path}:{number}: {diagnostic} is a security rule, which is never relaxed for a "
-                                "tier; fix it or suppress it at its site (ADR-0035 decision 4).")
+            if diagnostic in SECURITY_IDS and entry.group(2).lower() in HELD:
+                # Decision 13: the section never names a security rule, even at error. A relaxed
+                # value is judge_security_lines' finding, so each line is reported once.
+                findings.append(f"{path}:{number}: {diagnostic} is a security rule, which the relaxed tier's "
+                                "section never names, at any severity (ADR-0035 decision 13).")
             reason_above = COMMENT.match(previous) and previous.strip().lstrip("#;").strip()
             if not reason_above and not TRAILING_REASON.search(line):
                 findings.append(f"{path}:{number}: {diagnostic} has no reason comment, on its line or the line "
                                 "directly above (ADR-0035 decision 13).")
         previous = line
+
+
+def judge_security_lines(path: str, text: str, findings: list[str]) -> None:
+    """Every line of the file, in every section and before the first: a security rule is held at
+    error everywhere, so where a line sits never makes its relaxation harmless (#671)."""
+    for number, line in enumerate(text.splitlines(), start=1):
+        entry = SEVERITY.match(line)
+        if not entry or entry.group(1).upper() not in SECURITY_IDS:
+            continue
+        value = entry.group(2).lower()
+        if value in HELD:
+            continue
+        if path == ".globalconfig" and value == "suggestion" and PENDING.search(line[entry.end():]):
+            continue
+        findings.append(f"{path}:{number}: {entry.group(1).upper()} is a security rule, which is never relaxed, "
+                        f"here to {entry.group(2) or 'nothing'}; it stays at error in both tiers, ramps only "
+                        "through a pending line in the root .globalconfig, and a finding is fixed or "
+                        "suppressed at its site (ADR-0035 decisions 4 and 6).")
 
 
 def judge_category_lines(path: str, text: str, findings: list[str]) -> None:
@@ -336,6 +366,7 @@ def judge(top: pathlib.Path) -> list[str]:
         if is_analyzer_config(path):
             text = read(top, path)
             judge_category_lines(path, text, findings)
+            judge_security_lines(path, text, findings)
             if path == ".editorconfig":
                 judge_relaxed_section(path, text, [p for p in paths if p.endswith(".cs")], findings)
         elif name.endswith(".cs"):

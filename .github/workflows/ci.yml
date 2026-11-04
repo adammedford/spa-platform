@@ -1,6 +1,6 @@
 # CI. Owner: integrator, written at task I-5.
 #
-# Four jobs. The documents job runs on every pull request and costs a few minutes: the documents a
+# Five jobs. The documents job runs on every pull request and costs a few minutes: the documents a
 # session steers by, the roadmap, the checks' own tests, the test companions of tools/land.sh, of
 # the review record reader it runs, of the local check, tools/check.sh, of tools/preflight.sh, of
 # the branch cleanup land.sh runs and of the main-checkout guard, the test companions of the cell
@@ -35,6 +35,15 @@
 # parse check again on macOS, under the bash 3.2 the scripts target, and the main-checkout guard's
 # companion on macOS, where the sessions here run the hook, on every push and pull request; the
 # steps that run them say why.
+#
+# The fifth job, `CodeQL`, is the advanced-setup CodeQL scan of the solution's C# (ADR-0035
+# decision 11, #609). It runs under the Build job's `if`, so it skips with it, and builds the
+# solution again under CodeQL's tracer, with the `security-extended` suite and the category
+# `/language:csharp`. Its alerts are advisory, read in the Security tab: the job fails only when the
+# analysis does not run. A weekly rescan under the same category lives in codeql-weekly.yml, a
+# schedule-only file of its own, because a schedule here would run every job. Main's protection
+# names this job, `CodeQL`, when it requires the scan, never the generated `Code scanning results /
+# CodeQL` check, which stays pending on a pull request with no upload (ADR-0035 decision 11).
 #
 # Plan policy (P-01 to P-03 and P-07) is mock-provider assertions that the Terraform job's test step
 # runs (ADR-0016); CI holds no AWS credential, and plan generation stays disabled.
@@ -207,7 +216,9 @@ jobs:
         # and the commits this change adds, each of which, if it changes a steering document, must
         # name what authorised it in an `Authority:` trailer (ADR-0023, #102). Those are judged from
         # the base the decision step resolved, or over every commit HEAD reaches when it resolved
-        # none, so a push GitHub has no `before` for is judged rather than skipped.
+        # none, so a push GitHub has no `before` for is judged rather than skipped. An ADR that
+        # existed at the merge-base of that base and HEAD may change only its Status item, so a
+        # body edit, delete or rename fails whatever the trailer says (ADR-0032 decision 7, #634).
         # The tests run first, on trees built to trip each rule, because the repository is green and
         # a green repository cannot show that a widened check stopped catching what it was for.
         env:
@@ -247,9 +258,10 @@ jobs:
 
       - name: The analyzer configs and every suppression keep ADR-0035's rules
         # The build enforces each analyzer severity but not the shape of the files that set them: a
-        # relaxed security rule, a later .editorconfig section overriding the relaxed tier's, a
-        # category line or a suppression citing nothing all build green (#606). tools/check.sh runs
-        # the guard before every push; here it runs on what reaches main, after its companion.
+        # security rule relaxed in any section of any analyzer config (#671), a later .editorconfig
+        # section overriding the relaxed tier's, a category line or a suppression citing nothing all
+        # build green (#606). tools/check.sh runs the guard before every push; here it runs on what
+        # reaches main, after its companion.
         run: |
           python3 -I tools/analysis_guard_tests.py
           python3 -I tools/analysis_guard.py
@@ -416,6 +428,14 @@ jobs:
         # passing case lines are the one shape let through, and the terminal's --stream mode masks
         # each line as it arrives and passes AccessDenied through (#468).
         run: python3 -I tools/wiz_redact_tests.py
+
+      - name: The derived issue labels follow the table, write by name, and delete a label only when nothing carries it
+        # tools/issue_labels.py (#680) works out each issue's kind:, area: and vendor: labels and
+        # retires the unused default labels, the one write it cannot take back. Its companion runs the
+        # real script against a gh double: the derivation, the routes written, a short listing that
+        # must not read a label as unused, a failed write's verdict and the workflow's invocations.
+        # One case reads this checkout's tracked files, so a path the table does not cover fails here.
+        run: python3 -I tools/issue_labels_tests.py
 
       - name: A session's tail prints its last text turns and leaves out tool output and task notifications
         # A review or a morning reads what another session meant from the end of its transcript
@@ -739,3 +759,45 @@ jobs:
             terraform -chdir="$dir" init -backend=false -input=false
             terraform -chdir="$dir" test
           done <<< "$dirs"
+
+  codeql:
+    name: CodeQL
+    runs-on: ubuntu-latest
+    needs: documents
+    # The Build job's own `if`, so a change with no .NET input skips this job, which GitHub reports
+    # as a success, and the job can be required by its name without sticking (ADR-0035 decision 11;
+    # the header says why it is an `if` and why it says `!cancelled()`).
+    if: ${{ !cancelled() && needs.documents.outputs.build != 'false' }}
+    # The analysis is uploaded to code scanning, which needs `security-events: write`; the workflow's
+    # own `contents: read` is all the checkout needs.
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - uses: github/codeql-action/init@v4
+        with:
+          # C# only (ADR-0035 decision 11). `manual`: CodeQL extracts what the build step below
+          # compiles, so the scan covers what the solution builds, sees the source generators'
+          # output and leaves `spikes/` out, which is outside the solution. The test projects stay
+          # in, under code scanning's `Test` label (#587, sections 3 and 6).
+          languages: csharp
+          build-mode: manual
+          queries: security-extended
+
+      - name: Build
+        # CI's own build of the solution, on the SDK setup-dotnet resolved from global.json. CodeQL's
+        # tracer adds its own properties to it (#587, section 3).
+        run: dotnet build SpaPlatform.slnx -c Release
+
+      - uses: github/codeql-action/analyze@v4
+        with:
+          # The category the weekly rescan in codeql-weekly.yml names too, so the two runs update one
+          # analysis rather than two. Alerts are advisory: the step fails only when the analysis or
+          # its upload does not happen, never on what it finds (ADR-0035 decision 11).
+          category: /language:csharp

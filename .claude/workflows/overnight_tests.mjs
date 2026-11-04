@@ -24,7 +24,20 @@
 // no two merges run at once, and that every ticket the run files passes tools/ticket_shape.py first (#248). Three
 // change requests (#436), two ready-for-human and one ready-for-agent, prove that a request is grilled into a draft
 // decision and built only on Adam's decision comment, and the mocked lanes' changeRequests fill the report's
-// Change requests lists. No agent, gh or git call is made.
+// Change requests lists. Each integrate's check is judged against its merge's first parent, and one closing check,
+// which answers red, judges the whole run against the run base once every lane has settled; three short runs after the
+// main one cover a run that integrated nothing, a closing agent that died, and an ok contradicting its last line
+// (#629). Five more short runs on synthetic tickets check that a lane runs first the ready ticket with the most of
+// tonight's tickets downstream, counted transitively, across lanes, once per ticket and only over tickets a lane
+// runs, ties by n (#662). One more short run has an agent die on the account's usage limit, and checks that the run
+// halts naming the reset, counts that death as no failure, lists the tickets it stopped apart from the failed ones,
+// and starts no agent after it (#710); one more checks that a re-run dying on the limit says the run branch may
+// hold its merge, and that a grill the limit stopped does not read as died. One more short run has the resume probe
+// find tickets already on the run branch (#712), #677's case with its gate on record and #634's with no pass line,
+// and checks that each skips implement and review, runs the gate once and integrates. A last short run has the live
+// read find tickets relabelled since collect (#721), #544's case relabelled ready-for-human among them, and checks
+// that none is implemented, that each takes its live status, and that a read that died fails closed. No agent,
+// gh or git call is made.
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -117,6 +130,10 @@ const changeRequestsOf = (kind, id, k) => (kind === 'implement' && id === AFTER_
   : (kind === 'implement' && id === CONFLICT_ALWAYS) ? [KEPT_IMPL] : (kind === 'review' && id === CONFLICT_ALWAYS) ? [k === 1 ? KEPT_REV1 : KEPT_REV] : []
 const grillResult = (id) => ({ questions: [], changeRequests: id === HELD_BY ? [QUEUED] : [], adrCandidates: [],
   draftDecision: id === REQUEST_HUMAN.id ? DRAFT_URL : '', decided: id === REQUEST_DECIDED.id ? DECIDED_LINE : '', summary: 'companion' })
+// The resume probe's answer for a ticket whose work is not yet on the run branch (#712), the case of every run but 36.
+const NOT_MERGED = { merged: false, mergeSha: '', subject: '', notes: 'companion' }
+// The live read's answer for a ticket still labelled as collect read it (#721), the case of every run but 38.
+const LIVE_READY = { state: 'OPEN', labels: ['ready-for-agent', 'kind:ticket'], assignees: [], notes: '' }
 const reviewCalls = {}     // id -> review calls so far, so a ticket's first and second review can report apart
 // One more, added after the tickets above so none of their choices moves (#480): a tracker edit whose Touches line says
 // none, which collect gives the status foreground: no lane, no Route, no grill, and the report's Foreground section.
@@ -147,6 +164,10 @@ const CARRIED_LOOSE_SUMMARY = 'Carried from an earlier night.'
 const grillQuestions = (n) => Array.from({ length: n }, (_, i) => ({ q: `Q${i + 1}?`, recommendation: 'yes' }))
 const ELSEWHERE = 'e'.repeat(40)   // the head FLAKE_ELSEWHERE's re-run agent answers ok on, not the gate's RED
 const AGAIN_NOTE = 're-run failed: tests/Spactl.Tests failed again alone'
+// The closing check's answer in the main run (#629 Q15, Q18): red on a companion that no single merge's check earned.
+const CLOSING_TIP = 'd'.repeat(40)
+const CLOSING_FAIL_LINE = 'check: fail: the test companion tools/landing_subjects_tests.py failed.'
+const CLOSING_RED = { ok: false, headSha: CLOSING_TIP, lastLine: CLOSING_FAIL_LINE, notes: 'companion' }
 const SHARED_FILE = '.gitignore'
 const changedFiles = (id) => (id === CONFLICT_ALWAYS || id === NEEDS_HUMAN || !fixture.expect.integrated.includes(id)) ? [`files/${id}.txt`] : [`files/${id}.txt`, SHARED_FILE]
 const merges = {}          // id -> integrate calls so far
@@ -174,6 +195,8 @@ globalThis.agent = async (prompt, opts) => {
   const [kind, id] = opts.label.split(':')
   // Copies: the script sets a routed ticket's status, and the checks read the statuses collect gave.
   if (kind === 'collect') return { outcome: 'ok', reason: 'companion', tickets: tickets.map((t) => ({ ...t })), landed: [], base: 'a'.repeat(40), shell: '3.2', shellCommand: '/bin/bash' }
+  if (kind === 'resume') return NOT_MERGED   // the resume probe (#712): nothing of this run is on the run branch yet
+  if (kind === 'live') return LIVE_READY   // the live read (#721): still ready-for-agent
   if (kind === 'grill') {
     const asked = id === CARRIED ? { questions: grillQuestions(13), summary: CARRIED_SUMMARY }
       : id === CARRIED_LOOSE ? { questions: grillQuestions(5), summary: CARRIED_LOOSE_SUMMARY }
@@ -207,6 +230,8 @@ globalThis.agent = async (prompt, opts) => {
     return { ok: false, mergeSha: '', headSha: '', notes: AGAIN_NOTE, projects }
   }
   if (kind === 'reset') return { ok: true, head: OLD, notes: `${id}: the run branch is at ${OLD}` }
+  // The closing check (#629) answers red, the case the report has to carry without resetting any merge.
+  if (kind === 'closing') return CLOSING_RED
   throw new Error(`unexpected agent label ${opts.label}`)
 }
 
@@ -642,7 +667,9 @@ const HOUSE_CREATE = 'gh issue create` only for a change request, after the sear
       }
       if (/dotnet test --solution/.test(p)) fail(`the re-run of ${id} runs the whole suite, not the failed projects alone`)
       if (/dotnet test --project tests\/(?!Spactl\.Tests |e2e |<X>\.Tests`)/.test(p)) fail(`the re-run of ${id} runs a project that did not fail`)
-      if (!p.includes(`tools/check.sh --full --base a${'a'.repeat(39)} --port `) || !p.includes(' --skip-tests; }')) fail(`the re-run of ${id} does not run the rest of the check with --skip-tests, against the run's base`)
+      // #629 Q19: the re-run judges the same merge against the same old commit the red check was judged against.
+      if (!p.includes(`tools/check.sh --full --base ${OLD} --port `) || !p.includes(' --skip-tests; }')) fail(`the re-run of ${id} does not run the rest of the check with --skip-tests, against the merge's first parent ${OLD}`)
+      if (p.includes(`--base a${'a'.repeat(39)}`)) fail(`the re-run of ${id} still judges against the run base, not the merge's first parent (#629)`)
       if (!p.includes(`reset --hard ${RED}`) || !p.includes(`reset --hard ${OLD}`)) fail(`the re-run of ${id} does not move the run branch to the gate's head and back to the old head on red`)
       if (!p.includes('"## Flake at integrate"')) fail(`the re-run of ${id} records no "## Flake at integrate" comment on its ticket`)
     }
@@ -906,12 +933,16 @@ const reportSummary = reportPrompt ? JSON.parse((/^Run results \(JSON\): (.*)$/m
 //     change-request issues are searched before anything is filed; a request is filed ready-for-human, blocking its
 //     ticket; and when GitHub is unreachable a create line is queued in the shape morning.js replays (#433). The
 //     route's body shape is run through tools/ticket_shape.py under ready-for-human, as collect's forecast judges
-//     every listed ticket: without its Owner line it would fail owner-line (#442 Q68).
+//     every listed ticket: without its Owner line it would fail owner-line (#442 Q68). Just before the create, the
+//     route runs tools/ticket_shape.py --since from the time its search began, files only on its pass, folds a
+//     duplicate filed since, and queues the line, carrying that time, when nothing was searched (#678).
 {
   const PENDING = `${LOG}/pending-${fixture.args.date}.jsonl`
   const routed = allPrompts.filter((c) => /^(implement|review|grill):/.test(c.label))
   if (!routed.some((c) => c.label.startsWith('implement:')) || !routed.some((c) => c.label.startsWith('review:')) || !routed.some((c) => c.label.startsWith('grill:'))) fail('#436: no implement, review or grill prompt was rendered, so the route checks read nothing')
-  let shape = null
+  let shape = null, sinceRecipe = null
+  const SEARCHED_NOTE = 'Run `date -u +%FT%TZ` just before it and keep what it prints as <searched>'
+  const SINCE_CHECK = `cd ${fixture.args.repo} && python3 -I tools/ticket_shape.py --since <searched> --title "<title>"`
   for (const c of routed) {
     const id = c.label.split(':')[1], issue = byId[id].issue
     const search = c.prompt.indexOf(REQUEST_SEARCH)
@@ -920,11 +951,48 @@ const reportSummary = reportPrompt ? JSON.parse((/^Run results \(JSON\): (.*)$/m
     if (create < 0) { fail(`#436: the ${c.label} prompt does not file a change request ready-for-human, blocking #${issue}`); continue }
     if (search > create) fail(`#436: the ${c.label} prompt files a change request before it searches`)
     if (!c.prompt.includes(`gh issue edit ${issue} --add-blocked-by <its number>\`; otherwise change nothing and report nothing for it.`)) fail(`#436: the ${c.label} prompt adds no edge to a request it finds open, or reports one it did not wire`)
-    const queue = `jq -cn --arg t "<title>" --argjson k <${issue}, or 0 when it blocks nothing> --rawfile b ${LOG}/${id}-cr.md '{issue: 0, action: "create", title: $t, label: "change-request,ready-for-human", blocking: $k, body: $b}' >> ${PENDING}`
-    if (!c.prompt.includes(queue)) fail(`#436: the ${c.label} prompt does not queue the morning's create line when GitHub is unreachable`)
+    const queue = `jq -cn --arg t "<title>" --arg s "<searched>" --argjson k <${issue}, or 0 when it blocks nothing> --rawfile b ${LOG}/${id}-cr.md '{issue: 0, action: "create", title: $t, label: "change-request,ready-for-human", blocking: $k, searched: $s, body: $b}' >> ${PENDING}`
+    if (!c.prompt.includes(queue)) fail(`#436: the ${c.label} prompt does not queue the morning's create line, with the time its search began, when GitHub is unreachable`)
     else if (c.prompt.indexOf(queue) < create) fail(`#436: the ${c.label} prompt queues the create line before it tries to file`)
+    // #678: the time is noted before the search, and the --since check runs from it after the search and before the
+    // create, with a rule for each of its exits; exit 2 files nothing.
+    const route = c.prompt.lastIndexOf('THE CHANGE-REQUEST ROUTE', search)
+    const noted = c.prompt.indexOf(SEARCHED_NOTE, route)
+    const since = c.prompt.indexOf(SINCE_CHECK, search)
+    if (route < 0 || noted < 0 || noted > search) fail(`#678: the ${c.label} prompt does not note the time its change-request search began, as <searched>, before the search`)
+    if (since < 0 || since > create) fail(`#678: the ${c.label} prompt does not run ${SINCE_CHECK} after its search and before its create`)
+    else {
+      const step = c.prompt.slice(since, create)
+      for (const rule of ['On exit 0, its last line starting "ticket-shape: pass:", file it', 'On exit 1, read each issue a "ticket-shape: possible-duplicate:" line names', 'gh issue view <n> --json title,body,labels,state`', 'name each that does not with `--not-duplicate-of', 'On any other exit nothing was searched, so file nothing'])
+        if (!c.prompt.slice(since).includes(rule)) fail(`#678: the ${c.label} prompt's --since step lacks "${rule}"`)
+      if (!step.includes('On exit 0')) fail(`#678: the ${c.label} prompt files before it says the --since check must pass`)
+      if (!sinceRecipe) sinceRecipe = (/`cd \S+ && (python3 -I tools\/ticket_shape\.py --since <searched> --title "<title>")`/.exec(c.prompt.slice(since - 1)) || [])[1]
+    }
     if (!shape) shape = (/in this shape:\n([\s\S]*?)\n   Its title/.exec(c.prompt) || [])[1]
   }
+  // #678: the route's --since recipe is run for real against a fake gh on PATH, so a recipe the script refuses (an
+  // argument it does not take, a time it does not read) fails here and not on the night. An empty listing passes; a
+  // listing holding an issue whose title shares three content words with the title fails it on exit 1.
+  if (!sinceRecipe) fail('#678: no prompt gave the --since recipe, so the live run read nothing')
+  else {
+    const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'overnight-tests-since-'))
+    const gh = path.join(bin, 'gh')
+    fs.writeFileSync(gh, '#!/bin/sh\ncat "$LISTING"\n', { mode: 0o755 })
+    const run = (listing) => {
+      fs.writeFileSync(path.join(bin, 'listing.json'), JSON.stringify(listing))
+      const sh = sinceRecipe.replace('<searched>', '2026-10-31T22:00:00Z').replace('<title>', 'The proxy needs a header contract')
+      return spawnSync('sh', ['-c', sh], { cwd: path.resolve(here, '..', '..'), encoding: 'utf8', env: { PATH: `${bin}:/usr/bin:/bin`, LISTING: path.join(bin, 'listing.json') } })
+    }
+    const clear = run([])
+    if (clear.status !== 0 || !/^ticket-shape: pass:/m.test(clear.stdout)) fail(`#678: the route's --since recipe does not pass an empty listing: exit ${clear.status}, ${(clear.stdout + clear.stderr).trim()}`)
+    // The twin's number is built, not written after a hash, so the steering check reads no citation of an issue here.
+    const TWIN = 901
+    const twin = run([{ number: TWIN, title: 'A header contract for the proxy', createdAt: '2026-10-31T23:10:00Z', state: 'OPEN' }])
+    if (twin.status !== 1 || !new RegExp(`^ticket-shape: possible-duplicate: #${TWIN} `, 'm').test(twin.stdout)) fail(`#678: the route's --since recipe does not fail a possible duplicate filed since the search: exit ${twin.status}, ${(twin.stdout + twin.stderr).trim()}`)
+    fs.rmSync(bin, { recursive: true, force: true })
+  }
+  // morning.js runs its --since check from the line's searched field (#678).
+  if (!fs.readFileSync(path.join(here, 'morning.js'), 'utf8').includes('the line\'s "searched"')) fail('#678: morning.js does not read the create line\'s searched field, so the morning searches from its own time alone')
   for (const c of allPrompts.filter((x) => x.label.startsWith('implement:'))) {
     if (!c.prompt.includes('cite the request\'s number (#<n>)')) fail(`#436: the ${c.label} prompt does not cite the request's number on a partial lane's Outstanding line`)
   }
@@ -1101,9 +1169,506 @@ for (const c of allPrompts.filter((x) => x.label.startsWith('review:'))) {
   }
 }
 
+// 31. Each integrate step's local check is judged against the merge's first parent (#629 Q14). On 2026-10-29 every
+//     integrate ran `--base <run base>`, so the n-th merge's check judged all n merges: the span from merge message to
+//     integrate log grew from 2m31s (#506, the first) to 10m27s (#513, the last) while the suite stayed near 2 minutes,
+//     as the companions earlier merges had earned ran again on each later one. <old> is the run branch's tip before
+//     this merge, which STEP 1 records and STEP 0 recovers on a resumed run, so the diff judged is this merge and its
+//     roadmap refresh.
+{
+  const RUN_BASE = 'a'.repeat(40)
+  const integrates = allPrompts.filter((c) => c.label.startsWith('integrate:'))
+  if (!integrates.length) fail('#629: no integrate prompt was rendered, so the base check read nothing')
+  for (const c of integrates) {
+    if (!c.prompt.includes('tools/check.sh --full --base <old> --port ')) fail(`#629: the ${c.label} prompt's local check is not judged against <old>, the merge's first parent`)
+    if (c.prompt.includes(`--base ${RUN_BASE}`)) fail(`#629: the ${c.label} prompt still judges a check against the run base`)
+    if (!c.prompt.includes('Record old=') || !c.prompt.includes('judged against <old>, the merge\'s first parent')) fail(`#629: the ${c.label} prompt does not define <old> on both the first and the resumed path`)
+    if (!c.prompt.includes('STEP 2 — the integrate step\'s local check, judged against the merge\'s first parent <old>')) fail(`#629: the ${c.label} prompt's STEP 2 does not name the check in the glossary's words (Q13, Q17)`)
+    // The check's command is run exactly as written, and a bare `<old>` in it is a bash redirect from a file named old,
+    // so the step says to write the sha in its place (#629's review).
+    if (!c.prompt.includes('write <old>\'s 40-character sha where it says <old>')) fail(`#629: the ${c.label} prompt does not say to put <old>'s sha in the check's command, which bash would read as a redirect`)
+  }
+}
+
+// 32. One closing check judges the whole run against the run base (#629 Q15, Q18): what 31 gives up is the proof that
+//     a later merge did not break a companion an earlier merge earned, and no one knows in advance which merge is the
+//     last, since the lanes run in parallel. So once every lane has settled, and before the report, one agent runs
+//     `tools/check.sh --full --base <run base>` on the run branch's tip, on a port no lane has, and changes nothing.
+//     A red one is reported under its own heading with its log and last line; every merge stays, and the morning adds
+//     no hold. The main run's closing check answers red; three short runs below cover a run that integrated nothing,
+//     a closing agent that died, and an answer of ok whose last line is a failure.
+{
+  const RUN_BASE = 'a'.repeat(40)
+  const INT_WT = `${fixture.args.wt}/overnight`
+  const CLOSING_LOG = `${LOG}/closing-check.txt`
+  const closings = allPrompts.filter((c) => c.label === 'closing')
+  if (closings.length !== 1) fail(`#629: the run rendered ${closings.length} closing-check prompts, not 1`)
+  const p = (closings[0] || {}).prompt || ''
+  const cmd = (/^ {2}cd (\S+) && \{ echo "HEAD=\$\(git -C \S+ rev-parse HEAD\)"; tools\/check\.sh --full --base (\S+) --port (\d+); \} > (\S+) 2>&1; tail -25 \S+$/m.exec(p) || [])
+  if (!cmd.length) fail('#629: the closing-check prompt does not run tools/check.sh --full as the one check command')
+  else {
+    if (cmd[1] !== INT_WT) fail(`#629: the closing check runs in ${cmd[1]}, not the integration worktree ${INT_WT}`)
+    if (cmd[2] !== RUN_BASE) fail(`#629: the closing check is judged against ${cmd[2]}, not the run base ${RUN_BASE}`)
+    if (cmd[4] !== CLOSING_LOG) fail(`#629: the closing check logs to ${cmd[4]}, not ${CLOSING_LOG}`)
+    // No ticket's port, whether or not its lane ran tonight: a lane's port is 5100 + 10n, with n from 1.
+    const lanePorts = new Set([...allPrompts.filter((c) => c.label.startsWith('implement:')).map((c) => (/Your port: (\d+)\./.exec(c.prompt) || [])[1]),
+      ...tickets.map((t) => String(5100 + 10 * t.n))])
+    if (lanePorts.has(cmd[3])) fail(`#629: the closing check's port ${cmd[3]} is a lane's port`)
+  }
+  for (const rule of ['Change nothing in it', 'every merge stays', 'STEP 0 — durable state']) if (!p.includes(rule)) fail(`#629: the closing-check prompt lacks "${rule}"`)
+  if (/reset --hard|git -C \S+ (merge|commit)\b/.test(p)) fail('#629: the closing-check prompt moves the run branch')
+  // After every lane has settled: no integrate ends after the closing check starts; and before the report.
+  const closingStart = (events.find((e) => e.kind === 'closing' && e.edge === 'start') || {}).at
+  const lastIntegrate = Math.max(...events.filter((e) => e.kind === 'integrate' && e.edge === 'end').map((e) => e.at))
+  if (closingStart === undefined) fail('#629: the closing check never started')
+  else if (closingStart < lastIntegrate) fail(`#629: the closing check started at ${closingStart}, before the last integrate ended at ${lastIntegrate}`)
+  const at = (label) => allPrompts.findIndex((c) => c.label === label)
+  if (at('closing') < 0 || at('report') < at('closing')) fail('#629: the closing check does not run before the report')
+  // A red closing check is reported, and nothing moves: the integrated set is check 1's, and no reset agent ran for it.
+  const want629 = { status: 'fail', log: CLOSING_LOG, base: RUN_BASE, headSha: CLOSING_TIP, lastLine: CLOSING_FAIL_LINE }
+  for (const [where, got629] of [['the run\'s result', result.closingCheck], ['the report\'s results', reportSummary && reportSummary.closingCheck]]) {
+    for (const [k, v] of Object.entries(want629)) if (!got629 || got629[k] !== v) fail(`#629: ${where} closingCheck.${k} is ${got629 ? JSON.stringify(got629[k]) : 'missing'}, not ${JSON.stringify(v)}`)
+  }
+  if (allPrompts.some((c) => c.label === 'reset:closing' || c.label === 'reset:undefined')) fail('#629: a red closing check reset the run branch')
+  const item = reportPrompt.split('\n').find((l) => l.includes('- Closing check (#629)')) || ''
+  for (const rule of ['`### Closing check`', 'its log', 'its last line', 'every merge was kept', 'no morning hold']) if (!item.includes(rule)) fail(`#629: the report prompt's Closing check item lacks "${rule}"`)
+
+  // The short runs: one ticket, or none, and every agent answering at once.
+  const SOLO = [...want].find((id) => byId[id].status === 'ready-for-agent' && !byId[id].blockedBy.length && !byId[id].changeRequest)
+  const shortRun = async (only, closingAnswer) => {
+    const prompts = []
+    globalThis.args = { ...fixture.args, skills: OTHER_SKILLS, only }
+    globalThis.log = () => {}
+    globalThis.agent = async (prompt, opts) => {
+      prompts.push({ label: opts.label, prompt })
+      const [kind, id] = opts.label.split(':')
+      if (kind === 'collect') return { outcome: 'ok', reason: 'companion', tickets: tickets.map((t) => ({ ...t })), landed: [], base: RUN_BASE, shell: '3.2', shellCommand: '/bin/bash' }
+      if (kind === 'resume') return NOT_MERGED   // the resume probe (#712): nothing of this run is on the run branch yet
+      if (kind === 'live') return LIVE_READY   // the live read (#721): still ready-for-agent
+      if (kind === 'implement') return { outcome: 'resolved', branch: 'b', forkSha: 'f', headSha: 'h', complete: true, outstanding: '', summary: 's', question: '', delegatedDecisions: [], changeRequests: [] }
+      if (kind === 'review') return { outcome: 'committed', headSha: 'h', findingsFixed: [], findingsSkipped: [], summary: 's', question: '', changeRequests: [], changedFiles: [`files/${id}.txt`] }
+      if (kind === 'integrate') return { ok: true, mergeSha: 'm', notes: '', conflictFiles: [], headSha: `verified-${id}`, old: '', redHead: '', reach: '' }
+      if (kind === 'closing') return closingAnswer
+      if (kind === 'report') return { questions: 0, mainCheckoutClean: true, leftovers: '', issue: 0, url: '' }
+      throw new Error(`unexpected agent label ${opts.label} in a closing-check run`)
+    }
+    const src = fs.readFileSync(scriptPath, 'utf8').replace(/^export const meta/m, 'const meta')
+    return { result: await new Function('return (async () => {' + src + '\n})()')(), prompts }
+  }
+  if (!SOLO) fail('#629: the fixture has no unblocked ticket to integrate alone, so the short closing-check runs read nothing')
+  else {
+    const none = await shortRun([], null)
+    if (none.prompts.some((c) => c.label === 'closing')) fail('#629: a run that integrated nothing still ran a closing check')
+    if (!none.result.closingCheck || none.result.closingCheck.status !== 'not-run' || !/nothing integrated/.test(none.result.closingCheck.why || '')) fail(`#629: a run that integrated nothing does not say its closing check did not run because nothing integrated: ${JSON.stringify(none.result.closingCheck)}`)
+    const died = await shortRun([SOLO], null)
+    if (JSON.stringify(died.result.integrated) !== JSON.stringify([SOLO])) fail(`#629: the short run integrated ${JSON.stringify(died.result.integrated)}, not [${SOLO}]`)
+    if (!died.result.closingCheck || died.result.closingCheck.status !== 'not-run' || !/died/.test(died.result.closingCheck.why || '') || died.result.closingCheck.log !== CLOSING_LOG) fail(`#629: a closing agent that died does not read as not run, naming its log: ${JSON.stringify(died.result.closingCheck)}`)
+    // The script reads the verdict from the last line, not from the agent's ok, as the keep rule reads a re-run (#397).
+    const claimed = await shortRun([SOLO], { ok: true, headSha: CLOSING_TIP, lastLine: CLOSING_FAIL_LINE, notes: '' })
+    if (!claimed.result.closingCheck || claimed.result.closingCheck.status !== 'fail') fail(`#629: an ok whose last line is a failure reads as ${JSON.stringify(claimed.result.closingCheck)}, not fail`)
+    const green = await shortRun([SOLO], { ok: true, headSha: CLOSING_TIP, lastLine: 'check: pass: A-05, the roadmap.', notes: '' })
+    if (!green.result.closingCheck || green.result.closingCheck.status !== 'pass') fail(`#629: a green closing check reads as ${JSON.stringify(green.result.closingCheck)}, not pass`)
+  }
+}
+
+// 33. A lane runs first the ready ticket with the most of tonight's tickets downstream (#662). On 2026-10-31 the
+//     static-analysis head #605 had 18 of the night's tickets downstream, the five workstream lanes' only work among
+//     them, and sat at n=70 behind 19 ready integrator tickets with nothing downstream. Five short runs on synthetic
+//     tickets, every agent answering at once; implement starts are counted by ordinal, since the tick does not move.
+const DOWNSTREAM_CASES = 5
+{
+  const orderRun = async (set) => {
+    const starts = []
+    globalThis.args = { ...fixture.args, skills: OTHER_SKILLS }
+    globalThis.log = () => {}
+    globalThis.agent = async (prompt, opts) => {
+      const [kind, id] = opts.label.split(':')
+      if (kind === 'collect') return { outcome: 'ok', reason: 'companion', tickets: set.map((t) => ({ ...t })), landed: [], base: 'a'.repeat(40), shell: '3.2', shellCommand: '/bin/bash' }
+      if (kind === 'resume') return NOT_MERGED   // the resume probe (#712): nothing of this run is on the run branch yet
+      if (kind === 'live') return LIVE_READY   // the live read (#721): still ready-for-agent
+      if (kind === 'implement') { starts.push(id); return { outcome: 'resolved', branch: 'b', forkSha: 'f', headSha: 'h', complete: true, outstanding: '', summary: 's', question: '', delegatedDecisions: [], changeRequests: [] } }
+      if (kind === 'review') return { outcome: 'committed', headSha: 'h', findingsFixed: [], findingsSkipped: [], summary: 's', question: '', changeRequests: [], changedFiles: [`files/${id}.txt`] }
+      if (kind === 'integrate') return { ok: true, mergeSha: 'm', notes: '', conflictFiles: [], headSha: `verified-${id}`, old: '', redHead: '', reach: '' }
+      if (kind === 'closing') return { ok: true, headSha: CLOSING_TIP, lastLine: 'check: pass: companion.', notes: '' }
+      if (kind === 'report') return { questions: 0, mainCheckoutClean: true, leftovers: '', issue: 0, url: '' }
+      throw new Error(`unexpected agent label ${opts.label} in a downstream-order run`)
+    }
+    const src = fs.readFileSync(scriptPath, 'utf8').replace(/^export const meta/m, 'const meta')
+    const res = await new Function('return (async () => {' + src + '\n})()')()
+    return { res, starts }
+  }
+  const lane = (n, owner, blockedBy) => ({ ...synthetic(n, `issue-${n}`, 'ready-for-agent', blockedBy, 1), owner })
+  const before = (starts, a, b, why) => {
+    const i = starts.indexOf(a), j = starts.indexOf(b)
+    if (i < 0 || j < 0) fail(`#662: ${why}: ${i < 0 ? a : b} never started (${JSON.stringify(starts)})`)
+    else if (i > j) fail(`#662: ${why}: ${b} started before ${a} (${JSON.stringify(starts)})`)
+  }
+  // Case 1: FREE (n=961) has nothing downstream; HEAD (n=962) has three in other lanes, one of them only through
+  // another (HEAD <- ws1's 971 <- ws2's 972, and HEAD <- ws3's 973), so the count is transitive and crosses lanes.
+  {
+    const set = [lane(961, 'integrator', []), lane(962, 'integrator', []),
+      lane(971, 'ws1-infra', ['issue-962']), lane(972, 'ws2-hosting', ['issue-971']), lane(973, 'ws3-identity', ['issue-962'])]
+    const { res, starts } = await orderRun(set)
+    if ((res.integrated || []).length !== set.length) fail(`#662: the first downstream-order run integrated ${JSON.stringify(res.integrated)}, not all ${set.length}`)
+    before(starts, 'issue-962', 'issue-961', 'a ready ticket with three tickets downstream does not run before a lower n with none')
+  }
+  // Case 2: two ready tickets with one downstream each (a tie above zero) run in n order, as before #662.
+  {
+    const set = [lane(964, 'integrator', []), lane(963, 'integrator', []),
+      lane(974, 'ws1-infra', ['issue-963']), lane(975, 'ws2-hosting', ['issue-964'])]
+    const { res, starts } = await orderRun(set)
+    if ((res.integrated || []).length !== set.length) fail(`#662: the second downstream-order run integrated ${JSON.stringify(res.integrated)}, not all ${set.length}`)
+    before(starts, 'issue-963', 'issue-964', 'two ready tickets with equal downstream counts do not run in n order')
+  }
+  // Case 3: the count is transitive. WIDE (n=965) has two directly downstream; DEEP (n=966) has a chain of three
+  // (DEEP <- 978 <- 979 <- 980), one of them directly, so only a transitive count puts DEEP first.
+  {
+    const set = [lane(965, 'integrator', []), lane(966, 'integrator', []),
+      lane(976, 'ws1-infra', ['issue-965']), lane(977, 'ws2-hosting', ['issue-965']),
+      lane(978, 'ws3-identity', ['issue-966']), lane(979, 'ws4-proxy', ['issue-978']), lane(980, 'ws5-fixtures', ['issue-979'])]
+    const { res, starts } = await orderRun(set)
+    if ((res.integrated || []).length !== set.length) fail(`#662: the third downstream-order run integrated ${JSON.stringify(res.integrated)}, not all ${set.length}`)
+    before(starts, 'issue-966', 'issue-965', 'a chain of three downstream does not outrank two direct ones, so the count is not transitive')
+  }
+  // Case 4: a ticket downstream by two paths counts once. FLAT (n=967) has three direct; DIAMOND (n=968) has 984 and
+  // 985 directly and 986 behind both, three tickets by four paths, so the tie goes to FLAT's lower n.
+  {
+    const set = [lane(967, 'integrator', []), lane(968, 'integrator', []),
+      lane(981, 'ws1-infra', ['issue-967']), lane(982, 'ws2-hosting', ['issue-967']), lane(983, 'ws3-identity', ['issue-967']),
+      lane(984, 'ws4-proxy', ['issue-968']), lane(985, 'ws5-fixtures', ['issue-968']), lane(986, 'ws6-verification', ['issue-984', 'issue-985'])]
+    const { res, starts } = await orderRun(set)
+    if ((res.integrated || []).length !== set.length) fail(`#662: the fourth downstream-order run integrated ${JSON.stringify(res.integrated)}, not all ${set.length}`)
+    before(starts, 'issue-967', 'issue-968', 'a ticket reached by two paths counts twice downstream')
+  }
+  // Case 5: only tickets a lane runs count (#662's Answer). IDLE (n=987) has two downstream that no lane runs, 990
+  // blocked on an issue outside tonight's set and 991 close-in-morning; BUSY (n=988) has one lane ticket, 989. A count
+  // over every ticket would put IDLE first; a count over lane tickets puts BUSY first.
+  {
+    const lanes5 = [lane(987, 'integrator', []), lane(988, 'integrator', []), lane(989, 'ws1-infra', ['issue-988'])]
+    const set = [...lanes5,
+      { ...synthetic(990, 'issue-990', 'blocked', ['issue-987', 'issue-999'], 1), owner: 'ws2-hosting' },
+      { ...synthetic(991, 'issue-991', 'close-in-morning', ['issue-987'], 0), owner: 'ws3-identity' }]
+    const { res, starts } = await orderRun(set)
+    if ((res.integrated || []).length !== lanes5.length) fail(`#662: the fifth downstream-order run integrated ${JSON.stringify(res.integrated)}, not all ${lanes5.length} lane tickets`)
+    before(starts, 'issue-988', 'issue-987', 'a ticket no lane runs counts downstream')
+  }
+}
+
+// 34. An agent that dies on the account's usage limit halts the run with the reset the message names, and counts as no
+//     failure (#710). On 2026-11-01 each such death went through fail() toward maxFailures, so the run halted at "8
+//     failures" with 4 real ones, and a resume before the reset lost 18 more agents the same way. One short run on
+//     synthetic tickets, with the agents timed by sleeps: in the integrator lane DIES's implement throws the
+//     message, which the 2026-11-01 run quoted, at 40 ms, and AFTER waits behind it in the same lane; in ws1 FIRST's
+//     implement runs from 0 to 30 ms and its review from 30 to 60 ms, both started before the death, and SECOND's
+//     implement from 30 to 60 ms; in ws2 BROKEN's review fails at about 10 ms, a real failure. After the death no agent
+//     may start: not FIRST's integrate, not SECOND's review, not AFTER's implement, not the closing check or the report.
+const LIMIT_MESSAGE = 'You\'ve hit your weekly limit · resets 10pm (America/Chicago)'
+const LIMIT_HALTED = 'usage limit; resume after 10pm (America/Chicago)'
+{
+  const started710 = [], late = []
+  let died = false
+  globalThis.args = { ...fixture.args, skills: OTHER_SKILLS }
+  globalThis.log = () => {}
+  globalThis.agent = async (prompt, opts) => {
+    const [kind, id] = opts.label.split(':')
+    if (died) late.push(opts.label)
+    started710.push(opts.label)
+    if (kind === 'collect') return { outcome: 'ok', reason: 'companion', tickets: set710.map((t) => ({ ...t })), landed: [], base: 'a'.repeat(40), shell: '3.2', shellCommand: '/bin/bash' }
+    if (kind === 'resume') return NOT_MERGED   // the resume probe (#712): nothing of this run is on the run branch yet
+    if (kind === 'live') return LIVE_READY   // the live read (#721): still ready-for-agent
+    if (kind === 'report') return { questions: 0, mainCheckoutClean: true, leftovers: '', issue: 0, url: '' }
+    if (kind === 'closing') return { ok: true, headSha: CLOSING_TIP, lastLine: 'check: pass: companion.', notes: '' }
+    await sleep(id === 'issue-1001' ? 40 : id === 'issue-1003' || id === 'issue-1004' ? 30 : 5)
+    if (kind === 'implement' && id === 'issue-1001') { died = true; throw new Error(LIMIT_MESSAGE) }
+    if (kind === 'implement') return { outcome: 'resolved', branch: 'b', forkSha: 'f', headSha: 'h', complete: true, outstanding: '', summary: 's', question: '', delegatedDecisions: [], changeRequests: [] }
+    if (kind === 'review' && id === 'issue-1005') return { outcome: 'failed', headSha: 'h', findingsFixed: [], findingsSkipped: [], summary: 'a real failure', question: '', changeRequests: [], changedFiles: [] }
+    if (kind === 'review') return { outcome: 'committed', headSha: 'h', findingsFixed: [], findingsSkipped: [], summary: 's', question: '', changeRequests: [], changedFiles: [`files/${id}.txt`] }
+    if (kind === 'integrate') return { ok: true, mergeSha: 'm', notes: '', conflictFiles: [], headSha: `verified-${id}`, old: '', redHead: '', reach: '' }
+    throw new Error(`unexpected agent label ${opts.label} in the usage-limit run`)
+  }
+  const lane710 = (n, owner) => ({ ...synthetic(n, `issue-${n}`, 'ready-for-agent', [], 1), owner })
+  const set710 = [lane710(1001, 'integrator'), lane710(1002, 'integrator'), lane710(1003, 'ws1-infra'), lane710(1004, 'ws1-infra'), lane710(1005, 'ws2-hosting')]
+  const src = fs.readFileSync(scriptPath, 'utf8').replace(/^export const meta/m, 'const meta')
+  let res = null
+  try { res = await new Function('return (async () => {' + src + '\n})()')() } catch (e) { fail(`#710: the usage-limit run threw: ${e && e.message ? e.message : e}`) }
+  if (res) {
+    if (res.halted !== LIMIT_HALTED) fail(`#710: a usage-limit death leaves halted ${JSON.stringify(res.halted)}, not ${JSON.stringify(LIMIT_HALTED)}`)
+    if (res.failures !== 1) fail(`#710: the usage-limit run counts ${JSON.stringify(res.failures)} failures, not 1 (issue-1005's review alone; the death is no failure)`)
+    if (JSON.stringify(res.failed) !== JSON.stringify(['issue-1005'])) fail(`#710: the usage-limit run's failed list is ${JSON.stringify(res.failed)}, not ["issue-1005"]`)
+    // The tickets the limit stopped, each with the stage its agent died at or was refused at, apart from the failed.
+    const stopped = Object.fromEntries((res.stopped || []).map((s) => [s.id, s.stage]))
+    const wantStopped = { 'issue-1001': 'implement', 'issue-1003': 'integrate', 'issue-1004': 'review' }
+    if (JSON.stringify(stopped) !== JSON.stringify(wantStopped)) fail(`#710: the usage-limit run's stopped list is ${JSON.stringify(res.stopped)}, not ${JSON.stringify(wantStopped)}`)
+    if (!(res.skipped || []).includes('issue-1002')) fail(`#710: issue-1002, queued behind the death, is not skipped: ${JSON.stringify(res.skipped)}`)
+    if (!res.reasons || !res.reasons.some((r) => r.id === 'issue-1001' && r.outcome === 'stopped' && r.reason.includes(LIMIT_MESSAGE))) fail(`#710: the reasons do not give issue-1001 as stopped, quoting the message: ${JSON.stringify(res.reasons)}`)
+    if (!res.closingCheck || res.closingCheck.status !== 'not-run' || !res.closingCheck.why.includes(LIMIT_HALTED)) fail(`#710: the closing check after a usage-limit death is ${JSON.stringify(res.closingCheck)}, not not-run naming the limit`)
+  }
+  if (!started710.includes('implement:issue-1001')) fail('#710: issue-1001\'s implement never started, so the usage-limit run proved nothing')
+  if (late.length) fail(`#710: agents started after the usage-limit death: ${late.join(', ')}`)
+  // The report prompt lists the stopped tickets apart from the failed ones, for a run whose report can run.
+  const item710 = (/^ {3}- Partial \(Outstanding\).*$/m.exec(reportPrompt) || [''])[0]
+  if (!item710.includes('Stopped by the usage limit (#710') || !item710.includes('"stopped"')) fail('#710: the report prompt does not list the tickets the usage limit stopped apart from the failed ones')
+}
+
+// 35. A death that may leave a merge on the run branch says so, and a stopped grill does not read as died (#710's
+//     review). After the limit no reset agent can start, so a re-run agent that dies on the limit, having put the
+//     ticket's red merge back on the run branch (its STEP 1), leaves it there with no record unless the stop names it.
+//     One short run: issue-1101's integrate is red on a project its change cannot reach, at about 15 ms, and its
+//     re-run throws the usage-limit message at about 25 ms; issue-1102, ready-for-human, has its grill die on the limit
+//     at 60 ms.
+{
+  globalThis.args = { ...fixture.args, skills: OTHER_SKILLS }
+  globalThis.log = () => {}
+  const reach = JSON.stringify({ failedAt: 'tests', verdict: TESTS_FAILED, projects: [{ project: 'tests/Spactl.Tests', reachedBy: [] }], changed: ['tools/bench/report.py'] })
+  const set = [{ ...synthetic(1101, 'issue-1101', 'ready-for-agent', [], 1), owner: 'integrator' }, synthetic(1102, 'issue-1102', 'ready-for-human', [], 1)]
+  globalThis.agent = async (prompt, opts) => {
+    const [kind] = opts.label.split(':')
+    if (kind === 'collect') return { outcome: 'ok', reason: 'companion', tickets: set.map((t) => ({ ...t })), landed: [], base: 'a'.repeat(40), shell: '3.2', shellCommand: '/bin/bash' }
+    if (kind === 'resume') return NOT_MERGED   // the resume probe (#712): nothing of this run is on the run branch yet
+    if (kind === 'live') return LIVE_READY   // the live read (#721): still ready-for-agent
+    if (kind === 'report') return { questions: 0, mainCheckoutClean: true, leftovers: '', issue: 0, url: '' }
+    if (kind === 'closing') return { ok: true, headSha: CLOSING_TIP, lastLine: 'check: pass: companion.', notes: '' }
+    await sleep(kind === 'grill' ? 60 : 5)
+    if (kind === 'grill' || kind === 'rerun') throw new Error(LIMIT_MESSAGE)
+    if (kind === 'implement') return { outcome: 'resolved', branch: 'b', forkSha: 'f', headSha: 'h', complete: true, outstanding: '', summary: 's', question: '', delegatedDecisions: [], changeRequests: [] }
+    if (kind === 'review') return { outcome: 'committed', headSha: 'h', findingsFixed: [], findingsSkipped: [], summary: 's', question: '', changeRequests: [], changedFiles: ['tools/bench/report.py'] }
+    if (kind === 'integrate') return { ok: false, mergeSha: '', notes: TESTS_FAILED, conflictFiles: [], headSha: '', old: OLD, redHead: RED, reach }
+    throw new Error(`unexpected agent label ${opts.label} in the usage-limit merge run`)
+  }
+  const src = fs.readFileSync(scriptPath, 'utf8').replace(/^export const meta/m, 'const meta')
+  let res = null
+  try { res = await new Function('return (async () => {' + src + '\n})()')() } catch (e) { fail(`#710: the usage-limit merge run threw: ${e && e.message ? e.message : e}`) }
+  if (res) {
+    const r1 = (res.reasons || []).find((r) => r.id === 'issue-1101'), r2 = (res.reasons || []).find((r) => r.id === 'issue-1102')
+    if (!r1 || r1.outcome !== 'stopped' || r1.stage !== 'integrate' || !r1.reason.includes(`may hold issue-1101's unverified merge`) || !r1.reason.includes(OLD)) fail(`#710: a re-run that died on the limit does not say the run branch may hold the merge: ${JSON.stringify(r1)}`)
+    if (!r2 || !r2.reason.includes('the usage limit stopped its grill')) fail(`#710: a grill the limit stopped does not say so: ${JSON.stringify(r2)}`)
+  }
+}
+
+// 36. A resumed lane whose work is already on the run branch is integrated, not failed or skipped (#712). On
+//     2026-11-01, after two resumes, #677's merge 02d755d was on the branch while its result read "skipped" (its lane
+//     re-forked from a tip holding its own merge and saw head equal to fork), and #634's merge fd8c797 was on the
+//     branch while its result read "failed" (its integrate agent had died before the gate finished). Before a lane
+//     implements a ticket, the resume probe asks whether its branch is already on the run branch; a ticket whose merge
+//     is there skips implement and review and goes to the gate alone, which passes on the record or runs once. One
+//     short run on synthetic tickets, every agent answering at once: AS_677 is on the branch with its gate recorded as
+//     passing, AS_634 is on the branch with no pass line, so its gate runs; PART is on the branch as "Merge part of
+//     task"; GATE_RED's gate runs red with later merges on it; FRESH is not on the branch and is built as before; and
+//     PROBE_DIED's probe dies. A mocked implement answers as the resumed lane of #677 did, head equal to fork, so a
+//     script that skips the probe reads AS_677 as skipped.
+{
+  const AS_677 = 'issue-1201', AS_634 = 'issue-1202', PART = 'issue-1203', GATE_RED = 'issue-1204', FRESH = 'issue-1205', PROBE_DIED = 'issue-1206'
+  const ON_BRANCH = [AS_677, AS_634, PART, GATE_RED]
+  const BASE_712 = 'a'.repeat(40)
+  const mergeOf = (id) => `${id.slice(6)}`.padEnd(40, '0')
+  const RED_LINE = 'check: fail: the workflow test companion .claude/workflows/review-queue_tests.mjs failed.'
+  const calls712 = []
+  const prompts712 = {}
+  globalThis.args = { ...fixture.args, skills: OTHER_SKILLS }
+  globalThis.log = () => {}
+  globalThis.agent = async (prompt, opts) => {
+    const [kind, id] = opts.label.split(':')
+    calls712.push(opts.label)
+    prompts712[opts.label] = prompt
+    if (kind === 'collect') return { outcome: 'ok', reason: 'companion', tickets: set712.map((t) => ({ ...t })), landed: [], base: BASE_712, shell: '3.2', shellCommand: '/bin/bash' }
+    if (kind === 'report') return { questions: 0, mainCheckoutClean: true, leftovers: '', issue: 0, url: '' }
+    if (kind === 'closing') return { ok: true, headSha: CLOSING_TIP, lastLine: 'check: pass: companion.', notes: '' }
+    if (kind === 'live') return LIVE_READY
+    if (kind === 'resume') {
+      if (id === PROBE_DIED) return null
+      if (!ON_BRANCH.includes(id)) return { merged: false, mergeSha: '', subject: '', notes: 'no commit of its own on the run branch' }
+      return { merged: true, mergeSha: mergeOf(id), subject: `${id === PART ? 'Merge part of task' : 'Merge task'} ${id}: companion`, notes: '' }
+    }
+    // The resumed lane of #677: its STEP 0 found no "Task" commit outside the run branch, re-forked, and changed nothing.
+    if (kind === 'implement') return ON_BRANCH.includes(id)
+      ? { outcome: 'resolved', branch: `task/${id}`, forkSha: mergeOf(id), headSha: mergeOf(id), complete: true, outstanding: '', summary: 'changed nothing', question: '', delegatedDecisions: [], changeRequests: [] }
+      : { outcome: 'resolved', branch: `task/${id}`, forkSha: 'f', headSha: 'h', complete: true, outstanding: '', summary: 's', question: '', delegatedDecisions: [], changeRequests: [] }
+    if (kind === 'review') return { outcome: 'committed', headSha: 'h', findingsFixed: [], findingsSkipped: [], summary: 's', question: '', changeRequests: [], changedFiles: [`files/${id}.txt`] }
+    if (kind === 'integrate') return { ok: true, mergeSha: 'm', notes: '', conflictFiles: [], headSha: `verified-${id}`, old: '', redHead: '', reach: '' }
+    if (kind === 'gate') {
+      if (id === GATE_RED) return { ok: false, ran: true, mergeSha: mergeOf(id), headSha: '', notes: `the merge stays on the run branch, unverified: later merges sit on it. ${RED_LINE}` }
+      return { ok: true, ran: id !== AS_677, mergeSha: mergeOf(id), headSha: id === AS_677 ? mergeOf(id) : `verified-${id}`, notes: '' }
+    }
+    throw new Error(`unexpected agent label ${opts.label} in the resumed-lane run`)
+  }
+  const lane712 = (n) => ({ ...synthetic(n, `issue-${n}`, 'ready-for-agent', [], 1), owner: 'integrator' })
+  const set712 = [1201, 1202, 1203, 1204, 1205, 1206].map(lane712)
+  const src = fs.readFileSync(scriptPath, 'utf8').replace(/^export const meta/m, 'const meta')
+  let res = null
+  try { res = await new Function('return (async () => {' + src + '\n})()')() } catch (e) { fail(`#712: the resumed-lane run threw: ${e && e.message ? e.message : e}`) }
+  const count = (label) => calls712.filter((l) => l === label).length
+  if (res) {
+    for (const id of [AS_677, AS_634]) if (!(res.integrated || []).includes(id)) fail(`#712: ${id}, whose merge was on the run branch at resume (${id === AS_677 ? "#677's case" : "#634's case"}), is not integrated: integrated ${JSON.stringify(res.integrated)}, skipped ${JSON.stringify(res.skipped)}, failed ${JSON.stringify(res.failed)}`)
+    if (!(res.partial || []).includes(PART)) fail(`#712: ${PART}, on the run branch as "Merge part of task", is not partial: ${JSON.stringify(res.partial)}`)
+    if (!(res.integrated || []).includes(FRESH)) fail(`#712: ${FRESH}, not on the run branch, is not built and integrated as before: ${JSON.stringify(res.integrated)}`)
+    if (!(res.failed || []).includes(GATE_RED)) fail(`#712: ${GATE_RED}, whose gate went red, is not failed: ${JSON.stringify(res.failed)}`)
+    const red = (res.reasons || []).find((r) => r.id === GATE_RED)
+    if (!red || red.stage !== 'integrate' || !red.reason.includes(RED_LINE)) fail(`#712: the red gate's reason does not quote its last line at integrate: ${JSON.stringify(red)}`)
+    // A probe that dies fails closed: the ticket is not implemented on a guess (CODING_STANDARDS.md, "A check fails closed").
+    const died = (res.reasons || []).find((r) => r.id === PROBE_DIED)
+    if (!(res.failed || []).includes(PROBE_DIED) || !died || !/resume probe/.test(died.reason)) fail(`#712: a resume probe that died does not fail its ticket, naming the probe: ${JSON.stringify(died)}`)
+  }
+  for (const id of [AS_677, AS_634, PART, GATE_RED]) {
+    for (const kind of ['implement', 'review', 'integrate']) if (count(`${kind}:${id}`)) fail(`#712: ${id}'s merge was on the run branch, yet its ${kind} agent ran ${count(`${kind}:${id}`)} time(s)`)
+    if (count(`gate:${id}`) !== 1) fail(`#712: ${id}'s gate ran ${count(`gate:${id}`)} time(s), not once`)
+    if (count(`resume:${id}`) !== 1) fail(`#712: ${id}'s resume probe ran ${count(`resume:${id}`)} time(s), not once`)
+  }
+  if (count(`implement:${PROBE_DIED}`)) fail(`#712: ${PROBE_DIED}'s probe died, yet its implement ran`)
+  for (const kind of ['implement', 'review', 'integrate']) if (count(`${kind}:${FRESH}`) !== 1) fail(`#712: ${FRESH}'s ${kind} ran ${count(`${kind}:${FRESH}`)} time(s), not once`)
+  if (count(`gate:${FRESH}`)) fail(`#712: ${FRESH} is not on the run branch, yet the gate alone ran for it`)
+  if (calls712.some((l) => l.startsWith('reset:'))) fail('#712: a red gate on a merge already on the run branch launched a reset agent')
+  // The probe asks git, not the issue: the branch, the run branch, the run base and the "Task <id>:" commit it must own.
+  const probe = prompts712[`resume:${AS_677}`] || ''
+  // The ancestor check is named whole, branch against run branch: MERGE_OF's own "merge-base --is-ancestor" against
+  // a merge sha would otherwise keep the probe's prompt passing with that check deleted (#712's review).
+  for (const part of [`task/${AS_677}-${AS_677}`, 'overnight/', BASE_712, `"Task ${AS_677}:"`, `merge-base --is-ancestor task/${AS_677}-${AS_677} overnight/`]) if (!probe.includes(part)) fail(`#712: the resume probe's prompt lacks ${JSON.stringify(part)}`)
+  // The gate alone judges the ticket's own merge against its first parent, and resets only a merge nothing sits on.
+  // A recorded pass stands only on a head that holds the merge and that the run branch still holds (#712's review).
+  const gate = prompts712[`gate:${AS_634}`] || ''
+  for (const part of [mergeOf(AS_634), `${LOG}/${AS_634}-integrate.txt`, '--base <old>', '^1', 'reset nothing',
+    `merge-base --is-ancestor ${mergeOf(AS_634)} <h>`, 'merge-base --is-ancestor <h> HEAD']) if (!gate.includes(part)) fail(`#712: the gate-alone prompt lacks ${JSON.stringify(part)}`)
+  // The integrate step's own durable state, for an integrate agent replayed after it died mid-gate, finds the ticket's
+  // own merge, not the run branch's latest (#634: its gate re-ran against #553's 1435e21).
+  const integ = prompts712[`integrate:${FRESH}`] || ''
+  if (integ.includes('rev-list --merges --first-parent -n 1 HEAD)^1')) fail('#712: the integrate step\'s STEP 0 still takes the run branch\'s latest merge as the ticket\'s own')
+  if (!integ.includes('THE GATE ALONE')) fail('#712: the integrate step\'s STEP 0 does not hand a merge already in to the gate alone')
+  // MERGE_OF reads the oldest first-parent merge since the base, `--reverse` then the first sha, never the
+  // latest (#634's fix). The mocked probe returns mergeSha directly, so only the prompts' text can show the
+  // flag: with `--reverse` dropped, both prompts read the newest merge and this companion stayed green (review of #737).
+  for (const [label, p] of [['resume probe', probe], ['integrate STEP 0', integ]]) {
+    if (!p.includes(`rev-list --first-parent --merges --reverse ${BASE_712}..`)) fail(`#712: the ${label} prompt does not read the oldest merge, rev-list --first-parent --merges --reverse <base>.., for the ticket's own merge`)
+    if (!/the first sha/.test(p)) fail(`#712: the ${label} prompt does not take the first sha that rev-list prints`)
+  }
+}
+
+// 37. The report's main-checkout step tells a foreground session's scratch from a file the run left (#714). On
+//     2026-11-01 it listed 331 untracked files absent from untracked-at-start.txt as a finding, all under
+//     .scratch/ready-human-advance-2026-11-01/ and .scratch/ready-human-recheck-2026-11-01/, which foreground
+//     sessions wrote during the run, where no lane writes. The step reads a new untracked path under .scratch/ but
+//     outside .scratch/overnight/ as a note naming its directories, and any other new untracked path as a finding.
+{
+  const NOTE_RULE = 'a new untracked path under .scratch/ but outside .scratch/overnight/ is a note, not a finding'
+  const DIRS_RULE = 'list it as a note naming its directories'
+  const FINDING_RULE = 'any other untracked path untracked-at-start.txt does not list is a finding: list it'
+  if (!reportPrompt) fail('#714: no report prompt was rendered, so the untracked-files check read nothing')
+  else {
+    const step = (/^2\. Check .*$/m.exec(reportPrompt) || [''])[0]
+    if (!step) fail('#714: the report prompt has no main-checkout step 2')
+    for (const [rule, what] of [[NOTE_RULE, 'read a foreground session\'s scratch under .scratch/, outside .scratch/overnight/, as a note'],
+      [DIRS_RULE, 'name the directories of the noted scratch files'], [FINDING_RULE, 'keep every other new untracked path a finding']]) {
+      if (step && !step.includes(rule)) fail(`#714: the report prompt's main-checkout step does not ${what}`)
+    }
+  }
+}
+
+// 38. A resumed run reads each ticket's live labels before it dispatches implement (#721). On 2026-11-01 #544 and
+//     #562 were each dispatched for implement three times, because each resume replayed collect's cached answer,
+//     ready-for-agent, after an earlier launch's lane had relabelled them ready-for-human. One short run on synthetic
+//     tickets, collect reading every one ready-for-agent: AS_544 is live ready-for-human and assigned, as #544 was
+//     after its first lane's status note; TRIAGED_LIVE is live needs-triage; UNLABELLED carries no triage label;
+//     CLOSED_LIVE closed since collect; READY is still ready-for-agent; LIVE_DIED's read dies and LIVE_UNREAD's gh
+//     failed; and MERGED_LIVE's merge is already on the run branch while its labels read ready-for-human. AFTER_544
+//     waits on AS_544 and AFTER_CLOSED on CLOSED_LIVE. HUMAN_OVER_AGENT still carries ready-for-agent beside
+//     ready-for-human, and TRIAGE_OVER_AGENT beside needs-triage, so the precedence collect reads is held live too.
+{
+  const AS_544 = 'issue-1301', TRIAGED_LIVE = 'issue-1302', UNLABELLED = 'issue-1303', CLOSED_LIVE = 'issue-1304', READY = 'issue-1305'
+  const LIVE_DIED = 'issue-1306', LIVE_UNREAD = 'issue-1307', MERGED_LIVE = 'issue-1308', AFTER_544 = 'issue-1309', AFTER_CLOSED = 'issue-1310'
+  const HUMAN_OVER_AGENT = 'issue-1311', TRIAGE_OVER_AGENT = 'issue-1312'
+  const RELABELLED = [AS_544, TRIAGED_LIVE, UNLABELLED, HUMAN_OVER_AGENT, TRIAGE_OVER_AGENT]
+  const liveOf = {
+    [AS_544]: { state: 'OPEN', labels: ['ready-for-human', 'change-request'], assignees: ['adammedford'], notes: '' },
+    [TRIAGED_LIVE]: { state: 'OPEN', labels: ['needs-triage'], assignees: [], notes: '' },
+    [UNLABELLED]: { state: 'OPEN', labels: ['kind:ticket'], assignees: [], notes: '' },
+    [CLOSED_LIVE]: { state: 'CLOSED', labels: ['ready-for-agent'], assignees: [], notes: '' },
+    [LIVE_DIED]: null,
+    [LIVE_UNREAD]: { state: 'UNREAD', labels: [], assignees: [], notes: 'error connecting to api.github.com' },
+    [MERGED_LIVE]: { state: 'OPEN', labels: ['ready-for-human'], assignees: [], notes: '' },
+    [HUMAN_OVER_AGENT]: { state: 'OPEN', labels: ['ready-for-agent', 'ready-for-human'], assignees: [], notes: '' },
+    [TRIAGE_OVER_AGENT]: { state: 'OPEN', labels: ['ready-for-agent', 'needs-triage'], assignees: [], notes: '' },
+  }
+  const calls721 = []
+  const prompts721 = {}
+  let report721 = ''
+  globalThis.args = { ...fixture.args, skills: OTHER_SKILLS }
+  globalThis.log = () => {}
+  globalThis.agent = async (prompt, opts) => {
+    const [kind, id] = opts.label.split(':')
+    calls721.push(opts.label)
+    prompts721[opts.label] = prompt
+    if (kind === 'collect') return { outcome: 'ok', reason: 'companion', tickets: set721.map((t) => ({ ...t })), landed: [], base: 'a'.repeat(40), shell: '3.2', shellCommand: '/bin/bash' }
+    if (kind === 'report') { report721 = prompt; return { questions: 0, mainCheckoutClean: true, leftovers: '', issue: 0, url: '' } }
+    if (kind === 'closing') return { ok: true, headSha: CLOSING_TIP, lastLine: 'check: pass: companion.', notes: '' }
+    if (kind === 'resume') return id === MERGED_LIVE ? { merged: true, mergeSha: '8'.repeat(40), subject: `Merge task ${id}: companion`, notes: '' } : NOT_MERGED
+    if (kind === 'live') return id in liveOf ? liveOf[id] : LIVE_READY
+    if (kind === 'grill') return { questions: [], changeRequests: [], adrCandidates: [], draftDecision: '', decided: '', summary: CARRIED_GRILL_SUMMARY }
+    if (kind === 'gate') return { ok: true, ran: false, mergeSha: '8'.repeat(40), headSha: '8'.repeat(40), notes: '' }
+    if (kind === 'implement') return { outcome: 'resolved', branch: `task/${id}`, forkSha: 'f', headSha: 'h', complete: true, outstanding: '', summary: 's', question: '', delegatedDecisions: [], changeRequests: [] }
+    if (kind === 'review') return { outcome: 'committed', headSha: 'h', findingsFixed: [], findingsSkipped: [], summary: 's', question: '', changeRequests: [], changedFiles: [`files/${id}.txt`] }
+    if (kind === 'integrate') return { ok: true, mergeSha: 'm', notes: '', conflictFiles: [], headSha: `verified-${id}`, old: '', redHead: '', reach: '' }
+    throw new Error(`unexpected agent label ${opts.label} in the live-label run`)
+  }
+  const CARRIED_GRILL_SUMMARY = 'carried from an earlier night, not re-grilled'
+  const lane721 = (n, blockedBy = []) => ({ ...synthetic(n, `issue-${n}`, 'ready-for-agent', blockedBy, 1), owner: 'integrator' })
+  const set721 = [lane721(1301), lane721(1302), lane721(1303), lane721(1304), lane721(1305), lane721(1306), lane721(1307), lane721(1308),
+    lane721(1309, [AS_544]), lane721(1310, [CLOSED_LIVE]), lane721(1311), lane721(1312)]
+  const src = fs.readFileSync(scriptPath, 'utf8').replace(/^export const meta/m, 'const meta')
+  let res = null
+  try { res = await new Function('return (async () => {' + src + '\n})()')() } catch (e) { fail(`#721: the live-label run threw: ${e && e.message ? e.message : e}`) }
+  const count = (label) => calls721.filter((l) => l === label).length
+  const reasonOf = (id) => ((res && res.reasons) || []).find((r) => r.id === id)
+  for (const id of [...RELABELLED, CLOSED_LIVE, LIVE_DIED, LIVE_UNREAD, AFTER_544]) {
+    if (count(`implement:${id}`)) fail(`#721: ${id}, whose live read did not say ready-for-agent, was implemented ${count(`implement:${id}`)} time(s)`)
+  }
+  for (const id of [READY, AFTER_CLOSED]) {
+    for (const kind of ['live', 'implement', 'review', 'integrate']) if (count(`${kind}:${id}`) !== 1) fail(`#721: ${id}, still ready-for-agent, ran its ${kind} ${count(`${kind}:${id}`)} time(s), not once`)
+    if (calls721.indexOf(`live:${id}`) > calls721.indexOf(`implement:${id}`)) fail(`#721: ${id}'s live read ran after its implement`)
+  }
+  // The probe comes first: a merge already on the run branch keeps its gate, whatever its labels say now.
+  if (count(`live:${MERGED_LIVE}`)) fail(`#721: ${MERGED_LIVE}'s merge was on the run branch, yet its live read ran`)
+  if (count(`gate:${MERGED_LIVE}`) !== 1) fail(`#721: ${MERGED_LIVE}'s merge was on the run branch, yet its gate ran ${count(`gate:${MERGED_LIVE}`)} time(s), not once`)
+  if (res) {
+    for (const id of [READY, AFTER_CLOSED, MERGED_LIVE]) if (!(res.integrated || []).includes(id)) fail(`#721: ${id} is not integrated: ${JSON.stringify(res.integrated)}`)
+    // #544's case: not built, reported as the human ticket it now is, its reason naming the live label, and its grill
+    // run with no context, so its STEP 0 carries the record an earlier launch wrote.
+    if (!(res.needsHuman || []).includes(AS_544)) fail(`#721: ${AS_544}, live ready-for-human, is not among needsHuman: ${JSON.stringify(res.needsHuman)}`)
+    const h = reasonOf(AS_544)
+    if (!h || h.outcome !== 'needs-human' || h.stage !== 'implement' || !h.reason.includes('ready-for-human') || !h.reason.includes('relabelled since collect')) fail(`#721: ${AS_544}'s reason does not say it was relabelled ready-for-human at implement: ${JSON.stringify(h)}`)
+    if (count(`grill:${AS_544}`) !== 1) fail(`#721: ${AS_544}'s grill ran ${count(`grill:${AS_544}`)} time(s), not once`)
+    if (/Context from tonight/.test(prompts721[`grill:${AS_544}`] || '')) fail(`#721: ${AS_544}'s grill was given context, so its STEP 0 would grill again rather than carry the earlier record`)
+    // ready-for-human outranks a ready-for-agent label left beside it, as in collect's precedence.
+    const ho = reasonOf(HUMAN_OVER_AGENT)
+    if (!(res.needsHuman || []).includes(HUMAN_OVER_AGENT) || !ho || ho.outcome !== 'needs-human' || ho.stage !== 'implement') fail(`#721: ${HUMAN_OVER_AGENT}, live ready-for-human beside ready-for-agent, is not a human ticket at implement: ${JSON.stringify(ho)}`)
+    for (const [id, label] of [[TRIAGED_LIVE, 'needs-triage'], [UNLABELLED, 'kind:ticket'], [TRIAGE_OVER_AGENT, 'needs-triage']]) {
+      const r = reasonOf(id)
+      if (!(res.skipped || []).includes(id) || !r || r.stage !== 'implement' || !r.reason.includes(label)) fail(`#721: ${id}, live ${label}, is not skipped at implement naming its live labels: ${JSON.stringify(r)}`)
+      if (count(`grill:${id}`)) fail(`#721: ${id}, live ${label}, was grilled`)
+    }
+    // Nothing of a relabelled ticket landed, so a ticket waiting on it is not built; a closed one counts as met (#108).
+    if (!(res.skipped || []).includes(AFTER_544) || !/blocker not integrated/.test((reasonOf(AFTER_544) || {}).reason || '')) fail(`#721: ${AFTER_544}, waiting on the relabelled ${AS_544}, is not skipped for its blocker: ${JSON.stringify(reasonOf(AFTER_544))}`)
+    const c = reasonOf(CLOSED_LIVE)
+    if (!(res.skipped || []).includes(CLOSED_LIVE) || !c || !c.reason.includes('closed before the lane started')) fail(`#721: ${CLOSED_LIVE}, closed since collect, is not skipped as closed: ${JSON.stringify(c)}`)
+    // A read that died or gave no state fails closed, naming the read.
+    for (const id of [LIVE_DIED, LIVE_UNREAD]) {
+      const r = reasonOf(id)
+      if (!(res.failed || []).includes(id) || !r || !/live read of its labels/.test(r.reason)) fail(`#721: ${id}, whose live read ${id === LIVE_DIED ? 'died' : 'gave no state'}, does not fail naming the read: ${JSON.stringify(r)}`)
+    }
+    // The report reads each ticket's reconciled status, not the cached one.
+    const sum = JSON.parse((/^Run results \(JSON\): (.*)$/m.exec(report721) || [, 'null'])[1])
+    const st = (id) => ((sum && sum.tickets) || []).find((t) => t.id === id)
+    for (const [id, status] of [[AS_544, 'ready-for-human'], [TRIAGED_LIVE, 'needs-triage'], [UNLABELLED, 'unlabelled'],
+      [HUMAN_OVER_AGENT, 'ready-for-human'], [TRIAGE_OVER_AGENT, 'needs-triage']]) {
+      if (!st(id) || st(id).status !== status) fail(`#721: the report reads ${id}'s status as ${JSON.stringify(st(id) && st(id).status)}, not its live ${status}`)
+    }
+  }
+  // The read is one gh read of the issue, and writes nothing.
+  const lp = prompts721[`live:${READY}`] || ''
+  for (const part of [`gh issue view ${READY.slice(6)} --json state,labels,assignees`, 'no gh write', 'write no file']) if (!lp.includes(part)) fail(`#721: the live read's prompt lacks ${JSON.stringify(part)}`)
+  if (/gh issue (edit|comment|create|close)/.test(lp)) fail('#721: the live read\'s prompt names a gh write')
+}
+
 if (failures.length) {
   console.log(`overnight_tests: FAILED, ${failures.length} check(s), on ${path.basename(scriptPath)}:`)
   failures.forEach((f) => console.log(`  - ${f}`))
   process.exit(1)
 }
-console.log(`overnight_tests: pass: ${got.size} integrated, ${fixture.expect.skippedForBlocker.length} skipped for a blocker, ${fixture.expect.startsBefore.length} ordering checks, on ${path.basename(scriptPath)}`)
+console.log(`overnight_tests: pass: ${got.size} integrated, ${fixture.expect.skippedForBlocker.length} skipped for a blocker, ${fixture.expect.startsBefore.length} ordering checks, ${DOWNSTREAM_CASES} downstream-order runs, on ${path.basename(scriptPath)}`)

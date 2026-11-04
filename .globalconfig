@@ -22,7 +22,9 @@ is_global = true
 # --- the declines (ADR-0035 decision 8) ---------------------------------------------------------
 
 # An ASP.NET Core host and tools/spactl have no SynchronizationContext, so ConfigureAwait changes
-# nothing; Microsoft's page says to suppress the rule entirely for application code.
+# nothing; Microsoft's page, "When to suppress warnings", says to suppress the rule entirely for
+# application code and that ASP.NET Core has no SynchronizationContext by default:
+# https://learn.microsoft.com/dotnet/fundamentals/code-analysis/quality-rules/ca2007#when-to-suppress-warnings
 dotnet_diagnostic.CA2007.severity = none
 
 # Whitespace formatting, which .editorconfig sets and the map ruled out of enforcement.
