@@ -86,7 +86,9 @@ export const meta = {
 // catching test guards the break and, for a candidate, why the named test could not go red on it, so
 // a row pinned to a test that could never guard its break is answered by the test that does (#684,
 // #689). A stated or nominated mutation keeps its own test: the author named it, or the Standards
-// axis suspects it cannot fail, and a catch elsewhere confirms that, so the row is did-not-fail. A
+// axis suspects it cannot fail, and a catch elsewhere confirms that, so the row is did-not-fail;
+// except on a Node companion, an .mjs project, which prints no test names, where a row of any kind
+// is a caught row the verdict answers by its checks' fail() messages (#905). A
 // later review reads a caught cell as the named test alone, so a catcher, whose own break nobody
 // mutated, is neither answered nor cleared by it (#693). A held test the cap cuts is still
 // unanswered, so it holds the verdict as well as being named in the cap's line. The candidates a
@@ -239,7 +241,8 @@ const recordsIn = (inv) => {
 // The rows of a review comment's Mutations table, as mutationLines below writes it (#289): one
 // { test, broken, result } per row, each cell unescaped as cell() escaped it, result the leading word
 // of the Result cell. A comment with no such table, a human's or an older shape's, yields none. A
-// caught row's cell, `<named test> (caught by <tests>)`, held or candidate (#689), yields the named
+// caught row's cell, `<named test> (caught by <tests>)`, held or candidate (#689), or of any kind on
+// an .mjs project (#905), yields the named
 // test alone (#693): the row reproduced the named test's break, not the catchers', so a catcher the
 // runner printed by the name the inventory gives it is neither answered as held nor cleared as a
 // candidate by that row.
@@ -451,7 +454,8 @@ const VERDICT = {
     outstanding: { type: 'array', items: { type: 'string' } },
     summary: { type: 'string' },
     // The held and candidate tests whose caught row (#684, #689) the verdict accepts: a test the row
-    // names guards the break and, for a candidate, the named test could not go red on it.
+    // names guards the break and, for a candidate, the named test could not go red on it. On an .mjs
+    // project, a row of any kind whose every message is a named check's own fail() message (#905).
     caughtAccepted: { type: 'array', items: { type: 'string' } },
     // A delta review after a hold: each finding of the held record, whether that record held on it or
     // carried it as a follow-up, and whether the range answers it.
@@ -639,7 +643,7 @@ ${stale.length ? `The script compared every head the description states with the
 ${mut.rows.length ? mut.rows.map((r) => `- ${r.test} (${r.kind}): ${r.result}, ${r.failed} of ${r.total} failed.${r.caughtBy.length ? ` Caught by ${r.caughtBy.join(', ')}, not by ${r.test}.` : ''} ${r.why}`).join('\n') : '- None ran.'}${mut.rows.some((r) => r.kind === 'held') ? '\nA held row is a test an earlier record held on as did-not-fail and no later record reproduced, mutated again with the break that record named.' : ''}${mut.cut.length ? `\nThe cap (${MUTATION_CAP}) left unmutated: ${mut.cut.join(', ')}.` : ''}${mut.cleared.length ? `\nNot mutated, cleared by an earlier record that reproduced it, its test file and the source it breaks unchanged since that record's head: ${clearedText(mut.cleared)}.` : ''}
 ${mut.holds.length ? `The rows already hold the verdict: ${mut.holds.join('; ')}. Say so in summary.` : ''}
 ${d ? deltaBrief(d) + (d.verdict === 'hold' ? ' Put each of the held record\'s findings in earlierFindings: held true when that record held on it, false when it carried it as a follow-up that did not hold; answered true when the range answers it, false when it does not, and how. An unanswered finding the record held on holds, and so does an empty list; an unanswered follow-up does not, and goes in followUps.' : ' earlierFindings is [].') : 'earlierFindings is [].'}
-verdict is hold when a verified finding shows the change does not do what it says, or a test that proves it cannot fail: a did-not-fail row, or a stated or held mutation that did not reproduce. A could-not-run on a stated, held or nominated mutation holds too; one on a candidate nobody suspected is reported and does not. A removed row is a held break whose target the range deleted, so it holds nothing by itself, but it answers the held test only if the deletion is sound: read the commit its why names, and it answers when the removed code could never run (say why) or the same check is still enforced elsewhere (say where), each as a verified finding; otherwise, or if you cannot show either, the held test is unanswered and the verdict is hold. A caught row is a held or candidate break the project caught through other tests while the named test stayed green (#684, #689). It answers the named test only when you verify, as a verified finding, that a test it names guards the break: for a held row, the break the held record named. For a candidate, you must also verify, as a verified finding, why the named test could not go red on that break: either the break lies outside what the named test guards, or the case the break reaches skips where the review runs. Then put the named test in caughtAccepted. A candidate that guards the break and stayed green proves nothing: leave it out. In every other case leave it out too, and the named test is unanswered and the verdict is hold. Otherwise merge. outstanding lists what stays for the merge body's Outstanding: line.
+verdict is hold when a verified finding shows the change does not do what it says, or a test that proves it cannot fail: a did-not-fail row, or a stated or held mutation that did not reproduce. A could-not-run on a stated, held or nominated mutation holds too; one on a candidate nobody suspected is reported and does not. A removed row is a held break whose target the range deleted, so it holds nothing by itself, but it answers the held test only if the deletion is sound: read the commit its why names, and it answers when the removed code could never run (say why) or the same check is still enforced elsewhere (say where), each as a verified finding; otherwise, or if you cannot show either, the held test is unanswered and the verdict is hold. A caught row is a held or candidate break the project caught through other tests while the named test stayed green (#684, #689). It answers the named test only when you verify, as a verified finding, that a test it names guards the break: for a held row, the break the held record named. For a candidate, you must also verify, as a verified finding, why the named test could not go red on that break: either the break lies outside what the named test guards, or the case the break reaches skips where the review runs. Then put the named test in caughtAccepted. A candidate that guards the break and stayed green proves nothing: leave it out. A caught row of any kind whose project is a Node companion (an .mjs file) is read another way, since such a companion prints no test names, only its checks' fail() messages (#905): read the named checks' source at the head, and when every message the row went red on is one of those checks' own fail() messages, say so as a verified finding and put the named test in caughtAccepted; the check for a candidate's green named test does not apply. A row that went red on any message of another check is not answered by it, whatever its kind: leave it out of caughtAccepted, and the verdict is hold. In every other case leave it out too, and the named test is unanswered and the verdict is hold. Otherwise merge. outstanding lists what stays for the merge body's Outstanding: line.
 followUps: every finding this review carries rather than holds on, whatever the verdict: a finding left standing for after the merge, and each outstanding entry that is a defect still to fix. Each: axis, title (one line; when an earlier record's "## Follow-ups" table lists the finding, its Finding cell verbatim), where, ticket and firstCarried. ticket is the open issue that owns the fix, as "#<n>", checked with \`cd ${REPO} && gh issue view <n> --json state,title\` (it must be OPEN and its title or body must be about this fix; an issue the finding merely mentions does not own it), or "" when there is no open ticket for it, which you search for with \`cd ${REPO} && gh issue list --state open --search "<key words> in:title,body" --json number,title\`. firstCarried is the earliest of the records on this pull request that carried the same finding, by its URL: ${(() => { const urls = recordsIn(inv).map((r) => r.url).filter(Boolean); return urls.length ? `read ${urls.join(', ')} (oldest first)` : 'there is none, so it is ""' })()}; "" when none did. The script keeps those with ticket "" as the comment's follow-ups, which the morning run files while this pull request is still open; one still unfiled when it merges is named by tools/land.sh and filed by hand (#514, #573).
 ${heldChangeRoute(n, inv)}
 Write the result as JSON to the OUTPUT FILE, then return it.`
@@ -838,13 +842,19 @@ const mutationRow = (n, m, i, got) => {
   const wholeFile = !!m.file && m.project === m.file && (cell === m.file || cell === m.file.split('/').pop())
   const isNamed = (f) => wholeFile || `.${dotted(f)}`.endsWith(`.${m.test}`)
   const caughtElsewhere = row.result === 'reproduced' && row.failingNames.length > 0 && !row.failingNames.some(isNamed)
-  if (caughtElsewhere && (m.kind === 'stated' || m.kind === 'nominated')) {
+  // A Node companion, a project that is an .mjs file, prints no test names: a check is a block of
+  // the file, and its failures are its fail() messages, which no cell such as 'x_tests.mjs check 39'
+  // can match by name (#905). On #798 and #796 a stated row red only on its own checks' messages read
+  // did-not-fail, and no acceptance could answer it. So a row of any kind there is a caught row, which
+  // the verdict answers when it verifies the messages are the named checks' own, and holds otherwise.
+  const checksOnly = /\.mjs$/.test(m.project || '') && !wholeFile
+  if (caughtElsewhere && !checksOnly && (m.kind === 'stated' || m.kind === 'nominated')) {
     row.why = `the project went red only on ${row.failingNames.join(', ')}, and a ${m.kind} mutation keeps its own test: ${row.why}`
     row.result = 'did-not-fail'
   }
   // -1 is a count the body does not give (STATED): compare only the counts the author stated.
   if (m.kind === 'stated' && row.result === 'reproduced' && m.failed >= 0) row.countsMatched = row.failed === m.failed && (m.total < 0 || row.total === m.total)
-  row.caughtBy = caughtElsewhere && (m.kind === 'held' || m.kind === 'candidate') ? row.failingNames : []
+  row.caughtBy = caughtElsewhere && (checksOnly || m.kind === 'held' || m.kind === 'candidate') ? row.failingNames : []
   return row
 }
 // What in the rows holds the verdict, each named. A held test the cap cut was never mutated, so the
