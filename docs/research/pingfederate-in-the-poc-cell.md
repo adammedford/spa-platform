@@ -38,7 +38,7 @@
    So a second service is a change request on P-01's reading and an amendment of ADR-0010 (integrator
    paths), carried out as the repository already carries gated shapes: one input defaulting off
    (`multi_task`, `session_store`), under which the default plan is unchanged (section 1). The tunnel
-   needs nothing: it is one Session Manager port forward from local 8443 to the ALB's DNS name on 443
+   needs nothing for the host: it is one Session Manager port forward from local 8443 to the ALB's DNS name on 443
    through the gateway task, the ALB answers every `*.spa-poc.test` host on that listener, the imported
    certificate's one SAN is `*.spa-poc.test`, and `verify-tunnel.sh` only checks that the host resolves to
    `127.0.0.1`; `idp.spa-poc.test` is one more hosts-file line.
@@ -357,13 +357,16 @@ The shapes, each with one issuer string for browser and task:
 
 | Shape | Browser path | Task path | New resources | What it costs |
 | --- | --- | --- | --- | --- |
-| **A. Listener on 8443 and a private zone to the ALB** | `idp.spa-poc.test:8443` -> tunnel -> ALB:8443 -> host rule -> PF target group (HTTPS, engine port) | the same URL: a Route 53 private hosted zone `spa-poc.test` on the cell's VPC with an alias record for `idp` (and `app1..3` for item 7) to the internal ALB; the task's existing 443 egress becomes 8443 to the ALB group, which already admits the task group | one `aws_route53_zone`, records, one listener rule, one target group, the service and its parts | the listener port moves from 443 to 8443 (`alb.tf`, `tunnel.sh`'s `portNumber`, the `alb_https_from_task` rule); the plan text says "forwards local port 8443 to the ALB on 443" (`docs/plan/05`, frozen; runbooks are editable). Gives PingFederate's back-channel logout POST a reachable `https://app1.spa-poc.test:8443/signout-backchannel-oidc` by the same zone (PingFederate then needs the local authority among its trusted CAs). |
+| **A. Listener on 8443 and a private zone to the ALB** | `idp.spa-poc.test:8443` -> tunnel -> ALB:8443 -> host rule -> PF target group (HTTPS, engine port) | the same URL: a Route 53 private hosted zone `spa-poc.test` on the cell's VPC with an alias record for `idp` (and `app1..3` for item 7) to the internal ALB; the gateway task gains a new egress rule, 8443 to the ALB group (its `task_https_out` 443 to `0.0.0.0/0` stays: it carries Cognito, S3, Parameter Store, ECR and logs), and the ALB group's `alb_https_from_task` ingress moves from 443 to 8443; that a private hosted zone's alias record may target an internal ALB is not verified on a page here | one `aws_route53_zone`, records, one listener rule, one target group, the service and its parts | the listener port moves from 443 to 8443 (`alb.tf`, `tunnel.sh`'s `portNumber`, the `alb_https_from_task` rule); the plan text says "forwards local port 8443 to the ALB on 443" (`docs/plan/05`, frozen; runbooks are editable). Gives PingFederate's back-channel logout POST a reachable `https://app1.spa-poc.test:8443/signout-backchannel-oidc` by the same zone (PingFederate then needs the local authority among its trusted CAs). |
 | **B. Direct reach on the engine port** | as A but the ALB stays on 443 | `idp.spa-poc.test:8443` resolved by a private zone (or ECS service discovery) to the PingFederate task's address, with `PF_RUN_PF_HTTPS_PORT=8443`; a fifth and sixth security-group rule (task group egress 8443 to the PF group; PF group ingress 8443 from the task group) | as A, minus the listener change; service discovery adds Cloud Map, whose resources "must be cleaned up manually" ([service discovery](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/service-discovery.html)), so a plain zone with a record is preferred, but a plain record needs the task's address, which service discovery supplies and a static record cannot | the task validates PingFederate's own certificate, so the profile must install the wildcard leaf and key (held on the workstation by `certs.sh`) as PingFederate's SSL server key pair; back-channel logout to `app1...:8443` still has no listener on 8443 |
 | **C. A third container in the gateway task** | as A | loopback would be ideal, but the name cannot be made to resolve (`extraHosts` unsupported under `awsvpc`), so a zone is still needed; the provider restarts, and re-fetches its licence, on every `deploy.sh`; its state dies with each gateway task | fewest AWS resources | ties the provider's life to the gateway's rolls and to the hop |
 
 Shape A keeps the ALB's "does not validate target certificates" on the task's path too, keeps the
-engine port at its default, leaves the four-rule boundary at four rules (one port number changes), and
-is the only one of the three under which item 7's back-channel POST has somewhere to land. Its price is
+engine port at its default, and is the only one of the three under which item 7's back-channel POST
+has somewhere to land. No shape keeps `network.tftest.hcl`'s boundary as it is: under every one the
+provider task has a group of its own (a third group) with at least two rules (the engine port from the
+ALB group; 443 out), the ALB group gains an egress to that engine port, and shape A adds the gateway
+task's 8443 egress; the test's "exactly four rules" and "two groups" runs move with the gated input. Its price is
 the listener port and a Route 53 zone, both reversible. Every shape needs the gateway image to trust the
 local authority. The choice is the spec's, after the prototype has shown what PingFederate puts in
 `issuer`.
