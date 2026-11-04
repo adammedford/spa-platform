@@ -1546,7 +1546,7 @@ class ClosesTests(LandTestCase):
                         "resolved", "Fixed", "RESOLVES"):
             with self.subTest(keyword=keyword):
                 case = MergingCase(self, description=f"{keyword} #352")
-                self.assertClosesRefused(case, case.run(PR, "--subject", self.SUBJECT), "#352")
+                self.assertClosesRefused(case, case.run(PR, *case.with_body, "--subject", self.SUBJECT), "#352")
 
     def test_a_closing_reference_anywhere_in_a_line_is_read(self):
         # The forms the review of #567 named (#578): a colon after the keyword, a keyword mid-line,
@@ -1556,19 +1556,19 @@ class ClosesTests(LandTestCase):
             with self.subTest(description=description):
                 case = MergingCase(self, commits=("Task issue-177: the work",),
                                    description=description)
-                self.assertClosesRefused(case, case.run(PR, "--subject", self.SUBJECT), "#352")
+                self.assertClosesRefused(case, case.run(PR, *case.with_body, "--subject", self.SUBJECT), "#352")
 
     def test_the_tickets_are_named_in_the_description_order(self):
         # Two on one line and one on the next, none named: the refusal lists them as written.
         case = MergingCase(self, description="Fixes #352, closes #35\nResolves #388")
-        self.assertClosesRefused(case, case.run(PR, "--subject", self.SUBJECT),
+        self.assertClosesRefused(case, case.run(PR, *case.with_body, "--subject", self.SUBJECT),
                                  "#352", "#35", "#388")
 
     def test_a_word_ending_in_a_keyword_closes_nothing(self):
         # GitHub reads a keyword as a word: `prefixes #3` and `unclosed #3` close nothing, so the
         # ticket needs no commit and the description merges.
         case = MergingCase(self, description="The prefixes #352 uses, and the unclosed #35 case.")
-        result = case.run(PR, "--subject", self.SUBJECT)
+        result = case.run(PR, *case.with_body, "--subject", self.SUBJECT)
         self.assertEqual(0, result.status, result.stderr)
         self.assertEqual([], result.land_lines())
         self.assertEqual([case.base_tip, case.head], case.on_origin("main").parents)
@@ -1583,7 +1583,7 @@ class ClosesTests(LandTestCase):
             with self.subTest(description=description):
                 case = MergingCase(self, commits=("Task issue-352: the work, for #177",),
                                    description=description)
-                result = case.run(PR, "--subject", self.SUBJECT)
+                result = case.run(PR, *case.with_body, "--subject", self.SUBJECT)
                 self.assertRefused(case, result, "the owner/repo#n form", READS_HEAD)
                 self.assertTrue(any("Write Closes #n" in line for line in result.land_lines()),
                                 result.stderr)
