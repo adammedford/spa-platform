@@ -1519,6 +1519,8 @@ try {
     if (JSON.stringify(fetched) !== JSON.stringify([`${PRL(761)}#issuecomment-61`])) fail(`#744: with an outsider's comment and review after the owner's record, the record reader was asked for ${JSON.stringify(fetched)}, expected the owner's record only`)
     if (JSON.stringify(sentTitles(outRun)) !== JSON.stringify([F_MEMBER])) fail(`#744: with an outsider's records after the owner's, the morning sent ${JSON.stringify(sentTitles(outRun))}, expected the owner's row only`)
     if (!advanced(outRun, S1)) fail(`#744: an outsider's records after the owner's did not read as complete coverage:\n${windowOf(outRun)}`)
+    // Nor is an outsider's record counted: the window line's counts read only the owner's comment.
+    if (!windowOf(outRun).includes('1 issue-comment records since, 0 COMMENTED-review records since')) fail(`#744: the window line counts an outsider's records:\n${windowOf(outRun)}`)
 
     // Box 8: reader output missing a PR's state, or carrying a malformed timestamp, is incomplete.
     const F_OK = 'A finding beside the malformed one'
