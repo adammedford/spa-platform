@@ -120,6 +120,34 @@ public sealed class StoreFailureTests
         }
     }
 
+    [Fact]
+    public async Task A_failed_lease_acquire_answers_session_store_unavailable_and_clears_no_cookie()
+    {
+        // Item 4's lease acquire (#727): the refresh lease's acquire is a session store operation too, and
+        // the DynamoDB lease table throws the store's own exception when it fails. The source notes
+        // auth.store and answers StoreUnavailable; no grant is asked for and the session stands.
+        // Mutation: drop the source's catch; the call ends on an exception.
+        CapturedLog log = new();
+        ScriptedLeases leases = new(new InMemoryRefreshLeases(TimeProvider.System))
+        {
+            BeforeAcquire = _ => throw new SessionStoreUnavailableException(
+                "lease acquire (PutItem)", DynamoDbSessionTable.DefaultStoreDeadline, null),
+        };
+        await using IdentityGateway gateway = await IdentityGateway.StartAsync(
+            [App1], services => services.AddSingleton(log.Provider), leases: leases);
+        Dictionary<string, string> jar = await RefreshLeaseTests.LoginDueAsync(gateway, App1);
+        int before = log.Lines.Count;
+
+        IdentityGateway.Answer answer = await gateway.SendAsync(App1, IdentityGateway.TokenPath, jar);
+
+        Assert.Equal((503, "session_store_unavailable", "auth.store"), (answer.Status, answer.Body, answer.Rule));
+        Assert.Empty(answer.Cookies);
+        Assert.Empty(gateway.Idp.RefreshGrants);
+        AssertOneErrorLine(log, before, "lease acquire (PutItem)", jar);
+        leases.BeforeAcquire = null;
+        Assert.Equal(200, (await gateway.SendAsync(App1, "/bff/session", jar)).Status);
+    }
+
     private static async Task<(IdentityGateway, ScriptedReads, CapturedLog, Dictionary<string, string>)> SignedInAsync(bool due = false)
     {
         ScriptedReads store = new(new InMemorySessionStore());
