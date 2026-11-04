@@ -76,8 +76,8 @@ public sealed class DependencyUnavailableContractTests
     {
         // Mutation: write the draft's 503 store_unavailable for a refused read, and this fails on both
         // answers; drop the shell's answer, and it fails on shell_unavailable; drop "no rule id", the
-        // shell's "with the same header", the asset or shell label, "never the key", the shell's Error
-        // clause or the Snapshot cell, and it fails on each.
+        // shell's "with the same header", the asset or shell label, "never the key" or the shell's
+        // Error clause, and it fails on each. The Snapshot cell is its own fact, below.
         string row = Row(TableHeading, "The object store refuses a read");
 
         Assert.Contains("`404` `not_found`", row);
@@ -86,24 +86,36 @@ public sealed class DependencyUnavailableContractTests
         Assert.Contains("`read_refused`, `asset` or `shell`", row);
         Assert.Contains("never the key", row);
         Assert.Contains("one Error naming the app, the release and that the store refused", row);
+    }
+
+    [Fact]
+    public void A_refused_read_leaves_the_live_snapshot_standing()
+    {
+        // #381: a refusal says the key is unreadable, not that the release is gone, so the snapshot
+        // is not touched. A fact of its own, so that changing this cell and dropping a Logged clause
+        // each fail a different test. Mutation: write "Is replaced", and this fails.
         Assert.Equal("Stays", Cells(TableHeading, "The object store refuses a read")[3]);
     }
 
     [Fact]
     public void Parameter_store_unreadable_at_a_cold_start_leaves_the_gateway_not_ready_and_every_host_unknown()
     {
-        // Mutation: say /readyz answers 200 or the app paths answer 503, and this fails; change the
-        // Logged clause for each unreadable secret or for the revision, or the Snapshot cell, and it
-        // fails on that.
-        string row = Row(TableHeading, "Parameter Store cannot be read at a cold start");
+        // RegistrySource stays without a snapshot only when no app's secret reads; when some do, those
+        // apps go live and the rest are left out (contracts/README.md, clientSecretRef), so the row's
+        // case is the every-secret one. Mutation: drop that qualification, or the pointer to the
+        // partial case, and this fails on it; say /readyz answers 200, or drop "every app path is" or
+        // "every host is unknown", and it fails on the answer; change the Logged clause for each
+        // unreadable secret or for the revision, or the Snapshot cell, and it fails on that.
+        IReadOnlyList<string> cells = Cells(TableHeading, "Parameter Store cannot be read at a cold start");
+        string row = string.Join(" | ", cells);
 
+        Assert.Contains("for the secret of every app in the document", cells[0]);
+        Assert.Contains("when only some cannot, those apps are left out and the rest go live: `contracts/README.md`, `clientSecretRef`", cells[0]);
         Assert.Contains("`/readyz` stays `503`", row);
-        Assert.Contains("`404` `not_found`", row);
+        Assert.Contains("every app path is `404` `not_found`, since before a snapshot every host is unknown", cells[1]);
         Assert.Contains("One Warning per app whose secret cannot be read, naming the app and the reference, never the value", row);
         Assert.Contains("one Error per poll that the revision is not applied", row);
-        Assert.Equal(
-            "There is none, and each poll reads the document again",
-            Cells(TableHeading, "Parameter Store cannot be read at a cold start")[3]);
+        Assert.Equal("There is none, and each poll reads the document again", cells[3]);
     }
 
     [Fact]
