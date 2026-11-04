@@ -120,6 +120,23 @@ internal sealed partial class AccessTokenSource(
             return new AccessTokenResult.Unauthenticated();
         }
 
+        try
+        {
+            return await ForSessionAsync(context, app, key);
+        }
+        catch (SessionStoreUnavailableException e)
+        {
+            // auth.store (#727): a store call under the turn failed, whichever it was: the gated read, the
+            // lease, a re-read, the versioned write or an end's remove. The session, if it exists, is kept,
+            // no cookie is cleared, and the proxy's access-token step answers the result.
+            StoreFailure.Note(context, e.Operation);
+            return new AccessTokenResult.StoreUnavailable();
+        }
+    }
+
+    /// <summary>The answer for the session under <paramref name="key"/>, under its gate.</summary>
+    private async Task<AccessTokenResult> ForSessionAsync(HttpContext context, AppDefinition app, string key)
+    {
         using AppSessions.Turn turn = await sessions.EnterAsync(app, key);
 
         switch (turn.WhileWaiting)
@@ -128,6 +145,10 @@ internal sealed partial class AccessTokenSource(
                 return new AccessTokenResult.ProviderUnavailable();
             case RefreshOutcome.Ended:
                 return new AccessTokenResult.SessionEnded();
+            case RefreshOutcome.AtStoreBound:
+                // A waiter answers as the turn it inherits did; the line is that turn's (#727).
+                Rejection.Note(context, RuleIds.AuthStore);
+                return new AccessTokenResult.StoreUnavailable();
         }
 
         if (turn.Owned is not { } record)
@@ -205,10 +226,13 @@ internal sealed partial class AccessTokenSource(
             {
                 // No honest holder keeps the lease this long: every lease lapses within one time to live,
                 // and the next pass takes it over. Only a store too slow for any holder to pass the check
-                // gets here, and it fails the call with the session kept, as an outage would.
-                turn.Finish(new RefreshOutcome.Unavailable());
+                // gets here, and it fails the call with the session kept: the store's bound, #332 D2's
+                // "lease exhaustion", which answers under auth.store and not as a provider outage (#729's
+                // decision, part 4; #727). Its own Warning line keeps the cause apart from a failed call.
+                turn.Finish(new RefreshOutcome.AtStoreBound());
                 NoLease(logger, app.AppId, SessionRef.Of(key));
-                return new AccessTokenResult.ProviderUnavailable();
+                Rejection.Note(context, RuleIds.AuthStore);
+                return new AccessTokenResult.StoreUnavailable();
             }
 
             await Task.Delay(LoserPoll, clock);
@@ -315,6 +339,7 @@ internal sealed partial class AccessTokenSource(
         RefreshOutcome.Refreshed => "refreshed",
         RefreshOutcome.Unavailable => "unavailable",
         RefreshOutcome.Ended => "ended",
+        RefreshOutcome.AtStoreBound => "store_bound",
         _ => "unknown",
     };
 

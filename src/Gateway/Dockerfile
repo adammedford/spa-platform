@@ -8,7 +8,17 @@
 # workstream projects the gateway references:
 #   docker build -f src/Gateway/Dockerfile -t gateway .
 
-FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/sdk:10.0-noble AS build
+# Both FROM lines name their base by digest beside its tag, so two builds of one commit build on the
+# same layers, whoever builds them and whenever (#781). The digest is the tag's manifest list, which
+# names an image for each architecture, so the ARM64 deployment and an x64 workstation resolve the
+# same pin. The tag stays beside it for the reader and for the pins sweep, which reports both digests
+# (tools/pins_inventory.py); moving to a new patch is a commit that changes the digest. Read a tag's
+# current digest with `docker buildx imagetools inspect mcr.microsoft.com/dotnet/sdk:10.0-noble`.
+#
+# The build stage stays on the full Ubuntu SDK: Microsoft produces no SDK image of the chiseled type
+# (https://learn.microsoft.com/en-us/dotnet/core/docker/container-images#images-optimized-for-size),
+# and nothing of this stage reaches the final image but /app.
+FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/sdk:10.0-noble@sha256:de4fe90a98845d75910b9769662465c84de1a934665c431279d1382b2bddc02b AS build
 ARG TARGETARCH
 WORKDIR /src
 
@@ -47,15 +57,41 @@ RUN dotnet publish src/Gateway/Gateway.csproj -a "$TARGETARCH" --no-restore -c R
 # https://docs.docker.com/reference/dockerfile/#copy---chown---chmod
 RUN chmod -R a+rX,go-w /app
 
-FROM mcr.microsoft.com/dotnet/aspnet:10.0-noble AS final
+# The runtime stage is Ubuntu chiseled: distroless, with no shell and no package manager, and a
+# non-root user by default (https://github.com/dotnet/dotnet-docker/blob/main/documentation/ubuntu-chiseled.md).
+# The -extra variant, because the plain chiseled images carry no ICU or tzdata and work only for an
+# app in globalization invariant mode, and nothing in the solution sets InvariantGlobalization
+# (https://learn.microsoft.com/en-us/dotnet/core/docker/container-images#scenario-based-images).
+# Pinned by digest for the reason above the build stage's FROM. tools/image-check.sh fails an image
+# that has /bin/sh.
+FROM mcr.microsoft.com/dotnet/aspnet:10.0-noble-chiseled-extra@sha256:9b755ea799ae649141a073e30d8b62d8095a5465af2b7694d17866e8c05131d8 AS final
 WORKDIR /app
+
+# Off: the runtime's debugger, profiler and EventPipe diagnostics, and with them the diagnostic port
+# a process in the task could attach to
+# (https://learn.microsoft.com/en-us/dotnet/core/runtime-config/debugging-profiling#enable-diagnostics).
+# So dotnet-trace, dotnet-counters and dotnet-dump cannot attach to this image's gateway; reading one
+# needs a debugging image built without this line. tools/image-check.sh fails an image without it.
+ENV DOTNET_EnableDiagnostics=0
+
+# What built the image, as the OCI annotations name it
+# (https://github.com/opencontainers/image-spec/blob/main/annotations.md#pre-defined-annotation-keys).
+# The build passes each with --build-arg; one it does not pass reads "unset", so a missing value says
+# so rather than reading as an empty string. tools/image-check.sh fails an image without one of them.
+ARG SOURCE=unset
+ARG REVISION=unset
+ARG VERSION=unset
+LABEL org.opencontainers.image.source="$SOURCE"
+LABEL org.opencontainers.image.revision="$REVISION"
+LABEL org.opencontainers.image.version="$VERSION"
 
 # 8080, which is what the ALB target group sends to (task 1.3). No TLS in the container: the
 # listener terminates it.
 EXPOSE 8080
 ENV ASPNETCORE_HTTP_PORTS=8080
 
-# The image runs as the non-root user the base image ships.
+# The image runs as the non-root user the base image ships, by its number, as the chiseled base's
+# own user is.
 USER $APP_UID
 
 COPY --from=build /app .

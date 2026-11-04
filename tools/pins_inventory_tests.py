@@ -19,7 +19,9 @@ here: on #336 a new pin did. The line below names them for tools/check.sh, whose
 this companion when a change touches one (#354), as CI's Documents job runs it on every change. A
 file Repo starts copying joins the line; tools/check_tests.py fails while one is missing.
 
-Checkout inputs: Directory.Packages.props global.json SpaPlatform.slnx Directory.Build.props *.csproj
+The base-image family reads the gateway's Dockerfile, so Repo copies that too (#781).
+
+Checkout inputs: Directory.Packages.props global.json SpaPlatform.slnx Directory.Build.props *.csproj src/Gateway/Dockerfile
 
 Run: python3 -I tools/pins_inventory_tests.py
 """
@@ -29,6 +31,7 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import posixpath
 import re
 import shutil
 import subprocess
@@ -40,6 +43,8 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 COMPANION = ROOT / "tools" / "pins_inventory.py"
 GHSA = "GHSA-jrjw-qgr2-wfcg"
 PROPS = "Directory.Packages.props"
+GATEWAY_DOCKERFILE = "src/Gateway/Dockerfile"
+DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 
 def git(repo, *argv):
@@ -58,7 +63,8 @@ class Repo:
         self.dir = pathlib.Path(tempfile.mkdtemp(prefix="pins-inventory-tests-"))
         case.addCleanup(shutil.rmtree, self.dir, True)
         git(self.dir, "init", "-q")
-        for rel in [PROPS, "global.json", "SpaPlatform.slnx", "Directory.Build.props", *solution_projects()]:
+        for rel in [PROPS, "global.json", "SpaPlatform.slnx", "Directory.Build.props", GATEWAY_DOCKERFILE,
+                    *solution_projects()]:
             self.copy(rel)
 
     def copy(self, rel):
@@ -153,7 +159,8 @@ class Parsing(Case):
         self.assertEqual(len(re.findall(r"<PackageVersion\s", r.read(PROPS))), len(data["pins"]))
         self.assertEqual([], [p["id"] for p in data["pins"] if not p["family"]])
         self.assertEqual(["aspnetcore", "duende", "yarp", "aws-sdk", "opentelemetry", "xunit", "playwright",
-                          "schema-validator", "fake-clock", "mvc-testing", "analyzers", "sdk"], [f["id"] for f in data["families"]])
+                          "schema-validator", "fake-clock", "mvc-testing", "analyzers", "sdk", "base-images"],
+                         [f["id"] for f in data["families"]])
 
     def test_deleting_one_pin_drops_the_count_and_its_family(self):
         r = self.repo()
@@ -326,6 +333,64 @@ class DecisionHold(Case):
         self.assertEqual(("behind-minor", ""), (schema["status"], schema["hold"]))
 
 
+class BaseImages(Case):
+    """The base images every tracked Dockerfile builds on, by digest, as one report-only family (#781)."""
+
+    def test_the_gateway_dockerfile_gives_both_stages_digests_as_one_family(self):
+        data = self.inventory(self.repo())
+        rows = [r for r in data["baseImages"] if r["dockerfile"] == GATEWAY_DOCKERFILE]
+        self.assertEqual([("build", "mcr.microsoft.com/dotnet/sdk", "10.0-noble"),
+                          ("final", "mcr.microsoft.com/dotnet/aspnet", "10.0-noble-chiseled-extra")],
+                         [(r["stage"], r["image"], r["tag"]) for r in rows])
+        for r in rows:
+            self.assertRegex(r["digest"], DIGEST)
+            self.assertEqual("not-checked", r["status"])
+        family = next(f for f in data["families"] if f["id"] == "base-images")
+        self.assertEqual((True, False, [GATEWAY_DOCKERFILE], "not-checked"),
+                         (family["reportOnly"], family["frameworkWide"], family["trialScope"], family["status"]))
+        self.assertEqual(["mcr.microsoft.com/dotnet/sdk:10.0-noble", "mcr.microsoft.com/dotnet/aspnet:10.0-noble-chiseled-extra"],
+                         family["members"])
+        self.assertEqual([], [f for f in data["findings"] if f["kind"] == "unpinned-base-image"])
+
+    def test_a_from_without_a_digest_is_a_finding_and_a_stage_or_scratch_is_not_a_base(self):
+        r = self.repo()
+        r.write("fixtures/Other/Dockerfile",
+                "# a comment\nFROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/sdk:10.0-noble AS build\n"
+                "RUN true\nFROM build AS again\nFROM scratch\nFROM \\\n  mcr.microsoft.com/dotnet/aspnet:10.0-noble\n")
+        data = self.inventory(r)
+        rows = [x for x in data["baseImages"] if x["dockerfile"] == "fixtures/Other/Dockerfile"]
+        self.assertEqual([("build", "mcr.microsoft.com/dotnet/sdk", "10.0-noble", ""),
+                          ("", "mcr.microsoft.com/dotnet/aspnet", "10.0-noble", "")],
+                         [(x["stage"], x["image"], x["tag"], x["digest"]) for x in rows])
+        self.assertEqual([{"kind": "unpinned-base-image", "dockerfile": "fixtures/Other/Dockerfile",
+                           "image": "mcr.microsoft.com/dotnet/sdk:10.0-noble"},
+                          {"kind": "unpinned-base-image", "dockerfile": "fixtures/Other/Dockerfile",
+                           "image": "mcr.microsoft.com/dotnet/aspnet:10.0-noble"}],
+                         [f for f in data["findings"] if f["kind"] == "unpinned-base-image"])
+        family = next(f for f in data["families"] if f["id"] == "base-images")
+        self.assertEqual(["fixtures/Other/Dockerfile", GATEWAY_DOCKERFILE], family["trialScope"])
+
+    def test_dropping_the_gateways_digest_leaves_its_row_unpinned(self):
+        r = self.repo()
+        r.write(GATEWAY_DOCKERFILE, re.sub(r"@sha256:[0-9a-f]{64}", "", r.read(GATEWAY_DOCKERFILE), count=1))
+        data = self.inventory(r)
+        rows = [x for x in data["baseImages"] if x["dockerfile"] == GATEWAY_DOCKERFILE]
+        self.assertEqual(["", "pinned"], ["pinned" if DIGEST.match(x["digest"]) else x["digest"] for x in rows])
+        self.assertEqual(["mcr.microsoft.com/dotnet/sdk:10.0-noble"],
+                         [f["image"] for f in data["findings"] if f["kind"] == "unpinned-base-image"])
+
+    def test_the_table_has_a_row_per_base_image_with_its_digest(self):
+        r = self.repo()
+        data = self.inventory(r)
+        out = run("render", "--input", r.input("inventory", data))[1]
+        for row in data["baseImages"]:
+            self.assertIn(f"| {row['image']}:{row['tag']} ({row['dockerfile']}, {row['stage']}) | {row['digest']} | ? | "
+                          f"not-checked | {posixpath.dirname(row['dockerfile'])} |", out)
+        # With a family scope, as the sweep renders it, the rows stay.
+        scoped = run("render", "--input", r.input("inventory2", data), "--families", "yarp")[1]
+        self.assertEqual(len(data["baseImages"]), scoped.count("(src/Gateway/Dockerfile, "))
+
+
 class Rendering(Case):
     def canned(self):
         r = self.repo()
@@ -346,7 +411,8 @@ class Rendering(Case):
         _, path, data = self.canned()
         out = self.table(path)
         rows = [l for l in out.splitlines() if l.startswith("| ") and not l.startswith("| Pin ") and not l.startswith("| ---")]
-        self.assertEqual(len(data["pins"]) + 1, len(rows))
+        # A row per pin, the SDK's, and one per base image (#781).
+        self.assertEqual(len(data["pins"]) + 1 + len(data["baseImages"]), len(rows))
         status = {l.split(" | ")[0][2:]: l.split(" | ")[3] for l in rows}
         # Yarp has an advisory and an evidence tie: the advisory outranks. JsonSchema.Net has a tie and
         # a hold: the tie outranks. AWSSDK.S3 is only behind.

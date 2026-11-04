@@ -140,6 +140,15 @@ locals {
 
   gateway_environment = merge(local.platform_configuration, local.gateway_runtime_environment)
 
+  # One value for both containers (#786), so the two cannot drift; the comment at the gateway
+  # container's use says why each setting is there.
+  container_linux_parameters = {
+    capabilities = {
+      drop = ["ALL"]
+    }
+    initProcessEnabled = true
+  }
+
   gateway_container = {
     name      = local.gateway_container_name
     image     = var.gateway_image
@@ -156,6 +165,19 @@ locals {
       protocol      = "tcp"
     }]
 
+    # Hardening (#786, P2-9). capabilities.drop removes Linux capabilities from the default set
+    # Docker grants (--cap-drop); "ALL" is one of its valid values, and on Fargate add accepts
+    # SYS_PTRACE alone, so nothing here could be added back. The process needs none: it runs as the
+    # image's non-root user (USER $APP_UID in src/Gateway/Dockerfile) and binds var.gateway_port,
+    # 8080 by default, above 1024, so it needs no NET_BIND_SERVICE either. initProcessEnabled runs
+    # "an init process inside the container that forwards signals and reaps processes" (--init), so
+    # dotnet is no longer PID 1: a zombie is reaped, and SIGTERM still reaches the process (see
+    # stopTimeout below). ECS Exec, on while task 1.6b's tunnel needs it, also recommends the init
+    # process, to clean up the SSM agent's orphaned and zombie child processes.
+    # https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task_definition_parameters.html
+    # https://docs.aws.amazon.com/AmazonECS/latest/developerguide/ecs-exec.html
+    linuxParameters = local.container_linux_parameters
+
     # Continuity (#347, #332 F1). The seconds between SIGTERM and SIGKILL. A roll stops a task in this
     # order: the target group's deregistration delay (alb.tf, 30 s) drains it first, then ECS sends
     # SIGTERM, then after stopTimeout SIGKILL. The gateway's own ShutdownTimeout, the time the process
@@ -169,7 +191,13 @@ locals {
     # pause are its exceptions, and a loser's wait is F2's and F3's, which no number here bounds
     # (#332 F1; P2-3's second amendment, decision 2). The drain (alb.tf) promises no refresh's
     # completion. On the gateway alone: the mock API holds no session and no lease. 30 is also
-    # Fargate's default, written down because F1 depends on it.
+    # Fargate's default, written down because F1 depends on it. The init process (#786, above)
+    # leaves these relations as they were: ECS sends SIGTERM to the container's PID 1, now the init,
+    # which "forwards signals" to its child, and stopTimeout is "time duration (in seconds) to wait
+    # before the container is forcefully killed if it doesn't exit normally on its own", timed from
+    # the same SIGTERM. The child is dotnet itself because the Dockerfile's ENTRYPOINT is exec form
+    # (["dotnet", "Gateway.dll"]); a shell-form entrypoint would put a shell between them, which
+    # forwards nothing, and the process would see SIGKILL alone. Both quotes are from the page below.
     # https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task_definition_parameters.html
     stopTimeout = 30
 
@@ -201,6 +229,11 @@ locals {
 
     # The same reason as the gateway's: one task, one Session Manager agent, one writable root.
     readonlyRootFilesystem = false
+
+    # The gateway's hardening (#786), for the same reasons: a non-root user (USER $APP_UID in
+    # fixtures/MockApi/Dockerfile), listeners on 5080 and 5081, above 1024, and an exec-form
+    # ENTRYPOINT, so the init forwards SIGTERM to dotnet.
+    linuxParameters = local.container_linux_parameters
 
     # No portMappings. The two listeners are on loopback ports 5080 and 5081 and are reached from
     # the gateway container inside the task's own network namespace, never from outside it

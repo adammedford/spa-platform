@@ -50,11 +50,14 @@
 # line, as .claude/workflows/morning.js's filedAs reads one) is printed as a `land:` warning that
 # says so; nothing is refused for it.
 #
-# It merges only a description whose every `Closes #n` line names a ticket some non-merge commit
-# between the base and that head names in its message, as `#n` or as `issue-n`, because the merge
-# closes each one (#566). A refusal names each #n no commit names, and --unreviewed does not lift it.
+# It merges only a description whose every closing reference, `Closes #n` or any other form GitHub
+# closes a ticket on (#578), names a ticket some non-merge commit between the base and that head
+# names in its message, as `#n` or as `issue-n`, because the merge closes each one (#566). A refusal
+# names each #n no commit names, and --unreviewed does not lift it. A keyword before `owner/repo#n`,
+# GitHub's form for another repository's ticket, is refused outright, because the check cannot tell
+# whether it names a ticket here; the remedy is `Closes #n`.
 #
-# It merges only a body that cites each decision it owes (#530). A `Closes #n` line that names a
+# It merges only a body that cites each decision it owes (#530). A closing reference that names a
 # change request decided `ADR: no` closes a request whose why lives nowhere but the merge body, so
 # docs/agents/tracker-policy.md -> "Landing" has that body state the why and cite the decision
 # comment (#413). The citation half is mechanical: tools/decision_citation.py, beside this script,
@@ -65,6 +68,17 @@
 # why stays the reviewer's to judge. --unreviewed does not lift it either. #492's merge closed
 # #495, #497 and #498, each decided `ADR: no`, citing none of them, and a merge body cannot be
 # edited afterwards.
+#
+# Before it merges, it lists the overnight answers that wait on this landing (#531). A grill on an
+# `Overnight <date>` issue often answers a question in terms of another pull request ("closes when
+# #492 merges", "state this in #492's merge body"), provisionally until a Confirm, and the session
+# landing that pull request had no reason to read them: on 2026-10-29 three such answers on #528
+# went stale at #492's merge. So tools/overnight_answers.py, beside this script, reads the open
+# issues titled `Overnight <date>` for `## Questions:` comments naming this pull request's number
+# or a number its description closes, and this script prints each such question as one `land:`
+# line: the Overnight issue, the Q number, whether a Confirm comment on that issue covers it, and
+# its first line. It only reports: nothing it finds stops the merge, and when the reader fails one
+# line says so and the merge proceeds, with the reader's own words above it.
 #
 # --unreviewed "<reason>" is the one escape: for a red main that cannot wait, or no session free to
 # review. It merges without reading the records, still pinned to the head it saw, and ends the body
@@ -207,12 +221,13 @@ head="$(gh pr view "$pr" --json headRefOid --jq .headRefOid)"
 full_sha='^[0123456789abcdef]{40}$'
 [[ $head =~ $full_sha ]] || die "gh reported '$head' as the head of #$pr, which is not a full commit sha."
 
-# A `Closes #n` line in the description closes ticket n when this merges into the default branch:
+# A closing reference in the description, such as `Closes #n`, closes ticket n when this merges into
+# the default branch:
 # https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/linking-a-pull-request-to-an-issue.
 # So each n has to be a ticket the branch did work for (#566). On 2026-10-29 #536's branch was
 # rebuilt without e2fc266, the one commit naming #352, and its description still closed #352, whose
-# work change request #551 still carried; only a sub-agent's reading caught it. Every n a Closes
-# line names must appear as `#n`, or as the token `issue-n`, in the message (subject, body or
+# work change request #551 still carried; only a sub-agent's reading caught it. Every n a closing
+# reference names must appear as `#n`, or as the token `issue-n`, in the message (subject, body or
 # trailer) of a non-merge commit between the base and the pinned head. `issue-n` is how an
 # overnight lane's task commit names a ticket with no plan row, `Task issue-<n>: ...` in
 # .claude/workflows/overnight.js, where only the lane's merge carries `Ticket: #n`; without it the
@@ -224,27 +239,63 @@ full_sha='^[0123456789abcdef]{40}$'
 # A merge is left out because its message names what it joins, which a rebuild can keep after the
 # commit that did the work is gone. It runs with --unreviewed too: a review record clears a head,
 # not a description, which can change after it. .claude/workflows/review-queue.js applies this same
-# rule before its review spends any agent on the head (#688), so a change to it here changes that copy.
+# rule before its review spends any agent on the head (#688), in a JavaScript copy, and a table holds
+# the two in step (#745): .claude/workflows/fixtures/closing-references.json lists descriptions,
+# commit messages and what the rule answers, tools/land_tests.py runs this script on every row and
+# review-queue_tests.mjs runs that one on every row. A change to the rule here changes that copy and
+# the table in the same commit, or one of the companions fails.
 #
-# A Closes line is read in the form docs/agents/landing-work.md -> "Land it" gives it and
-# .claude/workflows/morning.js reads, one `Closes #n` to a line, with the keyword in any case, as
-# GitHub reads it, and whatever follows the number, such as the carriage return that ends each line
-# of a description edited on the web. n is every digit after the `#`. `#n` and `issue-n` are
-# matched in a message only where no digit follows, so #35 is not found inside #352 nor issue-35
-# inside issue-352, and `issue-n` only where no letter, digit or underscore comes before it. The
-# head's commits are read only when there is a Closes line, and fetched by sha when this clone
-# lacks them, the way actions/checkout fetches a pull request's commit from GitHub:
-# https://github.com/actions/checkout.
+# The form docs/agents/landing-work.md -> "Land it" asks for, and .claude/workflows/morning.js
+# reads, is one `Closes #n` to a line. The check reads what GitHub reads (#578): any of its closing
+# keywords (close, closes, closed, fix, fixes, fixed, resolve, resolves, resolved), in any case, an
+# optional colon after it, then `#n`, anywhere in a line and as many times to a line as it occurs,
+# https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/linking-a-pull-request-to-an-issue,
+# so a `Fixes #n` written by hand still has to name a ticket the branch did work for. The keyword
+# is a whole word (`prefixes #3` closes nothing), n is every digit after the `#`, and what follows
+# the number, such as the carriage return that ends each line of a description edited on the web,
+# is ignored. A keyword before `owner/repo#n`, GitHub's form for a ticket of another repository,
+# also closes a ticket here when owner/repo is this repository, and telling the two apart would
+# take a read of this repository's name, so the form is refused before anything is read, failing
+# closed (CODING_STANDARDS.md -> "A check fails closed"): the refusal asks for `Closes #n`, the
+# form docs/agents/landing-work.md gives, and nothing here closes another repository's ticket.
+# bash's =~ finds one match, so a line is read from its right end, each match's prefix
+# becoming the next line to read, and the numbers are put back in the line's order. `#n` and
+# `issue-n` are matched in a message only where no digit follows, so #35 is not found inside #352
+# nor issue-35 inside issue-352, and `issue-n` only where no letter, digit or underscore comes
+# before it. The head's commits are read only when there is a closing reference, and fetched by
+# sha when this clone lacks them, the way actions/checkout fetches a pull request's commit from
+# GitHub: https://github.com/actions/checkout.
+# The rule is read in the C locale whatever the caller's is, and the caller's is put back after it
+# (#745). [[:alnum:]] and [[:space:]] read the locale's classes, so in a UTF-8 locale, C.UTF-8
+# among them, an é before a keyword hid it and a no-break space after one was whitespace, while
+# land_tests.py runs this under LC_ALL=C and review-queue.js's copy reads ASCII: a description
+# could pass the review's pre-check and be refused here. An assignment to LC_ALL takes effect at
+# once in bash, and is exported only when the caller exported it.
 description="$(gh pr view "$pr" --json body --jq .body)"
-closes_line='^[[:space:]]*[Cc][Ll][Oo][Ss][Ee][Ss][[:space:]]+#([0-9]+)'
+had_lc_all="${LC_ALL+set}"
+caller_lc_all="${LC_ALL-}"
+LC_ALL=C
+keyword='([Cc][Ll][Oo][Ss][Ee]([Ss]|[Dd])?|[Ff][Ii][Xx]([Ee][Ss]|[Ee][Dd])?|[Rr][Ee][Ss][Oo][Ll][Vv][Ee]([Ss]|[Dd])?)'
+# In each match, group 1 is what comes before the keyword, groups 2 to 5 the keyword and its
+# endings, and group 6 the ticket: `n` of `#n`, or the whole `owner/repo#n`.
+closing="^(.*[^[:alnum:]_])?${keyword}:?[[:space:]]*#([0-9]+)([^0-9].*)?\$"
+other_repository="^(.*[^[:alnum:]_])?${keyword}:?[[:space:]]*([^[:space:]#/]+/[^[:space:]#/]+#[0-9]+)"
 closes=""
 while IFS= read -r line; do
-  if [[ $line =~ $closes_line ]]; then closes="$closes #${BASH_REMATCH[1]}"; fi
+  if [[ $line =~ $other_repository ]]; then
+    die "the description of #$pr closes ${BASH_REMATCH[6]}, the owner/repo#n form, which this check cannot read against the commits here, so it does not merge. Write Closes #n for a ticket of this repository (docs/agents/landing-work.md -> Land it); a ticket of another repository is not closed from here."
+  fi
+  in_line=""
+  while [[ $line =~ $closing ]]; do
+    in_line=" #${BASH_REMATCH[6]}$in_line"
+    line="${BASH_REMATCH[1]}"
+  done
+  closes="$closes$in_line"
 done <<< "$description"
 if [ -n "$closes" ]; then
   { git cat-file -e "$head^{commit}" 2>/dev/null || git fetch -q origin "$head"; } \
     && messages="$(git log --no-merges --format=%B "origin/$base..$head")" \
-    || die "could not read the commits of #$pr up to $head, so the tickets its Closes lines name cannot be checked."
+    || die "could not read the commits of #$pr up to $head, so the tickets its closing references name cannot be checked."
   unnamed=""
   for ticket in $closes; do
     named="($ticket|(^|[^[:alnum:]_])issue-${ticket#\#})([^0-9]|\$)"
@@ -253,12 +304,13 @@ if [ -n "$closes" ]; then
   [ -z "$unnamed" ] \
     || die "the description of #$pr closes$unnamed, which no non-merge commit between origin/$base and $head names as #n or issue-n, so it does not merge. Name each in the commit that did its work; a ticket the branch only advances takes a Ticket: #n line instead (docs/agents/landing-work.md -> Land it)."
 fi
+if [ -n "$had_lc_all" ]; then LC_ALL="$caller_lc_all"; else unset LC_ALL; fi
 
 # The body is $text, read once after the argument loop (#552) and reused from here on, because
 # it may be a named pipe or an inherited descriptor, which gives its bytes once (#72). $(<)
 # dropped the file's trailing newlines, which is what the trailer's gap below rests on.
 
-# Each ticket a Closes line names, against the decision it may owe a citation (#530). The reader
+# Each ticket a closing reference names, against the decision it may owe a citation (#530). The reader
 # beside this script judges one issue a run, with its own gh calls, and answers on its status: 0
 # and the decision comment's URL on standard output, which the body has to carry; 1 when nothing is
 # owed; 2 when it could not read the issue. Its output is held and shown only when it could not
@@ -365,6 +417,28 @@ if [ -n "${follow_ups:-}" ]; then
   else
     printf 'land: could not list the issues raised by #%s, so whether each carried follow-up has been filed is not checked; gh says why above. The merge goes on; read the record'"'"'s Follow-ups table yourself.\n' "$pr" >&2
   fi
+fi
+
+# The overnight answers that wait on this landing (#531): the reader beside this script lists, from
+# the open `Overnight <date>` issues, each question naming this pull request or a ticket its
+# description closes, one line each, with whether a Confirm comment covers it; its gh calls live in
+# the reader alone. It runs after every refusal above and before the confirmation below, so the
+# human reads what waits before answering, and with --unreviewed too. It only reports: a question
+# it lists is the human's to act on, so none stops the merge, and a reader that fails (status 2,
+# its reason above) is said in one line and the merge proceeds. That is a deliberate departure
+# from CODING_STANDARDS.md -> "A check fails closed", decided on #531 for a reader whose answer is
+# advice, not a gate.
+echo "--- reading the overnight answers that wait on #$pr"
+waiting_on=(--number "$pr")
+for ticket in $closes; do waiting_on=("${waiting_on[@]}" --number "${ticket#\#}"); done
+status=0
+waiting="$(python3 -I "$here/overnight_answers.py" "${waiting_on[@]}" --lookup)" || status=$?
+if [ "$status" -ne 0 ]; then
+  echo "land: could not read the Overnight issues' questions (the reader exited $status; its reason is above), so none is listed and the merge proceeds."
+else
+  while IFS= read -r line; do
+    [ -z "$line" ] || echo "land: $line"
+  done <<< "$waiting"
 fi
 
 # The subject is read by a check, so it is worth saying out loud which one is being used.
