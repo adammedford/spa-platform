@@ -625,6 +625,27 @@ try {
       const m = (resultOf(208, result).mutations || []).find((x) => x.kind === 'nominated') || {}
       if (m.test !== want) fail(`PR 208 with the nomination "${cell}": row test ${m.test}, expected ${want}`)
     }
+    // The pre-3.11 cell 'test_x (pkg.C)' keeps its parenthesis as a class to check (#808): red on a
+    // failing name unittest printed, in either form, the row is the nomination only when that name's
+    // class is pkg.C, so another class's test_x red alone is did-not-fail, as it was before the bare
+    // reading. A failing name in no unittest form, as xUnit prints 'Ns.Class.Nom', is matched by the
+    // bare name, so 'Nom (Assert.Null)' red on its own test still reproduces (#764).
+    for (const [cell, red, want] of [
+      ['test_x (pkg.C)', 'test_x (pkg.C)', 'reproduced'],
+      ['test_x (pkg.C)', 'test_x (pkg.C.test_x)', 'reproduced'],
+      ['test_x (pkg.C)', 'test_x (top.pkg.C) (k=\'v\')', 'reproduced'],
+      ['test_x (pkg.C)', 'test_x (pkg.Other)', 'did-not-fail'],
+      ['test_x (pkg.C)', 'test_x (pkg.Other.test_x)', 'did-not-fail'],
+      ['test_x (pkg.C)', 'test_x (other.pkg.Cx)', 'did-not-fail'],
+      ['Nom (Assert.Null)', 'Platform.Registry.Tests.NomTests.Nom', 'reproduced'],
+      ['Nom (Assert.Null)', 'Platform.Registry.Tests.NomTests.Nom(kind: "a.b")', 'reproduced'],
+    ]) {
+      const bare = cell.split(' ')[0]
+      env = run({ prs: [208] }, NOM, { nominations: { 208: [{ test: cell, project: 'tests/py', why: 'asserts a constant' }] }, mutate: { [bare]: { ...row('reproduced', 1, 10), failingNames: [red] } } })
+      result = await execute(env)
+      const m = (resultOf(208, result).mutations || []).find((x) => x.kind === 'nominated') || {}
+      if (m.test !== bare || m.result !== want) fail(`PR 208 with the nomination "${cell}" red on ${red}: row ${JSON.stringify({ test: m.test, result: m.result })}, expected ${bare} ${want}`)
+    }
     // A candidate keyed by the bare name lends a dotted nomination what it guards and breaks.
     {
       const PYCAND = { 208: pr(208, ['tests/py/t.py'], { candidates: [cand('test_x', 'tests/py')] }) }

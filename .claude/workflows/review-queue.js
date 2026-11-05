@@ -768,9 +768,11 @@ const sinceHeadsOf = (records, inv) => {
 // A unittest subtest prints its message in brackets, its parameters in a parenthesis or both after
 // the class one, 'test_x (pkg.Class) [msg] (k='v')', and is read without them (#793): on #792 the
 // greedy parenthesis took both groups, the name read as the bare test_x, and a candidate Class.test_x
-// red on its own subtest read as caught elsewhere.
+// red on its own subtest read as caught elsewhere. UNITTEST_PRINTED is either printed form, which
+// mutationRow also uses to tell a failing name unittest printed from one xUnit printed (#808).
+const UNITTEST_PRINTED = /^\s*([A-Za-z_]\w*)\s*\(([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+)\)\s*(?:\[.*?\])?\s*(?:\(.*\))?\s*$/
 const dotted = (f, withClass = true) => {
-  const sub = /^\s*([A-Za-z_]\w*)\s*\(([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+)\)\s*(?:\[.*?\])?\s*(?:\(.*\))?\s*$/.exec(f)
+  const sub = UNITTEST_PRINTED.exec(f)
   const [, head, inner] = sub || /^\s*([^(]*?)\s*(?:\((.*)\))?\s*$/.exec(f) || [, f.trim(), undefined]
   if (!/^[A-Za-z_]\w*$/.test(head) || !/^[A-Za-z_]\w*(\.[A-Za-z_]\w*)+$/.test(inner || '')) return head
   return inner.endsWith(`.${head}`) ? inner : withClass ? `${inner}.${head}` : head
@@ -780,16 +782,21 @@ const dotted = (f, withClass = true) => {
 // on X read as caught elsewhere and held. What followed the name stays in why. A Python unittest cell
 // 'test_x (pkg.Class.test_x)' is read as its whole dotted name, by dotted() as mutationRow reads a
 // failing name, so another class's test_x is not this one; 'test_x (pkg.Class)' is read as test_x,
-// since a qualifier such as '(Assert.Null)' has its shape. A candidate keyed by the bare name lends
-// the row what it guards. A cell with no name before its first space or '(' keeps its whole text, so
-// its row still reaches the verdict.
+// since a qualifier such as '(Assert.Null)' has its shape, and keeps pkg.Class as its cls (#808).
+// mutationRow holds a failing name unittest printed to that class, since only a Python run prints
+// one: on #764 the bare reading took another class's red test_x for the nomination. A failing name
+// xUnit printed, 'Ns.Class.Nom', is matched by the bare name, so 'Nom (Assert.Null)' still reads
+// its own red test. A candidate keyed by the bare name lends the row what it guards. A cell with no
+// name before its first space or '(' keeps its whole text, so its row still reaches the verdict.
 const nominated = (s, byTest) => {
   const cell = (s.test || '').trim()
   const bare = (/^[^\s(]*/.exec(cell) || [''])[0]
   const whole = dotted(cell, false)
   const test = whole !== bare && whole.endsWith(`.${bare}`) ? whole : bare || cell
+  const classed = dotted(cell)
+  const cls = test === bare && classed !== bare ? classed.slice(0, -bare.length - 1) : ''
   const why = test === s.test ? s.why : `${s.why} (nominated as ${s.test})`
-  return { ...(byTest.get(test) || byTest.get(bare)), ...s, test, why, kind: 'nominated' }
+  return { ...(byTest.get(test) || byTest.get(bare)), ...s, test, why, kind: 'nominated', cls }
 }
 const mutationList = (inv, standards, d, prior = { held: null, clearers: [] }) => {
   const candidates = inv.candidates || []
@@ -879,7 +886,10 @@ const mutationRow = (n, m, i, got) => {
   // .mjs file its cell names; that makes it only a caught row, which the verdict still has to answer.
   const nodeFile = /\.mjs$/.test(m.file || '') || /\.mjs$/.test((/^[^\s(]*/.exec(cell) || [''])[0])
   const wholeFile = !!m.file && (m.project === m.file || nodeFile) && (cell === m.file || cell === m.file.split('/').pop())
-  const isNamed = (f) => wholeFile || `.${dotted(f)}`.endsWith(`.${m.test}`)
+  // A nomination's cls, from a cell 'test_x (pkg.Class)', is that class when unittest printed the
+  // failing name, and nothing when xUnit did (#808); see nominated().
+  const nameIn = (f) => (m.cls && UNITTEST_PRINTED.test(f) ? `${m.cls}.${m.test}` : m.test)
+  const isNamed = (f) => wholeFile || `.${dotted(f)}`.endsWith(`.${nameIn(f)}`)
   const caughtElsewhere = row.result === 'reproduced' && row.failingNames.length > 0 && !row.failingNames.some(isNamed)
   // A Node companion, identified by its project or by nodeFile above, prints no test names: a
   // check is a block of the file, and its failures are its fail() messages, which no cell such as
