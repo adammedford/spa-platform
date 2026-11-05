@@ -42,9 +42,10 @@ rows and their questions) and #358 (the deployed continuity class).
    (ADR-0023 decision 1, ADR-0021 decision 1). A comment that is only the word `Confirm` covers
    every pre-accepted answer of that run and none that read `Answer: open`. Where none covers a
    write, print the write you would make under "Held" and go on.
-6. **The record is `.scratch/sitting/log/<UTC date>.log`** in the main checkout: every command,
-   every output, unredacted, mode 600. A run's evidence bundle (the junit report, the
-   configuration, a script's output) goes under `.scratch/sitting/log/<UTC date>/` (#63's Q75),
+6. **The record is `.scratch/sitting/log/<pinned date>.log`** in the main checkout, named after
+   the UTC date Stage 0 pins for the whole sitting (the prelude): every command, every output,
+   unredacted, mode 600. A run's evidence bundle (the junit report, the
+   configuration, a script's output) goes under `.scratch/sitting/log/<pinned date>/` (#63's Q75),
    checked with `git check-ignore` before the first write, and is never uploaded: a post names
    each file with its SHA-256. A plan that holds secrets (the apps root's carries client secrets)
    goes to a private directory outside the repository, `P=$(mktemp -d)`, mode 700 as
@@ -62,16 +63,27 @@ rows and their questions) and #358 (the deployed continuity class).
 ### The prelude: every Bash call starts with it
 
 The Bash tool's shell is `/bin/bash` (#183) and keeps no state between calls, so each call that
-touches AWS begins with this, and runs each read and script as `shown <command>`:
+touches AWS begins with this one line, and runs each read and script as `shown <command>`:
 
 ```bash
-cd "$(git rev-parse --path-format=absolute --git-common-dir)/.." && set -a && . tools/aws-project.env && set +a
-export PATH="$HOME/.docker/bin:$PATH"   # a per-user Docker Desktop; this shell is not a login shell
-umask 077; R=".scratch/sitting/log/$(date -u +%F).log"; E="${R%.log}"; git check-ignore -q "$E/x" && mkdir -p "$E"
-shown() { echo "\$ $*" >> "$R"; "$@" 2>&1 | tee -a "$R" | python3 -I tools/wiz_redact.py --stream; echo "exit=${PIPESTATUS[0]}" | tee -a "$R"; }
-captured() { echo "\$ $*" >> "$R"; "$@" 2> >(tee -a "$R" | python3 -I tools/wiz_redact.py --stream >&2) | tee -a "$R"; local rc=${PIPESTATUS[0]}; echo "exit=$rc" | tee -a "$R" >&2; return "$rc"; }
-spactl() { dotnet run --project tools/spactl -- "$@"; }   # a function, so SPACTL stays unset (Q80)
+. "$(git rev-parse --path-format=absolute --git-common-dir)/../tools/wiz_prelude.sh"
 ```
+
+The prelude is `tools/wiz_prelude.sh`, one file (#1010), so no call carries a hand copy that can
+leave a line out: in sitting D one left out the Docker `PATH` line and `platform-tfvars.sh` failed
+on `docker-credential-desktop`. Its header says what it does, and `tools/wiz_prelude_tests.py`
+holds it to cases. Sourced, it moves to the main checkout's top level (rule 8), exports the profile
+and Region of `tools/aws-project.env`, puts the per-user Docker Desktop on `PATH`, sets the
+owner-only file mask, names the record `R` and the bundle `E` (rule 6) and makes the bundle's
+directory once git confirms it is ignored, and defines `shown`, `captured` and `spactl`, the last a
+function so `SPACTL` stays unset (Q80). Never copy its commands into a call or into this file.
+
+The record and bundle are named after the sitting's pinned date, never the clock's: a sitting that
+crossed midnight UTC once moved both to the next day mid-sitting, and a test run did nothing.
+Stage 0 pins it once, with `--pin` (below), in `.scratch/sitting/log/date`, which `log/` keeps
+ignored; a pin from an earlier sitting is replaced there. Without a pin, or with one that is not a
+single date, the prelude prints a line naming Stage 0 and exits non-zero, so the rest of the call
+does not run: run Stage 0's pin, then the call again.
 
 Shell variables do not survive the call either: read `TD`, `TASK` and the like again in the call
 that uses them. A read whose value a later command needs runs as `X=$(captured <command>)`: its
@@ -104,7 +116,14 @@ would; the script catches shapes, not meaning.
 ## Stage 0: where things stand
 
 Ask first whether this is a `--dry-run` (list every command, run nothing, post nothing), so the
-answer governs Stage 0 too. Then, each line after the prelude:
+answer governs Stage 0 too. Then pin the sitting's date, once, in a call of its own before the
+first prelude, and name the date it prints:
+
+```bash
+bash "$(git rev-parse --path-format=absolute --git-common-dir)/../tools/wiz_prelude.sh" --pin
+```
+
+Then, each line after the prelude:
 
 ```bash
 tools/preflight.sh                       # must end ready; it compares the account with the pin; read its Container engine row
