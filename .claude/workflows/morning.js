@@ -7,9 +7,9 @@ export const meta = {
     { title: 'Verify', detail: 'one agent, first the merged-PR check (#661): a landing pull request already merged is reported as such, and none of the steps below runs; otherwise eight steps each a stop: the main checkout, the base, the lane worktrees, the check, the push with the hook, one pull request, CI on the exact head, a review record naming it; then, when the open pull request\'s description names an older head, one agent writes the description the script refreshed' },
     { title: 'Apply', detail: 'one index of the Overnight issue\'s comments, one body reader per batch of the questions and Confirm comments, one classifier, then at most maxParallel appliers: the chain (commit appliers on integrator/morning-<date>, and those that edit a ticket body another may write) one at a time, tracker-only appliers in parallel; follow-ups an answer asks for are filed, edits to other tickets applied; dry with no Confirm comment' },
     { title: 'Follow-ups', detail: 'one agent reads the discovery start and the checkpoint the earlier hand-overs recorded; one reads the pull requests into main the window reaches (open, merged since, recorded since; every one with no checkpoint) as an index of their records, and the open Apply tickets of every night; one record reader per batch returns the latest records\' bodies and the follow-ups already filed; the script reads each follow-ups table, one filer files the rows no issue holds, and the hand-over records the new checkpoint only when every read and filing completed' },
-    { title: 'Hand-over', detail: 'one agent, always: posts the hand-over the script wrote as ## Morning <date> on the Overnight issue, every open Apply ticket a step of its own, oldest first' },
+    { title: 'Hand-over', detail: 'one reader of the earlier hand-overs of the night, when Apply\'s index shows one (#969); then one agent posts the hand-over the script wrote as ## Morning <date> on the Overnight issue, every open Apply ticket a step of its own, oldest first: whole the first time, as ## Morning <date> (delta) with only the changed sections on a later pass, and not at all when identical to the latest' },
     { title: 'Check', detail: 'confirmFile only, one read agent: returns the issue\'s comments and the draft Confirm; the script sorts the questions with Apply\'s own code, prints the counts and lists, and stops (#302)' },
-    { title: 'After', detail: 'after: true only (#635): one agent refuses a closed Overnight issue, and refuses until the merged landing pull request\'s head, matched to the head the morning verified, is in a fresh origin/main; then it closes, unassigns and removes worktrees whose tips are on origin/main, the integration worktree last, and prunes. Apply follows as in the morning pass, gated on the landed head\'s review record and CI, then one agent posts ## After <date> and closes the issue once every question is settled and the pass refused nothing' },
+    { title: 'After', detail: 'after: true only (#635): one agent refuses a closed Overnight issue, and refuses until the merged landing pull request\'s head, matched to the head the morning verified, is in a fresh origin/main; then it closes, unassigns and removes worktrees whose tips are on origin/main, the integration worktree last, and prunes. Apply follows as in the morning pass, gated on the landed head\'s review record and CI, then one agent posts ## After <date>, a delta of it or nothing by the Hand-over rule (#969), and closes the issue once every question is settled and the pass refused nothing' },
   ],
 }
 
@@ -55,8 +55,10 @@ export const meta = {
 // Agent budget (#78 -> "Agent budget"): Replay 1, Verify 1, Apply 1 comments index, the body
 // readers, 1 classifier and at most maxParallel appliers, Follow-ups 1 window reader (#514), 1
 // reader, one record reader per batch of the latest records it indexed, and at most 1 filer (#292),
-// Hand-over 1: eleven at the default, besides the body readers and their re-reads, at most
-// READ_RETRIES for each comment a reader returned changed (#724), and the record readers. The body
+// Hand-over 1, or none when the hand-over is identical to the latest earlier one (#969): eleven at
+// the default, besides the body readers and their re-reads, at most
+// READ_RETRIES for each comment a reader returned changed (#724), the record readers, and the one
+// reader of the night's earlier hand-overs when there is one (#969). The body
 // readers' cost rule (#661 Q24): the questions and Confirm comments are packed in order toward a
 // 24,000-byte body budget (BATCH_BYTES), one reader per batch, and a comment larger than that is
 // read alone; no total cap on the readers is imposed here. That is a packing target, not a hard
@@ -70,7 +72,22 @@ export const meta = {
 // after pass's, in the same bounded grouping. The after pass (#635 Q27): 1 cleanup agent, whose
 // first step is the lookup, then Apply's 1 comments index, the body readers, 1 classifier and at
 // most maxParallel appliers in the same bounded grouping, and 1 agent for the After comment and the
-// close: seven at the default, besides the body readers and their re-reads.
+// close, none when the comment is identical and the issue stays open: seven at the default, besides
+// the body readers and their re-reads.
+//
+// A second hand-over on one night (#969). A pass run twice posted its whole hand-over twice: #799
+// carries a "## Morning 2026-11-04" of 46 KB and a second of 42 KB, and 15 comments across the tracker
+// were byte-for-byte copies of an earlier one. So before it posts, a pass looks in Apply's index for
+// Adam's comments headed exactly "## Morning <date>" (the after pass: "## After <date>") or that with
+// " (delta)", and reads the latest whole one and the latest delta after it in one reader. The first
+// hand-over of a night is posted whole. A later one is diffed against the latest whole one, section by
+// section ("### " blocks, and the opening as "Opening"), and posted as "<heading> (delta)": a link to
+// the whole comment it extends, each changed section whole, each unchanged one as "### <title>
+// (unchanged)", each one gone as "### <title> (removed)". Every delta extends the whole comment, never
+// another delta, so a reader needs those two comments at most. A hand-over identical to the latest
+// earlier one, whole or delta, is not posted, and the return says so. A read that failed, a delta with
+// no whole comment before it, or a hand-over whose section titles repeat is posted whole, and the
+// first is named: posting it again costs bytes, losing it costs the hand-over.
 //
 // An already merged landing pull request (#661, from #706 Q21 to Q29). On 2026-10-30 Verify stopped
 // at step 6 because #620 had merged, and the hand-over said "Review record: none" and "CI: none" and
@@ -1387,7 +1404,7 @@ ${COMMENTS_RULES}
 1. \`cd ${REPO} && gh issue view ${issue} --json number,comments --jq '{number, comments: [.comments[] | {author: .author.login, createdAt, url, bytes: (.body|utf8bytelength), head: .body[0:${HEAD_CHARS}]}]}'\`. issue is its output as printed: its number, and every comment, in order, as {author, createdAt, url, bytes, head}. head is the first ${HEAD_CHARS} characters of the comment, whatever they are; return nothing more of any comment.
 2. If GitHub cannot be reached or the read fails, error says why and comments is []. error is "" when nothing stopped you.
 Return issue and error.`
-const batchPrompt = (issue, at) => `Comments: return ${at.length === 1 ? 'one comment' : `${at.length} comments`} of the Overnight issue verbatim for Apply (#319). You read; the script reads the questions and the Confirm comments from them.
+const batchPrompt = (issue, at, purpose = 'for Apply (#319). You read; the script reads the questions and the Confirm comments from them.') => `Comments: return ${at.length === 1 ? 'one comment' : `${at.length} comments`} of the Overnight issue verbatim ${purpose}
 
 ${COMMENTS_RULES}
 - Never quote a secret, token, cookie, code or state value in anything you return but the comments, verbatim.
@@ -1625,7 +1642,7 @@ ${HOUSE(p.mdir)}
 
 OUTPUT FILE: ${p.mdir}/handover.md
 1. Write the text between the markers, without the markers, to ${p.mdir}/handover.md.
-2. Read the issue's comments, \`cd ${REPO} && gh issue view ${issue} --json comments\`. If a comment headed "## Morning ${date}" already has exactly this text, post nothing: url is that comment's URL and posted false.
+2. Read the issue's comments, \`cd ${REPO} && gh issue view ${issue} --json comments\`. If a comment headed "## Morning ${date}" or "## Morning ${date} (delta)" already has exactly this text, post nothing: url is that comment's URL and posted false.
 3. Otherwise post it, \`cd ${REPO} && gh issue comment ${issue} --body-file ${p.mdir}/handover.md\`; url is the new comment's URL and posted true.
 reason is "" unless the post failed, and then the error.
 BEGIN HAND-OVER
@@ -1656,30 +1673,36 @@ ${HOUSE(paths(A.date || '<date>').mdir)}
 ${LOOKUP(`The date${A.date ? ` is ${A.date}` : ' is the one in that title'}; call it <date> below. issue is {number, title, url} of that issue.`, true)}
 2. The landing (#635 Q23). You never need the integration branch overnight/<date>, which the landing deleted, and you run no Verify. The landing pull request: \`cd ${REPO} && gh pr list --head overnight/<date> --state all --json number,headRefOid,state,mergeCommit\`. pr is the one whose state is MERGED, as {number, state, headRefOid, mergeCommit: its merge commit's oid}; when none merged, the first listed, or {number: 0, state: "", headRefOid: "", mergeCommit: ""} when none is listed. tip is pr's headRefOid. verifiedHead is the head the morning verified, the result's head in ${LOG}/morning-<date>/verify.json, or "" when that file does not exist. \`git -C ${REPO} fetch origin\`; originMain is \`git -C ${REPO} rev-parse origin/main\`; contained is whether \`git -C ${REPO} merge-base --is-ancestor <tip> origin/main\` exits 0. If pr did not merge, verifiedHead is not "" and differs from tip, or tip is not contained, stop here: reason says which, with the shas, and close, unassign and remove nothing.
 3. The landed head's evidence, read and never written (#635 Q23: containment proves the landing, not the review). The record naming tip, read with the reader's --pr form, pinned to tip as tools/land.sh pins its head (#488): \`cd ${REPO} && ${READER} --pr <pr number> --head <tip>\`, which lists every page of the comments and reviews itself. Exit 0: record {verdict "merge", head: tip, url: the URL it printed}. Exit 1 with "says hold: <url>": {verdict "hold", head: tip, url}. Exit 1 otherwise, or exit 2: {verdict "none", head "", url ""}. reader is the exit status and its first line. CI on tip: \`cd ${REPO} && gh pr checks <pr number> --json name,state,bucket,link\`; ci is green when every check passed or was skipped, red when one failed, pending when one has not finished, none when none is reported; ciUrl is a run's link on that head.
-4. The cleanup. Read the Overnight issue (\`cd ${REPO} && gh issue view <number> --json body,comments\`) and its last "## Morning <date>" comment, which stays the source of the rows. Close each landed row's issue that is still open, with a comment citing the merge sha: \`cd ${REPO} && gh issue close <n> --comment "Landed in <merge sha> on main."\`. Unassign each partial row's issue: \`cd ${REPO} && gh issue edit <n> --remove-assignee @me\`. Never close the Overnight issue itself: that is a later agent's, once the script has judged it.
+4. The cleanup. Read the Overnight issue (\`cd ${REPO} && gh issue view <number> --json body,comments\`) and its last "## Morning <date>" comment, which stays the source of the rows: the last one headed exactly that. A later "## Morning <date> (delta)" comment extends it (#969): it gives whole each section that changed since that comment and names each other "### <title> (unchanged)", so read each section from the latest delta that gives it whole, and otherwise from that comment. Close each landed row's issue that is still open, with a comment citing the merge sha: \`cd ${REPO} && gh issue close <n> --comment "Landed in <merge sha> on main."\`. Unassign each partial row's issue: \`cd ${REPO} && gh issue edit <n> --remove-assignee @me\`. Never close the Overnight issue itself: that is a later agent's, once the script has judged it.
 5. Each lane worktree under ${WTROOT}, then the morning worktree ${WTROOT}/morning, then the integration worktree overnight last: remove it only when it is clean and \`git -C ${REPO} merge-base --is-ancestor <its tip> origin/main\` exits 0, with \`git -C ${REPO} worktree remove <path>\`; every other is kept and listed in kept with why. A morning worktree whose tip is not on origin/main holds morning commits not yet landed: keep it. Then \`git -C ${REPO} worktree prune\`.
 6. phaseFiles: the classification an earlier pass made, ${LOG}/morning-<date>/classify.json, as [{name: "classify", inputs, result}] from its contents; [] when it does not exist.
 Return listing, issue, pr, tip, verifiedHead, originMain, contained, record, ci, ciUrl, closed and unassigned (issue numbers), removed and kept (paths), pruned, phaseFiles and reason ("" unless a step you were told to do failed, and then what failed).`
 
 // The After comment and the close (#635 Q25, Q27): posted exactly as the script wrote it, under its
 // own heading so the "## Morning <date>" comment stays the rows' source, then the close, only when
-// the script says CLOSE: true.
-const afterHandoverPrompt = (date, issue, text, close) => {
+// the script says CLOSE: true. POST: false (#969) when the comment is identical to the latest earlier
+// After comment, whose URL the agent returns: it posts nothing, and only closes.
+const afterHandoverPrompt = (date, issue, text, close, same = '') => {
   const p = paths(date)
-  return `After hand-over: post the after pass's comment on the Overnight issue, then close the issue only when CLOSE below is true (#635). The text between the markers is the comment, written by the script; post it exactly, adding and removing nothing.
+  const steps = same
+    ? `1. POST is false: the script found this pass's comment identical to the latest earlier one, ${same}. Write nothing and post nothing: url is ${same} and posted false.
+2. Read the issue's state, \`cd ${REPO} && gh issue view ${issue} --json state\`.`
+    : `1. Write the text between the markers, without the markers, to ${p.mdir}/after.md.
+2. Read the issue's comments, \`cd ${REPO} && gh issue view ${issue} --json state,comments\`. If a comment headed "## After ${date}" or "## After ${date} (delta)" already has exactly this text, post nothing: url is that comment's URL and posted false.
+3. Otherwise post it, \`cd ${REPO} && gh issue comment ${issue} --body-file ${p.mdir}/after.md\`; url is the new comment's URL and posted true.`
+  return `After hand-over: ${same ? 'the after pass\'s comment is already on the Overnight issue; close the issue' : 'post the after pass\'s comment on the Overnight issue, then close the issue'} only when CLOSE below is true (#635).${same ? '' : ' The text between the markers is the comment, written by the script; post it exactly, adding and removing nothing.'}
 
 ${HOUSE(p.mdir)}
-
-OUTPUT FILE: ${p.mdir}/after.md
+${same ? '' : `
+OUTPUT FILE: ${p.mdir}/after.md`}
+POST: ${same ? 'false' : 'true'}
 CLOSE: ${close ? 'true' : 'false'}
-1. Write the text between the markers, without the markers, to ${p.mdir}/after.md.
-2. Read the issue's comments, \`cd ${REPO} && gh issue view ${issue} --json state,comments\`. If a comment headed "## After ${date}" already has exactly this text, post nothing: url is that comment's URL and posted false.
-3. Otherwise post it, \`cd ${REPO} && gh issue comment ${issue} --body-file ${p.mdir}/after.md\`; url is the new comment's URL and posted true.
-4. ${close ? `CLOSE is true: once the comment is there, close the issue, \`cd ${REPO} && gh issue close ${issue}\`; closed is whether that succeeded, or true when step 2 showed it closed already.` : 'CLOSE is false: close nothing, and closed is false. The script found a question unsettled or a refusal in this pass, which the comment lists.'}
-reason is "" unless the post or the close failed, and then the error.
+${steps}
+${same ? 3 : 4}. ${close ? `CLOSE is true: once the comment is there, close the issue, \`cd ${REPO} && gh issue close ${issue}\`; closed is whether that succeeded, or true when step 2 showed it closed already.` : 'CLOSE is false: close nothing, and closed is false. The script found a question unsettled or a refusal in this pass, which the comment lists.'}
+reason is "" unless the post or the close failed, and then the error.${same ? '' : `
 BEGIN HAND-OVER
 ${text}
-END HAND-OVER`
+END HAND-OVER`}`
 }
 
 // ---------------------------------------------------------------- the hand-over's text
@@ -1865,6 +1888,93 @@ const afterText = (s) => {
   return L.join('\n').replace(/`/g, "'")
 }
 
+// ---------------------------------------------------------------- a second hand-over (#969)
+// See "A second hand-over on one night" in the header. The marks a delta carries, said once.
+const DELTA = ' (delta)'
+const UNCHANGED = ' (unchanged)'
+const REMOVED = ' (removed)'
+const OPENING = 'Opening'
+// A hand-over as its delta reads it: the heading line, the opening (the lines between it and the first
+// "### " line) and each "### " block by its title, each trimmed of the blank lines around it. A body
+// GitHub serves with \r\n line ends reads as the one posted with \n.
+const sectionsOf = (text) => {
+  const lines = String(text || '').replace(/\r\n/g, '\n').split('\n')
+  const opening = []
+  const sections = []
+  for (const l of lines.slice(1)) {
+    if (l.startsWith('### ')) sections.push({ title: l.slice(4), lines: [l] })
+    else (sections.length ? sections[sections.length - 1].lines : opening).push(l)
+  }
+  const tidy = (ls) => ls.join('\n').trim()
+  return { heading: lines[0], opening: tidy(opening), sections: sections.map((x) => ({ title: x.title, body: tidy(x.lines) })) }
+}
+const sameText = (a, b) => String(a || '').replace(/\r\n/g, '\n').trim() === String(b || '').replace(/\r\n/g, '\n').trim()
+// What a pass posts, from the whole hand-over it wrote and the night's earlier ones (earlier: null when
+// there is none to extend, else {whole, latest}, each {url, body}; latest is whole when no delta
+// followed it): {mode, body, extends, url}. mode whole posts text as it is; delta posts body, which
+// extends the whole comment; identical posts nothing, and url is the latest earlier hand-over it
+// matches. A delta is always taken against the latest whole comment, and never against a delta.
+const handoverPost = (text, earlier) => {
+  const whole = { mode: 'whole', body: text, extends: '', url: '', note: '' }
+  if (!earlier) return whole
+  const now = sectionsOf(text)
+  const was = sectionsOf(earlier.whole.body)
+  const titles = now.sections.map((x) => x.title)
+  const before = new Map(was.sections.map((x) => [x.title, x.body]))
+  // A title that repeats, or one a delta's own marks would misread, cannot be diffed by title.
+  const marked = (t) => t === OPENING || t.endsWith(UNCHANGED) || t.endsWith(REMOVED)
+  if (new Set(titles).size !== titles.length || before.size !== was.sections.length || titles.some(marked) || [...before.keys()].some(marked)) return { ...whole, note: `a section title repeats or reads as a delta's mark in this hand-over or in ${earlier.whole.url}, so it was posted whole` }
+  const L = [`${now.heading}${DELTA}`, '', `Extends ${earlier.whole.url}: each section that changed since it is given whole below; each other is named unchanged, as it reads there, or removed.`]
+  let changed = 0
+  if (now.opening === was.opening) L.push('', `### ${OPENING}${UNCHANGED}`)
+  else { changed++; L.push('', `### ${OPENING}`, '', now.opening) }
+  for (const x of now.sections) {
+    if (before.get(x.title) === x.body) L.push('', `### ${x.title}${UNCHANGED}`)
+    else { changed++; L.push('', x.body) }
+  }
+  for (const t of before.keys()) if (!titles.includes(t)) { changed++; L.push('', `### ${t}${REMOVED}`) }
+  const body = L.join('\n')
+  const latestIsWhole = earlier.latest.url === earlier.whole.url
+  if (latestIsWhole ? !changed : sameText(earlier.latest.body, body)) return { mode: 'identical', body: '', extends: earlier.whole.url, url: earlier.latest.url, note: `this hand-over is identical to the latest earlier one, ${earlier.latest.url}, so nothing was posted` }
+  return { mode: 'delta', body, extends: earlier.whole.url, url: '', note: '' }
+}
+// The night's earlier hand-overs, found in Apply's index of the comments (index: null when it was not
+// read): Adam's comments whose first line is heading exactly, or heading with " (delta)" (CODING_STANDARDS.md
+// -> "An authorisation is read from its author"). The latest whole one, and the latest delta when one
+// follows it, are read by one reader and checked against the index as Apply's readers' bodies are.
+// Returns {earlier, failed, note}: failed names a read that did not come back as the index shows it.
+const earlierHandovers = async (issue, index, heading) => {
+  if (!index) return { earlier: null, failed: 'Apply\'s index of the comments was not read', note: '' }
+  const firstLine = (c) => String((c && c.head) || '').replace(/\r\n/g, '\n').split('\n')[0]
+  const at = []
+  index.forEach((c, i) => { if (c && c.author === ADAM && (firstLine(c) === heading || firstLine(c) === heading + DELTA)) at.push(i) })
+  if (!at.length) return { earlier: null, failed: '', note: '' }
+  const wholes = at.filter((i) => firstLine(index[i]) === heading)
+  if (!wholes.length) return { earlier: null, failed: '', note: `the night's earlier hand-overs, ${at.map((i) => index[i].url).join(', ')}, are deltas with no whole comment before them, so this one was posted whole` }
+  const w = wholes[wholes.length - 1]
+  const last = at[at.length - 1]
+  const read = last === w ? [w] : [w, last]
+  const urls = read.map((i) => index[i].url)
+  const r = await run(batchPrompt(issue, read, 'for the hand-over (#969). You read; the script compares this pass\'s hand-over with them.'), { label: 'handover-read', phase: 'Hand-over', schema: COMMENTS_BATCH })
+  const got = r && !r.error ? r.comments || [] : []
+  const why = !r ? 'the reader returned nothing'
+    : r.error ? r.error
+      : got.map((c) => c.url).join(' ') !== urls.join(' ') ? `the reader returned ${got.map((c) => c.url).join(', ') || 'no comment'}`
+        : read.map((i, j) => bodyFault(got[j], index[i])).filter(Boolean).join('; ')
+  if (why) return { earlier: null, failed: `${urls.join(' and ')}: ${why}`, note: '' }
+  return { earlier: { whole: got[0], latest: got[got.length - 1] }, failed: '', note: '' }
+}
+// The earlier hand-overs read and the post decided, for either pass: a read that failed is named in
+// refusals, and the hand-over is then posted whole.
+const decideHandover = async (issue, index, heading, text, refusals) => {
+  const prior = await earlierHandovers(issue, index, heading)
+  if (prior.failed) refusals.push(`the earlier hand-over was not read as the index shows it (${prior.failed}), so this one was posted whole`)
+  const post = handoverPost(text, prior.earlier)
+  const note = post.note || prior.note || (prior.failed ? 'the earlier hand-over was not read, so this one was posted whole' : '')
+  if (note) log(`hand-over: ${note}`)
+  return { ...post, note }
+}
+
 // ---------------------------------------------------------------- Apply, for both passes
 // The phase files a pass may reuse, by name and inputs; done says whether a result is a finished phase.
 const reuser = (phaseFiles) => {
@@ -1892,6 +2002,8 @@ const applyAnswers = async ({ date, issue, gate, refusals, reuse, after = false 
     : cr.error ? `the comments reader could not read the comments of #${issue}: ${cr.error}; nothing was sorted or applied`
       : cr.issue.number !== issue ? `the comments reader read the comments of #${cr.issue.number}, not #${issue}; nothing was sorted or applied`
         : ''
+  // The index, kept for the hand-over, which finds the night's earlier hand-overs in it (#969).
+  const index = commentsRefusal ? null : cr.issue.comments || []
   // Every batch is read whole or the read fails: a body missing, or one from another comment than the
   // index named there, is named, and nothing is sorted from a partial read.
   let comments = []
@@ -2033,7 +2145,7 @@ const applyAnswers = async ({ date, issue, gate, refusals, reuse, after = false 
       for (const t of byTicket) for (const q of t.questions) if (q.kind === 'no-repo-change') apply.done.push(`skipped Q${q.q} (#${t.issue}): needs nothing: ${q.summary}`)
     }
   }
-  return { apply, unread, byQ, refusedQs, skipped }
+  return { apply, unread, byQ, refusedQs, skipped, index }
 }
 
 // ---------------------------------------------------------------- run: the draft check (#302)
@@ -2114,8 +2226,13 @@ if (AFTER) {
   phase('Hand-over')
   const text = afterText({ date: look.date, issue: look.issue, after: a, apply: ap.apply, skipped: ap.skipped, refusals, settled, unsettled, close })
   log(text)
-  const h = await run(afterHandoverPrompt(look.date, look.issue, text, close), { label: 'after-handover', phase: 'Hand-over', schema: AFTER_HANDED })
-  if (!h) refusals.push(`the After agent returned nothing: the After comment may not be posted, and #${look.issue} was not closed; relaunch the after pass`)
+  // An identical After comment is not posted (#969): its agent runs only to post, or to close.
+  const post = await decideHandover(look.issue, ap.index, `## After ${look.date}`, text, refusals)
+  const same = post.mode === 'identical'
+  const skip = same && !close
+  const h = skip ? null : await run(afterHandoverPrompt(look.date, look.issue, post.body, close, same ? post.url : ''), { label: 'after-handover', phase: 'Hand-over', schema: AFTER_HANDED })
+  if (skip) log(`after: no After agent ran: ${post.note}, and the issue stays open`)
+  else if (!h) refusals.push(`the After agent returned nothing: the After comment may not be posted, and #${look.issue} was not closed; relaunch the after pass`)
   else {
     if (h.reason) refusals.push(`the After comment was not posted or #${look.issue} not closed: ${h.reason}`)
     if (h.closed && !close) refusals.push(`the After agent closed #${look.issue} though it was told not to, which its prompt forbids: reopen it, since the comment lists what is unsettled`)
@@ -2126,7 +2243,7 @@ if (AFTER) {
     tip: a.tip, verifiedHead: a.verifiedHead, originMain: a.originMain, pr: a.pr, record: a.record, ci: a.ci,
     closed: a.closed, unassigned: a.unassigned, removed: a.removed, kept: a.kept, pruned: a.pruned,
     refusals, apply: ap.apply, settled, unsettled, close, issueClosed: !!(h && h.closed),
-    handover: { url: h ? h.url : '', posted: h ? h.posted : false, text },
+    handover: { url: same ? post.url : h ? h.url : '', posted: !same && !!(h && h.posted), mode: post.mode, extends: post.extends, posts: post.body, note: post.note, text },
     agents: agentsRun, reused,
   }
 }
@@ -2188,7 +2305,7 @@ phase('Apply')
 // A merged pull request's answers are applied through the after pass's path (#661 Q22): its appliers
 // fetch origin/main fresh, verify each effect before they skip it and reuse no applier's phase file,
 // behind the merged head's record and CI (judgeEvidence).
-const { apply, skipped: applySkipped } = await applyAnswers({
+const { apply, skipped: applySkipped, index: commentsIndex } = await applyAnswers({
   date: DATE, issue: ISSUE, refusals, reuse, after: !!verdict.merged,
   gate: verdict.merged ? (verdict.evidence ? 'the merged head\'s review record or CI does not clear it (see Refusals)' : '') : verdict.ok ? '' : 'Verify did not clear the head',
 })
@@ -2269,7 +2386,10 @@ if (!complete) refusals.push(`the follow-ups coverage is incomplete, so the chec
 phase('Hand-over')
 const text = handoverText({ date: DATE, issue: ISSUE, verify: v, verdict, refusals, apply, skipped: applySkipped, replay: rep, followUps, refresh, applyTickets })
 log(text)
-const handed = await run(handoverPrompt(DATE, ISSUE, text), { label: 'handover', phase: 'Hand-over', schema: HANDED })
+// The first hand-over of the night is posted whole, a later one as its delta, and one identical to the
+// latest earlier hand-over not at all (#969).
+const post = await decideHandover(ISSUE, commentsIndex, `## Morning ${DATE}`, text, refusals)
+const handed = post.mode === 'identical' ? null : await run(handoverPrompt(DATE, ISSUE, post.body), { label: 'handover', phase: 'Hand-over', schema: HANDED })
 if (handed && handed.reason) refusals.push(`the hand-over was not posted: ${handed.reason}`)
 return {
   mode: 'morning', date: DATE, issue: ISSUE, runLog: P.mdir,
@@ -2280,7 +2400,7 @@ return {
   replay: { counts: rep.counts, renamed: rep.renamed, stoppedAt: rep.stoppedAt, reason: rep.reason },
   pr: v ? v.pr : null, head: v ? v.head : '', ci: v ? v.ci : 'none', record: v ? v.record : null,
   apply: { ran: apply.ran, dry: apply.dry, answers: apply.answers, open: apply.open, no: apply.no, wouldDo: apply.wouldDo, done: apply.done, morning: apply.morning },
-  handover: { url: handed ? handed.url : '', posted: handed ? handed.posted : false, text },
+  handover: { url: post.mode === 'identical' ? post.url : handed ? handed.url : '', posted: !!(handed && handed.posted), mode: post.mode, extends: post.extends, posts: post.body, note: post.note, text },
   followUps, applyTickets,
   refresh: { state: refresh.state, named: refresh.named || '', edited: !!refresh.edited, rewrote: refresh.rewrote || [], reason: refresh.reason || '', body: refresh.body || '' },
   agents: agentsRun, reused,

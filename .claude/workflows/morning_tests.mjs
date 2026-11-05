@@ -309,6 +309,12 @@ function stub(env, scriptArgs, served) {
         const issue = served.issue === undefined ? issueWith([...QUESTIONS, CONFIRM]) : served.issue
         const indexed = (issue ? issue.comments : []).map((c) => ({ author: c.author, createdAt: c.createdAt, url: c.url, bytes: Buffer.byteLength(c.body), head: c.body.slice(0, 200) }))
         out = { issue: { number: served.commentsIssue || (issue ? issue.number : 0), comments: indexed }, error: served.commentsError || '' }
+      } else if (label === 'handover-read') {
+        // The earlier hand-overs' reader (#969): the comments its prompt's jq names, verbatim.
+        // served.handoverMangle: a reader that drops each body's last character, as a changed read would.
+        const issue = served.issue === undefined ? issueWith([...QUESTIONS, CONFIRM]) : served.issue
+        const at = /\.comments\[([\d,]+)\]/.exec(prompt)[1].split(',').map(Number)
+        out = { comments: at.map((i) => issue.comments[i]).map((c) => served.handoverMangle ? { ...c, body: c.body.slice(0, -1) } : c), error: '' }
       } else if (label.startsWith('comments-batch:')) {
         // A batch reader: the comments its prompt's jq names, verbatim. served.batchSwap: a reader
         // that returns another comment than the one named.
@@ -529,7 +535,7 @@ function stub(env, scriptArgs, served) {
       } else if (label === 'after-handover') {
         // Posts the After comment and closes the issue only when its prompt says CLOSE: true.
         // served.afterHanded: fields of its return, as a hand-over agent that closed anyway would.
-        out = { url: `${URL(ISSUE)}#issuecomment-98`, posted: true, closed: jsonAfter(prompt, 'CLOSE') === true, reason: '', ...(served.afterHanded || {}) }
+        out = { url: `${URL(ISSUE)}#issuecomment-98`, posted: jsonAfter(prompt, 'POST') !== false, closed: jsonAfter(prompt, 'CLOSE') === true, reason: '', ...(served.afterHanded || {}) }
       } else throw new Error(`unexpected agent label ${label}`)
       const dropped = label === 'verify' ? (served.verifyDrop || []).map((f) => `$.${f}: missing`) : []
       const bad = validate(opts.schema, out).filter((b) => !dropped.includes(b))
@@ -2891,8 +2897,140 @@ try {
     for (const said of ['24,000-byte', 'BATCH_BYTES', 'read alone', 'no total cap', 'not a hard bound']) if (!header.includes(said)) fail(`#661 Q24: the Agent budget header does not say "${said}":\n${header}`)
     if (!/^const BATCH_BYTES = 24000$/m.test(src)) fail('#661 Q24: BATCH_BYTES is not the 24,000 bytes the header states')
     if (!/already merged/.test(header)) fail('#661 Q24: the Agent budget header does not give the merged path\'s budget')
-    const core = merged.labels.filter((l) => !l.startsWith('comments-batch:'))
+    const core = merged.labels.filter((l) => !l.startsWith('comments-batch:') && l !== 'handover-read')
     if (core.length > 10 || merged.result.agents !== merged.labels.length) fail(`#661 Q24: a merged run took ${core.length} agents besides the body readers, and counts ${merged.result.agents} of ${merged.labels.length}: ${merged.labels.join(', ')}`)
+  }
+
+  // 28. A second hand-over on one night posts the sections that changed and nothing identical (#969).
+  //     On 2026-11-04 #799 carried a "## Morning 2026-11-04" of 46 KB and a second of 42 KB. A pass that
+  //     finds an earlier hand-over of its own heading by Adam posts "<heading> (delta)", opening with a
+  //     link to the whole comment it extends, each changed section whole and each other one as one
+  //     "### <title> (unchanged)" line; one identical to the latest earlier hand-over is not posted.
+  //     Each delta is proved complete: every section of the new whole hand-over is either in the delta
+  //     verbatim, or named unchanged there and verbatim in the comment it extends.
+  checks++
+  {
+    const posted = (r, l) => (/BEGIN HAND-OVER\n([\s\S]*)\nEND HAND-OVER/.exec(r.prompt(l)) || [])[1] || ''
+    // A hand-over's sections as the test reads them: the opening (between the heading and the first
+    // "### "), then each "### " block, by title, each without the blank lines around it.
+    const parts = (text) => {
+      const lines = text.split('\n')
+      const out = new Map([['', []]])
+      let cur = ''
+      for (const l of lines.slice(1)) {
+        if (l.startsWith('### ')) { cur = l.slice(4); out.set(cur, [l]) } else out.get(cur).push(l)
+      }
+      for (const [k, v] of out) out.set(k, v.join('\n').trim())
+      return out
+    }
+    const complete = (label, whole, earlier, delta, url) => {
+      const lines = delta.split('\n')
+      if (lines[0] !== `${whole.split('\n')[0]} (delta)`) fail(`#969 ${label}: the delta opens ${JSON.stringify(lines[0])}, not the heading with " (delta)"`)
+      if (!(lines[2] || '').startsWith(`Extends ${url}`)) fail(`#969 ${label}: the delta does not open with a link to the comment it extends, ${url}: ${JSON.stringify(lines[2])}`)
+      const now = parts(whole)
+      const was = parts(earlier)
+      const d = parts(delta)
+      let changed = 0
+      for (const [title, body] of now) {
+        const name = title || 'Opening'
+        const given = title ? d.get(title) : (d.get('Opening') || '').replace(/^### Opening\n\n?/, '')
+        if (d.has(`${name} (unchanged)`)) {
+          if (d.get(`${name} (unchanged)`) !== `### ${name} (unchanged)`) fail(`#969 ${label}: the unchanged line for ${name} is not one line`)
+          if (was.get(title) !== body) fail(`#969 ${label}: ${name} is named unchanged, but it changed:\n${was.get(title)}\n---\n${body}`)
+        } else if (given === body) changed++
+        else fail(`#969 ${label}: the section ${name} is neither given whole nor named unchanged in the delta:\n${delta}`)
+      }
+      if (!changed) fail(`#969 ${label}: the delta gives no changed section`)
+      for (const title of was.keys()) if (title && !now.has(title) && !d.has(`${title} (removed)`)) fail(`#969 ${label}: the section ${title}, gone from the new hand-over, is not named removed`)
+    }
+
+    // 28a. The Hand-over step. The first hand-over of the night is posted whole, as before.
+    // A hand-over names the main checkout, a new throwaway repository on each run, so an earlier one is
+    // served as that run's checkout would have written it.
+    const envFirst = newRepo()
+    const first = await execute(envFirst, { date: DATE })
+    const W1 = first.result.handover.text
+    const into = (env, text, from = envFirst) => text.split(from.repo).join(env.repo)
+    if (posted(first, 'handover') !== W1 || first.result.handover.mode !== 'whole' || first.labels.includes('handover-read')) fail(`#969: a night with no earlier hand-over did not post the whole one: mode ${first.result.handover.mode}, ${first.labels.join(', ')}`)
+    const at97 = `${URL(ISSUE)}#issuecomment-97`
+    const withEarlier = (...cs) => issueWith([...QUESTIONS, CONFIRM, ...cs])
+    const RED = { verify: { ci: 'red', failingJobs: ['.NET build and test'] } }
+    // A second pass with CI now red: Landing and Refusals change, the Replay section does not.
+    const envSecond = newRepo()
+    const second = await execute(envSecond, { date: DATE }, { issue: withEarlier(comment(97, into(envSecond, W1), '2026-10-21T09:00:00Z')), ...RED })
+    const D2 = posted(second, 'handover')
+    complete('morning', second.result.handover.text, into(envSecond, W1), D2, at97)
+    if (!/^### Replay \(unchanged\)$/m.test(D2) || /^- comment 0 applied/m.test(D2)) fail(`#969: the unchanged Replay section is carried whole in the delta:\n${D2}`)
+    if (!/^### Landing$/m.test(D2) || !/CI on c{40}: red/.test(D2)) fail(`#969: the changed Landing section is not in the delta:\n${D2}`)
+    if (second.result.handover.mode !== 'delta' || second.result.handover.extends !== at97 || second.result.handover.posts !== D2 || !second.result.handover.posted) fail(`#969: the delta run returns ${JSON.stringify({ ...second.result.handover, text: undefined, posts: undefined })}`)
+    if (second.labels[second.labels.length - 1] !== 'handover' || second.labels.indexOf('handover-read') < 0) fail(`#969: the earlier hand-over was not read before the post: ${second.labels.join(', ')}`)
+    // The same hand-over again: nothing is posted, and the pass says so.
+    const envAgain = newRepo()
+    const again = await execute(envAgain, { date: DATE }, { issue: withEarlier(comment(97, into(envAgain, W1), '2026-10-21T09:00:00Z')) })
+    if (again.labels.includes('handover') || again.result.handover.posted || again.result.handover.mode !== 'identical' || again.result.handover.url !== at97) fail(`#969: an identical hand-over was posted, or not reported: ${again.labels.join(', ')}; ${JSON.stringify({ ...again.result.handover, text: undefined })}`)
+    if (!/identical/.test(again.result.handover.note || '')) fail(`#969: the pass does not say the identical hand-over was not posted: ${again.result.handover.note}`)
+    // The same delta again, over the whole one and the delta posted after it: nothing is posted.
+    const at98 = `${URL(ISSUE)}#issuecomment-98`
+    const envThird = newRepo()
+    const third = await execute(envThird, { date: DATE }, { issue: withEarlier(comment(97, into(envThird, W1), '2026-10-21T09:00:00Z'), comment(98, into(envThird, D2, envSecond), '2026-10-21T10:00:00Z')), ...RED })
+    if (third.labels.includes('handover') || third.result.handover.mode !== 'identical' || third.result.handover.url !== at98) fail(`#969: a delta identical to the latest one was posted: ${third.labels.join(', ')}; mode ${third.result.handover.mode}, url ${third.result.handover.url}`)
+    // A third pass that changed again extends the whole comment, not the delta.
+    const fourth = await execute(newRepo(), { date: DATE }, { issue: withEarlier(comment(97, W1, '2026-10-21T09:00:00Z'), comment(98, D2, '2026-10-21T10:00:00Z')), verify: { ci: 'pending' } })
+    complete('morning, after a delta', fourth.result.handover.text, W1, posted(fourth, 'handover'), at97)
+    // Only Adam's comment headed exactly "## Morning <date>" is a hand-over; any other is posted over whole.
+    for (const [label, c] of [
+      ['someone else\'s', { ...comment(97, W1, '2026-10-21T09:00:00Z'), author: 'someone-else' }],
+      ['another night\'s', comment(97, W1.replace(`## Morning ${DATE}`, '## Morning 2026-10-20'), '2026-10-21T09:00:00Z')],
+      ['a longer heading', comment(97, W1.replace(`## Morning ${DATE}`, `## Morning ${DATE} draft`), '2026-10-21T09:00:00Z')],
+    ]) {
+      const r = await execute(newRepo(), { date: DATE }, { issue: withEarlier(c) })
+      if (posted(r, 'handover') !== r.result.handover.text || r.result.handover.mode !== 'whole') fail(`#969: ${label} comment was read as an earlier hand-over: mode ${r.result.handover.mode}`)
+    }
+    // ...nor after a whole one: a longer heading after it is not the latest hand-over, so the same
+    // hand-over again is still identical to the whole one.
+    {
+      const env = newRepo()
+      const r = await execute(env, { date: DATE }, { issue: withEarlier(comment(97, into(env, W1), '2026-10-21T09:00:00Z'), comment(98, into(env, W1).replace(`## Morning ${DATE}`, `## Morning ${DATE} (delta) draft`), '2026-10-21T10:00:00Z')) })
+      if (r.result.handover.mode !== 'identical' || r.result.handover.url !== at97 || !/\.comments\[5\]/.test(r.prompt('handover-read'))) fail(`#969: a comment headed longer than "## Morning ${DATE} (delta)" was read as the latest hand-over: mode ${r.result.handover.mode}, url ${r.result.handover.url}`)
+    }
+    // A section the earlier hand-over had and this one has not is named removed.
+    const envGone = newRepo()
+    const gone = await execute(envGone, { date: DATE }, { issue: withEarlier(comment(97, into(envGone, W1).replace('\n\n### Replay\n', '\n\n### Findings\n\n- an old finding\n\n### Replay\n'), '2026-10-21T09:00:00Z')) })
+    if (gone.result.handover.mode !== 'delta' || !/^### Findings \(removed\)$/m.test(posted(gone, 'handover')) || /an old finding/.test(posted(gone, 'handover'))) fail(`#969: a section gone from the hand-over is not named removed: mode ${gone.result.handover.mode}\n${posted(gone, 'handover')}`)
+    // Sections are matched by title, so an earlier hand-over whose titles repeat is not diffed: posted whole, saying why.
+    const envTwice = newRepo()
+    const twice = await execute(envTwice, { date: DATE }, { issue: withEarlier(comment(97, into(envTwice, W1).replace('\n\n### Replay\n', '\n\n### main\n\n- twice\n\n### Replay\n'), '2026-10-21T09:00:00Z')) })
+    if (twice.result.handover.mode !== 'whole' || posted(twice, 'handover') !== twice.result.handover.text || !/repeats/.test(twice.result.handover.note)) fail(`#969: an earlier hand-over with a repeated title was diffed: mode ${twice.result.handover.mode}, note ${twice.result.handover.note}`)
+    // A delta with no whole comment before it extends nothing: the hand-over is posted whole, saying why.
+    const orphan = await execute(newRepo(), { date: DATE }, { issue: withEarlier(comment(98, D2, '2026-10-21T10:00:00Z')), ...RED })
+    if (orphan.result.handover.mode !== 'whole' || posted(orphan, 'handover') !== orphan.result.handover.text || !/no whole comment/.test(orphan.result.handover.note)) fail(`#969: a delta with no whole comment was extended: mode ${orphan.result.handover.mode}`)
+    // A read that came back changed is never diffed against: the whole hand-over is posted, and named.
+    const bent = await execute(newRepo(), { date: DATE }, { issue: withEarlier(comment(97, W1, '2026-10-21T09:00:00Z')), ...RED, handoverMangle: true })
+    if (bent.result.handover.mode !== 'whole' || posted(bent, 'handover') !== bent.result.handover.text) fail(`#969: a changed read of the earlier hand-over was diffed against: mode ${bent.result.handover.mode}`)
+    if (!bent.result.refusals.some((x) => /earlier hand-over/.test(x) && /posted whole/.test(x))) fail(`#969: a failed read of the earlier hand-over is not named: ${JSON.stringify(bent.result.refusals)}`)
+
+    // 28b. The After pass, against an earlier "## After <date>": the same rules.
+    const a1 = await afterRun({ after: { ci: 'red' } })
+    const A1 = afterText(a1)
+    if (A1 !== a1.result.handover.text || a1.result.handover.mode !== 'whole') fail(`#969 After: a night with no earlier After comment did not post the whole one: mode ${a1.result.handover.mode}`)
+    const afterWith = (...cs) => issueWith([...AFTER_NIGHT.comments, ...cs])
+    const a2 = await afterRun({ issue: afterWith(comment(97, A1, '2026-10-22T09:00:00Z')), after: { ci: 'pending' } })
+    complete('After', a2.result.handover.text, A1, afterText(a2), at97)
+    if (!/^### Cleanup \(unchanged\)$/m.test(afterText(a2)) || a2.result.handover.mode !== 'delta') fail(`#969 After: the unchanged Cleanup section is not one line:\n${afterText(a2)}`)
+    // Identical, with the issue kept open: no After agent runs at all, and the pass says so.
+    const a3 = await afterRun({ issue: afterWith(comment(97, A1, '2026-10-22T09:00:00Z')), after: { ci: 'red' } })
+    if (a3.labels.includes('after-handover') || a3.result.handover.mode !== 'identical' || a3.result.handover.posted || a3.result.handover.url !== at97 || !/identical/.test(a3.result.handover.note || '')) fail(`#969 After: an identical After comment was posted, or not reported: ${a3.labels.join(', ')}; ${JSON.stringify({ ...a3.result.handover, text: undefined })}`)
+    if (a3.result.refusals.some((x) => /returned nothing/.test(x))) fail(`#969 After: the skipped After agent is read as one that returned nothing: ${JSON.stringify(a3.result.refusals)}`)
+    // Identical, on a night that closes: the agent still closes the issue, and posts nothing.
+    const s1 = await afterRun({ landed: [1] })
+    const S1 = afterText(s1)
+    const s2 = await afterRun({ landed: [1], issue: afterWith(comment(97, S1, '2026-10-22T09:00:00Z')) })
+    if (!s2.labels.includes('after-handover') || jsonAfter(s2.prompt('after-handover'), 'POST') !== false || afterText(s2) !== '' || s2.result.handover.posted || s2.result.handover.mode !== 'identical' || s2.result.issueClosed !== true) fail(`#969 After: an identical comment on a night that closes: ${s2.labels.join(', ')}; POST ${jsonAfter(s2.prompt('after-handover'), 'POST')}; ${JSON.stringify({ ...s2.result.handover, text: undefined })}, closed ${s2.result.issueClosed}`)
+    if (jsonAfter(s1.prompt('after-handover'), 'POST') !== true) fail('#969 After: a whole After comment is not sent with POST: true')
+    // The Morning comment of the same night is not an earlier After comment.
+    if (!AFTER_NIGHT.comments.some((c) => c.body.startsWith(`## Morning ${DATE}`)) || a1.labels.includes('handover-read')) fail(`#969 After: the night's Morning comment was read as an earlier After comment: ${a1.labels.join(', ')}`)
+    // The cleanup reads its rows through a Morning delta to the whole comment it extends.
+    if (!/"## Morning <date> \(delta\)"/.test(a1.prompt('after'))) fail('#969: the cleanup is not told how a "## Morning <date> (delta)" comment extends the rows\' source')
   }
 
   // 16. Every agent call passes a schema and every stub's return satisfies it.
