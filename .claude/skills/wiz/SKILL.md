@@ -200,13 +200,16 @@ Then ask for the confirm on launch of `deploy.sh`, naming the shape it will appl
 change, 1 to destroy` from a standing gateway, `1 to add, 2 to change, 1 to destroy` from the
 sample image, the one replacement being the task definition as its new revision. Run it in the
 background (it builds both images for ARM64, pushes by digest, applies, waits for steady state and
-asserts the running digest), and watch its output for `waiting through`: `deploy.sh` then waits for
-each new task to report the registry revision on `/readyz`, through the tunnel. Start `tunnel.sh`
-in the background at that line, so its hop goes through the new task, and then:
+asserts the running digest, then waits for each new task to report the registry revision on
+`/readyz`), and start no tunnel while it runs: its readiness wait opens a tunnel of its own and
+closes it when the wait ends (#1008). Once `deploy.sh` prints its pass line, start `tunnel.sh` in
+the background, so its hop goes through a task of the new deployment, for `verify-tunnel.sh
+/healthz` and the human's browser; a `tunnel.sh` still running from before is stopped first, since
+its hop was a task the deployment replaced:
 
 ```bash
-shown tools/scripts/deploy.sh                    # in the background; start the tunnel at "waiting through"
-tools/scripts/tunnel.sh                          # in the background, at that line
+shown tools/scripts/deploy.sh                    # in the background; no tunnel while it runs
+tools/scripts/tunnel.sh                          # in the background, after deploy.sh's pass line
 shown tools/scripts/verify-tunnel.sh /healthz
 ```
 
@@ -533,8 +536,9 @@ deployment order from the first root that is absent:
 5. `shown tools/scripts/seed.sh`, with #236's Q107 capture in its order: the commit; the names only
    of the `AWS_*` variables set; the count of `[spa-platform]` sections in `~/.aws/credentials`;
    seed's whole output to its pass line; `exit=`. Post it on #236 and cite it from #242 (Q103).
-6. `deploy.sh` as C1 runs it, from the sample image, then `verify-tunnel.sh /healthz`. Post both on
-   #242: this is the second deployment #63's Q79 asks for, and the suite is not run again.
+6. `deploy.sh` as C1 runs it, from the sample image, with no tunnel while it runs; after its pass
+   line, `tunnel.sh` in the background, then `verify-tunnel.sh /healthz`. Post both on #242: this
+   is the second deployment #63's Q79 asks for, and the suite is not run again.
 
 **C4, the gate tags.** For each gate, list the range's merges and their `Reviewed:` lines as
 `docs/agents/landing-work.md` → Gates shows, name any merge no record clears, and draft the tag
@@ -594,9 +598,10 @@ fast-forward first (rule 8) and name the commit: D0 deploys the commit `main` is
 one #348 Q34 tags, and its CI run must be green. Then N's steps 1 to 6 from the first root that is
 absent, with `terraform.tfvars` in its Phase 1 shape: N step 3's rewrite, which
 `tools/scripts/platform-tfvars.sh` (#470) does, and no G6 key. N's posts for the identity and apps
-roots, seed and the deploy go where N sends them; D0's own post is the one below. With the tunnel up
-and `verify-tunnel.sh /healthz` passing, the human opens `https://app1.spa-poc.test:8443/` in a
-browser, logs in as the test user, sees the app, and keeps that tab: D2 reloads it. Then:
+roots, seed and the deploy go where N sends them; D0's own post is the one below. Once N step 6's
+tunnel, started after `deploy.sh`'s pass line, is up and `verify-tunnel.sh /healthz` passes, the
+human opens `https://app1.spa-poc.test:8443/` in a browser, logs in as the test user, sees the app,
+and keeps that tab: D2 reloads it. Then:
 
 ```bash
 git rev-parse HEAD
@@ -759,10 +764,14 @@ mutation the summary does not name stops the sitting:
   row, the service replaces the task; read the two tasks again before D5 and name the new id.
 - **D6 (row 6, F1; #348 Q29).** The class drives for up to 40 minutes while the operator deploys:
   start the row's `dotnet test` in the background first, then `deploy.sh` on the same commit as C1
-  runs it (confirm on launch, C1's shape: the one replacement is the task definition), and restart
-  `tunnel.sh` at `waiting through` through a new task, its gap recorded as missing coverage and the
-  new hop's id kept. The class reads the old and new task ids and both image digests from ECS and
-  posts nothing itself; `deploy.sh`'s wait names both new task ids, and those go into the post.
+  runs it (confirm on launch, C1's shape: the one replacement is the task definition), with no
+  tunnel started while it runs. Once `deploy.sh` prints its pass line, restart `tunnel.sh` through a
+  new task as D2 does: stop it, note the UTC time, start it again in the background (keep the id it
+  prints after `through task`), run `verify-tunnel.sh /healthz`, and note the time it passed. The
+  old hop's task drains during the roll, so requests through it fail before the stop; the gap is
+  recorded as missing coverage and the new hop's id kept. The class reads the old and new task ids
+  and both image digests from ECS and posts nothing itself; `deploy.sh`'s wait names both new task
+  ids, and those go into the post.
 - **D7 (row 7; #348 Q31).** The class onboards app 3 with #212's F-07 flow (the apps root's plan
   and apply of app 3's three creates, `spactl release publish`, `app add`, `wait` on both tasks) and
   offboards it after the row, failed or not. Show C3's step 1 addresses as the mutations, and the
