@@ -109,6 +109,18 @@ const FINDING_NOPATH = 'The pull request description names a test id the diff ne
 const FOLLOW_UPS_443 = `## Follow-ups\n\n| Finding | Axis | Where | First carried by |\n| --- | --- | --- | --- |\n| ${FINDING_DDB} | Standards | .github/workflows/ci.yml:657-658 | this record |\n| ${FINDING_DEADLINE} | Standards | tests/Platform.Identity.Tests/AccessTokenSourceTests.cs; \`tests/Platform.Identity.Tests/BackchannelTimeoutTests.cs:41\` | this record |\n| ${FINDING_NOPATH} | Spec | the pull request description | this record |\n`
 const REC443 = { body: `## Review\n\n${FOLLOW_UPS_443}\nReviewed ${sha('e')} against ${sha('f')}: merge`, author_association: 'OWNER', html_url: R443, created_at: '2026-10-28T01:00:00Z' }
 const FU443 = { prs: [{ number: 443, comments: [REC443], reviews: [] }], filed: [] }
+// #966: a record in the five-column table review-queue.js writes since, each row naming in its Fails on
+// cell the input or state on which the finding gives the wrong result. #443's and #287's records stay
+// four-column, as every record before #966 is, and their rows read with an empty Fails on.
+const PR966 = 'https://github.com/adammedford/spa-platform/pull/966'
+const R966 = `${PR966}#issuecomment-6600000001`
+const FINDING_TAB = 'review_record.py prints a tab inside a Finding cell unchanged'
+const FAILS_TAB = 'A Finding cell holding a tab is cut at that tab by tools/land.sh, so its title never matches the filed issue \\| its warning repeats.'
+const FINDING_DOCS = 'The landing guide still names the four-column table'
+const FAILS_DOCS = 'A hand-filer reading docs/agents/review.md writes a row with no Fails on.'
+const FOLLOW_UPS_966 = `## Follow-ups\n\n| Finding | Axis | Where | First carried by | Fails on |\n| --- | --- | --- | --- | --- |\n| ${FINDING_TAB} | Standards | tools/review_record.py:300 | this record | ${FAILS_TAB} |\n| ${FINDING_DOCS} | Spec | docs/agents/review.md | this record | ${FAILS_DOCS} |\n`
+const REC966 = { body: `## Review\n\n${FOLLOW_UPS_966}\nReviewed ${sha('a')} against ${sha('b')}: merge`, author_association: 'OWNER', html_url: R966, created_at: '2026-11-05T01:00:00Z' }
+const FU966 = { prs: [{ number: 966, comments: [REC966], reviews: [] }], filed: [] }
 
 // #300: #287's description as the morning wrote it at the first head, served verbatim from its edit
 // history, and the first-parent merges of the branch it was rebuilt to (76704c5), oldest first.
@@ -1228,6 +1240,20 @@ try {
     const listed = await execute(newRepo(), { date: DATE }, { applyTickets: [OLD] })
     if (!/^- #455\b/m.test(listed.result.handover.text)) fail('#481: an earlier night\'s Apply ticket is not listed on a morning that filed none')
     if (!/gh issue list --state open --limit 500 --json number,title,body,url,state,author /.test(listed.prompt('followups'))) fail('#481: the follow-ups reader is not told to list the open issues for the Apply tickets')
+    // #966: the index's hasTable, run by jq on the program the prompt gives, is true for a record in
+    // the five-column table and for one in the four-column table of the records before it, and false
+    // for a record with none; a false one is never read further, so its rows would never be filed.
+    const jqOf = /comments = `[^`]*\| jq '([^']+)'`/.exec(listed.prompt('followups'))
+    if (!jqOf) fail('#966: the follow-ups reader\'s prompt gives no jq program for the comments\' index')
+    else {
+      const pages = [[REC966, REC443, { ...REC443, html_url: `${R443}0`, body: `Findings: none.\n\nReviewed ${sha('e')} against ${sha('f')}: merge` }].map((c) => ({ ...c, html_url: c.html_url }))]
+      const jqRun = spawnSync('jq', [jqOf[1]], { input: JSON.stringify(pages), encoding: 'utf8' })
+      if (jqRun.error || jqRun.status !== 0) fail(`#966: jq could not run the index program: ${jqRun.error ? jqRun.error.message : jqRun.stderr}`)
+      else {
+        const got = JSON.parse(jqRun.stdout).map((e) => e.hasTable)
+        if (JSON.stringify(got) !== '[true,true,false]') fail(`#966: the index's hasTable reads ${JSON.stringify(got)} for a five-column record, a four-column one and one with no table, expected [true,true,false]`)
+      }
+    }
   }
 
   // 12. Forbidden commands. Every command a prompt asks an agent to run is a backtick span; across
@@ -1389,6 +1415,18 @@ try {
       if (!s || s.status !== 0) fail(`#479: ${JSON.stringify(f.title)} fails tools/ticket_shape.py under ${f.label}: ${s ? [...s.failures, s.last].join('; ') : 'never checked'}`)
     }
     if ((env.filed || []).length !== 3) fail(`#479: ${(env.filed || []).length} of #443's three follow-ups were filed`)
+    // #966: a four-column row files with no Fails on line; a five-column row's body carries its
+    // sentence, and still passes tools/ticket_shape.py under its label.
+    if (sent.some((f) => /^Fails on:/m.test(f.body))) fail('#966: a row of #443\'s four-column record files with a Fails on line, though the record names none')
+    const env966 = newRepo()
+    const run966 = await execute(env966, { date: DATE }, { followUps: FU966 })
+    const sent966 = jsonAfter(run966.prompt('followups-file'), 'FOLLOW-UPS') || []
+    for (const [title, failsOn] of [[FINDING_TAB, FAILS_TAB.replace('\\|', '|')], [FINDING_DOCS, FAILS_DOCS]]) {
+      const f = sent966.find((x) => x.title === title)
+      if (!f || !f.body.split('\n').includes(`Fails on: ${failsOn}`)) fail(`#966: the row ${JSON.stringify(title)} files a body without its line "Fails on: ${failsOn}":\n${f ? f.body : 'not sent'}`)
+      const shaped = (env966.shaped || []).find((x) => x.title === title)
+      if (!shaped || shaped.status !== 0) fail(`#966: ${JSON.stringify(title)} fails tools/ticket_shape.py: ${shaped ? [...shaped.failures, shaped.last].join('; ') : 'never checked'}`)
+    }
     const ho = run443.result.handover.text
     if (!ho.includes(FINDING_NOPATH) || !/names no repository path/.test(ho)) fail(`#479: the hand-over does not say why the pathless follow-up is ready-for-human:\n${ho}`)
 
@@ -1684,7 +1722,7 @@ try {
   {
     const mine = fs.readFileSync(scriptPath, 'utf8')
     const theirs = fs.readFileSync(path.join(here, 'review-queue.js'), 'utf8')
-    for (const name of ['FOLLOW_UP_HEAD', 'THIS_RECORD', 'PY_LINE_BREAK', 'PY_SPACE', 'PY_STRIP', 'RECORD', 'REPOSITORY_ACCOUNTS', 'sameFinding']) {
+    for (const name of ['FOLLOW_UP_HEAD', 'FOLLOW_UP_HEAD_FOUR', 'THIS_RECORD', 'PY_LINE_BREAK', 'PY_SPACE', 'PY_STRIP', 'RECORD', 'REPOSITORY_ACCOUNTS', 'sameFinding']) {
       const line = (src) => (new RegExp(`^const ${name} = .*$`, 'm').exec(src) || [''])[0]
       if (!line(mine) || line(mine) !== line(theirs)) fail(`the grammar: morning.js's ${name} is ${JSON.stringify(line(mine))}, review-queue.js's ${JSON.stringify(line(theirs))}`)
     }
@@ -2378,7 +2416,7 @@ try {
       const port = portOf(src)
       const rules = port.ownershipRules(OWNERSHIP_MD)
       const direct = (pr, url, body, k) => { const f = port.followUpsOf(body, url)[k - 1]; return port.followUpBody(pr, url, f, port.placeOf(rules, f.where)) }
-      const CASES = [[443, R443, REC443.body, 1], [443, R443, REC443.body, 2], [443, R443, REC443.body, 3], [287, R287[2], rec287(2, 'merge', FOLLOW_UPS_287).body, 1], [287, R287[2], rec287(2, 'merge', FOLLOW_UPS_287).body, 2]]
+      const CASES = [[443, R443, REC443.body, 1], [443, R443, REC443.body, 2], [443, R443, REC443.body, 3], [287, R287[2], rec287(2, 'merge', FOLLOW_UPS_287).body, 1], [287, R287[2], rec287(2, 'merge', FOLLOW_UPS_287).body, 2], [966, R966, REC966.body, 1], [966, R966, REC966.body, 2]]
 
       // The output is the direct result, byte for byte, for every row of both records.
       for (const [pr, url, body, k] of CASES) {
@@ -2410,6 +2448,25 @@ try {
       if (!/label needs-triage/.test(hand.stderr)) fail(`#643: row 2's stderr does not name its label needs-triage: ${hand.stderr}`)
       const nopath = run([443, R443, recordFile(REC443.body), 3])
       if (!/label ready-for-human: the finding names no repository path/.test(nopath.stderr)) fail(`#643: row 3, which names no path, is not named ready-for-human with why: ${nopath.stderr}`)
+      // #966: a five-column row's body, written out by hand, carries its Fails on sentence, the
+      // escaped pipe read back as a pipe.
+      const BODY_966_1 = [
+        `**Raised by:** #966, from its review record ${R966}`,
+        '**Owner:** integrator',
+        '**Touches:** `tools/review_record.py`',
+        '',
+        '## What to build',
+        '',
+        `The review of #966 carried this finding rather than holding on it (Standards axis), first carried by ${R966}: ${FINDING_TAB}, at tools/review_record.py:300. The record lists it under "## Follow-ups", which names no open ticket for it; this issue is that ticket.`,
+        '',
+        `Fails on: ${FAILS_TAB.replace('\\|', '|')}`,
+        '',
+        '## Acceptance criteria',
+        '',
+        `- [ ] ${FINDING_TAB}: fixed, or declined with the reason in this issue's Answer.`,
+      ].join('\n')
+      const five = run([966, R966, recordFile(REC966.body), 1])
+      if (five.status !== 0 || five.stdout !== BODY_966_1) fail(`#966: row 1 of a five-column record is not the body written out by hand, with its Fails on sentence: exit ${five.status}: ${five.stderr}\n${five.stdout}`)
 
       // Exits nonzero with a message and no body.
       const NO_TABLE = `## Review\n\nFindings: none.\n\nReviewed ${sha('e')} against ${sha('f')}: merge`

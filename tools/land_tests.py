@@ -244,16 +244,26 @@ def decision_comment(n: int, comment_id: int, first: str = "Decision: accept wit
 
 # The table .claude/workflows/review-queue.js ends a record's findings with when the review carries
 # a finding rather than holding on it (docs/agents/review.md -> "Landing or holding"), written out
-# here in its shape rather than read from the reader, which is under test.
-FOLLOW_UP_HEAD = "| Finding | Axis | Where | First carried by |"
+# here in its shape rather than read from the reader, which is under test: five columns since #966,
+# the last the input or state the finding fails on, and four in every record before it.
+FOLLOW_UP_HEAD = "| Finding | Axis | Where | First carried by | Fails on |"
+FOLLOW_UP_HEAD_FOUR = "| Finding | Axis | Where | First carried by |"
+# Each five-column row's Fails on cell. land.sh names a row by its Finding alone, so this sentence is
+# in none of its lines; it holds a tab-free word the Finding never does.
+FAILS_ON = "An empty host passes validation, unremarked."
 
 
-def carrying(head: str, verdict: str, *findings: str) -> dict:
-    """A record comment whose findings end in a `## Follow-ups` table with one row per finding."""
+def carrying(head: str, verdict: str, *findings: str, columns: int = 5) -> dict:
+    """A record comment whose findings end in a `## Follow-ups` table with one row per finding, in
+    the five columns written since #966 or the four of the records before it."""
     entry = record_comment(head, verdict)
-    rows = [f"| {finding} | Standards | tools/x.py:1 | this record |" for finding in findings]
-    entry["body"] += "\n".join(["", "## Follow-ups", "", FOLLOW_UP_HEAD, "| --- | --- | --- | --- |",
-                                *rows, ""])
+    if columns == 5:
+        rows = [f"| {finding} | Standards | tools/x.py:1 | this record | {FAILS_ON} |" for finding in findings]
+        table = [FOLLOW_UP_HEAD, "| --- | --- | --- | --- | --- |"]
+    else:
+        rows = [f"| {finding} | Standards | tools/x.py:1 | this record |" for finding in findings]
+        table = [FOLLOW_UP_HEAD_FOUR, "| --- | --- | --- | --- |"]
+    entry["body"] += "\n".join(["", "## Follow-ups", "", *table, *rows, ""])
     return entry
 
 # Every standard error a case saw, for the closing completeness case.
@@ -1062,24 +1072,32 @@ class FollowUpsTests(LandTestCase):
         return f"{self.UNFILED}: {finding}."
 
     def test_an_unfiled_row_is_named_and_the_merge_goes_on(self):
-        case = Case(self, comments=[carrying(HEAD, "merge", self.FINDING)])
-        (case.work / "body.md").write_bytes(self.WITH.encode())
-        result = case.run(PR, "--subject", "Merge task 9.9: x", "--body-file", "body.md")
-        self.assertMerged(case, result, f"{self.WITH}\n\n{REVIEWED}", before=READS_FILED,
-                          lines=[self.unfiled(self.FINDING)])
-        line = result.land_lines()[0]
-        # It says what the morning will not do once the merge is made, and how the row is filed.
-        self.assertIn("morning", line)
-        self.assertIn(f"#{PR} merges", line)
-        self.assertIn(f"**Raised by:** #{PR}", line)
+        # By its Finding alone, in a five-column record (#966) as in a four-column one: the reader
+        # prints each row's Fails on after a tab, which land.sh cuts off.
+        for columns in (5, 4):
+            with self.subTest(columns=columns):
+                case = Case(self, comments=[carrying(HEAD, "merge", self.FINDING, columns=columns)])
+                (case.work / "body.md").write_bytes(self.WITH.encode())
+                result = case.run(PR, "--subject", "Merge task 9.9: x", "--body-file", "body.md")
+                self.assertMerged(case, result, f"{self.WITH}\n\n{REVIEWED}", before=READS_FILED,
+                                  lines=[self.unfiled(self.FINDING)])
+                line = result.land_lines()[0]
+                # It says what the morning will not do once the merge is made, and how the row is filed.
+                self.assertIn("morning", line)
+                self.assertIn(f"#{PR} merges", line)
+                self.assertIn(f"**Raised by:** #{PR}", line)
+                self.assertNotIn("\t", line)
+                self.assertNotIn("unremarked", line)
 
     def test_a_row_a_filed_issue_answers_names_nothing(self):
         # The title is matched as morning.js's filedAs matches it: case and runs of whitespace are
         # not differences. The listing already holds only the issues whose Raised-by line names the
         # pull request, so a title alone answers a row here.
-        for title in (self.FINDING, self.FINDING.upper(), f"  {self.FINDING.replace(' ', '   ')} "):
-            with self.subTest(title=title):
-                case = Case(self, comments=[carrying(HEAD, "merge", self.FINDING)], filed=[title])
+        for title, columns in ((t, c) for t in (self.FINDING, self.FINDING.upper(),
+                                                f"  {self.FINDING.replace(' ', '   ')} ") for c in (5, 4)):
+            with self.subTest(title=title, columns=columns):
+                case = Case(self, comments=[carrying(HEAD, "merge", self.FINDING, columns=columns)],
+                            filed=[title])
                 (case.work / "body.md").write_bytes(self.WITH.encode())
                 result = case.run(PR, "--subject", "Merge task 9.9: x", "--body-file", "body.md")
                 self.assertMerged(case, result, f"{self.WITH}\n\n{REVIEWED}", before=READS_FILED)
@@ -1121,13 +1139,16 @@ class FollowUpsTests(LandTestCase):
     def test_a_body_with_no_outstanding_line_is_refused_naming_each_row(self):
         # A landing with no body file at all is refused before any gh call (#552), a case of
         # RefusalTests, so the body here is present and lacks the line.
-        case = Case(self, comments=[carrying(HEAD, "merge", self.FINDING, self.OTHER_FINDING)])
-        (case.work / "body.md").write_bytes(self.WITHOUT.encode())
-        result = case.run(PR, "--subject", "Merge task 9.9: x", "--body-file", "body.md")
-        self.assertRefused(case, result, "has no Outstanding: line", READS_RECORDS)
-        line = next(line for line in result.land_lines() if "has no Outstanding: line" in line)
-        self.assertIn(self.FINDING, line)
-        self.assertIn(self.OTHER_FINDING, line)
+        for columns in (5, 4):
+            with self.subTest(columns=columns):
+                case = Case(self, comments=[carrying(HEAD, "merge", self.FINDING, self.OTHER_FINDING,
+                                                     columns=columns)])
+                (case.work / "body.md").write_bytes(self.WITHOUT.encode())
+                result = case.run(PR, "--subject", "Merge task 9.9: x", "--body-file", "body.md")
+                self.assertRefused(case, result, "has no Outstanding: line", READS_RECORDS)
+                line = next(line for line in result.land_lines() if "has no Outstanding: line" in line)
+                # Each row by its Finding alone, the two joined as before #966.
+                self.assertIn(f"follow-ups ({self.FINDING}; {self.OTHER_FINDING})", line)
 
     def test_a_body_with_an_outstanding_line_merges(self):
         case = Case(self, comments=[carrying(HEAD, "merge", self.FINDING)], filed=[self.FINDING])

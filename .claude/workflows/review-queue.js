@@ -116,8 +116,10 @@ export const meta = {
 // the open ticket that owns it or none, and the earliest record on the pull request that carried it;
 // the ones with none are returned as followUps and end the comment's findings as the table under
 // "## Follow-ups", which morning.js reads from the latest record of each open pull request and files
-// (#514); a row still unfiled at the merge is named by tools/land.sh (#573). The review still writes
-// nothing outside its log and its one comment, but for the change requests below.
+// (#514); a row still unfiled at the merge is named by tools/land.sh (#573). Each row names, in its
+// Fails on cell, the input or state on which the finding gives the wrong result (#966); one the
+// verdict gives none for is no row but a note under its axis, and files nothing. The review still
+// writes nothing outside its log and its one comment, but for the change requests below.
 //
 // Change requests (#434, from #411 Q5 and #421 Q12). The Spec axis reads the change-request issues
 // each cited ticket is or was blocked by, with their decision comments, as spec sources. It judges
@@ -286,22 +288,27 @@ const names = (cellText, test) => !!test && new RegExp(`(?<![\\w.])${test.replac
 // still unfiled when tools/land.sh merges is named by its land: warning and filed by hand (#573;
 // docs/agents/review.md -> "Landing or holding"). One row per finding, its First carried by cell the
 // earliest record on the pull request that carried it, or THIS_RECORD for the record the comment
-// ends in. morning.js reads the same table with its own copy of FOLLOW_UP_HEAD, THIS_RECORD and this
-// parser, since a workflow script imports nothing; morning_tests.mjs holds the two copies equal, so
-// a change to the table is an edit to both scripts together. followUpsOf(body, url) reads a comment's
+// ends in, and its Fails on cell the input or state on which it gives the wrong result (#966).
+// morning.js reads the same table with its own copy of FOLLOW_UP_HEAD, FOLLOW_UP_HEAD_FOUR,
+// THIS_RECORD and this parser, since a workflow script imports nothing; morning_tests.mjs holds the
+// two copies equal, so a change to the table is an edit to both scripts together, and to
+// tools/review_record.py, which reads it for tools/land.sh. followUpsOf(body, url) reads a comment's
 // table back, THIS_RECORD resolved to url, the comment's own address; a comment with no table yields
-// none.
-const FOLLOW_UP_HEAD = '| Finding | Axis | Where | First carried by |'
+// none. The records written before #966 carry the four-column FOLLOW_UP_HEAD_FOUR, which still reads,
+// each row with failsOn "": a row counts when it has its header's number of cells and a Finding.
+const FOLLOW_UP_HEAD = '| Finding | Axis | Where | First carried by | Fails on |'
+const FOLLOW_UP_HEAD_FOUR = '| Finding | Axis | Where | First carried by |'
 const THIS_RECORD = 'this record'
 const followUpsOf = (body, url = '') => {
   const lines = String(body || '').split(PY_LINE_BREAK).map((l) => l.trim())
-  const at = lines.indexOf(FOLLOW_UP_HEAD)
+  const at = lines.findIndex((l) => l === FOLLOW_UP_HEAD || l === FOLLOW_UP_HEAD_FOUR)
   if (at < 0) return []
+  const width = lines[at] === FOLLOW_UP_HEAD ? 5 : 4
   const rows = []
   for (const line of lines.slice(at + 2)) {
     if (!line.startsWith('|') || !line.endsWith('|')) break
     const cells = line.slice(1, -1).split(/(?<!\\)\|/).map((c) => c.trim().replace(/\\\|/g, '|'))
-    if (cells.length === 4 && cells[0]) rows.push({ title: cells[0], axis: cells[1], where: cells[2], firstCarried: cells[3] === THIS_RECORD ? url : cells[3] })
+    if (cells.length === width && cells[0]) rows.push({ title: cells[0], axis: cells[1], where: cells[2], firstCarried: cells[3] === THIS_RECORD ? url : cells[3], failsOn: width === 5 ? cells[4] : '' })
   }
   return rows
 }
@@ -309,16 +316,22 @@ const sameFinding = (a, b) => String(a).toLowerCase().replace(/\s+/g, ' ').trim(
 // The verdict's carried findings that name no open ticket, each with the earliest record on the pull
 // request that carried it: the earliest of the record the verdict names and every earlier record whose
 // own follow-ups table lists the finding by title. A URL that is no record here is not trusted, and
-// a finding no record carried before is this record's, "" until it is posted.
+// a finding no record carried before is this record's, "" until it is posted. Only one that names
+// the input it fails on is a row (#966); the rest are followUpNotes.
+// Only a "#<n>" names a ticket: "none" or "-" in its place loses no finding (a check fails closed).
+const unowned = (carried) => (carried || []).filter((f) => f && f.title && !/^#\d+$/.test(String(f.ticket || '').trim()))
+const failsOnOf = (f) => String(f.failsOn || '').replace(/\s+/g, ' ').trim()
 const followUpsFrom = (carried, records) => {
   const urls = records.map((r) => r.url).filter(Boolean)
-  // Only a "#<n>" names a ticket: "none" or "-" in its place loses no finding (a check fails closed).
-  return (carried || []).filter((f) => f && f.title && !/^#\d+$/.test(String(f.ticket || '').trim())).map((f) => {
+  return unowned(carried).filter((f) => failsOnOf(f)).map((f) => {
     const named = records.flatMap((r) => followUpsOf(r.body, r.url)).filter((x) => sameFinding(x.title, f.title)).map((x) => x.firstCarried)
     const first = [...named, f.firstCarried].filter((u) => urls.includes(u)).sort((a, b) => urls.indexOf(a) - urls.indexOf(b))[0] || ''
-    return { axis: f.axis, title: f.title, where: f.where, firstCarried: first }
+    return { axis: f.axis, title: f.title, where: f.where, firstCarried: first, failsOn: failsOnOf(f) }
   })
 }
+// The carried findings that name no open ticket and no input they fail on (#966): each is a note under
+// the axis that found it, no row, and files nothing, whatever the verdict was asked; none is lost.
+const followUpNotes = (carried) => unowned(carried).filter((f) => !failsOnOf(f))
 
 // ---------------------------------------------------------------- agents and slots
 let agentsRun = 0
@@ -485,9 +498,10 @@ const VERDICT = {
     // A delta review after a hold: each finding of the held record, whether that record held on it or
     // carried it as a follow-up, and whether the range answers it.
     earlierFindings: { type: 'array', items: { type: 'object', properties: { finding: { type: 'string' }, held: { type: 'boolean' }, answered: { type: 'boolean' }, how: { type: 'string' } }, required: ['finding', 'held', 'answered', 'how'] } },
-    // Every finding the review carries rather than holds on (#292), with the open ticket that owns
-    // it ("" for none) and the earliest record on this pull request that carried it ("" for none).
-    followUps: { type: 'array', items: { type: 'object', properties: { axis: { type: 'string', enum: ['Standards', 'Spec'] }, title: { type: 'string' }, where: { type: 'string' }, ticket: { type: 'string' }, firstCarried: { type: 'string' } }, required: ['axis', 'title', 'where', 'ticket', 'firstCarried'] } },
+    // Every finding the review carries rather than holds on (#292), with the input or state it fails
+    // on (#966), the open ticket that owns it ("" for none) and the earliest record on this pull
+    // request that carried it ("" for none).
+    followUps: { type: 'array', items: { type: 'object', properties: { axis: { type: 'string', enum: ['Standards', 'Spec'] }, title: { type: 'string' }, where: { type: 'string' }, failsOn: { type: 'string' }, ticket: { type: 'string' }, firstCarried: { type: 'string' } }, required: ['axis', 'title', 'where', 'failsOn', 'ticket', 'firstCarried'] } },
     // Each held steering change filed as a change-request issue (#434): number 0 when it could not be
     // filed, error why; found true when an open request with its title was there and nothing was filed.
     changeRequests: { type: 'array', items: { type: 'object', properties: { title: { type: 'string' }, number: { type: 'integer' }, found: { type: 'boolean' }, error: { type: 'string' } }, required: ['title', 'number', 'found', 'error'] } },
@@ -680,7 +694,7 @@ ${mut.rows.length ? mut.rows.map((r) => `- ${r.test} (${r.kind}): ${r.result}, $
 ${mut.holds.length ? `The rows already hold the verdict: ${mut.holds.join('; ')}. Say so in summary.` : ''}
 ${d ? deltaBrief(d) + (d.verdict === 'hold' ? ' Put each of the held record\'s findings in earlierFindings: held true when that record held on it, false when it carried it as a follow-up that did not hold; answered true when the range answers it, false when it does not, and how. An unanswered finding the record held on holds, and so does an empty list; an unanswered follow-up does not, and goes in followUps.' : ' earlierFindings is [].') : 'earlierFindings is [].'}
 verdict is hold when a verified finding shows the change does not do what it says, or a test that proves it cannot fail: a did-not-fail row, or a stated or held mutation that did not reproduce. A could-not-run on a stated, held or nominated mutation holds too; one on a candidate nobody suspected is reported and does not. A removed row is a held break whose target the range deleted, so it holds nothing by itself, but it answers the held test only if the deletion is sound: read the commit its why names, and it answers when the removed code could never run (say why) or the same check is still enforced elsewhere (say where), each as a verified finding; otherwise, or if you cannot show either, the held test is unanswered and the verdict is hold. A caught row is a held or candidate break the project caught through other tests while the named test stayed green (#684, #689). It answers the named test only when you verify, as a verified finding, that a test it names guards the break: for a held row, the break the held record named. For a candidate, you must also verify, as a verified finding, why the named test could not go red on that break: either the break lies outside what the named test guards, or the case the break reaches skips where the review runs. Then put the named test in caughtAccepted. A candidate that guards the break and stayed green proves nothing: leave it out. A caught row of any kind on a Node companion, a row whose project is an .mjs file or whose file or test cell's leading path is one, whatever project the inventory gives it (#938), is read another way, since such a companion prints no test names, only its checks' fail() messages (#905): read the named checks' source at the head, and when every message the row went red on is one of those checks' own fail() messages, say so as a verified finding and put the named test in caughtAccepted; the check for a candidate's green named test does not apply. On a Node companion, a stated or nominated row that went red on any message of another check is not answered by it: leave it out of caughtAccepted, and the verdict is hold. A held or candidate row there keeps its catch (#684, #689): one that went red on another check's message is answered only when you verify that the check whose fail() printed it guards the break (for a held row, the break the held record named) and, for a candidate, unlike a row red only on its own checks' messages, that its named check went red on its own fail() messages as well or why it could not go red on that break; then put the named test in caughtAccepted. In every other case leave the named test out of caughtAccepted, and the named test is unanswered and the verdict is hold. Otherwise merge. outstanding lists what stays for the merge body's Outstanding: line.
-followUps: every finding this review carries rather than holds on, whatever the verdict: a finding left standing for after the merge, and each outstanding entry that is a defect still to fix. Each: axis, title (one line; when an earlier record's "## Follow-ups" table lists the finding, its Finding cell verbatim), where, ticket and firstCarried. ticket is the open issue that owns the fix, as "#<n>", checked with \`cd ${REPO} && gh issue view <n> --json state,title\` (it must be OPEN and its title or body must be about this fix; an issue the finding merely mentions does not own it), or "" when there is no open ticket for it, which you search for with \`cd ${REPO} && gh issue list --state open --search "<key words> in:title,body" --json number,title\`. firstCarried is the earliest of the records on this pull request that carried the same finding, by its URL: ${(() => { const urls = recordsIn(inv).map((r) => r.url).filter(Boolean); return urls.length ? `read ${urls.join(', ')} (oldest first)` : 'there is none, so it is ""' })()}; "" when none did. The script keeps those with ticket "" as the comment's follow-ups, which the morning run files while this pull request is still open; one still unfiled when it merges is named by tools/land.sh and filed by hand (#514, #573).
+followUps: every finding this review carries rather than holds on, whatever the verdict: a finding left standing for after the merge, and each outstanding entry that is a defect still to fix. Each: axis, title (one line; when an earlier record's "## Follow-ups" table (five columns: Finding, Axis, Where, First carried by, Fails on) lists the finding, its Finding cell verbatim), where, failsOn, ticket and firstCarried. failsOn is the input or state on which the finding gives the wrong result, in one sentence (#966): what a reader would run or set up to see it go wrong. A carried finding for which you cannot name one is not a follow-up: write it in findings under the axis that found it, as a note, and leave it out of followUps; it files nothing, and the script writes any followUp with an empty failsOn as such a note. ticket is the open issue that owns the fix, as "#<n>", checked with \`cd ${REPO} && gh issue view <n> --json state,title\` (it must be OPEN and its title or body must be about this fix; an issue the finding merely mentions does not own it), or "" when there is no open ticket for it, which you search for with \`cd ${REPO} && gh issue list --state open --search "<key words> in:title,body" --json number,title\`. firstCarried is the earliest of the records on this pull request that carried the same finding, by its URL: ${(() => { const urls = recordsIn(inv).map((r) => r.url).filter(Boolean); return urls.length ? `read ${urls.join(', ')} (oldest first)` : 'there is none, so it is ""' })()}; "" when none did. The script keeps those with ticket "" as the comment's follow-ups, which the morning run files while this pull request is still open; one still unfiled when it merges is named by tools/land.sh and filed by hand (#514, #573).
 ${heldChangeRoute(n, inv)}
 Write the result as JSON to the OUTPUT FILE, then return it.`
 
@@ -956,6 +970,12 @@ END COMMENT`
 const findingLines = (list) => (list.length
   ? list.map((f) => `- **${f.title}** (${f.status}, ${f.severity}) at ${f.where}. Checked: ${f.checked}`)
   : ['- None.'])
+// An axis's section: its findings, then each carried finding it found that names no input it fails
+// on, as a note that files nothing (#966); "- None." only when there is neither.
+const axisLines = (findings, notes) => [
+  ...(findings.length || !notes.length ? findingLines(findings) : []),
+  ...notes.map((f) => `- Note: **${f.title}** at ${f.where || '-'}. It names no input or state on which it gives the wrong result, so it is no follow-up row and files nothing (#966).`),
+]
 const cell = (s) => String(s).replace(/[\r\n]+/g, ' ').replace(/\|/g, '\\|')
 const mutationLines = (mut) => [
   ...(mut.rows.length
@@ -985,8 +1005,8 @@ const earlierLines = (d, v) => (d && d.verdict === 'hold'
   : [])
 const followUpLines = (list) => ['## Follow-ups', '',
   ...(list.length
-    ? ['Carried findings that name no open ticket; the morning run files each one while this pull request is still open (#292, #514), and `tools/land.sh` names any still unfiled when it merges, to be filed by hand (#573; `docs/agents/review.md` -> Landing or holding).', '', FOLLOW_UP_HEAD, '| --- | --- | --- | --- |',
-      ...list.map((f) => `| ${[f.title, f.axis, f.where || '-', f.firstCarried || THIS_RECORD].map(cell).join(' | ')} |`)]
+    ? ['Carried findings that name no open ticket, each with the input or state it fails on; the morning run files each one while this pull request is still open (#292, #514), and `tools/land.sh` names any still unfiled when it merges, to be filed by hand (#573; `docs/agents/review.md` -> Landing or holding).', '', FOLLOW_UP_HEAD, '| --- | --- | --- | --- | --- |',
+      ...list.map((f) => `| ${[f.title, f.axis, f.where || '-', f.firstCarried || THIS_RECORD, f.failsOn].map(cell).join(' | ')} |`)]
     : ['- None: the review carries no finding that names no open ticket.']),
   '']
 // The held steering changes the verdict filed (#434), as a section only when there is one: filed,
@@ -997,7 +1017,7 @@ const changeRequestLines = (list) => (list.length
       ? `- #${c.number} ${c.title}: ${c.found ? 'already open, nothing filed' : 'filed, blocking nothing'}.`
       : `- ${c.title}: not filed: ${c.error || 'the verdict named no number'}.`)), '']
   : [])
-const commentBody = (inv, v, record, mut, d, full, followUps = []) => [
+const commentBody = (inv, v, record, mut, d, full, followUps = [], notes = []) => [
   '## Review',
   '',
   `Head ${inv.head}, read against the fork point ${inv.forkPoint} (origin/main at ${inv.baseTip}).`,
@@ -1008,11 +1028,11 @@ const commentBody = (inv, v, record, mut, d, full, followUps = []) => [
   '',
   '## Standards',
   '',
-  ...findingLines(v.findings.filter((f) => f.axis === 'Standards')),
+  ...axisLines(v.findings.filter((f) => f.axis === 'Standards'), notes.filter((f) => f.axis === 'Standards')),
   '',
   '## Spec',
   '',
-  ...findingLines(v.findings.filter((f) => f.axis === 'Spec')),
+  ...axisLines(v.findings.filter((f) => f.axis === 'Spec'), notes.filter((f) => f.axis !== 'Standards')),
   '',
   "The author's claims:",
   ...(v.claims.length ? v.claims.map((c) => `- ${c.claim}: ${c.verified ? 'verified' : 'not verified'}. ${c.how}`) : ['- None stated.']),
@@ -1304,7 +1324,7 @@ const reviewOne = async (n, res, at) => {
   // The record names the head the inventory read, whatever the post agent finds later.
   const record = recordLine(inv.head, inv.forkPoint, verdict)
   const followUps = followUpsFrom(v.followUps, records)
-  const body = commentBody(inv, v, record, mut, d, full, followUps)
+  const body = commentBody(inv, v, record, mut, d, full, followUps, followUpNotes(v.followUps))
   res.verdict = verdict
   res.followUps = followUps
   res.changeRequests = v.changeRequests
