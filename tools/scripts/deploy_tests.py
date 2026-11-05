@@ -11,11 +11,18 @@ Run: python3 -I tools/scripts/deploy_tests.py
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
 import json
+import os
 import pathlib
+import signal
+import socket
+import subprocess
 import sys
 import tempfile
+import threading
+import time
 
 _spec = importlib.util.spec_from_file_location("cell_doubles", pathlib.Path(__file__).resolve().parent / "cell_doubles.py")
 cell = importlib.util.module_from_spec(_spec)
@@ -33,6 +40,42 @@ def seeded_world() -> dict:
                          "apps": [{"appId": "app1", "release": "r1"}, {"appId": "app2", "release": "r1"}]}
     world["objects"] = [{"Key": "registry/registry.json", "VersionId": "r2"}]
     return world
+
+
+@contextlib.contextmanager
+def listening():
+    """A listener on a free port of 127.0.0.1 that accepts and closes each connection: an origin the
+    caller already reaches, or an operator's own tunnel."""
+    server = socket.socket()
+    server.bind(("127.0.0.1", 0))
+    server.listen(8)
+    server.settimeout(0.2)
+    stop = threading.Event()
+
+    def serve():
+        while not stop.is_set():
+            try:
+                connection, _ = server.accept()
+            except OSError:
+                continue
+            connection.close()
+
+    thread = threading.Thread(target=serve, daemon=True)
+    thread.start()
+    try:
+        yield server.getsockname()[1]
+    finally:
+        stop.set()
+        thread.join()
+        server.close()
+
+
+def accepts(port: int) -> bool:
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=1):
+            return True
+    except OSError:
+        return False
 
 
 def setUpModule():
@@ -182,8 +225,9 @@ class DeployBuildsPushesAppliesAndAsserts(cell.CompanionTestCase):
         running = [task["id"] for task in case.load()["tasks"]]
         self.assertEqual(",".join(running), args[args.index("--instances") + 1])
         self.assertEqual("7", args[args.index("--revision") + 1])
-        # The tunnel's origin by default: the ALB is internal (tools/scripts/tunnel.sh).
-        self.assertEqual("https://app1.spa-poc.test:8443", args[args.index("--url") + 1])
+        # Through the wait's own tunnel by default: the ALB is internal (#1008).
+        port = case.aws("ssm start-session")[0]["port"]
+        self.assertEqual(f"https://app1.spa-poc.test:{port}", args[args.index("--url") + 1])
         order = [c.get("command") or c["spactl"][0] for c in case.calls()
                  if c.get("command") == "ecs wait services-stable" or c.get("spactl", [""])[:1] == ["wait"]]
         self.assertEqual(["ecs wait services-stable", "wait"], order)
@@ -207,12 +251,17 @@ class DeployBuildsPushesAppliesAndAsserts(cell.CompanionTestCase):
                                 + [[cell.task_ip(cell.default_world()["tasks"][0]), "draining"]]),
                          sorted([t["id"], t["state"]] for t in world["target_group"]["targets"]))
 
-    def test_the_wait_takes_the_origin_given_with_url(self):
-        case = cell.Case(self, outputs=True, world=seeded_world())
-        result = case.run(SCRIPT, "--url", "https://app2.spa-poc.test:9443")
+    def test_the_wait_takes_the_origin_given_with_url_and_opens_no_tunnel(self):
+        # --url names an origin the caller already reaches, so the wait reads through it and starts
+        # no session (#1008). The listener stands in for that origin.
+        with listening() as port:
+            case = cell.Case(self, outputs=True, world=seeded_world())
+            result = case.run(SCRIPT, "--url", f"https://app2.spa-poc.test:{port}")
         self.assertEqual(0, result.status, result.output)
+        self.assertNoUnexpectedCall(case)
         wait = next(c["spactl"] for c in case.calls("dotnet") if c["spactl"][:1] == ["wait"])
-        self.assertEqual("https://app2.spa-poc.test:9443", wait[wait.index("--url") + 1])
+        self.assertEqual(f"https://app2.spa-poc.test:{port}", wait[wait.index("--url") + 1])
+        self.assertEqual([], case.aws("ssm start-session"))
 
     def test_two_deployments_push_two_tags(self):
         case = cell.Case(self, outputs=True, world=seeded_world())
@@ -221,6 +270,164 @@ class DeployBuildsPushesAppliesAndAsserts(cell.CompanionTestCase):
         self.assertEqual(0, second.status, second.output)
         tags = [c["tag"] for c in case.calls("docker") if c.get("tag", "").startswith(cell.ECR_GATEWAY)]
         self.assertEqual(2, len(set(tags)))
+
+
+class TheReadinessWaitOpensAndClosesItsOwnTunnel(cell.CompanionTestCase):
+    """#1008. The load balancer is internal, so the wait reads /readyz through a Session Manager port
+    forward. It used to read through an operator's tunnel, started by hand in the window between the
+    steady line and the end of the wait, which sitting D missed: deploy.sh exited 1 after a healthy,
+    steady deployment (#242). The wait now opens its own through tools/scripts/tunnel.sh, through a
+    running task of the new deployment, on a port of its own, and closes it when it ends, on a pass, a
+    fail or an interrupt. The session manager is cell_doubles.py's: a plugin that really listens, as
+    the CLI's child, which spactl's wait double reads through."""
+
+    def session(self, case, listened: bool = True) -> tuple[dict, int]:
+        sessions = case.aws("ssm start-session")
+        self.assertEqual(1, len(sessions), "the wait opens one tunnel")
+        self.assertEqual("session", sessions[0]["outcome"], sessions[0])
+        listening = [c for c in case.calls("session-manager-plugin") if c["event"] == "listening"]
+        self.assertEqual([sessions[0]["port"]] if listened else [], [c["port"] for c in listening])
+        return sessions[0], sessions[0]["port"]
+
+    def assertClosed(self, port: int):
+        """Nothing listens on the port, within a few seconds of the script's return: the plugin is
+        killed with the CLI and gone once its process is reaped. One that outlived the script listens
+        for cell_doubles.PLUGIN_LIFETIME seconds."""
+        deadline = time.monotonic() + 5
+        while accepts(port):
+            self.assertLess(time.monotonic(), deadline, f"something still listens on the wait's port {port}")
+            time.sleep(0.1)
+
+    def test_the_wait_opens_a_tunnel_on_a_port_other_than_8443_and_reads_through_it(self):
+        case = cell.Case(self, outputs=True, world=seeded_world())
+        result = case.run(SCRIPT, env=case.env(SPA_TUNNEL_PORT=None))
+        self.assertEqual(0, result.status, result.output)
+        self.assertNoUnexpectedCall(case)
+        session, port = self.session(case)
+        self.assertNotEqual(8443, port)
+        # Through a running task of the new deployment: the double answers only a target that is a
+        # task of the world's, which after the apply are the applied task definition's.
+        world = case.load()
+        self.assertIn(session["task"], [task["id"] for task in world["tasks"]])
+        self.assertEqual({f"{cell.FAMILY}:2"}, {task["taskDefinition"] for task in world["tasks"]})
+        wait = next(c["spactl"] for c in case.calls("dotnet") if c["spactl"][:1] == ["wait"])
+        self.assertEqual(f"https://app1.spa-poc.test:{port}", wait[wait.index("--url") + 1])
+        reads = [c["received"] for c in case.calls("session-manager-plugin") if c["event"] == "connection"]
+        self.assertIn("spactl wait", reads, "the wait read through the tunnel's port")
+        # Opened after the service is steady, and before the wait reads.
+        order = [c.get("command") or c["spactl"][0] for c in case.calls()
+                 if c.get("command") in ("ecs wait services-stable", "ssm start-session") or c.get("spactl", [""])[:1] == ["wait"]]
+        self.assertEqual(["ecs wait services-stable", "ssm start-session", "wait"], order)
+        self.assertClosed(port)
+        # Closed when the wait ends, before the pass line, and not only when the script exits.
+        closed = f"closed the wait's tunnel on local port {port}"
+        self.assertEqual(1, result.stdout.count(closed), result.stdout)
+        self.assertLess(result.stdout.index(closed), result.stdout.index("pass:"))
+
+    def test_an_operator_s_tunnel_is_left_alone(self):
+        # The operator's tunnel holds $SPA_TUNNEL_PORT (tools/scripts/tunnel.sh); the wait's takes
+        # another port, and the operator's still answers after the run.
+        with listening() as operator:
+            case = cell.Case(self, outputs=True, world=seeded_world())
+            result = case.run(SCRIPT, env=case.env(SPA_TUNNEL_PORT=str(operator)))
+            self.assertEqual(0, result.status, result.output)
+            _, port = self.session(case)
+            self.assertNotIn(port, (operator, 8443))
+            self.assertTrue(accepts(operator), "the operator's tunnel stopped answering")
+        self.assertClosed(port)
+
+    def test_a_failed_wait_closes_the_tunnel(self):
+        world = seeded_world()
+        world["faults"]["behind"] = 1
+        case = cell.Case(self, outputs=True, world=world)
+        result = case.run(SCRIPT)
+        self.assertEqual(1, result.status, result.output)
+        self.assertNoUnexpectedCall(case)
+        self.assertIn("last answered revision 1", result.stderr)
+        _, port = self.session(case)
+        self.assertClosed(port)
+        self.assertIn(f"closed the wait's tunnel on local port {port}", result.stdout)
+
+    def test_an_interrupt_during_the_wait_closes_the_tunnel(self):
+        # Ctrl-C in a terminal reaches the foreground process group, the script and the spactl it
+        # waits on, and not the tunnel, which runs in a group of its own: so the script itself has to
+        # close it. Hence the whole group here, and not the script's process alone.
+        world = seeded_world()
+        world["faults"]["hang"] = True
+        case = cell.Case(self, outputs=True, world=world)
+        process = subprocess.Popen([cell.BASH, str(case.script(SCRIPT))], cwd=case.dir, env=case.env(),
+                                   stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                   text=True, start_new_session=True)
+        self.addCleanup(lambda: process.poll() is None and os.killpg(process.pid, signal.SIGKILL))
+        deadline = time.monotonic() + 90
+        while not (case.dir / "waiting").exists():
+            self.assertIsNone(process.poll(), "deploy.sh ended before its wait read")
+            self.assertLess(time.monotonic(), deadline, "the wait never started reading")
+            time.sleep(0.1)
+        _, port = self.session(case)
+        self.assertTrue(accepts(port), "the tunnel is open while the wait reads")
+        os.killpg(process.pid, signal.SIGINT)
+        stdout, stderr = process.communicate(timeout=60)
+        self.assertEqual(130, process.returncode, stdout + stderr)
+        for secret in cell.SECRETS:
+            self.assertNotIn(secret, stdout + stderr)
+        self.assertNotIn("pass:", stdout)
+        # Closed by the port, not by the closing line: bash runs the trap once spactl has returned,
+        # inside the function's redirection of its output (cell-common.sh, close_wait_tunnel).
+        self.assertClosed(port)
+
+    def test_a_tunnel_that_ends_before_it_opens_fails_the_wait_by_its_error_code(self):
+        # StartSession refused: tunnel.sh exits 254, the CLI's status for it (`aws help return-codes`),
+        # and its line names the code and never the caller's ARN. The wait reads nothing.
+        world = seeded_world()
+        world["faults"]["session_refused"] = True
+        case = cell.Case(self, outputs=True, world=world)
+        result = case.run(SCRIPT, env=case.env(SPA_WAIT_TUNNEL_SECONDS="60"))
+        self.assertEqual(1, result.status, result.output)
+        self.assertNoUnexpectedCall(case)
+        self.assertIn("AccessDeniedException", result.stderr)
+        self.assertIn("the wait's tunnel ended before it opened: tools/scripts/tunnel.sh exited 254", result.stderr)
+        self.assertEqual([], [c for c in case.calls("dotnet") if c["spactl"][:1] == ["wait"]])
+        self.assertNotIn("pass:", result.stdout)
+
+    def test_a_tunnel_that_never_listens_fails_the_wait_at_its_bound_and_is_closed(self):
+        world = seeded_world()
+        world["faults"]["session_silent"] = True
+        case = cell.Case(self, outputs=True, world=world)
+        started = time.monotonic()
+        result = case.run(SCRIPT, env=case.env(SPA_WAIT_TUNNEL_SECONDS="2"))
+        self.assertLess(time.monotonic() - started, 60, "the CLI's session was not ended at the bound")
+        self.assertEqual(1, result.status, result.output)
+        self.assertNoUnexpectedCall(case)
+        _, port = self.session(case, listened=False)
+        self.assertIn(f"the wait's tunnel did not open on local port {port} within 2 seconds", result.stderr)
+        self.assertIn(f"closed the wait's tunnel on local port {port}", result.stdout)
+        self.assertEqual([], [c for c in case.calls("dotnet") if c["spactl"][:1] == ["wait"]])
+
+    def test_without_the_session_manager_plugin_it_refuses_before_it_builds(self):
+        case = cell.Case(self, outputs=True, world=seeded_world())
+        case.remove("session-manager-plugin")
+        result = case.run(SCRIPT)
+        self.assertEqual(2, result.status, result.output)
+        self.assertIn("brew install --cask session-manager-plugin", result.stderr)
+        self.assertEqual([], [c for c in case.calls("docker") if c["argv"][:2] == ["buildx", "build"]])
+
+    def test_the_wait_s_header_names_the_tunnel_it_opens_and_closes(self):
+        # #1008's second box: the comment above wait_for_revision, and the step of deploy.sh's
+        # manual that runs it, name the tunnel the wait opens and closes, and neither says an
+        # operator's tunnel must be running.
+        common = (cell.SCRIPTS / "cell-common.sh").read_text()
+        header = common[common.index("# --- convergence"):common.index("\nwait_for_revision() {")]
+        manual = (cell.SCRIPTS / SCRIPT).read_text().split("\n# Owner:")[0]
+        for comment in (header, manual):
+            # As prose, whatever the line breaks: each line without its comment mark, joined.
+            text = " ".join(" ".join(line.lstrip("#").split()) for line in comment.splitlines())
+            self.assertIn("tools/scripts/tunnel.sh", text)
+            self.assertIn("opens a tunnel of its own", text)
+            self.assertIn("closes it when the wait ends", text)
+            self.assertNotIn("has to be", text)
+            self.assertNotIn("in another terminal", text)
+        self.assertNotIn("restart tools/scripts/tunnel.sh", common)
 
 
 class DeployRefusesAnEmptyRegistry(cell.CompanionTestCase):
@@ -286,7 +493,11 @@ class DeployFailsUnlessTheAppliedGatewayRuns(cell.CompanionTestCase):
         self.assertEqual(0, result.status, result.output)
         self.assertNoUnexpectedCall(case)
         self.assertEqual(4, len(self.rollout_reads(case)))
-        self.assertEqual([["15"]] * 3, case.sleeps())
+        # The rollout's three, and after them only the one-second polls of the wait's tunnel opening
+        # (cell-common.sh, open_wait_tunnel), which the stub makes return at once.
+        sleeps = case.sleeps()
+        self.assertEqual([["15"]] * 3, sleeps[:3])
+        self.assertEqual([], [s for s in sleeps[3:] if s != ["1"]])
 
     def test_a_rollout_in_progress_that_then_fails_fails_naming_failed(self):
         world = seeded_world()
