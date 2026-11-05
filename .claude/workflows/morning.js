@@ -828,9 +828,57 @@ const openApplyTickets = (listed, filedToday) => {
 // before reading, so a question cut at a part boundary is read whole. A ticket whose parts are not
 // all present, a questions comment with no question in it, or a number that appears twice, is a
 // refusal, and those questions stay unread: nothing is applied from a partial read.
+// A pre-accepted question is one table row (#965): under a "### Pre-accepted" heading, up to the next
+// heading, each row of the table is a question, "| **Q94.** | (#244 Q9) | <question> | <recommendation> |",
+// its first cell the number in any of the three forms above, its last the recommendation, the one
+// before it the question, and anything between them (the ticket-local number) opens the question's
+// text as it does in the full form. A row's answer is the standing answer's yes, so to Apply a row
+// and a full-form question answered "yes, pre-accepted" are the same. The rows and the heading are
+// taken out before the full form is read, so the last full-form question above the table does not
+// swallow it. A table's header row (the line above its "---" separator) and the separator are not
+// questions; any other row whose first cell carries no number is a refusal, as above.
 const HEADING = /^## Questions: #(\d+), ([^,]+), (.*)$/
 const PART = /\s*\(part (\d+) of (\d+)\)\s*$/
 const Q_MARK = /^[ \t]*(?:\*\*Q(\d+)\.?\*\*|Q(\d+)\.(?=[ \t]))[ \t]*/gm
+const PRE_ROWS_HEADING = /^[ \t]*###[ \t]+Pre-accepted\b.*$/
+const ROW_NUMBER = /^(?:\*\*Q(\d+)\.?\*\*|Q(\d+)\.?)$/
+const isRow = (line) => /^[ \t]*\|/.test(line)
+const isSeparator = (line) => /^[ \t]*\|?[ \t]*:?-{3,}:?[ \t]*(?:\|[ \t]*:?-{3,}:?[ \t]*)*\|?[ \t]*$/.test(line)
+const rowCellsOf = (line) => line.trim().replace(/^\|/, '').replace(/(?<!\\)\|$/, '').split(/(?<!\\)\|/).map((c) => c.trim().replace(/\\\|/g, '|'))
+// The "### Pre-accepted" tables of one questions comment's text: { rest, rows, unnumbered }, rest
+// being the text with each such heading and its table lines taken out, every other line kept in place.
+const preAcceptedOf = (text) => {
+  const lines = text.split('\n')
+  const keep = []
+  const rows = []
+  const unnumbered = []
+  let inSection = false
+  let date = ''
+  lines.forEach((line, i) => {
+    if (PRE_ROWS_HEADING.test(line)) { inSection = true; date = (/granted (\d{4}-\d{2}-\d{2})/.exec(line) || [, ''])[1]; return }
+    if (inSection && /^[ \t]*#{1,6}[ \t]/.test(line)) inSection = false
+    if (!inSection) { keep.push(line); return }
+    if (!isRow(line)) {
+      // The section's own answer line, "Answer for every row: yes, pre-accepted under the standing answer
+      // granted <date>", dates the rows and is no part of any full-form question.
+      const d = /standing answer granted (\d{4}-\d{2}-\d{2})/.exec(line)
+      if (d) date = d[1]
+      else keep.push(line)
+      return
+    }
+    if (isSeparator(line) || (i + 1 < lines.length && isSeparator(lines[i + 1]))) return
+    const cells = rowCellsOf(line)
+    const n = ROW_NUMBER.exec(cells[0])
+    if (!n || cells.length < 3) { unnumbered.push(line.trim()); return }
+    rows.push({
+      q: Number(n[1] || n[2]),
+      text: cells.slice(1, -1).filter((c) => c).join(' '),
+      recommendation: cells[cells.length - 1],
+      answer: `yes, pre-accepted under the standing answer${date ? ` granted ${date}` : ''}`,
+    })
+  })
+  return { rest: keep.join('\n'), rows, unnumbered }
+}
 // What makes a comment one the readers read, said once: batchesOf picks the comments to fetch with
 // these two functions, on the head of each body, so it cannot pick a narrower set than the readers do.
 const headingOf = (body) => HEADING.exec(String(body || '').split('\n')[0].trim())
@@ -856,12 +904,19 @@ const readQuestions = (comments) => {
       refusals.push(`the questions of #${g.issue} are split into ${g.of} parts and ${ks.size} distinct part(s) were found; none of them is read`)
       continue
     }
-    const text = [...g.parts].sort((a, b) => a.k - b.k).map((p) => p.text).join('\n')
-    const marks = [...text.matchAll(Q_MARK)]
-    if (!marks.length) {
-      refusals.push(`the questions comment of #${g.issue} carries no question the morning can read (none opens "**Q<n>.**", "**Q<n>**" or "Q<n>."); none of it is read`)
+    const joined = [...g.parts].sort((a, b) => a.k - b.k).map((p) => p.text).join('\n')
+    const pre = preAcceptedOf(joined)
+    if (pre.unnumbered.length) {
+      refusals.push(`the questions comment of #${g.issue} has ${pre.unnumbered.length} "### Pre-accepted" row(s) the morning cannot number (the first cell opens none of "**Q<n>.**", "**Q<n>**" or "Q<n>.", or the row has no question and recommendation cells), the first ${JSON.stringify(pre.unnumbered[0].slice(0, 80))}; none of it is read`)
       continue
     }
+    const text = pre.rest
+    const marks = [...text.matchAll(Q_MARK)]
+    if (!marks.length && !pre.rows.length) {
+      refusals.push(`the questions comment of #${g.issue} carries no question the morning can read (none opens "**Q<n>.**", "**Q<n>**" or "Q<n>.", and no "### Pre-accepted" row); none of it is read`)
+      continue
+    }
+    for (const r of pre.rows) found.push({ q: r.q, issue: g.issue, task: g.task, title: g.title, text: r.text, recommendation: r.recommendation, answer: r.answer })
     marks.forEach((mk, i) => {
       const block = text.slice(mk.index + mk[0].length, i + 1 < marks.length ? marks[i + 1].index : text.length)
       const rec = /^[ \t]*(?:[-*][ \t]+)?Recommended:[ \t]*(.*)$/m.exec(block)
