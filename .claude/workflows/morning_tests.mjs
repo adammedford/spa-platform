@@ -230,8 +230,10 @@ const phaseFilesOn = (dir) => {
   return out
 }
 
-// The Verify agent's record step, played as the prompt asks: the two listings piped to the real
-// reader with the head, exit 0 a merge record at the URL it prints, "says hold: <url>" a hold.
+// The Verify agent's record step, played with the real reader: exit 0 a merge record at the URL it
+// prints, "says hold: <url>" a hold. The prompt names the reader's --pr form, which runs gh; the
+// stub has no gh, so it serves the same listings to the stdin form, which gives the same answer for
+// the same pull request (#488; tools/review_record.py's docstring).
 const readRecord = (head, comments, reviews = []) => {
   const r = spawnSync('python3', ['-I', READER, head], { input: JSON.stringify({ comments: [comments], reviews: [reviews] }), encoding: 'utf8' })
   if (r.status === 0) return { verdict: 'merge', head, url: r.stdout.trim(), reader: 'exit 0' }
@@ -678,7 +680,10 @@ try {
     const written = await execute(newRepo(), { date: DATE }, { recordComments: [prComment(14, `Reviewed ${HEAD} against ${BASE}: merge`, '2026-10-21T07:00:00Z')] })
     if (!written.result.ok || !/issuecomment-14$/.test(written.result.record.url)) fail(`a hand-written record of the head did not satisfy Verify: ${JSON.stringify(written.result.stop)}`)
     const vp = written.prompt('verify')
-    if (!vp.includes(`python3 -I ${written.result.runLog.split('/.scratch/')[0]}/tools/review_record.py <head>`)) fail('the Verify prompt does not read the record through tools/review_record.py')
+    // #859: the reader's --pr form, pinned to the head with --head, as tools/land.sh runs it (#488),
+    // and not the stdin pipeline land.sh no longer uses.
+    if (!vp.includes(`python3 -I ${written.result.runLog.split('/.scratch/')[0]}/tools/review_record.py --pr <number> --head <head>`)) fail('the Verify prompt does not read the record through tools/review_record.py --pr <number> --head <head>')
+    if (/printf '\{"comments"|--slurp repos\/\{owner\}\/\{repo\}\/(issues|pulls)\/<number>/.test(vp)) fail('#859: the Verify prompt still pipes the listings to the reader, which tools/land.sh no longer does')
     const held = await execute(newRepo(), { date: DATE }, { recordComments: HOLD })
     if (held.result.stopKind !== 'hold' || !held.result.handover.text.includes('pull/400#issuecomment-12')) fail(`a hold: stopKind ${held.result.stopKind}`)
   }
@@ -791,6 +796,9 @@ try {
     if (yes.labels[0] !== 'after' || yes.result.refused !== '' || yes.result.closed.join() !== '300') fail(`after, contained: ${yes.labels.join(', ')} -> ${JSON.stringify(yes.result)}`)
     const p = yes.prompt('after')
     if (!(p.indexOf('merge-base --is-ancestor <tip> origin/main') > 0 && p.indexOf('merge-base --is-ancestor <tip> origin/main') < p.indexOf('gh issue close'))) fail('the after prompt does not check origin/main before it closes anything')
+    // #859: the landed tip's record is read as tools/land.sh reads one, by the reader's --pr form.
+    if (!p.includes('/tools/review_record.py --pr <pr number> --head <tip>')) fail('#859: the after prompt does not read the record through tools/review_record.py --pr <pr number> --head <tip>')
+    if (/printf '\{"comments"|--slurp repos\/\{owner\}\/\{repo\}\/(issues|pulls)\/<pr number>/.test(p)) fail('#859: the after prompt still pipes the listings to the reader, which tools/land.sh no longer does')
     const none = await execute(newRepo(), { date: DATE, after: true }, { listing: [] })
     if (!none.result.halted) fail('after with no Overnight issue was not refused')
   }
