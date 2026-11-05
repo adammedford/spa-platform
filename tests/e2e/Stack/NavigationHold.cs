@@ -29,8 +29,20 @@ public static class NavigationHold
     /// Runs <paramref name="action"/> and holds the first request of <paramref name="page"/> whose URL
     /// starts with <paramref name="prefix"/>, which must come within <paramref name="wait"/>. Returns
     /// that request's URL. The hold ends when this returns, whether or not the request came.
+    ///
+    /// <para>Whatever the handler that answers the paused request meets ends the hold at once, as a
+    /// <see cref="HoldFailedException"/> carrying what the page showed (#1029): the handler runs on the
+    /// protocol session's event, where nothing it throws reaches anyone, so a failure it let escape left
+    /// the request paused, the navigation uncommitted and the hold waiting out its whole wait.</para>
     /// </summary>
-    public static async Task<Uri> HoldAsync(IPage page, string prefix, Func<Task> action, TimeSpan? wait = null)
+    public static Task<Uri> HoldAsync(IPage page, string prefix, Func<Task> action, TimeSpan? wait = null) =>
+        HoldAsync(page, prefix, action, wait, FulfilAsync);
+
+    /// <summary>
+    /// <see cref="HoldAsync(IPage, string, Func{Task}, TimeSpan?)"/> with the step that answers the paused
+    /// request given: the tests' seam for a handler that fails (#1029).
+    /// </summary>
+    internal static async Task<Uri> HoldAsync(IPage page, string prefix, Func<Task> action, TimeSpan? wait, Func<ICDPSession, JsonElement, Task> answer)
     {
         TaskCompletionSource<Uri> held = new(TaskCreationOptions.RunContinuationsAsynchronously);
         ICDPSession session = await page.Context.NewCDPSessionAsync(page);
@@ -44,21 +56,17 @@ public static class NavigationHold
             try
             {
                 string url = request.GetProperty("request").GetProperty("url").GetString()!;
-                await session.SendAsync("Fetch.fulfillRequest", new Dictionary<string, object>
-                {
-                    ["requestId"] = request.GetProperty("requestId").GetString()!,
-                    ["responseCode"] = 200,
-                    ["responseHeaders"] = new[] { new Dictionary<string, object> { ["name"] = "Content-Type", ["value"] = "text/html" } },
-                    ["body"] = Convert.ToBase64String(Encoding.UTF8.GetBytes($"<!doctype html><title>{HeldTitle}</title>")),
-                });
+                await answer(session, request);
                 held.TrySetResult(new Uri(url));
             }
-            catch (Exception failed) when (failed is PlaywrightException or JsonException or KeyNotFoundException)
+            catch (Exception failed)
             {
+                // Every failure, not a chosen few: one let past this handler is lost (#1029).
                 held.TrySetException(failed);
             }
         };
 
+        Task acting = Task.CompletedTask;
         try
         {
             // The pattern's only wildcard is the trailing one: the prefix is matched as written.
@@ -66,10 +74,29 @@ public static class NavigationHold
             {
                 ["patterns"] = new[] { new Dictionary<string, object> { ["urlPattern"] = Escape(prefix) + "*", ["requestStage"] = "Request" } },
             });
-            await action();
+
+            // A navigation the handler failed to answer stays paused, so an action that waits for it
+            // would wait out its own timeout first: the handler's failure does not wait for the action.
+            acting = action();
+            await Task.WhenAny(acting, held.Task);
+            if (!held.Task.IsFaulted)
+            {
+                await acting;
+            }
+
             try
             {
                 return await held.Task.WaitAsync(wait ?? DefaultWait, TestContext.Current.CancellationToken);
+            }
+            catch (Exception) when (held.Task.IsFaulted)
+            {
+                // Faulted by the handler, whatever its failure's kind: a TimeoutException it met is not the wait's.
+                Exception failure = held.Task.Exception!.InnerException!;
+                PageShown shown = await ShownAsync(page);
+                throw new HoldFailedException(
+                    $"the hold on {Redacted.Url(prefix)} ended when its handler met {failure.GetType().Name}: {Redacted.Text(failure.Message, [])}; the page is at {shown.Url}.",
+                    failure.GetType().Name,
+                    shown);
             }
             catch (TimeoutException)
             {
@@ -81,8 +108,22 @@ public static class NavigationHold
         {
             await session.SendAsync("Fetch.disable");
             await session.DetachAsync();
+
+            // An action left running when the handler failed ends once the request is released; its
+            // own failure is beside the point the hold already reported.
+            _ = acting.ContinueWith(static ended => ended.Exception, CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted, TaskScheduler.Default);
         }
     }
+
+    /// <summary>Answers the paused request with a page that says it was held, so it never leaves the browser.</summary>
+    private static Task FulfilAsync(ICDPSession session, JsonElement request) =>
+        session.SendAsync("Fetch.fulfillRequest", new Dictionary<string, object>
+        {
+            ["requestId"] = request.GetProperty("requestId").GetString()!,
+            ["responseCode"] = 200,
+            ["responseHeaders"] = new[] { new Dictionary<string, object> { ["name"] = "Content-Type", ["value"] = "text/html" } },
+            ["body"] = Convert.ToBase64String(Encoding.UTF8.GetBytes($"<!doctype html><title>{HeldTitle}</title>")),
+        });
 
     /// <summary>How long a timed-out hold waits for the page's text before it records that it could not read it.</summary>
     public static readonly TimeSpan TextWait = TimeSpan.FromSeconds(5);
@@ -131,6 +172,27 @@ public sealed class HoldTimeoutException : TimeoutException
 {
     public HoldTimeoutException(string message, PageShown page)
         : base(message) => Page = page;
+
+    public PageShown Page { get; }
+}
+
+/// <summary>
+/// A hold whose handler failed before it could answer the request (<see cref="NavigationHold.HoldAsync"/>,
+/// #1029): the kind of what it met and what the page showed, both for a continuity row's evidence file.
+/// Its message prints the failure's own message through <see cref="Redacted.Text"/>, so no URL's query
+/// and no token is in it, and it carries no inner exception, whose message xUnit would print.
+/// </summary>
+public sealed class HoldFailedException : Exception
+{
+    public HoldFailedException(string message, string failure, PageShown page)
+        : base(message)
+    {
+        Failure = failure;
+        Page = page;
+    }
+
+    /// <summary>The type name of what the handler met.</summary>
+    public string Failure { get; }
 
     public PageShown Page { get; }
 }
