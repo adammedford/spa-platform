@@ -33,8 +33,9 @@ internal sealed partial class Assets(ILogger logger)
     // asset needs a session (ADR-0008), so no shared cache may keep one.
     private const string RevalidateCacheControl = "private, no-cache";
 
-    // Every 404 this endpoint answers, and its shell_unavailable 500 (contracts/http-contract.md, the
-    // asset row; change request contracts/changes/issue-381-object-read-refusal.md, item 4). RFC 9110
+    // Every 404 this endpoint answers, its shell_unavailable 500 and its store_unavailable 503
+    // (contracts/http-contract.md, the asset row and Errors; change request
+    // contracts/changes/issue-381-object-read-refusal.md, item 4; #907). RFC 9110
     // section 15.5.5 lets a cache keep a 404 heuristically, and under the deployed role every missing
     // asset is a refused read, so a 404 a passing permission fault caused must not outlive the fault.
     private const string NoStoreCacheControl = "private, no-store";
@@ -142,6 +143,17 @@ internal sealed partial class Assets(ILogger logger)
             stored = null;
             refused = true;
         }
+        catch (Exception failure) when (!context.RequestAborted.IsCancellationRequested)
+        {
+            // Any other failure of the read: another 403 code, NoSuchBucket, a 5xx, a transport failure
+            // or an SDK timeout, which the S3 store lets propagate. It answers 503 store_unavailable,
+            // never cached, for an asset and for the shell alike, with no rule id: it is an answer, not
+            // a rejection, and the live snapshot is unaffected (contracts/http-contract.md -> Errors,
+            // #543, #907). Not when the request's abort token is what ended the read: the client went
+            // away, nobody is left to read a body, and the failure propagates as it did before.
+            await StoreUnavailableAsync(context, app, shell, failure);
+            return;
+        }
 
         if (stored is null)
         {
@@ -208,6 +220,18 @@ internal sealed partial class Assets(ILogger logger)
         LogShellUnavailable(logger, app.AppId, app.Release, refused ? "refused" : "null");
         context.Response.Headers.CacheControl = NoStoreCacheControl;
         return Problems.WriteAsync(context, Problems.ShellUnavailable);
+    }
+
+    /// <summary>
+    /// 503 <c>store_unavailable</c>, never cached: the store failed for a reason other than a refusal.
+    /// One Warning naming the app and the exception's type. Never the exception itself, whose message
+    /// names the key, and never the key, which holds the client's path.
+    /// </summary>
+    private Task StoreUnavailableAsync(HttpContext context, AppDefinition app, bool shell, Exception failure)
+    {
+        LogStoreUnavailable(logger, app.AppId, app.Release, shell ? RefusedShell : RefusedAsset, failure.GetType().FullName ?? failure.GetType().Name);
+        context.Response.Headers.CacheControl = NoStoreCacheControl;
+        return Problems.WriteAsync(context, Problems.StoreUnavailable);
     }
 
     private static bool IsReserved(PathString path)
@@ -299,4 +323,9 @@ internal sealed partial class Assets(ILogger logger)
     // fixes, and not the path, which is the client's text and may be any extensionless fallback.
     [LoggerMessage(EventId = 1002, Level = LogLevel.Error, Message = "The shell of app {AppId} release {Release} is unavailable: the store answered {Answer}")]
     private static partial void LogShellUnavailable(ILogger logger, string appId, string release, string answer);
+
+    // The app, its release, which kind of key, and the failure's type (#907). Not the key or the path,
+    // as above, and not the exception's message, which the store's exceptions write the key into.
+    [LoggerMessage(EventId = 1003, Level = LogLevel.Warning, Message = "The object store could not be read for the {Kind} of app {AppId} release {Release}: {ExceptionType}")]
+    private static partial void LogStoreUnavailable(ILogger logger, string appId, string release, string kind, string exceptionType);
 }
