@@ -167,6 +167,16 @@ the thing that actually has the property is a judgement about whether two files 
 check decides; the syntactic half of this family — a cell that disagrees with the file it indexes —
 belongs in a check instead.
 
+## A script's sequence change updates the runbooks that run it
+
+A diff that changes what an operator does or sees around a script under `tools/scripts/` (a step it
+now runs or no longer needs, an order, a wait, a precondition, a line it prints and an operator acts
+on) changes every runbook under `docs/runbooks/` that runs the script in the same diff, or names the
+runbook it leaves stale and the ticket that will change it. #309 made `deploy.sh` wait through the
+tunnel and left `deploy.md` starting the tunnel afterwards; the first sitting that followed the
+runbook as written failed at that wait. Whether a runbook's words still match the script's header
+is a reading of two files, which no check decides.
+
 ## A reviewer verifies before reporting
 
 The two worst defects found in task 5.3 were found by running the thing: a listener logging query
