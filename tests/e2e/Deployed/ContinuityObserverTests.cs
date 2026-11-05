@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using Gateway.E2ETests.Stack;
 using Gateway.TestHarness;
 
@@ -11,7 +12,7 @@ namespace Gateway.E2ETests.Deployed;
 /// for each of #348's rows 3 to 9 a recording that satisfies the row passes, and one recording per
 /// rule breaks it and reports failed or not proved, never passed.
 /// </summary>
-public sealed class ContinuityObserverTests
+public sealed partial class ContinuityObserverTests
 {
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
@@ -50,7 +51,7 @@ public sealed class ContinuityObserverTests
             {
                 ["ts"] = at.ToString("O"),
                 ["level"] = "information",
-                ["msg"] = $"Refreshed the access token for app app1, session {sessionRef}.",
+                ["msg"] = RefreshedTemplate.Replace("{AppId}", "app1", StringComparison.Ordinal).Replace("{SessionRef}", sessionRef, StringComparison.Ordinal),
                 ["category"] = "Platform.Identity.AccessTokenSource",
                 ["app_id"] = "app1",
                 ["session_ref"] = sessionRef,
@@ -89,6 +90,29 @@ public sealed class ContinuityObserverTests
 
     /// <summary>The status a planted challenge answers: contracts/http-contract.md's Errors row unauthenticated, never a literal (#863).</summary>
     private static readonly int Unauthenticated = Contract.Error("unauthenticated").Status;
+
+    /// <summary>
+    /// The <c>Message</c> of the identity library's Refreshed <c>[LoggerMessage]</c>, read from
+    /// src/Platform.Identity/AccessTokenSource.cs, so neither <see cref="GatewayEvent.IsRefreshed"/> nor
+    /// the recorded Refreshed lines above hold a copy of it that can drift from its source (#872).
+    /// </summary>
+    private static string RefreshedTemplate =>
+        Assert.Single(RefreshedLoggerMessage().Matches(File.ReadAllText(Path.Combine(FixtureFiles.RepositoryRoot, "src", "Platform.Identity", "AccessTokenSource.cs"))))
+            .Groups["message"].Value;
+
+    [GeneratedRegex("""\[LoggerMessage\((?<args>[^\]]*?)Message\s*=\s*"(?<message>[^"]*)"\s*\)\]\s*private static partial void Refreshed\(""", RegexOptions.Singleline | RegexOptions.CultureInvariant, RegexTimeout.Milliseconds)]
+    private static partial Regex RefreshedLoggerMessage();
+
+    // ---- the Refreshed line's source (#872) ----
+
+    [Fact]
+    public void IsRefreshed_matches_the_prefix_of_the_identity_librarys_Refreshed_log_message()
+    {
+        string template = RefreshedTemplate;
+
+        Assert.StartsWith(GatewayEvent.RefreshedPrefix, template, StringComparison.Ordinal);
+        Assert.DoesNotContain('{', GatewayEvent.RefreshedPrefix);
+    }
 
     // ---- the control (Q143) ----
 
