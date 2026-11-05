@@ -1725,15 +1725,20 @@ const LIMIT_HALTED = 'usage limit; resume after 10pm (America/Chicago)'
 //     prompt's decisions step reads that list and finds no fault in the missing comment, and the report takes a gap
 //     decision's alternatives from the Answer, which is among the comments it reads past the results JSON. The list's
 //     label is read from each implement prompt, never copied here, so a label renamed there alone fails this check
-//     (#914; CODING_STANDARDS.md "A guard reads the thing it guards").
+//     (#914; CODING_STANDARDS.md "A guard reads the thing it guards"). Since the report takes the alternatives from
+//     that list, each implement prompt asks the list to give them, on the line that names it (#915).
 {
   const impls = allPrompts.filter((x) => x.label.startsWith('implement:'))
   if (!impls.length) fail('#914: no implement prompt was rendered, so the gap-decision label was read from nothing')
   const labels = new Set()
+  const GIVES = ' For each, that list gives the question, at least two alternatives with what each costs, and the one you took and why: the morning report takes a gap decision\'s alternatives from it (#915).'
   for (const c of impls) {
-    const m = /^Gap decisions that are not human-owned you may take; list each in delegatedDecisions and in the Answer as "([^"]+)"\.$/m.exec(c.prompt)
+    const m = /^Gap decisions that are not human-owned you may take; list each in delegatedDecisions and in the Answer as "([^"]+)"\.(.*)$/m.exec(c.prompt)
     if (!m) fail(`#914: the ${c.label} prompt does not name the Answer's list a gap decision goes in`)
-    else labels.add(m[1])
+    else {
+      labels.add(m[1])
+      if (m[2] !== GIVES) fail(`#915: the ${c.label} prompt does not ask the Answer's "${m[1]}" list to give each gap decision's alternatives, which the report takes from it`)
+    }
   }
   if (labels.size > 1) fail(`#914: the implement prompts name ${labels.size} labels for the Answer's gap-decision list: ${[...labels].join(', ')}`)
   const LABEL = labels.size === 1 ? [...labels][0] : ''
