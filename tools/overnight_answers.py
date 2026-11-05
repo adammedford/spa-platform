@@ -24,8 +24,9 @@ exactly `Overnight <yyyy-mm-dd>`. A questions comment on it is one whose first l
 it; the parts are joined in order before reading so a question cut at a boundary is read whole. A
 question opens with `**Q<n>.**`, `**Q<n>**` or `Q<n>.` and runs to the next mark or the comment's
 end, its night-wide number unique across the issue (ADR-0021 decision 2). A question names a
-number when `#<n>` appears anywhere in it, matched whole, so #35 is not found in #352 nor in a
-decision URL's `#issuecomment-`. The heading's own ticket number selects nothing by itself
+number when `#<n>` appears anywhere in it, matched whole: no digit after it and no word character
+or `&` before the `#`, so #35 is not found in #352, in an HTML entity's `&#35;` nor in a link
+fragment's `README.md#35`. The heading's own ticket number selects nothing by itself
 (#531): a question is listed when its own text, its `(#<ticket> Q<k>)` source tag included, names
 a given number. A question a ticket's grill numbered opens with that tag, so a ticket the landing
 closes has those questions listed, which is what the landing wants; a question under a heading
