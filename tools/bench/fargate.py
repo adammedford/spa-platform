@@ -286,19 +286,22 @@ def stop_after_t0(t0: Optional[dict], seen: dict, bound_s: float = HARD_BOUND_S)
     """Where a stop the poll saw falls against T0 + bound_s, both on the workstation's clock (#919).
     The stop is after the T0 window's earliest instant and the stop window's earliest, before both
     windows' latest, so the low end pairs the stop's earliest with T0's latest and the high end the
-    reverse. A window with no sample before it is its one instant."""
+    reverse. A stop window with no describe before it is its one instant (unreachable with a T0:
+    a sample follows a describe). A T0 seen by the first sample has no earliest instant, so the
+    high end stays open and the stop is never placed before the bound on it (#919 review)."""
     if t0 is None:
         return f"with no T0 (no sample saw Elb.InitialHealthChecking), not placed against the T0 + {bound_s:g} s hard bound"
-    t0_after = t0["after_ns"] if t0["after_ns"] is not None else t0["at_ns"]
     seen_after = seen["after_ns"] if seen["after_ns"] is not None else seen["at_ns"]
-    low, high = (seen_after - t0["at_ns"]) / 1e9, (seen["at_ns"] - t0_after) / 1e9
+    low = (seen_after - t0["at_ns"]) / 1e9
+    high = None if t0["after_ns"] is None else (seen["at_ns"] - t0["after_ns"]) / 1e9
     if low > bound_s:
         where = "past"
-    elif high < bound_s:
+    elif high is not None and high < bound_s:
         where = "before"
     else:
         where = "across"
-    text = f"seen at T0 + {low:.0f}..{high:.0f} s, {where} the T0 + {bound_s:g} s hard bound"
+    shown = "?" if high is None else f"{high:.0f}"
+    text = f"seen at T0 + {low:.0f}..{shown} s, {where} the T0 + {bound_s:g} s hard bound"
     return text + (": the poll cannot place it" if where == "across" else "")
 
 

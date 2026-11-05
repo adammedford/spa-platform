@@ -635,6 +635,12 @@ class Arithmetic(unittest.TestCase):
         # A stop on the first describe has no describe before it: the window is its one instant.
         self.assertEqual("seen at T0 + 70..71 s, past the T0 + 60 s hard bound",
                          fargate.stop_after_t0(t0, {"after_ns": None, "at_ns": 170 * self.S}))
+        # A T0 the first sample saw may have begun any time before it, so the stop is never "before".
+        first = {"after_ns": None, "at_ns": 100 * self.S}
+        self.assertEqual("seen at T0 + 30..? s, across the T0 + 60 s hard bound: the poll cannot place it",
+                         fargate.stop_after_t0(first, self.window(130, 131)))
+        self.assertEqual("seen at T0 + 61..? s, past the T0 + 60 s hard bound",
+                         fargate.stop_after_t0(first, self.window(161, 162)))
         self.assertEqual("with no T0 (no sample saw Elb.InitialHealthChecking), not placed against the T0 + 60 s hard bound",
                          fargate.stop_after_t0(None, self.window(1, 2)))
 
