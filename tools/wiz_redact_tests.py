@@ -291,6 +291,22 @@ class RuleEightTerraformClientIds(Redacts):
         )
         self.assertRedacts(text, text)
 
+    def test_a_value_one_step_outside_the_client_id_shape_is_kept(self) -> None:
+        # Each line misses the client-id shape by one step, so each turns red under one widening of
+        # the matcher: the length bound (24 and 27 characters), the character class (upper case, a
+        # hyphen), the key list (`name`, `client_name`) and the lookbehind (`_id` and `-id` endings).
+        text = (
+            '      - id                          = "3n4b5c6d7e8f9g0h1i2j3k4l" -> null\n'
+            '      - id                          = "3n4b5c6d7e8f9g0h1i2j3k4l5m6" -> null\n'
+            '      - client_id                   = "3N4B5C6D7E8F9G0H1I2J3K4L5" -> null\n'
+            '      - client_id                   = "3n4b5c6d7e8f9g0h1i2j3k4-5" -> null\n'
+            '      - name                        = "3n4b5c6d7e8f9g0h1i2j3k4l5" -> null\n'
+            '      - client_name                 = "3n4b5c6d7e8f9g0h1i2j3k4l5" -> null\n'
+            '      - managed_login_branding_id   = "3n4b5c6d7e8f9g0h1i2j3k4l5" -> null\n'
+            '          - "app-id"                = "3n4b5c6d7e8f9g0h1i2j3k4l5"\n'
+        )
+        self.assertRedacts(text, text)
+
     def test_a_plans_client_id_attribute_and_the_outputs_clientid_are_elided(self) -> None:
         # The shapes a destroy plan and an apply's Outputs block printed in the sitting of 2026-10-27;
         # the client-id matcher accepts the 25- or 26-character shapes exercised above.
