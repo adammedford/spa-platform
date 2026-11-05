@@ -142,8 +142,17 @@ locals {
 
   # One value for both containers (#786), so the two cannot drift; the comment at the gateway
   # container's use says why each setting is there.
+  #
+  # add = [] is ECS's own value, spelled out (#1006). ECS returns capabilities.add as an empty list
+  # when none was given, and the provider's comparison of the configured definitions with the ones
+  # read back does not treat the two as equal: its reduce() empties to null the top-level lists
+  # (mountPoints, systemControls, volumesFrom and others) and fills hostPort from containerPort under
+  # awsvpc, but leaves the lists inside linuxParameters as they are. Without it every plan after an
+  # apply replaced the task definition and rolled the service.
+  # https://github.com/hashicorp/terraform-provider-aws/blob/v6.68.0/internal/service/ecs/container_definitions.go
   container_linux_parameters = {
     capabilities = {
+      add  = []
       drop = ["ALL"]
     }
     initProcessEnabled = true
@@ -160,10 +169,19 @@ locals {
     # Explicit rather than left to the default, because task 1.6b's tunnel depends on it.
     readonlyRootFilesystem = false
 
+    # hostPort is the value ECS fills in under awsvpc, where it must equal containerPort, spelled out
+    # with the three empty lists below so the definition is the one ECS reads back (#1006).
     portMappings = [{
       containerPort = var.gateway_port
+      hostPort      = var.gateway_port
       protocol      = "tcp"
     }]
+
+    # ECS's values when none is given (#1006): the task has no volumes, no other container's volumes
+    # and no namespaced kernel parameters.
+    mountPoints    = []
+    systemControls = []
+    volumesFrom    = []
 
     # Hardening (#786, P2-9). capabilities.drop removes Linux capabilities from the default set
     # Docker grants (--cap-drop); "ALL" is one of its valid values, and on Fargate add accepts
@@ -234,6 +252,11 @@ locals {
     # fixtures/MockApi/Dockerfile), listeners on 5080 and 5081, above 1024, and an exec-form
     # ENTRYPOINT, so the init forwards SIGTERM to dotnet.
     linuxParameters = local.container_linux_parameters
+
+    # ECS's values when none is given, spelled out as on the gateway (#1006).
+    mountPoints    = []
+    systemControls = []
+    volumesFrom    = []
 
     # No portMappings. The two listeners are on loopback ports 5080 and 5081 and are reached from
     # the gateway container inside the task's own network namespace, never from outside it
