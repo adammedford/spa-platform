@@ -1753,6 +1753,9 @@ const LIMIT_HALTED = 'usage limit; resume after 10pm (America/Chicago)'
     else {
       const item = (/^   - Decisions taken overnight:.*$/m.exec(reportPrompt) || [''])[0]
       if (!item.includes(REPORT)) fail(`#631: the report's "Decisions taken overnight" item does not take a gap decision's alternatives from the Answer's "${LABEL}" list`)
+      // The implement prompt's sentence (#915) is there because this item reads alternatives from that list: tie the
+      // two, so an item that stops taking the alternatives fails here rather than leaving the lanes writing for nothing.
+      else if (!item.includes(`each with the alternatives it was weighed against ${REPORT}`)) fail(`#915: the report's "Decisions taken overnight" item no longer takes each decision's alternatives from where it names, so the implement prompt's request for them in the "${LABEL}" list has no reader`)
       if (!reportPrompt.includes(READS)) fail(`#631: the report does not read the Answer's "${LABEL}" list among the comments the results JSON lacks`)
     }
   }
