@@ -10,15 +10,21 @@ namespace Platform.Identity;
 /// <summary>
 /// A challenge whose provider's discovery document cannot be fetched (#908, #543's held row). Discovery is
 /// read on the first challenge, not at start-up (<see cref="IssuerDirectory"/>), and the handler's challenge
-/// reads it before it writes anything; left alone, the identity model's <c>InvalidOperationException</c>
-/// (IDX20803) leaves the challenge and the server answers <c>500</c> with no body.
+/// reads it before it writes anything
+/// (OpenIdConnectHandler.HandleChallengeAsyncInternal:
+/// https://github.com/dotnet/aspnetcore/blob/v10.0.0/src/Security/Authentication/OpenIdConnect/src/OpenIdConnectHandler.cs);
+/// left alone, the identity model's <c>InvalidOperationException</c> (IDX20803) leaves the challenge and
+/// the server answers <c>500</c> with no body.
 ///
 /// Read here first instead, through the options' own manager, so the handler's read that follows is the
 /// cached document. When it cannot be read, a navigation is answered <c>503</c> with the static failure
 /// page, whose link tries again, and anything else with the <c>401</c> problem a fetch always gets, since a
 /// fetch's answer never depended on the provider (ADR-0008). Neither carries a rule id: nothing the
-/// request sent was refused. The identity model keeps no failed read, so the next challenge asks the
-/// provider again and logins resume when it answers.
+/// request sent was refused. The identity model keeps no failed read: with no document yet, its manager
+/// fetches again on every call and throws IDX20803 around the fetch's exception each time it fails
+/// (ConfigurationManager.GetConfigurationAsync:
+/// https://github.com/AzureAD/azure-activedirectory-identitymodel-extensions-for-dotnet/blob/8.19.2/src/Microsoft.IdentityModel.Protocols/Configuration/ConfigurationManager.cs),
+/// so the next challenge asks the provider again and logins resume when it answers.
 ///
 /// One Warning per request names the issuer and the type of the exception that caused the failure, under
 /// this type's category, which the telemetry floor keeps (the framework handler's is floored to None). The
@@ -74,7 +80,10 @@ internal static partial class ProviderDiscovery
     {
         // The identity model wraps the cause twice: its manager's IDX20803 around its retriever's IOException,
         // which wraps what the HTTP client threw (refused, timed out) or, for an answer that was not 200,
-        // stands alone. The type logged is the innermost of those two levels that exists.
+        // stands alone (IDX20804 wraps the client's exception, IDX20807 is the non-200 answer's own:
+        // HttpDocumentRetriever.GetDocumentAsync,
+        // https://github.com/AzureAD/azure-activedirectory-identitymodel-extensions-for-dotnet/blob/8.19.2/src/Microsoft.IdentityModel.Protocols/Configuration/HttpDocumentRetriever.cs).
+        // The type logged is the innermost of those two levels that exists.
         Exception cause = failure.InnerException?.InnerException ?? failure.InnerException ?? failure;
         ILogger logger = context.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger(typeof(ProviderDiscovery).FullName!);
         Unreadable(logger, context.Features.Get<IAppFeature>()?.App.OAuth.Issuer ?? "(none)", cause.GetType().Name);
