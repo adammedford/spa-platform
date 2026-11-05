@@ -32,7 +32,21 @@ const OWNERSHIP_MD = fs.readFileSync(path.join(top, 'OWNERSHIP.md'), 'utf8')
 const shapeOf = (body, label) => {
   const r = spawnSync('python3', ['-I', SHAPE, '-'], { cwd: top, encoding: 'utf8', input: JSON.stringify({ number: 0, body, labels: [{ name: label }], subIssuesSummary: { total: 0 }, blockedBy: { nodes: [] } }) })
   const lines = String(r.stdout || '').trim().split('\n')
-  return { status: r.status, last: lines[lines.length - 1] || '', failures: lines.filter((l) => /^ticket-shape: (?!note:|pass:|fail:)/.test(l)) }
+  return { status: r.status, last: lines[lines.length - 1] || '', failures: lines.filter((l) => /^ticket-shape: (?!note:|pass:|fail:)/.test(l)), notes: lines.filter((l) => l.startsWith('ticket-shape: note: ')) }
+}
+// The ticket template's headings (#973), as the ticket names the set, and what a filed body breaks of
+// it: each `##` heading outside the set, and each heading note tools/ticket_shape.py prints on it. A
+// run of the check that judged nothing (exit 2, or no exit) is itself an entry, so an unreadable body
+// or a broken check reads as off the template rather than as a body with no notes (CODING_STANDARDS.md
+// -> "A check fails closed").
+const TICKET_SET = ['Parent', 'What to build', 'Acceptance criteria', 'Blocked by']
+const offTemplate = (body, label) => {
+  const shape = shapeOf(body, label)
+  return [
+    ...String(body).split('\n').filter((l) => /^## /.test(l) && !TICKET_SET.includes(l.slice(3).trim())).map((l) => `writes "${l}"`),
+    ...(shape.status === 0 || shape.status === 1 ? [] : [`tools/ticket_shape.py judged nothing: exit ${shape.status}, ${shape.last}`]),
+    ...shape.notes.filter((l) => /^ticket-shape: note: heading:/.test(l)),
+  ]
 }
 const DATE = '2026-10-21'
 const MORNING_REL = `.scratch/overnight/log/morning-${DATE}`
@@ -1151,6 +1165,22 @@ try {
     if (!/`[^`]*tools\/ticket_shape\.py[^`]*`/.test(fp)) fail('#320: the applier that files a follow-up is not told to check its shape with tools/ticket_shape.py')
     const create = (/`cd [^`]*gh issue create[^`]*FOLLOW-UP[^`]*`|`cd [^`]*gh issue create --title "<its title>"[^`]*`/.exec(fp) || [''])[0]
     if (!create || /--parent/.test(create)) fail(`#320: the follow-up is filed ${create ? 'as a sub-issue' : 'by no gh issue create'}: ${create}`)
+    // #973: the Apply filer's bodies, the applier's <role> filled in as it fills it, carry only the
+    // ticket template's headings, and tools/ticket_shape.py prints no heading note on them; and the
+    // workstream tickets an applier writes are asked for those headings and no other.
+    if (!followUps.length) fail('#973: Apply wrote no follow-up body, so its headings went unread')
+    for (const f of followUps) {
+      const off = offTemplate(f.body.replace('<role>', 'integrator'), 'needs-triage')
+      if (off.length) fail(`#973: Apply's follow-up for Q${f.q} is off the ticket template: ${off.join(' | ')}`)
+    }
+    const applierPrompts = calls.filter((c) => c.label.startsWith('apply:')).map((c) => c.prompt)
+    if (!applierPrompts.length) fail('#973: no applier prompt was rendered, so its workstream tickets went unread')
+    for (const p of applierPrompts) {
+      const ws = (/^Workstream tickets: [^\n]*/m.exec(p) || [''])[0]
+      const heads = [...ws.matchAll(/`(## [^`]+)`/g)].map((m) => m[1].slice(3))
+      for (const h of ['What to build', 'Acceptance criteria']) if (!heads.includes(h)) fail(`#973: the applier's workstream tickets are not asked for a "## ${h}" section: ${ws.slice(0, 200)}`)
+      for (const h of heads) if (!TICKET_SET.includes(h)) fail(`#973: the applier's workstream tickets are asked for "## ${h}", outside the ticket's set`)
+    }
     // Q91's shape: #62's boxes removed, the changed paragraphs posted as a diff first (#968).
     const e2 = units.flatMap((u) => u.edits || []).filter((e) => e.q === 2)
     if (e2.length !== 1 || e2[0].target !== 62 || e2[0].removeBoxes.join('|') !== `${BOX2}|${BOX3}`) fail(`#320 Q91 shape: the edit sent is ${JSON.stringify(e2)}`)
@@ -1451,6 +1481,13 @@ try {
       if (!f || !f.body.split('\n').includes(`Fails on: ${failsOn}`)) fail(`#966: the row ${JSON.stringify(title)} files a body without its line "Fails on: ${failsOn}":\n${f ? f.body : 'not sent'}`)
       const shaped = (env966.shaped || []).find((x) => x.title === title)
       if (!shaped || shaped.status !== 0) fail(`#966: ${JSON.stringify(title)} fails tools/ticket_shape.py: ${shaped ? [...shaped.failures, shaped.last].join('; ') : 'never checked'}`)
+    }
+    // #973: every body the follow-up filer sent, of a four-column record and a five-column one, under
+    // each label it is filed with, carries only the ticket template's headings, and tools/ticket_shape.py
+    // prints no heading note on it.
+    for (const f of [...sent, ...sent966]) {
+      const off = offTemplate(f.body, f.label)
+      if (off.length) fail(`#973: the follow-up ${JSON.stringify(f.title)} (${f.label}) is off the ticket template: ${off.join(' | ')}`)
     }
     const ho = run443.result.handover.text
     // The why is the body's "Filed ready-for-human" line, asserted above; the hand-over lists the
@@ -2506,6 +2543,14 @@ try {
         const r = run([pr, url, recordFile(body), k])
         const want = direct(pr, url, body, k)
         if (r.status !== 0 || r.stdout !== want) fail(`#643: row ${k} of #${pr}'s record: exit ${r.status}, ${r.status === 0 ? 'the output is not followUpBody\'s direct result' : r.stderr}:\n${JSON.stringify(r.stdout)}\n${JSON.stringify(want)}`)
+        // #973: the printed body, under the label its stderr names, carries only the ticket
+        // template's headings, and tools/ticket_shape.py prints no heading note on it.
+        const label = (/, label (\S+?)(:|$)/m.exec(r.stderr) || [])[1]
+        if (!label) fail(`#973: row ${k} of #${pr}'s record names no label on stderr: ${r.stderr}`)
+        else {
+          const off = offTemplate(r.stdout, label)
+          if (off.length) fail(`#973: the body follow_up_body.mjs prints for row ${k} of #${pr}'s record is off the ticket template: ${off.join(' | ')}`)
+        }
       }
       // A body from stdin is the same body.
       const piped = run([443, R443, '-', 2], { input: REC443.body })

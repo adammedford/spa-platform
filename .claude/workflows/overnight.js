@@ -395,8 +395,12 @@ NEW TICKETS. Every open row of docs/plan/03 that is not landed, not SKIP, and no
   **Owner:** <role>
   **Plan row:** <id>
 
-  **What to build:** the row's What, the contracts/ rows and test ids that name it (cite paths), and its Done when.
-  ## Acceptance
+  ## What to build
+
+  The row's What, the contracts/ rows and test ids that name it (cite paths), and its Done when.
+
+  ## Acceptance criteria
+
   - [ ] one box per Done-when clause and per test id
   2. Check its shape under the label and blockers you will file it with, by the rules the ticket-shape workflow holds at creation and tools/overnight_collect.py forecasts from (#248): \`cd ${REPO} && python3 -I -c 'import json,sys; print(json.dumps({"number": 0, "body": open(sys.argv[1]).read(), "labels": [{"name": sys.argv[2]}], "subIssuesSummary": {"total": 0}, "blockedBy": {"nodes": [{"number": int(n), "state": "OPEN"} for n in sys.argv[3:]]}}))' ${LOG}/new-ticket-<id>.md <label> <each --blocked-by number> | python3 -I tools/ticket_shape.py -\` (bare numbers, such as 213; with no blockers, nothing after the label: a word there, such as "none", stops the check on exit 2 and files nothing)
   3. Only when that exits 0, its last line starting "ticket-shape: pass:", file it: \`cd ${REPO} && gh issue create --title "<id> — <short title>" --label <ready-for-agent|ready-for-human> --parent ${PARENT_ISSUE} --body-file ${LOG}/new-ticket-<id>.md\`. On exit 1 file nothing for that row and name the row and each "ticket-shape: <rule>:" line in "reason"; on any other exit file nothing either and say in "reason" that the check did not judge it, quoting its last line. Never reword a body to get past the check: a failure is reported, not repaired.
@@ -586,7 +590,7 @@ Integration worktree ${INT_WT} (branch ${INT_BRANCH}). Task branch ${impl.branch
 The implementer's summary: ${impl.summary}
 The reviewer's summary: ${rev.summary}
 Findings the review fixed: ${(rev.findingsFixed || []).join(' | ') || 'none'}.
-These, the task branch's own commit messages and the gate logs under ${LOG} are the merge body's sources.${impl.complete ? '' : ` For the "Outstanding test ids:" line, read the issue body's acceptance list alone: \`cd ${REPO} && gh issue view ${t.issue} --json body --jq .body | awk '/^## /{p=($0=="## Acceptance")} p'\`; an unticked box naming a test id is outstanding.`}
+These, the task branch's own commit messages and the gate logs under ${LOG} are the merge body's sources.${impl.complete ? '' : ` For the "Outstanding test ids:" line, read the issue body's acceptance list alone: \`cd ${REPO} && gh issue view ${t.issue} --json body --jq .body | awk '/^## /{p=($0 ~ /^## Acceptance/)} p'\`; an unticked box naming a test id is outstanding.`}
 
 STEP 0 — durable state: if \`git -C ${INT_WT} rev-parse -q --verify MERGE_HEAD\` succeeds, \`git -C ${INT_WT} merge --abort\`. If \`git -C ${INT_WT} merge-base --is-ancestor ${impl.branch} HEAD\` succeeds, the merge is already in, and STEP 1 and STEP 2 do not run: <merge> is ${MERGE_OF(impl.branch)}, never the run branch's latest merge, which may be another ticket's (#712). Follow THE GATE ALONE below for <merge>, and return what it returns, with mergeSha <merge>, conflictFiles [], and old, redHead and reach "", so a red gate there is never re-run or reset by the script.
 ${GATE_ALONE(t, '<merge>')}
