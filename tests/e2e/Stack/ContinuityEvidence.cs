@@ -6,8 +6,11 @@ namespace Gateway.E2ETests.Stack;
 /// What a continuity row writes when it ends (#358 Q142): its attempts and wall time so far, reruns
 /// included, its verdict, what it observed and the steps it sent. A step holds a name, a client trace
 /// id, a time, a status and an exception's type; an observation holds task ids, trace ids and
-/// <c>session_ref</c>, which contracts/telemetry.md makes safe to log. No field can hold a cookie, a
-/// token, a session key or a ticket.
+/// <c>session_ref</c>, which contracts/telemetry.md makes safe to log. When this run stopped at a
+/// login hold that timed out, <see cref="Page"/> is what the page showed then (#1003): its URL with no
+/// query and its visible text, through <see cref="Redacted.Text"/>; a run that did not stop there writes
+/// none, so a rerun's file never carries an earlier run's page beside its own verdict. No field can hold
+/// a cookie, a token, a session key or a ticket.
 /// </summary>
 public sealed record RowEvidence(
     string Row,
@@ -16,7 +19,8 @@ public sealed record RowEvidence(
     Verdict Verdict,
     string Reason,
     IReadOnlyList<string> Observations,
-    IReadOnlyList<Attempt> Steps);
+    IReadOnlyList<Attempt> Steps,
+    PageShown? Page = null);
 
 /// <summary>What is left of a row's bounds (Q144, Q148).</summary>
 public sealed record RowBudget(int Attempts, TimeSpan Wall)
@@ -60,9 +64,9 @@ public sealed class ContinuityEvidence(string directory, ICommandRunner runner)
 
     /// <summary>
     /// Writes the row's file: this run's attempts and wall time added to the earlier file's, and this
-    /// run's steps after the earlier ones.
+    /// run's steps after the earlier ones, and what the page showed if this run stopped at a timed-out hold.
     /// </summary>
-    public async Task<RowEvidence> WriteAsync(string row, RowResult result, IReadOnlyList<Attempt> attempts, TimeSpan wall, CancellationToken ct)
+    public async Task<RowEvidence> WriteAsync(string row, RowResult result, IReadOnlyList<Attempt> attempts, TimeSpan wall, CancellationToken ct, PageShown? page = null)
     {
         RowEvidence? earlier = await EarlierAsync(row, ct);
         RowEvidence evidence = new(
@@ -72,7 +76,8 @@ public sealed class ContinuityEvidence(string directory, ICommandRunner runner)
             result.Verdict,
             result.Reason,
             result.Observations,
-            [.. earlier?.Steps ?? [], .. attempts]);
+            [.. earlier?.Steps ?? [], .. attempts],
+            page);
         Directory.CreateDirectory(Path.GetFullPath(directory));
         await File.WriteAllTextAsync(PathOf(row), JsonSerializer.Serialize(evidence, Json), ct);
         return evidence;

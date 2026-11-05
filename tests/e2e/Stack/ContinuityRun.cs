@@ -71,7 +71,7 @@ public sealed class ContinuityRun(ContinuityEvidence evidence, ContinuityLog log
                 result = RowResult.NotProved($"the driver stopped with {stopped.GetType().Name}", result.Observations);
             }
 
-            await WriteBesideAsync(stopped, () => evidence.WriteAsync(row, result, attempts, wall.Elapsed, CancellationToken.None));
+            await WriteBesideAsync(stopped, () => evidence.WriteAsync(row, result, attempts, wall.Elapsed, CancellationToken.None, ShownBy(stopped)));
             throw;
         }
 
@@ -105,13 +105,16 @@ public sealed class ContinuityRun(ContinuityEvidence evidence, ContinuityLog log
                 result = RowResult.NotProved($"the driver stopped with {stopped.GetType().Name}", []);
             }
 
-            await WriteBesideAsync(stopped, () => evidence.WriteAsync(row, result, recorded is null ? [] : [recorded], wall.Elapsed, CancellationToken.None));
+            await WriteBesideAsync(stopped, () => evidence.WriteAsync(row, result, recorded is null ? [] : [recorded], wall.Elapsed, CancellationToken.None, ShownBy(stopped)));
             throw;
         }
 
         await evidence.WriteAsync(row, result, recorded is null ? [] : [recorded], wall.Elapsed, CancellationToken.None);
         return result;
     }
+
+    /// <summary>What the page showed, when the driver stopped at a login hold that timed out (rows 5 and 7, #1003).</summary>
+    private static PageShown? ShownBy(Exception stopped) => (stopped as HoldTimeoutException)?.Page;
 
     /// <summary>
     /// The evidence write after the row has already failed: a write that fails too is reported beside the
