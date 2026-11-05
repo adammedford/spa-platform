@@ -764,10 +764,13 @@ try {
   // path, so the row had no file, its red run read as caught elsewhere, and it held twice although
   // each verdict said merge. Red on any test of the file it reproduces with no caught cell and
   // merges. A cell scoping one check, and a (companion) cell with no whole-file candidate for its
-  // file, are matched as before: red only on another test they hold.
+  // file, are matched as before: red only on another test they hold. A candidate for one check of
+  // that file, its project and file the file but its test neither the file's path nor its basename,
+  // is not the whole file, so the cell is not held on it (#900).
   checks++
   {
     const F = 'tools/overnight_answers_tests.py'
+    const ONE = 'ConfirmTests.test_every_confirm_comment_counts'
     const H1 = sha('1'); const H2 = sha('2')
     const BREAK = 'tools/overnight_answers.py covered_questions: dropped the author check'
     const RED = ['test_a_confirm_from_another_account_or_not_opening_confirm_does_not_count (__main__.ConfirmTests)']
@@ -795,6 +798,7 @@ try {
       ['overnight_answers_tests.py (check: every Confirm comment counts)', [comp(F)]],
       ['overnight_answers_tests.py (companion)', []],
       ['overnight_answers_tests.py (companion)', [comp(F, 'tools', F)]],
+      ['overnight_answers_tests.py (companion)', [comp(ONE)]],
       ['other_tests.py (companion)', [comp(F)]],
     ]) {
       const c = await verdictOf(cell, cands)
