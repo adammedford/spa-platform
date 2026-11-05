@@ -293,7 +293,7 @@ class RuleEightTerraformClientIds(Redacts):
 
     def test_a_plans_client_id_attribute_and_the_outputs_clientid_are_elided(self) -> None:
         # The shapes a destroy plan and an apply's Outputs block printed in the sitting of 2026-10-27;
-        # a Cognito client id is 26 lowercase letters and digits, which no other id in the roots is.
+        # the client-id matcher accepts the 25- or 26-character shapes exercised above.
         self.assertRedacts(
             '  - resource "aws_cognito_user_pool_client" "app" {\n'
             '      - id                                            = "3n4b5c6d7e8f9g0h1i2j3k4l5m" -> null\n'
