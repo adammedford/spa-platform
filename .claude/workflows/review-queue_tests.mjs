@@ -608,6 +608,23 @@ try {
       const m = (resultOf(208, result).mutations || []).find((x) => x.kind === 'nominated')
       if (!m || m.test !== '(x) Nom') fail(`PR 208 with the nomination "(x) Nom": row ${JSON.stringify(m && { test: m.test, result: m.result })}, expected a row for "(x) Nom"`)
     }
+    // A cell that names no test at all, empty or whitespace only, still gets a row (#811): it is
+    // could-not-run without a mutation agent, since there is no test to break, and it holds. Two such
+    // nominations keep a row each, so the dedup by test cannot fold one into the other.
+    for (const cells of [['   '], [''], ['   ', '']]) {
+      const BLANK = { 208: cells.map((test, i) => ({ test, project: 'tests/Platform.Registry.Tests', why: `asserts constant ${i + 1}` })) }
+      env = run({ prs: [208] }, NOM, { nominations: BLANK, mutate: { Nom: row('reproduced', 1, 10) } })
+      result = await execute(env)
+      const c = resultOf(208, result)
+      const ms = (c.mutations || []).filter((x) => x.kind === 'nominated')
+      const label = `PR 208 with the nominations ${JSON.stringify(cells)}`
+      if (ms.length !== cells.length) fail(`${label}: ${ms.length} nominated rows, expected ${cells.length}`)
+      if (ms.some((m) => m.result !== 'could-not-run' || !/names no test/.test(m.why || ''))) fail(`${label}: rows ${JSON.stringify(ms.map((m) => ({ test: m.test, result: m.result, why: m.why })))}, expected could-not-run naming no test`)
+      if (cells.some((_, i) => !ms.some((m) => (m.why || '').includes(`asserts constant ${i + 1}`)))) fail(`${label}: a nomination's why did not reach its row`)
+      if (ms.some((m) => m.logFile !== '-')) fail(`${label}: a row that ran no agent names a log file: ${JSON.stringify(ms.map((m) => m.logFile))}`)
+      if (c.verdict !== 'hold') fail(`${label}: verdict ${c.verdict}, expected hold`)
+      if (env.mutations.some((x) => x.test !== 'Nom')) fail(`${label}: a mutation agent ran for a nomination that names no test`)
+    }
     // A Python unittest cell is read as its whole dotted name: red on its own class it reads
     // reproduced, red only on another class's same-named method it is did-not-fail.
     for (const [red, want] of [['test_x (pkg.C.test_x)', 'reproduced'], ['test_x (pkg.Other.test_x)', 'did-not-fail']]) {
