@@ -110,8 +110,9 @@
 # subject as landed for good, said S7 owed nothing. It also fails a full landing that names a plan
 # row while an open issue, other than one on the merge's Ticket lines, declares itself part of that
 # row (#388, #457): "Merge task P2-2" landed so on 2026-10-24 with #338 and #342 open. Without gh, a
-# login or GitHub it says the merges went unchecked and fails nothing, as the steering check does
-# offline; only python3 is a tool it needs.
+# login or GitHub, a ticket body it cannot read is reported unchecked and fails nothing, as the
+# steering check does offline, but a full landing that names a plan row needs the complete list of
+# open issues, so offline it fails (#871); only python3 is a tool it needs.
 #
 # Not called a gate: GLOSSARY.md reserves Gate for the platform's checkpoint ladder.
 #
@@ -407,8 +408,8 @@ fi
 # two review rounds, two rebuilds of the run branch and a force-push; on main it could not have been
 # corrected at all (#296). tools/landing_subjects.py says what it judges and what it leaves; this
 # hands it the same range as the part-row merges, and, the same way, no base is no check: the
-# hook says so, and the full check has already failed at A-05. Its own exit 2, a range it could not
-# read, fails here as surely as a held merge.
+# hook says so, and the full check has already failed at A-05. Its own exit 2, a range or a list of
+# open issues it could not read completely (#871), fails here as surely as a held merge.
 if command -v python3 > /dev/null; then
   if [ -n "$base" ]; then
     python3 -I tools/landing_subjects.py --base "$base" \
