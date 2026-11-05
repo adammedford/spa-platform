@@ -64,16 +64,18 @@ public sealed class ContinuityRun(ContinuityEvidence evidence, ContinuityLog log
                 }
             }
         }
-        catch (Exception stopped) when (stopped is not OperationCanceledException)
+        catch (Exception stopped)
         {
-            result = RowResult.NotProved($"the driver stopped with {stopped.GetType().Name}", result.Observations);
+            if (stopped is not OperationCanceledException)
+            {
+                result = RowResult.NotProved($"the driver stopped with {stopped.GetType().Name}", result.Observations);
+            }
+
+            await WriteBesideAsync(stopped, () => evidence.WriteAsync(row, result, attempts, wall.Elapsed, CancellationToken.None));
             throw;
         }
-        finally
-        {
-            await evidence.WriteAsync(row, result, attempts, wall.Elapsed, CancellationToken.None);
-        }
 
+        await evidence.WriteAsync(row, result, attempts, wall.Elapsed, CancellationToken.None);
         return result;
     }
 
@@ -96,17 +98,35 @@ public sealed class ContinuityRun(ContinuityEvidence evidence, ContinuityLog log
             GatewayCapture capture = await WaitAndReadAsync(control, recorded.Steps, ct);
             result = ContinuityObserver.Control(control, capture) ?? judge(driven, capture);
         }
-        catch (Exception stopped) when (stopped is not OperationCanceledException)
+        catch (Exception stopped)
         {
-            result = RowResult.NotProved($"the driver stopped with {stopped.GetType().Name}", []);
+            if (stopped is not OperationCanceledException)
+            {
+                result = RowResult.NotProved($"the driver stopped with {stopped.GetType().Name}", []);
+            }
+
+            await WriteBesideAsync(stopped, () => evidence.WriteAsync(row, result, recorded is null ? [] : [recorded], wall.Elapsed, CancellationToken.None));
             throw;
         }
-        finally
-        {
-            await evidence.WriteAsync(row, result, recorded is null ? [] : [recorded], wall.Elapsed, CancellationToken.None);
-        }
 
+        await evidence.WriteAsync(row, result, recorded is null ? [] : [recorded], wall.Elapsed, CancellationToken.None);
         return result;
+    }
+
+    /// <summary>
+    /// The evidence write after the row has already failed: a write that fails too is reported beside the
+    /// row's own failure rather than in place of it, the shape #212's clean-up took (f234abc).
+    /// </summary>
+    private static async Task WriteBesideAsync(Exception failure, Func<Task> write)
+    {
+        try
+        {
+            await write();
+        }
+        catch (Exception failed)
+        {
+            throw new AggregateException(failure, failed);
+        }
     }
 
     private async Task<GatewayCapture> WaitAndReadAsync(Step control, IEnumerable<Step> steps, CancellationToken ct)
