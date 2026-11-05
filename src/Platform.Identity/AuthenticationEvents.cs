@@ -136,7 +136,7 @@ internal static class AuthenticationEvents
     /// fetch metadata is not one either: the gateway never redirects a request it cannot show is a
     /// navigation, the same reading the request gate gives a missing header (ADR-0007).
     /// </summary>
-    private static bool IsNavigation(HttpRequest request) =>
+    internal static bool IsNavigation(HttpRequest request) =>
         Single(request, "Sec-Fetch-Mode", "navigate") && Single(request, "Sec-Fetch-Dest", "document");
 
     private static bool Single(HttpRequest request, string header, string value) =>
