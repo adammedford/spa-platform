@@ -16,12 +16,17 @@
 #      deployment would fail its health checks and roll back (contracts/README.md). Run seed.sh
 #      first. Nothing is built before this. It keeps the registry's revision for step 5.
 #   2. It builds both images for ARM64 and pushes each under a tag of this run's own, since the
-#      repositories' tags are immutable, then takes each digest from ECR. Each build pulls its base
-#      image (--pull), so every deployment resolves the floating tag, mcr.microsoft.com/dotnet/
-#      aspnet:10.0-noble among them, afresh: without it a workstation whose cache holds an older
-#      image builds on that one, and could ship a .NET runtime that predates the security fixes
-#      the tag's current image carries (#273, #288). --pull is Docker's "Always attempt to pull all
-#      referenced images": https://docs.docker.com/reference/cli/docker/buildx/build/
+#      repositories' tags are immutable, then takes each digest from ECR. The base images are the
+#      Dockerfiles' to choose, not this script's: both FROM lines of each Dockerfile name their base
+#      by @sha256: digest beside its tag, mcr.microsoft.com/dotnet/aspnet:10.0-noble-chiseled-extra
+#      for the runtime stage (src/Gateway/Dockerfile, #781; fixtures/MockApi/Dockerfile, #782), so a
+#      deployment builds on the pinned image whatever the workstation's cache holds, and moving to a
+#      new .NET patch is a commit that changes the digest. Each build still pulls (--pull, Docker's
+#      "Always attempt to pull all referenced images":
+#      https://docs.docker.com/reference/cli/docker/buildx/build/), which for a pinned reference
+#      fetches only that digest, and keeps #288's guard for a FROM line that names a tag alone: such
+#      a build resolves the tag afresh rather than build on an older cached image, which could ship
+#      a .NET runtime that predates the security fixes the tag's current image carries (#273).
 #   3. It plans and applies infra/envs/poc/platform with both images by digest and the health
 #      check on /readyz, and records them in images.auto.tfvars there, so every later apply of the
 #      root passes the same digests back and never moves the image.
