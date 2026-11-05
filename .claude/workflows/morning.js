@@ -1348,10 +1348,12 @@ const BATCH_BYTES = 24000
 // Two heads cannot be judged. One is full length with less than MIN_VISIBLE characters of it after
 // its leading whitespace: the cut may have fallen before the pattern could show. The other is full
 // length, its first line cut (no newline in it), and what is visible is only the start of a heading,
-// short of its second comma (a long padded or long second field): HEADING needs the whole line to
-// match, so a head cut there says nothing either way.
+// up to and including its second comma (a long padded or long second field): HEADING needs the whole
+// line to match, so a head cut there says nothing either way. A cut at the second comma, or at the
+// space after it, which the trim drops, leaves a line ending in that comma, short of the ", " HEADING
+// needs after the second field (#832).
 const MIN_VISIBLE = 40
-const HEADING_CUT = /^## Questions: #\d*(?:, [^,]*)?$/
+const HEADING_CUT = /^## Questions: #\d*(?:, [^,]*,?)?$/
 const undecidableHead = (head) => head.length >= HEAD_CHARS &&
   (head.trim().length < MIN_VISIBLE || (!head.includes('\n') && HEADING_CUT.test(head.trim())))
 // A body the reader returned must be the one the index describes: the same length in bytes and the same
