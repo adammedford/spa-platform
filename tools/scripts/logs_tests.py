@@ -13,7 +13,14 @@ id) are tools/scripts/cell_doubles.py's. The client ids are not in that universa
 every cell script's run is held to and some of them may print, so the cases here search for them
 themselves.
 
+#1014, raised by the G6 continuity sitting of 2026-11-04: to tell a sign-out from a page served
+normally, the sitting summarised 259 gateway lines by hand. --requests prints one line per gateway
+request record, drops the health checks, and still passes every line through the redaction. The
+record's category and the health route are read from the gateway's source and the telemetry
+contract, so a change to either runs these cases.
+
 Run: python3 -I tools/scripts/logs_tests.py
+Checkout inputs: src/Platform.Telemetry/RequestTelemetry.cs contracts/telemetry.md
 """
 
 from __future__ import annotations
@@ -21,6 +28,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import pathlib
+import re
 import sys
 
 _spec = importlib.util.spec_from_file_location("cell_doubles", pathlib.Path(__file__).resolve().parent / "cell_doubles.py")
@@ -30,6 +38,21 @@ _spec.loader.exec_module(cell)
 import unittest  # noqa: E402
 
 SCRIPT = "logs.sh"
+REPO = pathlib.Path(__file__).resolve().parents[2]
+
+
+def request_category() -> str:
+    """RequestTelemetry.Category, the category the gateway writes its request line under."""
+    source = (REPO / "src/Platform.Telemetry/RequestTelemetry.cs").read_text()
+    return re.search(r'const string Category = "([^"]+)";', source).group(1)
+
+
+def health_route() -> str:
+    """The route value contracts/telemetry.md lists that is a health check's, by its name there."""
+    row = next(line for line in (REPO / "contracts/telemetry.md").read_text().splitlines()
+               if line.startswith("| `route` values |"))
+    values = re.findall(r"`([a-z]+)`", row.split("|")[2])
+    return next(value for value in values if value == "health")
 
 
 def client_ids(world: dict) -> dict[str, str]:
@@ -135,6 +158,85 @@ class LogsReadsTheGroupThroughTheRedaction(cell.CompanionTestCase):
         self.assertNotIn("Kk", result.stdout)
 
 
+def request(route: str, status: int, app: str | None, rule: str | None = None) -> str:
+    """A request line as the gateway's PlatformJsonFormatter writes it, its fields in
+    contracts/telemetry.md's order."""
+    return json.dumps({"ts": f"2026-11-04T21:13:0{status % 10}.1234567+00:00", "level": "Information",
+                       "msg": "request", "category": request_category(),
+                       "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736", "span_id": "00f067aa0ba902b7",
+                       "cell": "poc", "app_id": app, "registry_rev": 7, "route": route, "rule": rule,
+                       "session_ref": "a1b2c3d4e5f6", "status": status, "duration_ms": 3.25})
+
+
+def requests_world() -> dict:
+    """logged_world's lines, which are no request's, and a sitting's worth of request records: two
+    served, a refusal, a sign-out, a request refused before its app was known, and the two health
+    checks, which the telemetry stage gives the route `health` (a request line carries no path)."""
+    world = logged_world()
+    stream = f"{cell.GATEWAY}/{cell.GATEWAY}/{world['tasks'][0]['id']}"
+    world["log_events"] += [
+        [stream, request("asset", 200, "app1")],
+        [stream, request(health_route(), 200, None)],
+        [stream, request("api", 401, "app2", "auth.session")],
+        [stream, request(health_route(), 503, None)],
+        [stream, request("bff", 302, "app1")],
+        [stream, request("asset", 404, None, "gate.host")],
+        [stream, json.dumps({"ts": "2026-11-04T21:13:09.0000000+00:00", "level": "Information",
+                             "msg": "registry swapped", "category": "Platform.Registry.Swap", "route": "asset",
+                             "status": 200})],
+        [stream, "{not json"],
+        [stream, "[1, 2]"],
+    ]
+    return world
+
+
+class LogsRequestsSummarisesTheGatewayRequests(cell.CompanionTestCase):
+
+    def read(self, world: dict, *args: str):
+        case = cell.Case(self, outputs=True, world=world)
+        result = case.run(SCRIPT, "--requests", *args)
+        self.assertEqual(0, result.status, result.output)
+        self.assertNoUnexpectedCall(case)
+        for app, client in client_ids(world).items():
+            self.assertNotIn(client, result.output, f"{app}'s client id was printed")
+        self.assertNotIn(cell.ACCOUNT, result.output)
+        tails = case.aws("logs tail")
+        self.assertEqual(1, len(tails))
+        # note() writes the read's first line to standard output; every other line is a request's.
+        lines = [line for line in result.stdout.splitlines() if not line.startswith("logs: ")]
+        return lines, tails[0]
+
+    def test_one_line_per_request_record_and_nothing_for_any_other_line(self):
+        lines, _ = self.read(requests_world())
+        self.assertEqual([
+            "2026-11-04T21:13:00.1234567+00:00 01234567 app1 asset - 200",
+            "2026-11-04T21:13:01.1234567+00:00 01234567 app2 api auth.session 401",
+            "2026-11-04T21:13:02.1234567+00:00 01234567 app1 bff - 302",
+            "2026-11-04T21:13:04.1234567+00:00 01234567 - asset gate.host 404",
+        ], lines)
+
+    def test_it_reads_the_gateway_streams_and_passes_since_and_follow_on(self):
+        _, call = self.read(requests_world())
+        self.assertEqual(f"{cell.GATEWAY}/", call["options"]["log-stream-name-prefix"])
+        self.assertEqual("10m", call["options"]["since"])
+        self.assertNotIn("follow", call["options"])
+        _, call = self.read(requests_world(), "--since", "2h", "--follow")
+        self.assertEqual("2h", call["options"]["since"])
+        self.assertIs(True, call["options"]["follow"])
+        _, call = self.read(requests_world(), "--container", cell.GATEWAY)
+        self.assertEqual(f"{cell.GATEWAY}/", call["options"]["log-stream-name-prefix"])
+
+    def test_a_request_line_passes_through_the_redaction(self):
+        # A request line names no client id or account; one whose app or rule held one would still
+        # be printed without it, because the summary passes through the same redaction as plain mode.
+        world = requests_world()
+        world["roots"]["apps"]["clients"]["app1"]["clientId"] = "Qz7vQclient"
+        stream = f"{cell.GATEWAY}/{cell.GATEWAY}/{world['tasks'][0]['id']}"
+        world["log_events"] = [[stream, request("api", 403, "Qz7vQclient", f"rule-{cell.ACCOUNT}")]]
+        lines, _ = self.read(world)
+        self.assertEqual(["2026-11-04T21:13:03.1234567+00:00 01234567 <client-id:app1> api rule-<account> 403"], lines)
+
+
 class LogsRefuses(cell.CompanionTestCase):
 
     def refused(self, fragment: str, *args: str, status: int = 2, world: dict | None = None, outputs: bool = True):
@@ -147,6 +249,10 @@ class LogsRefuses(cell.CompanionTestCase):
 
     def test_a_container_the_task_does_not_run(self):
         case, _ = self.refused("--container must be", "--container", "sidecar")
+        self.assertEqual([], case.calls("aws"))
+
+    def test_requests_from_the_mock_api(self):
+        case, _ = self.refused("--requests reads the", "--requests", "--container", cell.MOCK_API)
         self.assertEqual([], case.calls("aws"))
 
     def test_a_window_the_cli_does_not_take(self):

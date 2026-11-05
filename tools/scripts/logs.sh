@@ -12,6 +12,14 @@
 #   tools/scripts/logs.sh --since 2h               # the last two hours
 #   tools/scripts/logs.sh --container mock-api     # one container's streams
 #   tools/scripts/logs.sh --since 5m --follow      # and keep reading until Control-C
+#   tools/scripts/logs.sh --requests --since 1h    # one line per gateway request
+#
+# --requests prints each gateway request as one line: its time, the task id's first eight
+# characters, the app, the route, the rule and the status, with - for an app or rule the request
+# had none of. It reads the gateway's streams only, drops the health checks (/healthz and /readyz,
+# the route `health` in contracts/telemetry.md) and prints nothing for any other line. The sitting
+# of #348 wrote that summary by hand over 259 lines, twice (#1014). The summary passes through the
+# same redaction as every other line.
 #
 # The group is the outputs document's logGroup, which seed.sh, deploy.sh and rollback.sh write after
 # every apply (contracts/infra-outputs.schema.json), and never Terraform state. One group holds both
@@ -40,6 +48,7 @@ PROGRAM="logs"
 SINCE="10m"
 CONTAINER=""
 FOLLOW=""
+REQUESTS=""
 
 usage() {
   # The header above, up to the Owner line, is this script's manual.
@@ -51,6 +60,7 @@ Options
                       timestamp (2026-10-21T02:00:00Z). The default is ${SINCE}.
   --container NAME    Only ${GATEWAY_CONTAINER} or only ${MOCK_API_CONTAINER}. The default is both.
   --follow            Keep reading new lines until Control-C.
+  --requests          One line per gateway request, health checks left out.
   -h, --help          This text.
 EOF
 }
@@ -68,6 +78,7 @@ while [ "$#" -gt 0 ]; do
       shift
       ;;
     --follow) FOLLOW="--follow" ;;
+    --requests) REQUESTS="yes" ;;
     -h | --help)
       usage
       exit 0
@@ -92,6 +103,12 @@ case "$CONTAINER" in
   "$GATEWAY_CONTAINER" | "$MOCK_API_CONTAINER") STREAM_PREFIX="${CONTAINER}/" ;;
   *) refuse "--container must be ${GATEWAY_CONTAINER} or ${MOCK_API_CONTAINER}: got '${CONTAINER}'" ;;
 esac
+if [ -n "$REQUESTS" ]; then
+  # The requests are the gateway's own lines; the mock API's never are one.
+  [ "$CONTAINER" != "$MOCK_API_CONTAINER" ] ||
+    refuse "--requests reads the ${GATEWAY_CONTAINER} container's requests: drop --container ${MOCK_API_CONTAINER}"
+  STREAM_PREFIX="${GATEWAY_CONTAINER}/"
+fi
 
 trap cell_cleanup EXIT
 trap 'exit 130' INT TERM
@@ -101,7 +118,7 @@ redact_clients
 
 # From the outputs document, never from state (contracts/infra-outputs.schema.json).
 LOG_GROUP="$(outputs_field logGroup)"
-note "reading ${LOG_GROUP} since ${SINCE}${CONTAINER:+, the ${CONTAINER} container}${FOLLOW:+, following}"
+note "reading ${LOG_GROUP} since ${SINCE}${CONTAINER:+, the ${CONTAINER} container}${REQUESTS:+, its requests only}${FOLLOW:+, following}"
 
 # Not through aws_call, which holds the whole answer in a file: a followed read never ends. The
 # detailed format names each line's stream, and so its container; colour off, so no escape sequence
@@ -110,8 +127,14 @@ set -- logs tail "$LOG_GROUP" --since "$SINCE" --format detailed --color off
 if [ -n "$STREAM_PREFIX" ]; then set -- "$@" --log-stream-name-prefix "$STREAM_PREFIX"; fi
 if [ -n "$FOLLOW" ]; then set -- "$@" "$FOLLOW"; fi
 
+# --requests puts the summary between the read and the redaction, so that the summary reads each
+# record as the gateway wrote it and what it prints is redacted as plain mode's lines are.
 status=0
-run_aws "$@" 2> "$ERR" | redact_stream || status=$?
+if [ -n "$REQUESTS" ]; then
+  run_aws "$@" 2> "$ERR" | documents requests | redact_stream || status=$?
+else
+  run_aws "$@" 2> "$ERR" | redact_stream || status=$?
+fi
 if [ "$status" -ne 0 ]; then
   # The code and never the message, which can carry the caller's ARN.
   code="$(error_code)"
