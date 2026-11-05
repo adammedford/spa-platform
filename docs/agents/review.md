@@ -99,7 +99,9 @@ Merge when nothing found is a defect: the spec is met, no assertion is unfailabl
 claims, and the diff stayed in its owner's paths. Record the rest as an `Outstanding:` line in the
 merge body, which `docs/agents/landing-work.md` requires anyway, and end the review comment's
 findings with each carried finding that names no open ticket, in the `## Follow-ups` table the
-review-queue workflow writes. The morning run files each row as an issue of its own while the pull
+review-queue workflow writes, whose `Fails on` cell names the input or state on which the finding
+gives the wrong result; a finding with no such input is a note under its axis, not a row, and files
+nothing. The morning run files each row as an issue of its own while the pull
 request is still open (#292, #514); a row still unfiled when `tools/land.sh` merges is named by its
 `land:` warning (#573), and is filed by hand with the finding as the title and the body
 `node .claude/workflows/follow_up_body.mjs <pr> <record-url> <record.md> <row>` prints, whose

@@ -477,23 +477,28 @@ const createLines = (r) => createsOf(r).map((c) => `create line ${c.line}: #${c.
 // ---------------------------------------------------------------- follow-ups, read here
 // review-queue.js's record recogniser and follow-ups table, by copy: a workflow script imports
 // nothing, and morning_tests.mjs holds each line below equal to its twin there, so a change to the
-// grammar is an edit to both scripts together (and to tools/review_record.py for the record line).
+// grammar is an edit to both scripts together (and to tools/review_record.py for the record line and
+// the table). The table has five columns since #966, its last the Fails on sentence each row's body
+// carries; a record from before it has the four of FOLLOW_UP_HEAD_FOUR, and its rows read with
+// failsOn "".
 const PY_LINE_BREAK = /\r\n|[\n\v\f\r\x1c-\x1e\x85\u2028\u2029]/
 const PY_SPACE = '[\\t\\n\\v\\f\\r\\x1c-\\x1f \\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]'
 const PY_STRIP = new RegExp(`^${PY_SPACE}+|${PY_SPACE}+$`, 'g')
 const RECORD = /^Reviewed ([0-9a-f]{40}) against ([0-9a-f]{40}): (merge|hold)$/
 const REPOSITORY_ACCOUNTS = ['OWNER', 'MEMBER', 'COLLABORATOR']
-const FOLLOW_UP_HEAD = '| Finding | Axis | Where | First carried by |'
+const FOLLOW_UP_HEAD = '| Finding | Axis | Where | First carried by | Fails on |'
+const FOLLOW_UP_HEAD_FOUR = '| Finding | Axis | Where | First carried by |'
 const THIS_RECORD = 'this record'
 const followUpsOf = (body, url = '') => {
   const lines = String(body || '').split(PY_LINE_BREAK).map((l) => l.trim())
-  const at = lines.indexOf(FOLLOW_UP_HEAD)
+  const at = lines.findIndex((l) => l === FOLLOW_UP_HEAD || l === FOLLOW_UP_HEAD_FOUR)
   if (at < 0) return []
+  const width = lines[at] === FOLLOW_UP_HEAD ? 5 : 4
   const rows = []
   for (const line of lines.slice(at + 2)) {
     if (!line.startsWith('|') || !line.endsWith('|')) break
     const cells = line.slice(1, -1).split(/(?<!\\)\|/).map((c) => c.trim().replace(/\\\|/g, '|'))
-    if (cells.length === 4 && cells[0]) rows.push({ title: cells[0], axis: cells[1], where: cells[2], firstCarried: cells[3] === THIS_RECORD ? url : cells[3] })
+    if (cells.length === width && cells[0]) rows.push({ title: cells[0], axis: cells[1], where: cells[2], firstCarried: cells[3] === THIS_RECORD ? url : cells[3], failsOn: width === 5 ? cells[4] : '' })
   }
   return rows
 }
@@ -605,6 +610,8 @@ const followUpBody = (pr, record, f, place) => [
   '',
   `The review of #${pr} carried this finding rather than holding on it (${f.axis || 'no'} axis), first carried by ${f.firstCarried || record}: ${f.title}, at ${f.where || 'no place named'}. The record lists it under "## Follow-ups", which names no open ticket for it; this issue is that ticket.`,
   '',
+  // The input or state on which it gives the wrong result (#966); a four-column row names none.
+  ...(f.failsOn ? [`Fails on: ${f.failsOn}`, ''] : []),
   '## Acceptance criteria',
   '',
   `- [ ] ${f.title}: fixed, or declined with the reason in this issue's Answer.`,
@@ -1550,7 +1557,7 @@ ${rewriteRecord(date, issue, p.mdir)}`
 const JQ_LINES = '"\\r\\n|[\\n\\u000b\\f\\r\\u001c-\\u001e\\u0085\\u2028\\u2029]"'
 // A comment's or a review's index entry (#514), as INDEXED: the lines that look like a record line, a
 // pattern looser than RECORD, which the script applies, so the cut drops no record.
-const JQ_INDEX = (at, state) => `[.[][] | (.body // "") as $b | {url: .html_url, at: (.${at} // ""), association: .author_association, state: ${state}, bytes: ($b | utf8bytelength), hasTable: ($b | contains("${FOLLOW_UP_HEAD}")), lines: [$b | splits(${JQ_LINES}) | select(test("Reviewed [0-9a-f]{40} against [0-9a-f]{40}: (merge|hold)"))]} | select(.lines | length > 0)]`
+const JQ_INDEX = (at, state) => `[.[][] | (.body // "") as $b | {url: .html_url, at: (.${at} // ""), association: .author_association, state: ${state}, bytes: ($b | utf8bytelength), hasTable: ($b | contains("${FOLLOW_UP_HEAD_FOUR}")), lines: [$b | splits(${JQ_LINES}) | select(test("Reviewed [0-9a-f]{40} against [0-9a-f]{40}: (merge|hold)"))]} | select(.lines | length > 0)]`
 
 const windowPrompt = (date) => {
   const p = paths(date)

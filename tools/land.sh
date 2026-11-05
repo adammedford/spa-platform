@@ -41,7 +41,8 @@
 # When the comment holding the clearing record ends its findings with a `## Follow-ups` table that
 # has a row, the review carried a finding rather than holding on it, and docs/agents/review.md ->
 # "Landing or holding" has the merge body record it as an `Outstanding:` line. So the reader is run
-# with --follow-ups, which prints each row's Finding after the URL, and a merge body with no line
+# with --follow-ups, which prints each row's Finding after the URL (and its Fails on after a tab,
+# which is cut off here; #966), and a merge body with no line
 # beginning `Outstanding:` is then refused before the merge, naming the rows (#521). A record with
 # no such row is not checked, and nor is an --unreviewed landing, which reads no record.
 # Each such row also names, before the merge, whether an issue has filed it (#573): the morning
@@ -344,10 +345,10 @@ else
   # The reader's --pr form lists the pull request's comments and reviews itself, every page of each
   # (#488), and judges the head passed with --head: the one this script pinned above, not whatever
   # a second read would report. It prints the clearing record's URL on its first line and, with
-  # --follow-ups, the Finding of each row of that record's `## Follow-ups` table on the lines after
-  # it (#521); or it says on standard error, above the line below, why nothing clears the head
-  # (status 1) or why it could not read the records (status 2: a gh call failed, or what came back
-  # was not GitHub's shape).
+  # --follow-ups, one line for each row of that record's `## Follow-ups` table on the lines after it
+  # (#521), the row's Finding, a tab and its Fails on (#966); or it says on standard error, above the
+  # line below, why nothing clears the head (status 1) or why it could not read the records (status
+  # 2: a gh call failed, or what came back was not GitHub's shape).
   echo "--- reading the review records of #$pr at $head"
   status=0
   read_out="$(python3 -I "$here/review_record.py" --pr "$pr" --head "$head" --follow-ups)" || status=$?
@@ -359,6 +360,16 @@ else
   record="${read_out%%"$newline"*}"
   follow_ups=""
   [ "$read_out" = "$record" ] || follow_ups="${read_out#*"$newline"}"
+  # A row is named below by its Finding, the title the morning files it under, so each line is cut
+  # at its first tab, which the reader prints only as that separator (#966).
+  if [ -n "$follow_ups" ]; then
+    findings=""
+    tab="$(printf '\t')"
+    while IFS= read -r line; do
+      findings="$findings${line%%"$tab"*}$newline"
+    done <<< "$follow_ups"
+    follow_ups="${findings%"$newline"}"
+  fi
   trailer="Reviewed: $head $record"
 fi
 

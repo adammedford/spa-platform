@@ -1626,15 +1626,16 @@ try {
     const R2 = 'https://github.com/adammedford/spa-platform/pull/287#issuecomment-6342205384'
     const rec = (url, head, at, extra = '') => ({ author_association: 'OWNER', created_at: at, html_url: url, body: `## Review\n\n${extra}Reviewed ${head} against ${F287}: hold` })
     const CARRIED = [
-      { axis: 'Spec', title: 'deploy.sh builds the gateway image without --pull', where: 'tools/scripts/deploy.sh', ticket: '#288', firstCarried: R1 },
-      { axis: 'Standards', title: 'logs_tests.py and cell_doubles_tests.py run in no CI job', where: '.github/workflows/ci.yml lines 321-326 | tools/scripts', ticket: '', firstCarried: R1 },
-      { axis: 'Spec', title: 'The provisional #244 Q9 answer disagrees with end-app-sessions.md', where: '#244 Q9; docs/runbooks/end-app-sessions.md', ticket: '', firstCarried: R2 },
+      { axis: 'Spec', title: 'deploy.sh builds the gateway image without --pull', where: 'tools/scripts/deploy.sh', failsOn: 'A base image retagged upstream is built from the stale local copy.', ticket: '#288', firstCarried: R1 },
+      { axis: 'Standards', title: 'logs_tests.py and cell_doubles_tests.py run in no CI job', where: '.github/workflows/ci.yml lines 321-326 | tools/scripts', failsOn: 'A change that breaks logs.py | cell_doubles.py merges with CI green.', ticket: '', firstCarried: R1 },
+      { axis: 'Spec', title: 'The provisional #244 Q9 answer disagrees with end-app-sessions.md', where: '#244 Q9; docs/runbooks/end-app-sessions.md', failsOn: 'An operator ending sessions by the runbook leaves the refresh token live.', ticket: '', firstCarried: R2 },
     ]
     const served = (comments) => ({ 287: pr(287, ['.github/workflows/ci.yml'], { head: H287, forkPoint: F287, commits: [H287], comments }) })
     const tableOf = (body) => {
       const lines = body.split('\n')
-      const at = lines.indexOf('| Finding | Axis | Where | First carried by |')
+      const at = lines.indexOf('| Finding | Axis | Where | First carried by | Fails on |')
       if (at < 0) return null
+      if (lines[at + 1] !== '| --- | --- | --- | --- | --- |') return null
       const rows = []
       for (const l of lines.slice(at + 2)) {
         if (!l.startsWith('|')) break
@@ -1647,19 +1648,19 @@ try {
     result = await execute(env)
     const r = resultOf(287, result)
     const want = [
-      { axis: 'Standards', title: CARRIED[1].title, where: CARRIED[1].where, firstCarried: R1 },
-      { axis: 'Spec', title: CARRIED[2].title, where: CARRIED[2].where, firstCarried: R2 },
+      { axis: 'Standards', title: CARRIED[1].title, where: CARRIED[1].where, firstCarried: R1, failsOn: CARRIED[1].failsOn },
+      { axis: 'Spec', title: CARRIED[2].title, where: CARRIED[2].where, firstCarried: R2, failsOn: CARRIED[2].failsOn },
     ]
     if (JSON.stringify(r.followUps) !== JSON.stringify(want)) fail(`PR 287: followUps ${JSON.stringify(r.followUps)}, expected the two carried findings that name no open ticket, ${JSON.stringify(want)}`)
     const body = commentOf(env, 287)
     const lines = body.split('\n')
     const t = tableOf(body)
-    if (!t) fail('PR 287: the comment carries no follow-ups table')
+    if (!t) fail('PR 287: the comment carries no follow-ups table under the five-column header `| Finding | Axis | Where | First carried by | Fails on |` and its five-cell separator (#966)')
     else {
       const head = lines.indexOf('## Follow-ups')
       if (!(lines.indexOf('## Spec') < head && head < t.at && t.at < lines.indexOf('## Mutations'))) fail('PR 287: the follow-ups table does not end the findings: it must sit under "## Follow-ups", after "## Spec" and before "## Mutations"')
       const rows = JSON.stringify(t.rows)
-      const wantRows = JSON.stringify(want.map((f) => [f.title, f.axis, f.where, f.firstCarried]))
+      const wantRows = JSON.stringify(want.map((f) => [f.title, f.axis, f.where, f.firstCarried, f.failsOn]))
       if (rows !== wantRows) fail(`PR 287: the follow-ups table reads back as ${rows}, expected ${wantRows}`)
     }
     if (lines[lines.length - 1] !== `Reviewed ${H287} against ${F287}: merge`) fail(`PR 287: the comment's last line is ${JSON.stringify(lines[lines.length - 1])}, not the record`)
@@ -1688,6 +1689,35 @@ try {
     const kept = (resultOf(287, result).followUps || []).map((f) => f.title)
     if (JSON.stringify(kept) !== JSON.stringify([CARRIED[1].title, CARRIED[2].title])) fail(`PR 287 with tickets "none" and "-": followUps ${JSON.stringify(kept)}, expected both findings kept and the one #288 owns dropped`)
     if (!/followUps/.test(env.prompts['verdict:287'] || '') || !/no open ticket/.test(env.prompts['verdict:287'] || '')) fail('PR 287: the verdict prompt does not ask for followUps naming no open ticket')
+
+    // Fails on (#966): the verdict prompt asks for the one sentence naming the input or state on
+    // which the finding gives the wrong result, and for the note rule: a carried finding with none is
+    // a note under the axis that found it, not a row, and files nothing. A followUp the verdict
+    // returns with an empty failsOn is written so, whatever the prompt said: it is no row of the
+    // table and no followUp of the result, and it is not lost, since its axis's section names it.
+    const vp = env.prompts['verdict:287'] || ''
+    if (!/failsOn is the input or state on which the finding gives the wrong result, in one sentence/.test(vp)) fail('PR 287: the verdict prompt does not ask for each followUp\'s failsOn, the input or state on which it gives the wrong result, in one sentence (#966)')
+    if (!/cannot name one is not a follow-up: write it in findings under the axis that found it, as a note, and leave it out of followUps; it files nothing/.test(vp)) fail('PR 287: the verdict prompt does not state the note rule for a carried finding with no input it fails on (#966)')
+    if (!vp.includes('"## Follow-ups" table (five columns: Finding, Axis, Where, First carried by, Fails on)')) fail('PR 287: the verdict prompt does not name the five-column follow-ups table (#966)')
+    const NOTE = { axis: 'Standards', title: 'The helper reads as a second copy of the parser', where: 'tools/x.py:9', failsOn: ' ', ticket: '', firstCarried: '' }
+    env = run({ prs: [287] }, served(EARLIER), { followUps: { 287: [CARRIED[1], NOTE, { ...CARRIED[2], failsOn: '' }] } })
+    result = await execute(env)
+    const noted = resultOf(287, result).followUps || []
+    if (JSON.stringify(noted.map((f) => f.title)) !== JSON.stringify([CARRIED[1].title])) fail(`PR 287 with two carried findings naming no input they fail on: followUps ${JSON.stringify(noted.map((f) => f.title))}, expected only the one with a Fails on (#966)`)
+    const nb = commentOf(env, 287)
+    const nlines = nb.split('\n')
+    const nt = tableOf(nb)
+    if (!nt || nt.rows.length !== 1 || nt.rows[0][0] !== CARRIED[1].title) fail(`PR 287 with notes: the table rows are ${JSON.stringify(nt && nt.rows)}, expected the one row with a Fails on`)
+    const section = (name) => nlines.slice(nlines.indexOf(name), nlines.indexOf(name === '## Standards' ? '## Spec' : "The author's claims:"))
+    const noteLine = (f) => `- Note: **${f.title}** at ${f.where}. It names no input or state on which it gives the wrong result, so it is no follow-up row and files nothing (#966).`
+    if (!section('## Standards').includes(noteLine(NOTE))) fail(`PR 287 with notes: the Standards section does not carry ${JSON.stringify(noteLine(NOTE))}:\n${section('## Standards').join('\n')}`)
+    if (!section('## Spec').includes(noteLine(CARRIED[2]))) fail(`PR 287 with notes: the Spec section does not carry ${JSON.stringify(noteLine(CARRIED[2]))}:\n${section('## Spec').join('\n')}`)
+    if (section('## Standards').includes('- None.')) fail('PR 287 with notes: the Standards section says "- None." above the note it carries')
+    if (nlines.some((l) => l.startsWith('- Note:') && l.includes(CARRIED[1].title))) fail('PR 287 with notes: the finding with a Fails on is written as a note as well as a row')
+    // An owned finding with no Fails on is neither row nor note: its ticket owns it.
+    env = run({ prs: [287] }, served(EARLIER), { followUps: { 287: [{ ...CARRIED[0], failsOn: '' }] } })
+    result = await execute(env)
+    if (commentOf(env, 287).split('\n').some((l) => l.startsWith('- Note:'))) fail('PR 287: a carried finding #288 owns, with no Fails on, is written as a note; its ticket owns it')
   }
   // A description whose stated head is not the head (#294): #287's description still named ed8d063
   // after a rebuild. The inventory reports each sha the description states as the head; the script
@@ -2080,7 +2110,7 @@ try {
   const HUMAN796 = { author_association: 'OWNER', created_at: '2026-11-04T09:00:00Z', html_url: U796('h'), body: 'Rebased onto main; please review again.' }
   const APPROVAL796 = { state: 'APPROVED', author_association: 'OWNER', submitted_at: '2026-11-04T09:30:00Z', html_url: 'https://github.com/adammedford/spa-platform/pull/796#pullrequestreview-1', body: `Reviewed ${OLD796[0]} against ${F796}: merge` }
   const SERVED796 = { 796: pr(796, ['.claude/workflows/review-queue.js'], { head: H796, forkPoint: F796, commits: [H796], comments: [HUMAN796, ...RECORDS796], reviews: [APPROVAL796] }) }
-  const CARRIED796 = RECORDS796.flatMap((_, i) => ['a', 'b'].map((x) => ({ axis: x === 'a' ? 'Standards' : 'Spec', title: `Follow-up ${i}${x} carried by record ${i}`, where: x === 'a' ? `src/a${i}.cs` : `docs/b${i}.md`, ticket: '', firstCarried: '' })))
+  const CARRIED796 = RECORDS796.flatMap((_, i) => ['a', 'b'].map((x) => ({ axis: x === 'a' ? 'Standards' : 'Spec', title: `Follow-up ${i}${x} carried by record ${i}`, where: x === 'a' ? `src/a${i}.cs` : `docs/b${i}.md`, failsOn: `Input ${i}${x} gives the wrong result.`, ticket: '', firstCarried: '' })))
   const HELD796 = RECORDS796.flatMap((_, i) => [`Held${i}a`, `Held${i}b`])
   checks++
   {
@@ -2093,7 +2123,7 @@ try {
     const bodies = env.calls.filter((c) => /^inventory:796:body:/.test(c))
     if (bodies.length !== 6) fail(`#796's shape: ${bodies.length} body agent(s) ran (${bodies.join(', ')}), expected one per record comment, 6, and none for the human's comment or the approval`)
     if (JSON.stringify(r.earlierRecords) !== JSON.stringify(RECORDS796.map((x) => x.html_url))) fail(`#796's shape: recordsOf read ${JSON.stringify(r.earlierRecords)}, expected the six records ${JSON.stringify(RECORDS796.map((x) => x.html_url))}`)
-    const want = CARRIED796.map((f, k) => ({ axis: f.axis, title: f.title, where: f.where, firstCarried: RECORDS796[Math.floor(k / 2)].html_url }))
+    const want = CARRIED796.map((f, k) => ({ axis: f.axis, title: f.title, where: f.where, firstCarried: RECORDS796[Math.floor(k / 2)].html_url, failsOn: f.failsOn }))
     if (JSON.stringify(r.followUps) !== JSON.stringify(want)) fail(`#796's shape: followUpsOf gave ${JSON.stringify(r.followUps.map((f) => f.firstCarried))}, expected each of the twelve rows first carried by its own record`)
     const mutated = env.mutations.filter((m) => m.n === 796).map((m) => m.test)
     const missing = HELD796.filter((t) => !mutated.includes(t))
@@ -2158,7 +2188,7 @@ try {
       const r = resultOf(796, result)
       if (r.outcome !== 'recorded') fail(`a body returned ${what}: outcome ${r.outcome} at ${JSON.stringify(r.stage)}, expected recorded`)
       if ((r.earlierRecords || []).length !== RECORDS796.length) fail(`a body returned ${what}: ${(r.earlierRecords || []).length} earlier record(s) read, expected ${RECORDS796.length}`)
-      const want = CARRIED796.map((f, k) => ({ axis: f.axis, title: f.title, where: f.where, firstCarried: RECORDS796[Math.floor(k / 2)].html_url }))
+      const want = CARRIED796.map((f, k) => ({ axis: f.axis, title: f.title, where: f.where, firstCarried: RECORDS796[Math.floor(k / 2)].html_url, failsOn: f.failsOn }))
       if (JSON.stringify(r.followUps) !== JSON.stringify(want)) fail(`a body returned ${what}: followUpsOf gave ${(r.followUps || []).length} row(s), expected the twelve each record carries`)
       const mutated = env.mutations.filter((m) => m.n === 796).map((m) => m.test)
       const missing = HELD796.filter((t) => !mutated.includes(t))

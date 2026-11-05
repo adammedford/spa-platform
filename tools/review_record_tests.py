@@ -495,46 +495,83 @@ class PullRequestFormInputTests(ReaderTestCase):
 
 
 # A review comment carrying a record and a `## Follow-ups` table, in the shape review-queue.js
-# writes (its followUpLines and cell): each Finding cell with `|` escaped as `\|`.
-FOLLOW_UP_HEAD = "| Finding | Axis | Where | First carried by |"
+# writes (its followUpLines and cell): each cell with `|` escaped as `\|`. The five-column header is
+# the one written since #966; the four-column one is every earlier night's, which still reads.
+FOLLOW_UP_HEAD = "| Finding | Axis | Where | First carried by | Fails on |"
+FOLLOW_UP_HEAD_FOUR = "| Finding | Axis | Where | First carried by |"
 
 
-def with_follow_ups(line: str, *findings: str) -> str:
-    rows = [f"| {finding} | Standards | tools/x.py:1 | this record |" for finding in findings]
+def with_follow_ups(line: str, *rows: tuple[str, str]) -> str:
+    """A record whose table has a row per (Finding, Fails on) pair, in five columns."""
+    cells = [f"| {finding} | Standards | tools/x.py:1 | this record | {fails_on} |"
+             for finding, fails_on in rows]
     return "\n".join(["## Review", "", line, "", "## Follow-ups", "", FOLLOW_UP_HEAD,
-                      "| --- | --- | --- | --- |", *rows, "", "## Outstanding", "", "- none"])
+                      "| --- | --- | --- | --- | --- |", *cells, "", "## Outstanding", "", "- none"])
+
+
+def with_four_column_follow_ups(line: str, *findings: str) -> str:
+    """A record from before #966: four columns, no Fails on."""
+    cells = [f"| {finding} | Standards | tools/x.py:1 | this record |" for finding in findings]
+    return "\n".join(["## Review", "", line, "", "## Follow-ups", "", FOLLOW_UP_HEAD_FOUR,
+                      "| --- | --- | --- | --- |", *cells, "", "## Outstanding", "", "- none"])
+
+
+CANNOT_FAIL = ("A test that cannot fail", "Deleting the guard leaves the test green.")
+UNREAD_FLAG = ("An unread flag", "Passing --strict changes nothing.")
 
 
 class FollowUpsTests(ReaderTestCase):
     """With `--follow-ups` last, the reader prints, after the URL, one line per row of the clearing
-    record's `## Follow-ups` table: its Finding cell, read as morning.js's followUpsOf reads it, so
-    land.sh can refuse a merge body with no `Outstanding:` line that carries them (#521). Without the
-    flag nothing changes, so what docs/agents/landing-work.md says the reader prints stays true."""
+    record's `## Follow-ups` table: its Finding cell, a tab, and its Fails on cell (#966), read as
+    morning.js's followUpsOf reads them, so land.sh can refuse a merge body with no `Outstanding:`
+    line that carries them (#521) and match each Finding against the issues filed. A four-column
+    record, from before #966, prints its rows with an empty Fails on. Without the flag nothing
+    changes, so what docs/agents/landing-work.md says the reader prints stays true."""
 
-    def test_the_header_is_the_one_review_queue_writes_and_morning_reads(self):
-        # The cases below prove the reader reads a table under FOLLOW_UP_HEAD; this one reads that
-        # header back from the script that writes the table and the one that files its rows. Were
+    def test_the_headers_are_the_ones_review_queue_writes_and_morning_reads(self):
+        # The cases below prove the reader reads a table under either header; this one reads those
+        # headers back from the script that writes the table and the one that files its rows. Were
         # either renamed, the reader would find no table, land.sh's check would pass on every
         # record, and every other case here would still be green: a guard reads the thing it
         # guards (CODING_STANDARDS.md), and a check that reads nothing must not read as a pass.
         for script in ("review-queue.js", "morning.js"):
-            with self.subTest(script=script):
-                source = (ROOT / ".claude" / "workflows" / script).read_text(encoding="utf-8")
-                found = re.search(r"^const FOLLOW_UP_HEAD = '([^']*)'$", source, re.MULTILINE)
-                self.assertIsNotNone(found, f"{script} no longer defines FOLLOW_UP_HEAD on one line")
-                self.assertEqual(FOLLOW_UP_HEAD, found.group(1))
+            for name, head in (("FOLLOW_UP_HEAD", FOLLOW_UP_HEAD),
+                               ("FOLLOW_UP_HEAD_FOUR", FOLLOW_UP_HEAD_FOUR)):
+                with self.subTest(script=script, name=name):
+                    source = (ROOT / ".claude" / "workflows" / script).read_text(encoding="utf-8")
+                    found = re.search(rf"^const {name} = '([^']*)'$", source, re.MULTILINE)
+                    self.assertIsNotNone(found, f"{script} no longer defines {name} on one line")
+                    self.assertEqual(head, found.group(1))
 
-    def test_each_row_follows_the_url(self):
-        body = with_follow_ups(record(HEAD, "merge"), "A test that cannot fail", "An unread flag")
+    def test_each_row_follows_the_url_with_its_fails_on_after_its_finding(self):
+        body = with_follow_ups(record(HEAD, "merge"), CANNOT_FAIL, UNREAD_FLAG)
         outcome = read(HEAD, "--follow-ups", comments=[comment(11, body, "2026-10-18T01:00:00Z")])
         self.assertEqual(0, outcome.status, outcome.stderr)
-        self.assertEqual(f"{PULL}#issuecomment-11\nA test that cannot fail\nAn unread flag\n",
+        self.assertEqual(f"{PULL}#issuecomment-11\n"
+                         "A test that cannot fail\tDeleting the guard leaves the test green.\n"
+                         "An unread flag\tPassing --strict changes nothing.\n", outcome.stdout)
+
+    def test_a_four_column_record_prints_an_empty_fails_on(self):
+        body = with_four_column_follow_ups(record(HEAD, "merge"), "A test that cannot fail",
+                                           "An unread flag")
+        outcome = read(HEAD, "--follow-ups", comments=[comment(11, body, "2026-10-18T01:00:00Z")])
+        self.assertEqual(0, outcome.status, outcome.stderr)
+        self.assertEqual(f"{PULL}#issuecomment-11\nA test that cannot fail\t\nAn unread flag\t\n",
                          outcome.stdout)
 
+    def test_a_tab_inside_a_cell_prints_as_a_space(self):
+        # The tab is the one separator a caller cuts at (land.sh cuts at the first), so none may
+        # come from inside a cell; a space reads the same in the rendered table.
+        body = with_follow_ups(record(HEAD, "merge"), ("A tab\there", "On\tthis input."))
+        outcome = read(HEAD, "--follow-ups", comments=[comment(11, body, "2026-10-18T01:00:00Z")])
+        self.assertEqual(f"{PULL}#issuecomment-11\nA tab here\tOn this input.\n", outcome.stdout)
+
     def test_without_the_flag_the_url_stands_alone(self):
-        body = with_follow_ups(record(HEAD, "merge"), "A test that cannot fail")
-        outcome = read(comments=[comment(11, body, "2026-10-18T01:00:00Z")])
-        self.assertCleared(outcome, f"{PULL}#issuecomment-11")
+        for body in (with_follow_ups(record(HEAD, "merge"), CANNOT_FAIL),
+                     with_four_column_follow_ups(record(HEAD, "merge"), "A test that cannot fail")):
+            with self.subTest(body=body):
+                outcome = read(comments=[comment(11, body, "2026-10-18T01:00:00Z")])
+                self.assertCleared(outcome, f"{PULL}#issuecomment-11")
 
     def test_a_record_with_no_table_prints_the_url_alone(self):
         outcome = read(HEAD, "--follow-ups",
@@ -542,47 +579,64 @@ class FollowUpsTests(ReaderTestCase):
         self.assertCleared(outcome, f"{PULL}#issuecomment-11")
 
     def test_a_table_with_no_row_prints_the_url_alone(self):
-        outcome = read(HEAD, "--follow-ups", comments=[comment(11, with_follow_ups(record(HEAD, "merge")),
-                                                               "2026-10-18T01:00:00Z")])
-        self.assertCleared(outcome, f"{PULL}#issuecomment-11")
+        for body in (with_follow_ups(record(HEAD, "merge")),
+                     with_four_column_follow_ups(record(HEAD, "merge"))):
+            with self.subTest(body=body):
+                outcome = read(HEAD, "--follow-ups",
+                               comments=[comment(11, body, "2026-10-18T01:00:00Z")])
+                self.assertCleared(outcome, f"{PULL}#issuecomment-11")
 
-    def test_an_escaped_pipe_in_a_finding_is_read_back_as_a_pipe(self):
-        body = with_follow_ups(record(HEAD, "merge"), "`a \\| b` is split wrong")
+    def test_an_escaped_pipe_in_a_cell_is_read_back_as_a_pipe(self):
+        body = with_follow_ups(record(HEAD, "merge"), ("`a \\| b` is split wrong", "On `x \\| y`."))
         outcome = read(HEAD, "--follow-ups", comments=[comment(11, body, "2026-10-18T01:00:00Z")])
-        self.assertEqual(f"{PULL}#issuecomment-11\n`a | b` is split wrong\n", outcome.stdout)
+        self.assertEqual(f"{PULL}#issuecomment-11\n`a | b` is split wrong\tOn `x | y`.\n", outcome.stdout)
 
     def test_the_table_ends_at_the_first_line_that_is_not_a_row(self):
-        # A row with the wrong number of cells, or an empty Finding, is not a follow-up; the table
-        # ends at the first line not bracketed by pipes, as morning.js reads it.
-        body = "\n".join([record(HEAD, "merge"), "", FOLLOW_UP_HEAD, "| --- | --- | --- | --- |",
-                          "| First | Spec | here | this record |", "|  | Spec | here | this record |",
-                          "| Three | cells | only |", "", "| After the table | Spec | here | x |"])
+        # A row with the wrong number of cells for its header, or an empty Finding, is not a
+        # follow-up; the table ends at the first line not bracketed by pipes, as morning.js reads it.
+        body = "\n".join([record(HEAD, "merge"), "", FOLLOW_UP_HEAD, "| --- | --- | --- | --- | --- |",
+                          "| First | Spec | here | this record | On empty input. |",
+                          "|  | Spec | here | this record | On x. |",
+                          "| Four | cells | in a | five-column table |",
+                          "| Six | cells | in a | five | column | table |",
+                          "", "| After the table | Spec | here | x | y |"])
         outcome = read(HEAD, "--follow-ups", comments=[comment(11, body, "2026-10-18T01:00:00Z")])
-        self.assertEqual(f"{PULL}#issuecomment-11\nFirst\n", outcome.stdout)
+        self.assertEqual(f"{PULL}#issuecomment-11\nFirst\tOn empty input.\n", outcome.stdout)
+
+    def test_a_four_column_table_reads_four_cells_only(self):
+        body = "\n".join([record(HEAD, "merge"), "", FOLLOW_UP_HEAD_FOUR, "| --- | --- | --- | --- |",
+                          "| First | Spec | here | this record |", "|  | Spec | here | this record |",
+                          "| Three | cells | only |", "| Five | cells | in a | four-column | table |",
+                          "", "| After the table | Spec | here | x |"])
+        outcome = read(HEAD, "--follow-ups", comments=[comment(11, body, "2026-10-18T01:00:00Z")])
+        self.assertEqual(f"{PULL}#issuecomment-11\nFirst\t\n", outcome.stdout)
 
     def test_only_the_clearing_record_s_table_is_read(self):
-        held = with_follow_ups(record(HEAD, "hold"), "Carried by the hold")
+        held = with_follow_ups(record(HEAD, "hold"), ("Carried by the hold", "On x."))
         outcome = read(HEAD, "--follow-ups",
                        comments=[comment(11, held, "2026-10-18T01:00:00Z"),
                                  comment(12, record(HEAD, "merge"), "2026-10-18T02:00:00Z")])
         self.assertCleared(outcome, f"{PULL}#issuecomment-12")
 
     def test_a_refusal_prints_no_rows(self):
-        body = with_follow_ups(record(HEAD, "hold"), "A finding")
+        body = with_follow_ups(record(HEAD, "hold"), ("A finding", "On x."))
         outcome = read(HEAD, "--follow-ups", comments=[comment(11, body, "2026-10-18T01:00:00Z")])
         self.assertRefused(outcome, "says hold")
 
     def test_the_two_forms_agree_with_the_flag(self):
-        body = with_follow_ups(record(HEAD, "merge"), "A test that cannot fail")
-        pages = {"comments": [[comment(11, body, "2026-10-18T01:00:00Z")]], "reviews": [[]]}
-        piped = read(HEAD, "--follow-ups", pages=pages)
-        for arguments in (["--pr", NUMBER, "--follow-ups"],
-                          ["--pr", NUMBER, "--head", HEAD, "--follow-ups"]):
-            with self.subTest(arguments=arguments):
-                asked = ask(*arguments, pages=pages)
-                self.assertEqual((piped.status, piped.stdout, piped.stderr),
-                                 (asked.outcome.status, asked.outcome.stdout, asked.outcome.stderr))
-        self.assertEqual(f"{PULL}#issuecomment-11\nA test that cannot fail\n", piped.stdout)
+        for body, want in ((with_follow_ups(record(HEAD, "merge"), CANNOT_FAIL),
+                            "A test that cannot fail\tDeleting the guard leaves the test green.\n"),
+                           (with_four_column_follow_ups(record(HEAD, "merge"), "A test that cannot fail"),
+                            "A test that cannot fail\t\n")):
+            pages = {"comments": [[comment(11, body, "2026-10-18T01:00:00Z")]], "reviews": [[]]}
+            piped = read(HEAD, "--follow-ups", pages=pages)
+            for arguments in (["--pr", NUMBER, "--follow-ups"],
+                              ["--pr", NUMBER, "--head", HEAD, "--follow-ups"]):
+                with self.subTest(arguments=arguments, want=want):
+                    asked = ask(*arguments, pages=pages)
+                    self.assertEqual((piped.status, piped.stdout, piped.stderr),
+                                     (asked.outcome.status, asked.outcome.stdout, asked.outcome.stderr))
+            self.assertEqual(f"{PULL}#issuecomment-11\n{want}", piped.stdout)
 
 
 class ArgumentTests(ReaderTestCase):
