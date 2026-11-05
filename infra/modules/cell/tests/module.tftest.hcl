@@ -238,11 +238,12 @@ variables {
 # made to say what the new type is for. The platform root's tests hold the rest of P-01 (plan row
 # 1.9): how many of each type the plan holds, and that this module is the root's whole plan.
 #
-# It holds one part of "no NAT gateway, no bastion, no database" (plan row 1.2, test P-01)
-# statically rather than only against a deployed account: no instance, bastion or database type can
-# be declared. The two gated exceptions, the session table and the two-task cell's NAT gateway, are
-# named below with the input that creates each, so this set cannot tell a gated one from an ungated
-# one; the platform root's tripwire holds both to their gates, at no instance on the default inputs.
+# It holds one part of plan row 1.2's "no NAT, bastion or database" and test P-01's "No NAT
+# gateway, database or EC2 instance" statically rather than only against a deployed account: no
+# instance, bastion or database type can be declared. The two gated exceptions, the session table
+# and the two-task cell's NAT gateway, are named below with the input that creates each, so this set
+# cannot tell a gated one from an ungated one; the platform root's tripwire holds both to their
+# gates, at no instance on the default inputs.
 run "the_module_declares_only_the_cell_s_intended_resource_types" {
   command = plan
 
