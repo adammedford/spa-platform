@@ -747,19 +747,6 @@ const sinceHeadsOf = (records, inv) => {
   return [...new Set(heads)]
 }
 
-// The mutation list: when the latest record held, first the tests the records list as did-not-fail
-// and no later record reproduced (#289); then the body's stated mutations, then the Standards axis's
-// nominations, then the candidates whose file or broken source a commit titled `Review: ...` since
-// the fork point touches, then the
-// inventory's remaining candidates; deduplicated by test and cut at the cap. A held row whose Test
-// cell names candidates becomes one held mutation per candidate it names; one naming none is mutated
-// by the cell itself, its project left for the mutation agent to find. kind decides the hold rule a
-// row falls under; a held mutation falls under the stated one. In a delta review a stated mutation or
-// a candidate whose file and broken source the range leaves alone was cleared by the earlier record
-// and is listed as outside the range; a nomination comes from the range's own review and always runs,
-// as does a held test and a stated mutation naming no file the inventory knows. A candidate an
-// earlier record reproduced is cleared by that record, and not mutated, when neither its file nor its
-// broken source changed since that record's head.
 // A test name as a runner prints it, read up to its '(': an xUnit case's arguments follow it.
 // Python unittest prints 'test_x (pkg.Class.test_x)', or 'test_x (pkg.Class)' before 3.11, so a
 // dotted name in the parenthesis after a bare method is the whole name (#695). withClass false
@@ -798,6 +785,19 @@ const nominated = (s, byTest) => {
   const why = test === s.test ? s.why : `${s.why} (nominated as ${s.test})`
   return { ...(byTest.get(test) || byTest.get(bare)), ...s, test, why, kind: 'nominated', cls }
 }
+
+// The mutation list: when the latest record held, first the tests the records list as did-not-fail
+// and no later record reproduced (#289); then the body's stated mutations, then the Standards axis's
+// nominations, then the candidates whose file or broken source a commit titled `Review: ...` since
+// the fork point touches, then the inventory's remaining candidates; deduplicated by test and cut at
+// the cap. A held row whose Test cell names candidates becomes one held mutation per candidate it
+// names; one naming none is mutated by the cell itself, its project left for the mutation agent to
+// find. kind decides the hold rule a row falls under; a held mutation falls under the stated one. In
+// a delta review a stated mutation or a candidate whose file and broken source the range leaves alone
+// was cleared by the earlier record and is listed as outside the range; a nomination comes from the
+// range's own review and always runs, as does a held test and a stated mutation naming no file the
+// inventory knows. A candidate an earlier record reproduced is cleared by that record, and not
+// mutated, when neither its file nor its broken source changed since that record's head.
 const mutationList = (inv, standards, d, prior = { held: null, clearers: [] }) => {
   const candidates = inv.candidates || []
   const byTest = new Map(candidates.map((c) => [c.test, c]))
