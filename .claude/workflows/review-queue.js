@@ -884,13 +884,14 @@ const mutationRow = (n, m, i, got) => {
   // name at a dot. A name shorter than that, a bare method or a class-qualified name under a
   // namespace-qualified cell, could be a same-named method of another class, so it is a catch, which
   // fails closed to the verdict's check (#695). dotted() above reads each name. A test that is its
-  // whole file owns every test in that file: any failing name is its own (#793). That is a candidate
-  // whose project is its file, so its run is that file alone, as a Python companion's is, and whose
-  // test is that path or its basename and nothing else. On #791 no failing name could match the cell,
-  // so the companion red on its own test read as caught elsewhere and held. Anything else stays a
-  // catch, failing closed to the verdict (#794): a test that adds to the name, 'x_tests.py (check:
-  // ...)' scoping one check of it or 'x_tests.py (companion)', and a Terraform test file, whose run
-  // is its whole directory, so a sibling file's red run would read as its own.
+  // whole file owns every test in that file: any failing name is its own (#793). That is a row whose
+  // test is its file's path or basename and nothing else, and whose run is that file alone: one whose
+  // project is its file, as a Python companion's is, or a Node companion, an .mjs file, which runs as
+  // its file whatever project the inventory gives it (#938; nodeFile below). On #791 no failing name
+  // could match the cell, so the companion red on its own test read as caught elsewhere and held.
+  // Anything else stays a catch, failing closed to the verdict (#794): a test that adds to the name,
+  // 'x_tests.py (check: ...)' scoping one check of it or 'x_tests.py (companion)', and a Terraform
+  // test file, whose run is its whole directory, so a sibling file's red run would read as its own.
   const cell = (m.test || '').trim()
   // A Node companion is run as `node <file>`, so its run is its file whatever project the inventory's
   // cell names (#938): on #796 a stated row on overnight_tests.mjs took the directory as its project.
