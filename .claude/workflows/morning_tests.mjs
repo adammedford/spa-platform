@@ -1372,9 +1372,16 @@ try {
       if (!f.body.startsWith('**Raised by:** #287')) fail(`follow-ups: the body of ${JSON.stringify(f.title)} does not open with the Raised-by line: ${JSON.stringify(f.body.split('\n')[0])}`)
       if (!f.body.includes(R287[2])) fail(`follow-ups: the body of ${JSON.stringify(f.title)} does not link the record ${R287[2]}`)
     }
-    if (sent[0] && !sent[0].body.includes(R287[0])) fail('follow-ups: the first row\'s body does not name the earliest record that carried it')
-    if (sent[0] && !sent[0].body.includes('76704c5:.github/workflows/ci.yml lines 321-326 | tools/scripts')) fail('follow-ups: the escaped bar in the Where cell was not read back')
-    if (sent[1] && !sent[1].body.includes(`first carried by ${R287[2]}`)) fail('follow-ups: "this record" was not read as the record the table is in')
+    // The row's cells as followUpsOf reads them; the body no longer repeats them (#972), so they are
+    // held here: the escaped bar read back, the earliest record kept, "this record" read as its link.
+    {
+      const src = fs.readFileSync(scriptPath, 'utf8')
+      const read = (/^\/\/ -+ follow-ups, read here\n([\s\S]*?)\n\/\/ -+ /m.exec(src) || [])[1]
+      const rows = read ? new Function(`${read}\nreturn followUpsOf`)()(rec287(2, 'merge', FOLLOW_UPS_287).body, R287[2]) : []
+      if (!rows[0] || rows[0].where !== '76704c5:.github/workflows/ci.yml lines 321-326 | tools/scripts') fail(`follow-ups: the escaped bar in the Where cell was not read back: ${JSON.stringify(rows[0])}`)
+      if (!rows[0] || rows[0].firstCarried !== R287[0]) fail('follow-ups: the first row does not name the earliest record that carried it')
+      if (!rows[1] || rows[1].firstCarried !== R287[2]) fail('follow-ups: "this record" was not read as the record the table is in')
+    }
     const fp = first.prompt('followups-file')
     const spans = [...fp.matchAll(/`([^`\n]+)`/g)].map((m) => m[1])
     if (!spans.some((x) => /gh issue create\b/.test(x) && /--label <its label>/.test(x))) fail('follow-ups: the filer prompt asks for no gh issue create with each follow-up\'s own label')
@@ -1446,7 +1453,10 @@ try {
       if (!shaped || shaped.status !== 0) fail(`#966: ${JSON.stringify(title)} fails tools/ticket_shape.py: ${shaped ? [...shaped.failures, shaped.last].join('; ') : 'never checked'}`)
     }
     const ho = run443.result.handover.text
-    if (!ho.includes(FINDING_NOPATH) || !/names no repository path/.test(ho)) fail(`#479: the hand-over does not say why the pathless follow-up is ready-for-human:\n${ho}`)
+    // The why is the body's "Filed ready-for-human" line, asserted above; the hand-over lists the
+    // ticket by number and title only (#972), under its own heading.
+    const human = ho.split(/^### /m).find((s) => s.startsWith('Follow-ups filed ready-for-human\n')) || ''
+    if (!human.split('\n').some((l) => new RegExp(`^- #\\d+ from #443: ${FINDING_NOPATH}$`).test(l))) fail(`#479: the hand-over does not list the pathless follow-up under "Follow-ups filed ready-for-human":\n${ho}`)
 
     // Paths of two owners: #287's first row names the integrator's ci.yml and ws1-infra's tools/scripts
     // (a directory written without its slash, read as that directory, as ticket_shape reads it).
@@ -1501,6 +1511,61 @@ try {
       let theirs = null
       try { theirs = JSON.parse(r.stdout) } catch { fail(`#479: ticket_shape's owner_of did not run: ${r.stderr}`) }
       if (theirs) probes.forEach((p, i) => { const mine = port.ownerOfPath(rules, p); if (mine !== theirs[i]) fail(`#479: ${p} is ${mine}'s by morning.js and ${theirs[i]}'s by tools/ticket_shape.py`) })
+    }
+  }
+
+  // 17b2. A follow-up carries its finding once (#972). The finding is the ticket's title, so the body
+  //       the filer writes from a five-column row holds the Raised-by line filedAs reads, the Touches
+  //       line, the row's Fails on sentence once beside the record sentence, and one box, and never
+  //       the title again; a rerun's filedAs still finds each ticket it filed. The hand-over's three
+  //       follow-up lists print "- #<n> from #<pr>: <title>" a line, with no URL and no finding text.
+  checks++
+  {
+    const RECORD_SENTENCE = 'The record lists it under Follow-ups; this issue is that ticket.'
+    const BOX = "- [ ] Fixed, or declined with the reason in this issue's Answer."
+    const times = (hay, needle) => hay.split(needle).length - 1
+    const env = newRepo()
+    const run966 = await execute(env, { date: DATE }, { followUps: FU966 })
+    const sent = jsonAfter(run966.prompt('followups-file'), 'FOLLOW-UPS') || []
+    for (const [title, failsOn] of [[FINDING_TAB, FAILS_TAB.replace('\\|', '|')], [FINDING_DOCS, FAILS_DOCS]]) {
+      const f = sent.find((x) => x.title === title)
+      if (!f) { fail(`#972: the row ${JSON.stringify(title)} was not sent to the filer`); continue }
+      const lines = f.body.split('\n')
+      const build = (/^## What to build\n([\s\S]*?)^## Acceptance criteria$/m.exec(f.body) || [])[1] || ''
+      const wrong = [
+        ...(lines[0] === `**Raised by:** #966, from its review record ${R966}` ? [] : ['its first line is not the Raised-by line']),
+        ...(lines.some((l) => /^\*\*Touches:\*\* `[^`]+`/.test(l)) ? [] : ['it has no Touches line']),
+        ...(times(f.body, failsOn) === 1 && times(build, failsOn) === 1 ? [] : [`it carries the Fails on sentence ${times(f.body, failsOn)} times, ${times(build, failsOn)} under What to build`]),
+        ...(times(f.body, RECORD_SENTENCE) === 1 && times(build, RECORD_SENTENCE) === 1 ? [] : [`it carries the record sentence ${times(f.body, RECORD_SENTENCE)} times`]),
+        ...(f.body.toLowerCase().includes(title.toLowerCase()) ? ['it repeats the title'] : []),
+        ...(JSON.stringify(lines.filter((l) => /^\s*- \[[ xX]\]/.test(l))) === JSON.stringify([BOX]) ? [] : ['its boxes are not the one box']),
+      ]
+      if (wrong.length) fail(`#972: the body of ${JSON.stringify(title)}: ${wrong.join('; ')}:\n${f.body}`)
+    }
+    // filedAs still matches the ticket it files: a rerun on the same checkout files nothing again.
+    const again966 = await execute(env, { date: DATE }, { followUps: FU966 })
+    const already966 = ((again966.result.followUps || {}).already || []).map((f) => f.title).sort()
+    if (again966.labels.includes('followups-file') || JSON.stringify(already966) !== JSON.stringify([FINDING_TAB, FINDING_DOCS].sort())) fail(`#972: a rerun did not find the tickets it filed: already ${JSON.stringify(already966)}`)
+
+    // The three lists. #443's three rows file, one ready-for-human; a rerun beside #966 finds #443's
+    // three already filed and files #966's two.
+    const envH = newRepo()
+    const first = await execute(envH, { date: DATE }, { followUps: FU443 })
+    const second = await execute(envH, { date: DATE }, { followUps: { prs: [...FU443.prs, ...FU966.prs], filed: [] } })
+    const numberOf = (t) => ((envH.filed || []).find((i) => i.title === t) || {}).number
+    const LISTS = [
+      [first, 'Follow-ups filed', [[443, FINDING_DDB], [443, FINDING_DEADLINE], [443, FINDING_NOPATH]]],
+      [first, 'Follow-ups filed ready-for-human', [[443, FINDING_NOPATH]]],
+      [second, 'Follow-ups already filed', [[443, FINDING_DDB], [443, FINDING_DEADLINE], [443, FINDING_NOPATH]]],
+      [second, 'Follow-ups filed', [[966, FINDING_TAB], [966, FINDING_DOCS]]],
+    ]
+    for (const [r, heading, rows] of LISTS) {
+      const section = r.result.handover.text.split(/^### /m).find((s) => s.startsWith(`${heading}\n`))
+      if (!section) { fail(`#972: the hand-over has no "### ${heading}":\n${r.result.handover.text}`); continue }
+      const got = section.split('\n').filter((l) => l.startsWith('- '))
+      const want = rows.map(([pr, t]) => `- #${numberOf(t)} from #${pr}: ${t}`)
+      if (JSON.stringify(got.slice().sort()) !== JSON.stringify(want.slice().sort())) fail(`#972: "### ${heading}" lists ${JSON.stringify(got)}, expected ${JSON.stringify(want)}`)
+      if (/https?:\/\//.test(section) || [FAILS_TAB, FAILS_DOCS, 'names no repository path'].some((x) => section.includes(x))) fail(`#972: "### ${heading}" carries a URL or finding text:\n${section}`)
     }
   }
 
@@ -2455,11 +2520,11 @@ try {
         '',
         '## What to build',
         '',
-        `The review of #443 carried this finding rather than holding on it (Standards axis), first carried by ${R443}: ${FINDING_DEADLINE}, at tests/Platform.Identity.Tests/AccessTokenSourceTests.cs; \`tests/Platform.Identity.Tests/BackchannelTimeoutTests.cs:41\`. The record lists it under "## Follow-ups", which names no open ticket for it; this issue is that ticket.`,
+        'The record lists it under Follow-ups; this issue is that ticket.',
         '',
         '## Acceptance criteria',
         '',
-        `- [ ] ${FINDING_DEADLINE}: fixed, or declined with the reason in this issue's Answer.`,
+        "- [ ] Fixed, or declined with the reason in this issue's Answer.",
       ].join('\n')
       const hand = run([443, R443, recordFile(REC443.body), 2])
       if (hand.stdout !== BODY_443_2) fail(`#643: row 2 of #443's record is not the body written out by hand:\n${hand.stdout}`)
@@ -2475,13 +2540,13 @@ try {
         '',
         '## What to build',
         '',
-        `The review of #966 carried this finding rather than holding on it (Standards axis), first carried by ${R966}: ${FINDING_TAB}, at tools/review_record.py:300. The record lists it under "## Follow-ups", which names no open ticket for it; this issue is that ticket.`,
-        '',
         `Fails on: ${FAILS_TAB.replace('\\|', '|')}`,
+        '',
+        'The record lists it under Follow-ups; this issue is that ticket.',
         '',
         '## Acceptance criteria',
         '',
-        `- [ ] ${FINDING_TAB}: fixed, or declined with the reason in this issue's Answer.`,
+        "- [ ] Fixed, or declined with the reason in this issue's Answer.",
       ].join('\n')
       const five = run([966, R966, recordFile(REC966.body), 1])
       if (five.status !== 0 || five.stdout !== BODY_966_1) fail(`#966: row 1 of a five-column record is not the body written out by hand, with its Fails on sentence: exit ${five.status}: ${five.stderr}\n${five.stdout}`)
@@ -2531,7 +2596,7 @@ try {
       // The command runs the script beside it: a mutation of each function changes what it prints. The
       // copy sits in a checkout's layout, OWNERSHIP.md two folders up, as the command reads it.
       const MUTANTS = [
-        ['followUpsOf', /^const followUpsOf = [\s\S]*?\n}\n/m, (fn) => fn.replace('axis: cells[1]', 'axis: cells[2]')],
+        ['followUpsOf', /^const followUpsOf = [\s\S]*?\n}\n/m, (fn) => fn.replace('where: cells[2]', 'where: cells[1]')],
         ['placeOf', /^const placeOf = [\s\S]*?\n}\n/m, (fn) => fn.replace("label: 'needs-triage'", "label: 'ready-for-agent'")],
         ['followUpBody', /^const followUpBody = [\s\S]*?\n\]\.join\('\\n'\)\n/m, (fn) => fn.replace("'## What to build'", "'## What to do'")],
       ]
