@@ -447,6 +447,41 @@ try {
     if ((refusedRun.result.tickets || []).map((t) => t.noun).join() !== 'noun-1') fail(`a ticket the check refused: tickets ${JSON.stringify((refusedRun.result.tickets || []).map((t) => t.noun))}, expected noun-1 alone`)
   }
 
+  // 19b. The ticket template's headings (#973). The File prompt's body shape wrote a bold
+  //      "**What to build:**" line and "## Acceptance", which tools/ticket_shape.py notes as outside
+  //      the ticket's set since #970. The `##` headings its step 4 names are the set the ticket names,
+  //      `## What to build` and `## Acceptance criteria` among them, and no bold What line; a body
+  //      written in that shape passes tools/ticket_shape.py under ready-for-agent with no heading
+  //      note and no derived-owner note (it has no Touches line, so its Owner line is the owner),
+  //      and passes the body-check the prompt runs on it.
+  checks++
+  {
+    const SET = ['Parent', 'What to build', 'Acceptance criteria', 'Blocked by']
+    const run = await execute(newRepo(), { date: DATE }, { index: indexFor(THREE) })
+    const fp = (run.calls.find((c) => c.label === 'file') || {}).prompt || ''
+    const start = fp.indexOf("4. Each ticket's body")
+    const step = start < 0 ? '' : fp.slice(start, fp.indexOf('body-check', start))
+    if (!step) fail('#973: the File prompt carries no step 4 giving each ticket\'s body shape')
+    const spans = [...step.matchAll(/`([^`\n]+)`/g)].map((m) => m[1])
+    const heads = spans.filter((s) => /^## /.test(s)).map((s) => s.slice(3).trim())
+    for (const h of heads) if (!SET.includes(h)) fail(`#973: the File prompt's body shape writes "## ${h}", outside the ticket's set ${SET.join(', ')}`)
+    for (const h of ['What to build', 'Acceptance criteria']) if (!heads.includes(h)) fail(`#973: the File prompt's body shape writes no "## ${h}" heading`)
+    if (spans.some((s) => /^\*\*What to build:\*\*/.test(s))) fail('#973: the File prompt\'s body shape still writes a bold "**What to build:**" line')
+    const lines = []
+    for (const s of spans) {
+      if (/^\*\*Owner:\*\*/.test(s)) lines.push('**Owner:** integrator')
+      else if (/^\*\*Plan row:\*\*/.test(s)) lines.push(s)
+      else if (/^## /.test(s)) lines.push('', s, '', s === '## Acceptance criteria' ? "- [ ] no lane's log in a later run's record shows the repair" : 'The evidence `/x/log/a.txt:3`, quoted, and its cost.')
+    }
+    const body = lines.join('\n') + '\n'
+    const shape = spawnSync('python3', ['-I', path.join(top, 'tools', 'ticket_shape.py'), '-'], { cwd: top, encoding: 'utf8', input: JSON.stringify({ number: 0, body, labels: [{ name: 'ready-for-agent' }], subIssuesSummary: { total: 0 }, blockedBy: { nodes: [] } }) })
+    const notes = String(shape.stdout || '').split('\n').filter((l) => /^ticket-shape: note: (heading|derived-owner):/.test(l))
+    if (shape.status !== 0) fail(`#973: a body in the File prompt's shape fails tools/ticket_shape.py: exit ${shape.status}, ${(shape.stdout + shape.stderr).trim()}\n${body}`)
+    if (notes.length) fail(`#973: tools/ticket_shape.py notes a body in the File prompt's shape: ${notes.join(' | ')}`)
+    const checked = spawnSync('python3', ['-I', path.join(top, 'tools', 'retro_record.py'), 'body-check'], { cwd: top, encoding: 'utf8', input: body })
+    if (checked.status !== 0) fail(`#973: a body in the File prompt's shape fails retro_record.py body-check: exit ${checked.status}, ${(checked.stdout + checked.stderr).trim()}`)
+  }
+
   // 20. The refusal count (#315): Gather runs tools/retro_refusals.py for the night, its line reaches
   //     the File prompt verbatim for the parent issue and the return, the parent's "cannot see"
   //     paragraph no longer counts tool-call counts among what it cannot see, and a transcripts root

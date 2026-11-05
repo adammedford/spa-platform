@@ -846,7 +846,7 @@ const HOUSE_CREATE = 'gh issue create` only for a change request, after the sear
   const REPORT_CREATE = 'gh issue create --title "Overnight '
   const top = path.resolve(here, '..', '..')
   const bodyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'overnight-tests-shape-'))
-  const body = (extra) => `**Owner:** integrator\n**Plan row:** I-9\n\n**What to build:** the row's What, citing \`contracts/pipeline.md\`, and its Done when.\n## Acceptance\n- [ ] the companion passes\n${extra}`
+  const body = (extra) => `**Owner:** integrator\n**Plan row:** I-9\n\n## What to build\n\nThe row's What, citing \`contracts/pipeline.md\`, and its Done when.\n\n## Acceptance criteria\n\n- [ ] the companion passes\n${extra}`
   fs.writeFileSync(path.join(bodyDir, 'good.md'), body(''))
   fs.writeFileSync(path.join(bodyDir, 'bad.md'), body('**Session:** foreground\n'))
   const shapeOf = (cmd, file, blockers) => {
@@ -2268,6 +2268,44 @@ const forkOf = (prompt) => (/Otherwise fork from [^:]+: forkSha = (\S+?)\. Take 
     if (!none.report.includes(OLD_REPORT)) fail('#965: the report prompt, no standing answer, no longer runs from the partial\'s choice straight to the steering change as before')
     for (const [name, p] of [['grill', none.grill], ['report', none.report]]) for (const w of NONE_OF) if (p.includes(w)) fail(`#965: the ${name} prompt with no standing answer names ${JSON.stringify(w)}`)
     if (granted.grill.includes('Under each question write the line "Answer: yes, pre-accepted')) fail('#965: the granted grill prompt still writes the pre-accepted line under each question')
+  }
+}
+
+// 47. The run's filer writes the ticket template's headings (#973). NEW TICKETS wrote a bold "**What to build:**"
+//     line and "## Acceptance", which tools/ticket_shape.py notes as outside the ticket's set since #970. The body
+//     template each collect prompt gives is filled in and run through the real check: its `##` headings are the
+//     set the ticket names, `## What to build` and `## Acceptance criteria` among them, it writes no bold What line,
+//     and the check passes it under ready-for-human printing no heading note and no derived-owner note (the template
+//     has no Touches line, so its Owner line is the owner). The integrate step's acceptance reader, which pulls the
+//     acceptance list out of a partial's issue body, reads a `## Acceptance criteria` section, which is now the
+//     heading every filer writes, and stops at the next heading.
+{
+  const SET = ['Parent', 'What to build', 'Acceptance criteria', 'Blocked by']
+  const top = path.resolve(here, '..', '..')
+  const collects = allPrompts.filter((x) => x.label === 'collect')
+  if (!collects.length) fail('#973: no collect prompt was rendered, so the NEW TICKETS template went unread')
+  for (const c of collects) {
+    const start = c.prompt.indexOf('  1. Write its body to')
+    const end = c.prompt.indexOf('\n  2. Check its shape', start)
+    if (start < 0 || end < 0) { fail('#973: NEW TICKETS carries no body template between its steps 1 and 2'); continue }
+    const template = c.prompt.slice(start, end).split('\n').slice(1).map((l) => l.replace(/^ {2}/, ''))
+    const body = template.join('\n').replace('<role>', 'integrator').replace('<id>', 'I-9') + '\n'
+    const heads = template.filter((l) => /^## /.test(l)).map((l) => l.slice(3).trim())
+    for (const h of heads) if (!SET.includes(h)) fail(`#973: the NEW TICKETS template writes "## ${h}", outside the ticket's set ${SET.join(', ')}`)
+    for (const h of ['What to build', 'Acceptance criteria']) if (!heads.includes(h)) fail(`#973: the NEW TICKETS template writes no "## ${h}" heading`)
+    if (template.some((l) => /^\*\*What to build:\*\*/.test(l))) fail('#973: the NEW TICKETS template still writes a bold "**What to build:**" line')
+    const r = spawnSync('python3', ['-I', 'tools/ticket_shape.py', '-'], { cwd: top, encoding: 'utf8', input: JSON.stringify({ number: 0, body, labels: [{ name: 'ready-for-human' }], subIssuesSummary: { total: 0 }, blockedBy: { nodes: [] } }) })
+    const notes = String(r.stdout || '').split('\n').filter((l) => /^ticket-shape: note: (heading|derived-owner):/.test(l))
+    if (r.status !== 0) fail(`#973: the filled-in NEW TICKETS template fails tools/ticket_shape.py: exit ${r.status}, ${(r.stdout + r.stderr).trim()}`)
+    if (notes.length) fail(`#973: tools/ticket_shape.py notes the filled-in NEW TICKETS template: ${notes.join(' | ')}`)
+  }
+  const src = fs.readFileSync(scriptPath, 'utf8')
+  const reader = (/acceptance list alone: [^\n]*?\| awk '([^']*)'/.exec(src) || [])[1]
+  if (!reader) fail('#973: the integrate prompt carries no awk reader of the acceptance list')
+  else {
+    const issueBody = '## What to build\n\nx\n\n## Acceptance criteria\n\n- [ ] F-01 passes\n- [x] F-02 passes\n\n## Blocked by\n\n- [ ] not a box of the list\n'
+    const r = spawnSync('awk', [reader], { encoding: 'utf8', input: issueBody })
+    if (r.status !== 0 || !r.stdout.includes('- [ ] F-01 passes') || r.stdout.includes('not a box of the list')) fail(`#973: the acceptance reader awk '${reader}' does not read the "## Acceptance criteria" section alone: exit ${r.status}, ${JSON.stringify(r.stdout)}`)
   }
 }
 
