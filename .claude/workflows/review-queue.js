@@ -714,10 +714,9 @@ The test: ${m.test}, run by ${project}. ${m.kind === 'stated'
 // What the earlier records say about this review's mutation list (#289). held: when the latest record
 // held on another head, the did-not-fail rows of the Mutations tables of every record on another head,
 // each with the record's url and the Test cells later records reproduced, or found removed in a record
-// that merged (#884), which answer it. On #287 the
-// latest record held for other reasons and its table had no did-not-fail row; the record before it
-// held on two LibraryTests cases nobody mutated again, so the rows are carried forward until a later
-// record reproduces them. clearers: newest first, each earlier record whose head the range agent
+// that merged (#884), which answer it. On #287 the latest record held for other reasons and its table
+// had no did-not-fail row; the record before it held on two LibraryTests cases nobody mutated again,
+// so the rows are carried forward until a later record reproduces them. clearers: newest first, each earlier record whose head the range agent
 // diffed against this one, with its url, the files changed since its head, and the Test cells of the
 // rows it reproduced. With no range read, or an empty diff read, nothing is known to be unchanged, so
 // nothing clears: an agent that left a list empty must not clear what changed.

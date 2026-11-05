@@ -1375,14 +1375,14 @@ try {
     ])] } }
     env = run({ prs: [287], maxMutationsPerPr: 9 }, ANSWERED, { range })
     await execute(env)
-    const kinds = Object.fromEntries(env.mutations.map((m) => [m.test, /The review record \S+ held because/.test(m.prompt) ? 'held' : 'other']))
+    const kindsOf = (e) => Object.fromEntries(e.mutations.map((m) => [m.test, /The review record \S+ held because/.test(m.prompt) ? 'held' : 'other']))
+    const kinds = kindsOf(env)
     if (kinds[LIB1] !== 'other' || kinds[LIB2] !== 'held') fail(`a held test a later record reproduced: kinds ${JSON.stringify(kinds)}, expected ${LIB2} held and ${LIB1} not`)
     // A later record's removed row answers the held test as a reproduced one does (#334), but only
     // when that record merged (#884): the script holds nothing on a removed row and leaves the
     // deletion's soundness to the verdict agent, so a removed row in a record that held may be the
     // very hold on an unsound deletion, and must not clear the test by itself.
     const REMOVED_ROW = [LIB1, 'the same break', '0 of 0', 'removed: commit abc1234 deleted the unreachable branch']
-    const kindsOf = (e) => Object.fromEntries(e.mutations.map((m) => [m.test, /The review record \S+ held because/.test(m.prompt) ? 'held' : 'other']))
     const REMOVED_HELD = { 287: { ...SHAPE[287], comments: [FIRST, record('https://github.com/o/r/pull/287#issuecomment-4', '2026-10-22T09:00:00Z', H2, 'hold', [REMOVED_ROW])] } }
     env = run({ prs: [287], maxMutationsPerPr: 9 }, REMOVED_HELD, { range })
     await execute(env)
