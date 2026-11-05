@@ -35,6 +35,10 @@
 # initialised. It needs Terraform and python3, and Docker unless --sample-digest is given. It makes
 # no AWS call of its own.
 #
+# A failed or malformed digest lookup says to try again later or pass --sample-digest; when the file
+# already pins the sample image by a full digest, it names that digest and prints the --sample-digest
+# line that reuses it (#1015).
+#
 # Exit status: 0 when the file holds the values, written or already there; 1 when a lookup failed or
 # answered a malformed value, or the file holds a key in a shape this script does not edit, each
 # named, and the file is unchanged; 2 when it did not start (a usage error, a malformed
@@ -132,6 +136,26 @@ DOMAIN="$(identity_output cognito_domain "$DOMAIN_FORM" "a host name")"
 
 # --- the sample image's digest ---------------------------------------------------------------------
 
+# What a failed lookup advises (#1015). When the file already pins the sample image by a full digest,
+# set once at the top level, the advice names that digest and the line that reuses it: in sitting D
+# of 2026-11-04 the operator had to find it in the file by hand. Otherwise, the plain retry advice.
+# The digest is the one value this script prints, as it does after a good run.
+retry_advice() {
+  local pinned
+  pinned="$(python3 -I -c 'import re, sys
+text = open(sys.argv[1]).read()
+keys = re.findall(r"(?m)^gateway_image\s*=.*$", text)
+pin = re.fullmatch(r"gateway_image\s*=\s*\"" + re.escape(sys.argv[2]) + r"@(sha256:[0-9a-f]{64})\"\s*(#.*)?", keys[0]) if len(keys) == 1 else None
+if pin:
+    print(pin[1])' "$TFVARS" "$SAMPLE_REPOSITORY" 2> /dev/null || true)"
+  if [[ "$pinned" =~ $DIGEST_FORM ]]; then
+    printf 'It already pins the sample image at %s. To reuse that pin, run:\n  tools/scripts/platform-tfvars.sh --sample-digest %s' \
+      "$pinned" "$pinned"
+  else
+    printf 'Try again later, or pass --sample-digest.'
+  fi
+}
+
 if [ -z "$DIGEST_GIVEN" ]; then
   LOOKUP="the digest lookup of ${SAMPLE_REPOSITORY}:${SAMPLE_TAG}"
   # --format '{{json .Manifest}}' prints the reference's own descriptor as JSON: for a multi-platform
@@ -143,7 +167,7 @@ if [ -z "$DIGEST_GIVEN" ]; then
   if [ "$status" -ne 0 ]; then
     # The registry's own line names the status, a 429 among them (#242). A public registry's URL
     # carries no account id.
-    fail "${LOOKUP} failed (exit ${status}): $(sed -n '$p' "$ERR"). Try again later, or pass --sample-digest. $(root_name "$TFVARS") is unchanged."
+    fail "${LOOKUP} failed (exit ${status}): $(sed -n '$p' "$ERR"). $(root_name "$TFVARS") is unchanged. $(retry_advice)"
   fi
   SAMPLE_DIGEST="$(python3 -I -c 'import json, sys
 try:
@@ -151,7 +175,7 @@ try:
 except Exception:
     pass' "${WORK}/manifest")"
   [[ "$SAMPLE_DIGEST" =~ $DIGEST_FORM ]] ||
-    fail "${LOOKUP} answered no full digest. Try again later, or pass --sample-digest. $(root_name "$TFVARS") is unchanged."
+    fail "${LOOKUP} answered no full digest. $(root_name "$TFVARS") is unchanged. $(retry_advice)"
 fi
 
 # --- the rewrite -----------------------------------------------------------------------------------
