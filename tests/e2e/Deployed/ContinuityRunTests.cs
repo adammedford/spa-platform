@@ -231,6 +231,21 @@ public sealed class ContinuityRunTests : IDisposable
     public async Task Each_row_test_reports_skipped_naming_the_switch_on_the_local_stack_before_any_aws_call(string? stack)
     {
         ContinuityStack.Environment.Value = name => name == StackSwitch.Variable ? stack : null;
+
+        // The two ways the driver reaches AWS, watched: a stack start that is counted and succeeds, and a
+        // runner that records and answers anything, so a start or a call made ahead of the skip is caught
+        // by the counts below and not by whatever a real start would throw on this machine (#868).
+        int started = 0;
+        RecordedRunner runner = new((_, _) => "{}");
+        ContinuityStack.Deployed.Value = new DeployedPath(
+            () =>
+            {
+                started++;
+                // Never dereferenced under the skip: the row's driver is built only after it.
+                return Task.FromResult<DeployedStack>(null!);
+            },
+            runner);
+
         MethodInfo[] rows = [.. typeof(ContinuityTests).GetMethods().Where(method => method.GetCustomAttribute<FactAttribute>() is not null)];
         Assert.Equal(["Row3", "Row4", "Row5", "Row6", "Row7", "Row8", "Row9"], rows.Select(row => row.Name[..4]).Order(StringComparer.Ordinal));
 
@@ -249,6 +264,8 @@ public sealed class ContinuityRunTests : IDisposable
 
             Assert.Equal("SkipException", skipped?.GetType().Name);
             Assert.Contains(StackSwitch.Variable, skipped!.Message, StringComparison.Ordinal);
+            Assert.True(started == 0, $"{row.Name} started the deployed stack before its skip");
+            Assert.True(runner.Calls.Count == 0, $"{row.Name} ran {string.Join(", ", runner.Calls.Select(call => call.Program))} before its skip");
         }
     }
 

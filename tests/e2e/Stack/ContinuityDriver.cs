@@ -36,11 +36,16 @@ public sealed class ContinuityDriver : IAsyncDisposable
 
     public HarnessApp App1 => stack.App("app1");
 
-    /// <summary>The two-task stack (Q139): skipped, naming the switch, unless <c>SPA_E2E_STACK</c> is <c>deployed</c>.</summary>
+    /// <summary>
+    /// The two-task stack (Q139): skipped, naming the switch, unless <c>SPA_E2E_STACK</c> is <c>deployed</c>.
+    /// The stack and the runner come by <see cref="ContinuityStack.Deployed"/>'s path, so the class's skip
+    /// test sees whether either was reached ahead of the skip.
+    /// </summary>
     public static async Task<ContinuityDriver> StartAsync()
     {
         ContinuityStack.SkipUnlessDeployed();
-        return new ContinuityDriver(await DeployedStack.StartAsync(), new ProcessCommandRunner());
+        DeployedPath path = ContinuityStack.Deployed.Value ?? new DeployedPath(DeployedStack.StartAsync, new ProcessCommandRunner());
+        return new ContinuityDriver(await path.Start(), path.Runner);
     }
 
     /// <summary>The control (Q143): one raw request to <c>/healthz</c>, which answers on any app host and needs no session.</summary>
@@ -229,6 +234,13 @@ public static class ContinuityStack
     /// <summary>A test's own environment, in place of the process's (the class's skip test).</summary>
     internal static readonly AsyncLocal<Func<string, string?>?> Environment = new();
 
+    /// <summary>
+    /// A test's own way to AWS, in place of the deployed stack's start and the process runner: the class's
+    /// skip test watches it, so a row that reaches either ahead of its skip is seen (#868). Unset
+    /// everywhere else, so a row run on the cell starts the real stack.
+    /// </summary>
+    internal static readonly AsyncLocal<DeployedPath?> Deployed = new();
+
     /// <summary>The reason a row is skipped on the local stack, naming the switch.</summary>
     public static string SkipReason =>
         $"{StackSwitch.Variable} is unset or 'local': the continuity rows drive the two-task cell only, with {StackSwitch.Variable}=deployed";
@@ -242,3 +254,6 @@ public static class ContinuityStack
         }
     }
 }
+
+/// <summary>The two ways a continuity row reaches AWS: the deployed stack's start, and the runner its driver calls the AWS CLI through.</summary>
+internal sealed record DeployedPath(Func<Task<DeployedStack>> Start, ICommandRunner Runner);
