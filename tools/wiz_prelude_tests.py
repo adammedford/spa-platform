@@ -11,8 +11,8 @@ one file, and the file names the record and the bundle after the date Stage 0 pi
 run without one.
 
 **What runs is the script itself.** The prelude finds the repository from git, as the skill's line
-does, so each case makes a throwaway git repository, copies the tracked tools/wiz_prelude.sh,
-tools/aws-project.env and tools/wiz_redact.py into it whole, and starts /bin/bash there, the shell
+does, so each case makes a throwaway git repository, copies the tracked .gitignore,
+tools/wiz_prelude.sh, tools/aws-project.env and tools/wiz_redact.py into it whole, and starts /bin/bash there, the shell
 the Bash tool runs (#183), which on macOS is 3.2. The environment is built, not inherited: PATH is
 the directories of git and python3 and the system's own, HOME is inside the case's directory, and
 git reads no configuration of the machine's.
@@ -20,7 +20,7 @@ git reads no configuration of the machine's.
 **The skill's text.** The third class reads the wiz skill's two files from this checkout and holds
 that no line of the prelude's commands is copied into them, so the file stays the one copy.
 
-Checkout inputs: .claude/skills/wiz/*.md
+Checkout inputs: .claude/skills/wiz/*.md .gitignore
 """
 from __future__ import annotations
 
@@ -34,7 +34,10 @@ import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 PRELUDE = ROOT / "tools" / "wiz_prelude.sh"
-COPIED = ("tools/wiz_prelude.sh", "tools/aws-project.env", "tools/wiz_redact.py")
+# .gitignore is the checkout's own, copied whole rather than restated, so the case reads the rule
+# that keeps the pin, the record and the bundle out of git: .scratch/sitting/ is tracked, its log/
+# is not (CODING_STANDARDS.md, "A guard reads the thing it guards").
+COPIED = (".gitignore", "tools/wiz_prelude.sh", "tools/aws-project.env", "tools/wiz_redact.py")
 SKILL_FILES = (ROOT / ".claude" / "skills" / "wiz" / "SKILL.md", ROOT / ".claude" / "skills" / "wiz" / "a-and-b.md")
 PIN = ".scratch/sitting/log/date"
 SOURCE = ". tools/wiz_prelude.sh"
@@ -65,8 +68,6 @@ class Sitting(unittest.TestCase):
         (self.repo / "tools").mkdir(parents=True)
         for path in COPIED:
             shutil.copy2(ROOT / path, self.repo / path)
-        # The repository's own rule: .scratch/sitting/ is tracked, its log/ is not.
-        (self.repo / ".gitignore").write_text(".scratch/*\n!.scratch/sitting/\n.scratch/*/log/\n")
         empty = self.dir / "gitconfig"
         empty.write_text("")
         self.env = {
@@ -153,6 +154,9 @@ class StageZeroPins(Sitting):
         self.assertIn(pinned, (before + "\n", after + "\n"))
         self.assertEqual(done.stdout, f"wiz prelude: the sitting's date is pinned to {pinned.strip()} in {PIN}\n")
         self.assertEqual((self.repo / PIN).stat().st_mode & 0o777, 0o600)
+        ignored = subprocess.run(["git", "check-ignore", "-q", PIN], cwd=self.repo, env=self.env, capture_output=True,
+                                 text=True, timeout=60, check=False)
+        self.assertEqual(ignored.returncode, 0, "the pin is not ignored, so Stage 0's git status would show it")
         later = self.bash(SOURCE + ' && echo "$R"')
         self.assertEqual(later.returncode, 0, later.stderr)
         self.assertEqual(later.stdout, f".scratch/sitting/log/{pinned.strip()}.log\n")
