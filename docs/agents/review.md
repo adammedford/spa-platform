@@ -166,16 +166,28 @@ posted on the merged pull request when the review runs, its findings land in a f
 
 A session that repairs what a review found works from the record, not from the PR's checkout.
 
-- **Read each finding from `<logDir>/pr-<n>/verdict.json`**, where the review-queue run's return
-  names `logDir`. The return's `prs` is cut short by the completion notice; its `summary` lines
-  are not.
+- **Read the findings from the run's log**, `<logDir>/pr-<n>/`, where the review-queue run's
+  return names `logDir`. The return's `prs` is cut short by the completion notice; its `summary`
+  lines are not. The verdict agent's findings, verified and suspected, are in `verdict.json`. The
+  script's own, its head comparison's and its later-date search's, are never there: they lead the
+  comment's Spec findings, in `comment.md` and the posted record. A pull request has a
+  `verdict.json` from the run only when it reached its verdict stage. One skipped because its head
+  already carries a record has none, and its findings are in the record its `summary` line names.
+  One failed before its verdict, at the stage its `summary` line names, has none and no findings to
+  repair: run the review again. One failed at posting has its `verdict.json`,
+  and `comment.md` when the post agent wrote it.
 - **Repair what a commit can settle**: a test that cannot fail, a wrong comment or quotation, a
   refusal that reports the wrong verdict. Leave to the human what a commit cannot: an approval, a
   tracker spec source, a live proof, a scope question. Name each left one in the report.
-- **Work in a new worktree off `origin/<branch>`**, one commit per owner (A-05 refuses a commit
-  that crosses owners), message `Review of #<n>: <what>`, and push plain, never forced. A push
-  moves the head, so the record names an old one: the pull request needs a delta review of the
-  commits since it (#85) before `tools/land.sh`.
+- **Work in a new worktree off `origin/<branch>`**, message `Review of #<n>: <what>`, and push
+  plain, never forced. Keep the repair inside the owner set the branch already touches: A-05
+  judges a linear branch by its whole diff, so splitting a repair into one commit per owner still
+  fails it. A repair on a branch holding a merge, such as a combined branch
+  (`docs/agents/landing-work.md`), is judged commit by commit, so each commit keeps to one owner
+  there. A fix that needs another owner's path is one a commit here cannot settle: name it in the
+  report, as a change request when the path is the integrator's. A push moves the head, so the
+  record names an old one: the pull request needs a delta review of the commits since it (#85)
+  before `tools/land.sh`.
 - **A description is not a commit.** Correct a false claim in it with `gh pr edit`; it moves no
   head. After a repair push, edit it in the same step: name the new head as the head, and each
   evidence line of an older one as "the earlier head `<sha>`", which the review's head comparison
