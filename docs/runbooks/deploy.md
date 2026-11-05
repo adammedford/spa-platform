@@ -9,7 +9,8 @@ is a SPA release, a registry entry, a client or a secret, use that lever instead
 a deployment.
 
 Start with the operator session in [README.md](README.md). Docker Desktop must be running, with
-buildx (decision D-2 in `docs/dependencies.md`).
+buildx (decision D-2 in `docs/dependencies.md`), and the Session Manager plugin must be installed
+for the readiness wait's tunnel unless `--url` is given.
 
 ## A deployment to a running cell
 
@@ -17,25 +18,39 @@ buildx (decision D-2 in `docs/dependencies.md`).
 tools/scripts/deploy.sh
 ```
 
-That is the whole sequence. In order, and it stops at the first that fails (its header has the
+That is the whole sequence: `deploy.sh` alone deploys and waits, and no tunnel need be running
+before it or while it runs. In order, and it stops at the first that fails (its header has the
 detail):
 
 1. It reads the live registry the gateway polls and refuses when there is none or it holds no app,
    because a gateway started against an empty registry never becomes ready and the deployment would
-   fail its health checks. Nothing is built before this.
+   fail its health checks. Nothing is built before this. It keeps the registry's revision for
+   step 5.
 2. It builds both images for ARM64 and pushes each under a tag of its own (the repositories' tags are
    immutable), then takes each digest from ECR.
 3. It plans and applies `infra/envs/poc/platform` with both digests and the health check on
    `/readyz`, and records them in `images.auto.tfvars` there, so every later apply of that root
    passes the same digests back and never moves the image (plan row 1.7).
 4. It rewrites `infra/envs/poc/outputs.json` from the three roots.
-5. It waits for a stable service, then asserts that the running gateway is the digest it pushed and
-   that the task's target is healthy on `/readyz`.
+5. It waits for a stable service, then asserts that the primary deployment completed on the applied
+   task definition, that every running task's gateway is the digest it pushed, that each running
+   task's own target is healthy on `/readyz` and every other target healthy or draining, and that
+   the outputs document names the applied gateway. Then it waits until each running task has
+   answered `/readyz` at the revision step 1 read or later: one answer through the load balancer
+   speaks for one task only, so a task the load balancer never picks fails the wait. The load
+   balancer is internal, so this wait opens a tunnel of its own, `tools/scripts/tunnel.sh` through a
+   running task of this deployment, on a free ephemeral local port the system picks, and closes it
+   when the wait ends, pass, fail or Ctrl-C. An operator's tunnel on 8443 is left alone.
+
+`tools/scripts/deploy.sh --url https://app1.spa-poc.test:9443` names an origin this workstation
+already reaches for the wait to read through instead, and then it opens no tunnel.
 
 Exit 0 means the new gateway runs steady and healthy. Exit 1 names the step that failed; exit 2
-means it did not start (a missing tool, no Region, no credentials, no outputs document).
+means it did not start (a usage error, a missing tool, no Region, no credentials, no outputs
+document).
 
-Then check it from the workstation. The tunnel's hop is the gateway task, which the deployment
+Then check it yourself from the workstation, through a tunnel of your own: the one `deploy.sh`
+opened is closed by the time it exits. The tunnel's hop is the gateway task, which the deployment
 replaced, so a tunnel opened before it has ended: start `tools/scripts/tunnel.sh` again, then
 
 ```bash
@@ -66,7 +81,9 @@ First deployment):
    health check is `/` for the sample.
 4. `tools/scripts/seed.sh` publishes the fixture releases and writes the first registry through
    `spactl`. `deploy.sh` refuses to run before it.
-5. `tools/scripts/deploy.sh`, as above. The target turns healthy only once `/readyz` reports a
-   snapshot. While the service settles, the sample task's target shows as draining and fails the new
-   `/readyz` check; `deploy.sh` tolerates that (#207).
-6. `tools/scripts/tunnel.sh`, then `tools/scripts/verify-tunnel.sh /healthz`.
+5. `tools/scripts/deploy.sh`, as above, with no tunnel running: its readiness wait opens its own.
+   The target turns healthy only once `/readyz` reports a snapshot. While the service settles, the
+   sample task's target shows as draining and fails the new `/readyz` check; `deploy.sh` tolerates
+   that (#207).
+6. After `deploy.sh` exits 0, your own check: `tools/scripts/tunnel.sh`, then
+   `tools/scripts/verify-tunnel.sh /healthz` in a second terminal.
