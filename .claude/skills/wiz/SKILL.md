@@ -599,8 +599,9 @@ one #348 Q34 tags, and its CI run must be green. Then N's steps 1 to 6 from the 
 absent, with `terraform.tfvars` in its Phase 1 shape: N step 3's rewrite, which
 `tools/scripts/platform-tfvars.sh` (#470) does, and no G6 key. N's posts for the identity and apps
 roots, seed and the deploy go where N sends them; D0's own post is the one below. Once N step 6's
-tunnel, started after `deploy.sh`'s pass line, is up and `verify-tunnel.sh /healthz` passes, the human opens `https://app1.spa-poc.test:8443/` in a
-browser, logs in as the test user, sees the app, and keeps that tab: D2 reloads it. Then:
+tunnel, started after `deploy.sh`'s pass line, is up and `verify-tunnel.sh /healthz` passes, the
+human opens `https://app1.spa-poc.test:8443/` in a browser, logs in as the test user, sees the app,
+and keeps that tab: D2 reloads it. Then:
 
 ```bash
 git rev-parse HEAD
@@ -768,8 +769,9 @@ mutation the summary does not name stops the sitting:
   new task as D2 does: stop it, note the UTC time, start it again in the background (keep the id it
   prints after `through task`), run `verify-tunnel.sh /healthz`, and note the time it passed. The
   old hop's task drains during the roll, so requests through it fail before the stop; the gap is
-  recorded as missing coverage and the new hop's id kept. The class reads the old and new task ids and both image digests from ECS and
-  posts nothing itself; `deploy.sh`'s wait names both new task ids, and those go into the post.
+  recorded as missing coverage and the new hop's id kept. The class reads the old and new task ids
+  and both image digests from ECS and posts nothing itself; `deploy.sh`'s wait names both new task
+  ids, and those go into the post.
 - **D7 (row 7; #348 Q31).** The class onboards app 3 with #212's F-07 flow (the apps root's plan
   and apply of app 3's three creates, `spactl release publish`, `app add`, `wait` on both tasks) and
   offboards it after the row, failed or not. Show C3's step 1 addresses as the mutations, and the
