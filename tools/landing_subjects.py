@@ -50,18 +50,20 @@ whole, when no other part of it is open: the merge of a row's last open part nam
 rule runs forward only. Anything else gets "Merge task <id>", as before. When the ticket cannot be
 read, its boxes are reported unchecked and the answer is the one its rows alone give.
 
-When gh is missing, not signed in, cannot reach GitHub or has no issue under the number, the
-commit is reported unchecked with gh's own reason and nothing fails, as the steering check's issue
-rule does offline (.github/steering.py): an offline push is not held up on it, and --subject-for
-answers as the lane's completeness alone would. A git that cannot read the range judges nothing and
-fails (CODING_STANDARDS.md, "A check fails closed").
+A ticket body gh cannot read is reported unchecked with gh's own reason, as the steering check's
+issue rule does offline (.github/steering.py). The open-issue listing has a different obligation:
+it establishes that no other part ticket holds a row, so it must be complete (#871). gh reads every
+GraphQL page, and the reader checks the pagination, distinct issue numbers and stable totalCount.
+A failed, incomplete or malformed listing cannot clear a row or choose its full-landing subject;
+it exits 2. A git that cannot read the range likewise fails (CODING_STANDARDS.md, "A check fails
+closed").
 
 Each finding is a line `landing-subjects: held: ...`, `landing-subjects: unchecked: ...` or
 `landing-subjects: note: ...`, and the last line is the verdict: `landing-subjects: pass: ...` with
 exit 0, `landing-subjects: fail: ...` with exit 1 when a merge was held, and exit 2 when nothing was
 judged. --subject-for's last line is `landing-subjects: subject: <head>`, with exit 0, or exit 2
-when it could not read the history. tools/check.sh runs the range check over the range it already
-judges, so the pre-push hook and the overnight integrate gate, which runs the full check, refuse the
+when it could not read the history or the complete open-issue listing. tools/check.sh runs the
+range check over the range it already judges, so the pre-push hook and the overnight integrate gate, which runs the full check, refuse the
 subject before it is written into history to stay.
 """
 from __future__ import annotations
@@ -97,11 +99,16 @@ TOKENS = re.compile(r"[,\s]+and[,\s]+|[,\s]+")
 # read up to the first `;` or `)`.
 PART_OF = re.compile(r"(?m)^\*\*Plan row:\*\*[ \t]*none[ \t]*\([ \t]*part of[ \t]+([^;)\n]*)")
 
-# How gh reads one issue's body, and lists the open issues with theirs. gh fills the repository from
-# the remote of the directory it runs in, and signs in from its keyring or from GH_TOKEN. The limit is
-# above the repository's issue count, open or closed, by a margin.
+# gh fills {owner}/{repo} from the current remote and signs in from its keyring or GH_TOKEN.
+# --paginate follows endCursor until hasNextPage is false; --slurp preserves every page's receipt,
+# so a short listing is not mistaken for all open issues (#871).
 GH_ISSUE_BODY = ("gh", "issue", "view", "{number}", "--json", "body", "--jq", ".body")
-GH_OPEN_ISSUES = ("gh", "issue", "list", "--state", "open", "--limit", "2000", "--json", "number,body")
+GH_OPEN_ISSUES = (
+    "gh", "api", "graphql", "--paginate", "--slurp", "-F", "owner={owner}", "-F", "name={repo}",
+    "-f", "query=query($owner:String!,$name:String!,$endCursor:String){"
+    "repository(owner:$owner,name:$name){issues(states:OPEN,first:100,after:$endCursor){"
+    "totalCount pageInfo{hasNextPage endCursor} nodes{number body}}}}",
+)
 
 # How long to wait for gh, or for git's listing of the range, before saying so, as
 # .github/steering.py waits for gh: the hook runs this on every push.
@@ -209,34 +216,67 @@ def declared(body: str) -> list[str]:
 
 
 class Parts:
-    """The open issues that declare themselves part of a plan row, listed once, when first asked."""
+    """The complete open-issue listing, read once when a plan row is first asked about."""
 
     def __init__(self):
         self.listed: dict[int, list[str]] | None = None
-        self.why = ""
-        self.asked = False
 
-    def of(self, row: str) -> list[int] | None:
-        """The open issues declaring themselves part of `row`, or None when gh could not list them."""
-        if not self.asked:
-            self.asked = True
-            text, self.why = gh(list(GH_OPEN_ISSUES))
-            if text is not None:
-                try:
-                    self.listed = {int(issue["number"]): declared(issue.get("body") or "")
-                                   for issue in json.loads(text)}
-                except (ValueError, TypeError, KeyError) as error:
-                    self.why = f"gh's listing could not be read: {error}"
+    def of(self, row: str) -> list[int]:
+        """Open issues declaring `row`; an unproven listing raises Broken instead of clearing it."""
         if self.listed is None:
-            return None
+            text, why = gh(list(GH_OPEN_ISSUES))
+            if text is None:
+                raise Broken(f"the open issues could not be listed completely: {why}")
+            try:
+                pages = json.loads(text)
+                if not isinstance(pages, list) or not pages:
+                    raise ValueError("no paginated listing receipt")
+                total = None
+                bodies: dict[int, str] = {}
+                cursors = set()
+                for index, page in enumerate(pages):
+                    if not isinstance(page, dict) or page.get("errors"):
+                        raise ValueError("a page has GraphQL errors or is not an object")
+                    listing = page["data"]["repository"]["issues"]
+                    count = listing["totalCount"]
+                    if type(count) is not int or count < 0:
+                        raise ValueError("totalCount is not a nonnegative integer")
+                    if total is not None and total != count:
+                        raise ValueError("totalCount changed between pages")
+                    total = count
+                    nodes = listing["nodes"]
+                    info = listing["pageInfo"]
+                    more, cursor = info["hasNextPage"], info["endCursor"]
+                    if not isinstance(nodes, list) or type(more) is not bool:
+                        raise ValueError("nodes or pageInfo has an unreadable shape")
+                    if index == len(pages) - 1 and more:
+                        raise ValueError("pagination ended while hasNextPage is true")
+                    if index < len(pages) - 1 and not more:
+                        raise ValueError("a page follows a terminal page")
+                    if nodes:
+                        if not isinstance(cursor, str) or not cursor or cursor in cursors:
+                            raise ValueError("a page has an absent or repeated endCursor")
+                        cursors.add(cursor)
+                    elif len(pages) != 1 or count != 0 or cursor is not None:
+                        raise ValueError("an empty page does not describe an empty listing")
+                    for issue in nodes:
+                        number, body = issue["number"], issue["body"]
+                        if type(number) is not int or number <= 0 or not isinstance(body, str):
+                            raise ValueError("an issue has no readable number or body")
+                        if number in bodies:
+                            raise ValueError("an issue number is repeated in the listing")
+                        bodies[number] = body
+                if len(bodies) != total:
+                    raise ValueError(f"the listing returned {len(bodies)} distinct issues of {total}")
+                self.listed = {number: declared(body) for number, body in bodies.items()}
+            except (ValueError, TypeError, KeyError) as error:
+                raise Broken(f"the open issues could not be listed completely: {error}") from error
         return sorted(number for number, declares in self.listed.items() if row in declares)
 
 
-def open_parts(parts: Parts, row: str, own: set[int], landed: dict[str, str]) -> list[int] | None:
-    """The part tickets of `row` still owed: open, not `own`, and not landed whole in `landed`."""
+def open_parts(parts: Parts, row: str, own: set[int], landed: dict[str, str]) -> list[int]:
+    """The part tickets still owed; an incomplete listing cannot prove that none is left."""
     found = parts.of(row)
-    if found is None:
-        return None
     return [number for number in found
             if number not in own and landed.get(f"issue-{number}") != "landed"]
 
@@ -288,12 +328,6 @@ def judge(base: str) -> int:
         landed = states(history(sha)) if named_rows else {}
         for row in named_rows:
             owed = open_parts(parts, row, set(numbers), landed)
-            if owed is None:
-                say(f'unchecked: {sha} "{subject}": the open part tickets of {row} could not be listed: '
-                    f"{parts.why}")
-                if verdict == "clear":
-                    verdict = "unchecked"
-                continue
             for number in owed:
                 say(f'held: {sha} "{subject}" lands {row} whole, but #{number} is open and declares itself '
                     f"part of {row}")
@@ -346,17 +380,12 @@ def subject_for(id_: str, number: int) -> int:
             if landed.get(row) != "part":
                 continue
             owed = open_parts(parts, row, {number}, landed)
-            if owed is None:
-                say(f"unchecked: the open part tickets of {row} could not be listed, so it is not named: "
-                    f"{parts.why}")
-            elif not owed:
+            if not owed:
                 named.append(row)
     owed_by = {}
     for row in rows(named[:1]):
         owed = open_parts(parts, row, {number}, landed)
-        if owed is None:
-            say(f"unchecked: the open part tickets of {row} could not be listed: {parts.why}")
-        elif owed:
+        if owed:
             owed_by[row] = owed
     if owed_by or boxes:
         for row, owed in owed_by.items():

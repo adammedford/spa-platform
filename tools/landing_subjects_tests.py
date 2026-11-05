@@ -15,6 +15,7 @@ case proves the same thing after #62 changes.
 """
 from __future__ import annotations
 
+import json
 import os
 import pathlib
 import shutil
@@ -45,20 +46,40 @@ FINISHED = """## Acceptance criteria
 - [X] The second thing.
 """
 
-# The fake gh. `issue view <n> ...` prints $GH_ISSUES/<n>.md, or says what gh says of a number the
-# repository has no issue for; `issue list ...` prints every issue there not marked closed, as the
-# JSON array `--json number,body` asks for; GH_FAIL makes every call fail as gh does with no network,
-# and GH_LIST_FAIL only the listing. Each call is logged to $GH_LOG, so a case can see which issues
-# were asked about.
+# The fake gh reads issue bodies from GH_ISSUES. Its GraphQL endpoint models the CLI's
+# --paginate and --slurp output: without --paginate it returns only the first page, and without
+# --slurp it prints separate JSON documents. GH_LIST_PAGES supplies a deliberately damaged receipt.
+# The legacy issue-list endpoint is kept for the before-fix reproduction: it returns only the nodes
+# in that receipt, without its pagination/count metadata, as gh issue list did.
 GH_DOUBLE = """#!/bin/bash
 printf '%s\\n' "$*" >> "$GH_LOG"
 if [ -n "$GH_FAIL" ]; then echo "error connecting to api.github.com" >&2; exit 1; fi
-if [ "$1 $2" = "issue list" ]; then
+if [ "$1 $2" = "issue list" ] || [ "$1 $2" = "api graphql" ]; then
   if [ -n "$GH_LIST_FAIL" ]; then echo "error connecting to api.github.com" >&2; exit 1; fi
-  exec python3 -I -c 'import json, os, pathlib
+  exec python3 -I -c 'import json, os, pathlib, sys
 d = pathlib.Path(os.environ["GH_ISSUES"])
-print(json.dumps([{"number": int(p.stem), "body": p.read_text()} for p in sorted(d.glob("*.md"))
-                  if not (d / (p.stem + ".closed")).exists()]))'
+issues = [{"number": int(p.stem), "body": p.read_text()} for p in sorted(d.glob("*.md"), key=lambda p: int(p.stem))
+          if not (d / (p.stem + ".closed")).exists()]
+if os.environ.get("GH_LIST_PAGES"):
+    pages = json.loads(pathlib.Path(os.environ["GH_LIST_PAGES"]).read_text())
+else:
+    pages = [{"data": {"repository": {"issues": {"totalCount": len(issues),
+              "nodes": issues[i:i + 100], "pageInfo": {"hasNextPage": i + 100 < len(issues),
+              "endCursor": "cursor-" + str(i + 100) if issues else None}}}}}
+             for i in range(0, max(len(issues), 1), 100)]
+if sys.argv[1:3] == ["issue", "list"]:
+    try:
+        answer = [node for page in pages for node in page["data"]["repository"]["issues"]["nodes"]]
+    except (TypeError, KeyError):
+        answer = pages
+    print(json.dumps(answer))
+else:
+    selected = pages if "--paginate" in sys.argv else pages[:1]
+    if "--slurp" in sys.argv:
+        print(json.dumps(selected))
+    else:
+        for page in selected:
+            print(json.dumps(page))' "$@"
 fi
 if [ "$1 $2" = "issue view" ] && [ -f "$GH_ISSUES/$3.md" ]; then cat "$GH_ISSUES/$3.md"; exit 0; fi
 echo "GraphQL: Could not resolve to an issue or pull request with the number of $3. (repository.issue)" >&2
@@ -123,6 +144,11 @@ class Case:
         (self.issues / f"{number}.md").write_text(body)
         if closed:
             (self.issues / f"{number}.closed").write_text("")
+
+    def listing(self, pages):
+        receipt = self.dir / "listing-pages.json"
+        receipt.write_text(json.dumps(pages))
+        self.env["GH_LIST_PAGES"] = str(receipt)
 
     def run(self, *arguments: str, **env: str) -> subprocess.CompletedProcess:
         return subprocess.run([sys.executable, "-I", str(SCRIPT), *(arguments or ("--base", "base"))],
@@ -292,17 +318,16 @@ class NeverJudgedTests(unittest.TestCase):
 
 
 class UncheckedTests(unittest.TestCase):
-    def test_an_unreachable_github_is_unchecked_and_passes(self):
+    def test_an_unreachable_github_cannot_clear_a_plan_row(self):
         case = Case(self)
         case.issue(62, ISSUE_62)
         sha = case.commit("Merge task 6.7: operating notes", "Ticket: #62")
         done = case.run(GH_FAIL="1")
-        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        self.assertEqual(2, done.returncode, done.stdout + done.stderr)
         self.assertIn(f'landing-subjects: unchecked: {sha} "Merge task 6.7: operating notes": #62 could not '
                       'be read: error connecting to api.github.com', done.stdout.splitlines())
-        self.assertEqual("landing-subjects: pass: 1 full-landing merge from base to HEAD: 0 clear, 1 unchecked, "
-                         "0 with no Ticket line.",
-                         last_line(done))
+        self.assertIn("the open issues could not be listed completely", last_line(done))
+        self.assertNotIn("landing-subjects: pass:", done.stdout)
 
     def test_an_issue_github_has_not_got_is_unchecked_and_passes(self):
         case = Case(self)
@@ -312,11 +337,11 @@ class UncheckedTests(unittest.TestCase):
         self.assertIn(f"#{NO_SUCH_ISSUE} could not be read: GraphQL: Could not resolve to an issue or pull request "
                       f"with the number of {NO_SUCH_ISSUE}. (repository.issue)", done.stdout)
 
-    def test_no_gh_is_unchecked_and_passes(self):
+    def test_no_gh_cannot_clear_a_plan_row(self):
         case = Case(self, gh=False)
         case.commit("Merge task 6.7: operating notes", "Ticket: #62")
         done = case.run()
-        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        self.assertEqual(2, done.returncode, done.stdout + done.stderr)
         self.assertIn("#62 could not be read: gh is not on PATH", done.stdout)
 
     def test_an_unchecked_issue_does_not_hide_a_held_one(self):
@@ -466,20 +491,18 @@ class PartTicketTests(unittest.TestCase):
         case.commit("Merge task P2-1: the session store", "Ticket: #344")
         case.commit("Merge task P2-3: composed", "Ticket: #346")
         self.assertEqual(0, case.run().returncode)
-        self.assertEqual(1, len([call for call in case.asked() if call.startswith("issue list ")]), case.asked())
+        self.assertEqual(1, len([call for call in case.asked() if call.startswith("api graphql ")]), case.asked())
 
-    def test_an_unreadable_listing_is_unchecked_and_passes(self):
+    def test_an_unreadable_listing_fails_without_clearing_the_row(self):
         case = Case(self)
         case.issue(344, CARRIER_P2_1)
         case.issue(338, PART_338)
-        sha = case.commit("Merge task P2-1: the session store", "Ticket: #344")
+        case.commit("Merge task P2-1: the session store", "Ticket: #344")
         done = case.run(GH_LIST_FAIL="1")
-        self.assertEqual(0, done.returncode, done.stdout)
-        self.assertIn(f'landing-subjects: unchecked: {sha} "Merge task P2-1: the session store": the open part '
-                      'tickets of P2-1 could not be listed: error connecting to api.github.com',
-                      done.stdout.splitlines())
-        self.assertEqual("landing-subjects: pass: 1 full-landing merge from base to HEAD: 0 clear, 1 unchecked, "
-                         "0 with no Ticket line.", last_line(done))
+        self.assertEqual(2, done.returncode, done.stdout + done.stderr)
+        self.assertIn("error connecting to api.github.com", done.stdout)
+        self.assertNotIn("landing-subjects: pass:", done.stdout)
+
 
     def test_an_open_box_and_an_open_part_are_both_named(self):
         case = Case(self)
@@ -492,6 +515,122 @@ class PartTicketTests(unittest.TestCase):
         self.assertIn("but #338 is open and declares itself part of P2-1", done.stdout)
         self.assertEqual('landing-subjects: fail: 1 full-landing merge held: 1 on an open box, 1 on an open part '
                          'ticket; land it as "Merge part of task" with its Outstanding lines.', last_line(done))
+
+
+def listing_page(nodes, total, *, more=False, cursor="page-1"):
+    return {"data": {"repository": {"issues": {
+        "nodes": nodes, "totalCount": total,
+        "pageInfo": {"hasNextPage": more, "endCursor": cursor},
+    }}}}
+
+
+class ListingCompletenessTests(unittest.TestCase):
+    def case(self, pages):
+        case = Case(self)
+        case.issue(344, CARRIER_P2_1)
+        case.commit("Merge task P2-1: the session store", "Ticket: #344")
+        case.listing(pages)
+        return case
+
+    def assert_unjudgeable(self, done):
+        self.assertEqual(2, done.returncode, done.stdout + done.stderr)
+        self.assertIn("landing-subjects: fail:", done.stdout)
+        self.assertNotIn("landing-subjects: pass:", done.stdout)
+        self.assertNotIn("landing-subjects: subject:", done.stdout)
+
+    def test_a_short_terminal_listing_cannot_hide_an_unreturned_part(self):
+        case = self.case([listing_page([{"number": 344, "body": CARRIER_P2_1}], 2)])
+        # The server reports two open issues but the returned slice contains only the carrier.
+        # An exit-zero list of that slice used to clear the row; the hidden part is still open.
+        hidden = 2205
+        case.issue(hidden, PART_338)
+        self.assert_unjudgeable(case.run())
+
+    def test_a_cut_before_the_next_page_cannot_clear_the_row(self):
+        case = self.case([listing_page([{"number": 344, "body": CARRIER_P2_1}], 2, more=True)])
+        self.assert_unjudgeable(case.run())
+
+    def test_a_next_page_flag_is_not_overruled_by_a_matching_total(self):
+        case = self.case([listing_page([{"number": 344, "body": CARRIER_P2_1}], 1, more=True)])
+        self.assert_unjudgeable(case.run())
+
+    def test_a_part_on_the_second_page_holds_the_row(self):
+        case = Case(self)
+        case.issue(344, CARRIER_P2_1)
+        for number in range(1000, 1100):
+            case.issue(number, NO_PART)
+        hidden = 2205
+        case.issue(hidden, PART_338)
+        case.commit("Merge task P2-1: the session store", "Ticket: #344")
+        done = case.run()
+        self.assertEqual(1, done.returncode, done.stdout + done.stderr)
+        self.assertIn(f"#{hidden} is open and declares itself part of P2-1", done.stdout)
+
+    def test_a_complete_multi_page_listing_without_a_part_can_clear(self):
+        case = Case(self)
+        case.issue(344, CARRIER_P2_1)
+        for number in range(1000, 1100):
+            case.issue(number, NO_PART)
+        case.commit("Merge task P2-1: the session store", "Ticket: #344")
+        done = case.run()
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        self.assertIn("1 clear, 0 unchecked", done.stdout)
+
+    def test_duplicate_numbers_cannot_fill_the_reported_count(self):
+        node = {"number": 344, "body": CARRIER_P2_1}
+        self.assert_unjudgeable(self.case([listing_page([node, node], 1)]).run())
+
+    def test_a_changed_total_between_pages_is_not_a_complete_listing(self):
+        pages = [listing_page([{"number": 344, "body": CARRIER_P2_1}], 3, more=True),
+                 listing_page([{"number": 345, "body": NO_PART}], 2, cursor="page-2")]
+        self.assert_unjudgeable(self.case(pages).run())
+
+    def test_graphql_errors_beside_data_are_not_accepted(self):
+        page = listing_page([{"number": 344, "body": CARRIER_P2_1}], 1)
+        page["errors"] = [{"message": "the other issue could not be read"}]
+        self.assert_unjudgeable(self.case([page]).run())
+
+    def test_a_page_after_a_terminal_page_is_not_accepted(self):
+        pages = [listing_page([{"number": 344, "body": CARRIER_P2_1}], 2),
+                 listing_page([{"number": 345, "body": NO_PART}], 2, cursor="page-2")]
+        self.assert_unjudgeable(self.case(pages).run())
+
+    def test_a_repeated_cursor_is_not_progress_through_the_listing(self):
+        pages = [listing_page([{"number": 344, "body": CARRIER_P2_1}], 2, more=True),
+                 listing_page([{"number": 345, "body": NO_PART}], 2)]
+        self.assert_unjudgeable(self.case(pages).run())
+
+    def test_malformed_receipts_cannot_clear_the_row(self):
+        for shape, pages in (
+            ("no pages", []),
+            ("no connection", [{"data": {"repository": None}}]),
+            ("a boolean count", [listing_page([], False, cursor=None)]),
+            ("a nonboolean next-page flag", [listing_page([], 0, more=0, cursor=None)]),
+            ("a missing body", [listing_page([{"number": 344}], 1)]),
+            ("a null body", [listing_page([{"number": 344, "body": None}], 1)]),
+            ("a boolean number", [listing_page([{"number": True, "body": ""}], 1)]),
+            ("an empty cursor on a nonempty page", [listing_page(
+                [{"number": 344, "body": CARRIER_P2_1}], 1, cursor="")]),
+        ):
+            with self.subTest(shape=shape):
+                self.assert_unjudgeable(self.case(pages).run())
+
+    def test_a_complete_empty_listing_is_valid(self):
+        case = Case(self)
+        case.issue(344, CARRIER_P2_1, closed=True)
+        case.commit("Merge task P2-1: the session store", "Ticket: #344")
+        done = case.run()
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        self.assertIn("1 clear, 0 unchecked", done.stdout)
+
+    def test_an_incomplete_listing_cannot_name_the_last_parts_row(self):
+        case = Case(self)
+        own = 2205
+        case.issue(own, PART_338.replace("- [ ]", "- [x]"))
+        case.commit("Merge part of task P2-1: the store", "Outstanding: a part.",
+                    "Outstanding test ids: none.")
+        case.listing([listing_page([{"number": own, "body": FINISHED}], 2)])
+        self.assert_unjudgeable(case.run("--subject-for", f"issue-{own}", "--ticket", str(own)))
 
 
 class SubjectForTests(unittest.TestCase):
@@ -564,13 +703,13 @@ class SubjectForTests(unittest.TestCase):
         done = self.ask(case, "issue-338", 338)
         self.assertEqual("landing-subjects: subject: Merge tasks issue-338, P2-1 and P2-2", last_line(done))
 
-    def test_an_unreachable_github_answers_as_before_and_says_so(self):
+    def test_an_unreachable_listing_cannot_choose_a_full_landing_subject(self):
         case = Case(self)
         done = self.ask(case, "P2-3", 346, GH_FAIL="1")
-        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
-        self.assertTrue(any(line.startswith("landing-subjects: unchecked: ") for line in done.stdout.splitlines()),
-                        done.stdout)
-        self.assertEqual("landing-subjects: subject: Merge task P2-3", last_line(done))
+        self.assertEqual(2, done.returncode, done.stdout + done.stderr)
+        self.assertIn("error connecting to api.github.com", done.stdout)
+        self.assertNotIn("landing-subjects: subject:", done.stdout)
+
 
     def test_the_answer_passes_the_range_check_once_merged(self):
         # One rule (#388 Q4): the subject it gives is one the range check does not hold.
