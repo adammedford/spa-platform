@@ -81,7 +81,7 @@ First deployment):
    health check is `/` for the sample.
 4. `tools/scripts/seed.sh` publishes the fixture releases and writes the first registry through
    `spactl`. `deploy.sh` refuses to run before it.
-5. `tools/scripts/deploy.sh`, as above, with no tunnel running: its readiness wait opens its own.
+5. `tools/scripts/deploy.sh`, as above; no tunnel need be running, since its readiness wait opens its own.
    The target turns healthy only once `/readyz` reports a snapshot. While the service settles, the
    sample task's target shows as draining and fails the new `/readyz` check; `deploy.sh` tolerates
    that (#207).
