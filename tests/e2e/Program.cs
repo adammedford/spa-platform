@@ -24,7 +24,7 @@ internal static class Program
     {
         if (args is [SittingBrowserCommand, ..])
         {
-            return await RunSittingBrowserAsync();
+            return await RunSittingBrowserAsync(args[1..]);
         }
 
         if (args.Any(arg => arg is "--server" or "--internal-msbuild-node"))
@@ -35,15 +35,56 @@ internal static class Program
         return await ConsoleRunner.Run(args);
     }
 
+    /// <summary>The option naming the sitting's bundle directory, <c>"$E"</c> in the wiz skill, which holds the socket and the files.</summary>
+    public const string BundleOption = "--bundle";
+
     /// <summary>
-    /// The stack <see cref="StackSwitch"/> names, under a token this process cancels on SIGINT or SIGTERM
-    /// (outside a test <c>TestContext.Current</c>'s never cancels), the sitting browser over it on
-    /// standard input and output, and the Playwright driver stopped at the end. The local cell's hosts
-    /// take SIGINT and SIGTERM too and stop their applications; the stop then closes the stack. A stack that does not
-    /// start is one line on standard error, its message as <see cref="Redacted.Text"/> prints it, and
-    /// exit 1.
+    /// <c>sitting-browser --bundle &lt;dir&gt; &lt;command&gt; ...</c> (#1033): <c>start</c> runs the resident
+    /// process, every other command is a client call to it. A usage error is one line on standard
+    /// error and exit 2.
     /// </summary>
-    private static async Task<int> RunSittingBrowserAsync()
+    private static async Task<int> RunSittingBrowserAsync(string[] args)
+    {
+        List<string> words = [.. args];
+        int at = words.IndexOf(BundleOption);
+        if (at < 0 || at + 1 >= words.Count)
+        {
+            return await UsageAsync($"{BundleOption} <the sitting's bundle directory> is required");
+        }
+
+        string bundle = words[at + 1];
+        words.RemoveRange(at, 2);
+        (SittingBrowser.SittingCommand? command, string? usage) = SittingBrowser.SittingCommand.Parse(words);
+        if (command is null)
+        {
+            return await UsageAsync(usage!);
+        }
+
+        if (!Directory.Exists(bundle))
+        {
+            return await UsageAsync($"{BundleOption} names no directory");
+        }
+
+        return command.Verb == SittingBrowser.SittingCommand.Start
+            ? await StartSittingBrowserAsync(bundle)
+            : await SittingBrowser.SittingBrowserClient.SendAsync(bundle, command, words, Console.Out, CancellationToken.None);
+    }
+
+    private static async Task<int> UsageAsync(string usage)
+    {
+        await Console.Error.WriteLineAsync($"sitting-browser: {usage}");
+        return 2;
+    }
+
+    /// <summary>
+    /// The resident process, under a token this process cancels on SIGINT or SIGTERM (outside a test
+    /// <c>TestContext.Current</c>'s never cancels), with the Playwright driver stopped at the end.
+    /// Standard output carries its own lines alone (ready, refused, stopped); everything else the
+    /// process writes, the local cell's hosts and Playwright among it, goes to
+    /// <see cref="SittingBrowser.SittingBrowserServer.ServerLog"/>, mode 600, and never to the terminal
+    /// (#1024 Q11).
+    /// </summary>
+    private static async Task<int> StartSittingBrowserAsync(string bundle)
     {
         using CancellationTokenSource stop = new();
         void Stop(PosixSignalContext signal)
@@ -56,30 +97,26 @@ internal static class Program
         using PosixSignalRegistration interrupt = PosixSignalRegistration.Create(PosixSignal.SIGINT, Stop);
         using PosixSignalRegistration terminate = PosixSignalRegistration.Create(PosixSignal.SIGTERM, Stop);
 
-        // Standard output carries observation lines and nothing else: what the local cell's hosts log to
-        // the console goes to standard error with the rest of the diagnostics.
         TextWriter lines = Console.Out;
-        Console.SetOut(Console.Error);
+        FileStreamOptions options = new() { Mode = FileMode.Append, Access = FileAccess.Write };
+        if (!OperatingSystem.IsWindows())
+        {
+            options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+        }
+
+        await using StreamWriter log = new(new FileStream(Path.Combine(bundle, SittingBrowser.SittingBrowserServer.ServerLog), options)) { AutoFlush = true };
+        TextWriter synchronized = TextWriter.Synchronized(log);
+        Console.SetOut(synchronized);
+        Console.SetError(synchronized);
         try
         {
-            IBrowserStack stack;
-            try
-            {
-                stack = await Stacks.StartCancellableAsync(stop.Token);
-            }
-            catch (Exception failed) when (failed is not OperationCanceledException)
-            {
-                await Console.Error.WriteLineAsync($"sitting-browser: the stack did not start: {failed.GetType().Name}: {Redacted.Text(failed.Message, [])}");
-                return 1;
-            }
-
-            await using SittingBrowser.SittingBrowser sitting = new(stack, lines, stop.Token);
-            await sitting.RunAsync(Console.In);
-            return 0;
+            return await SittingBrowser.SittingBrowserServer.RunAsync(bundle, lines, Stacks.StartCancellableAsync,
+                SittingBrowser.SittingBrowserServer.CurrentEnvironment(), stop.Token);
         }
         catch (OperationCanceledException) when (stop.IsCancellationRequested)
         {
             // Stopped while the stack was starting: nothing was opened that the stack's start did not close.
+            await lines.WriteLineAsync(SittingBrowser.Observations.Stopped(DateTimeOffset.UtcNow, SittingBrowser.SittingBrowserServer.CancelledReason));
             return 0;
         }
         finally

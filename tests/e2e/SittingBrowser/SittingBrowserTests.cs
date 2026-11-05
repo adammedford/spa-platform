@@ -3,7 +3,6 @@ using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
-using System.Threading.Channels;
 using Gateway.E2ETests.Stack;
 using Gateway.TestHarness;
 using Microsoft.Playwright;
@@ -11,19 +10,21 @@ using Microsoft.Playwright;
 namespace Gateway.E2ETests.SittingBrowser;
 
 /// <summary>
-/// The sitting browser's entry point and process (#1032), with no cell: the entry point that replaced
-/// xUnit's generated one still finds the suite, and the process signs in on the local stack, reads the
-/// marker, prints nothing a sitting may not post, and stops on its token and on the end of its input.
-/// The password's path (<c>DeployedStack</c>'s login form) is proven in the first sitting on the cell
-/// (#1027), since no provider here shows a form.
+/// The sitting browser's command surface and observation line (#1033) on its process (#1032), with no
+/// cell: the resident process runs in this test process on the local stack, and every command reaches
+/// it as a client call over its socket, as a sitting's Bash calls do. The executable facts run the
+/// suite's own executable, which is what a sitting starts. The password's path (<c>DeployedStack</c>'s
+/// login form) is proven in the first sitting on the cell (#1027), since no provider here shows a form.
 /// </summary>
 public sealed partial class SittingBrowserTests
 {
-    /// <summary>How long a stop may take: the profile, the browser and the local cell closing.</summary>
+    /// <summary>How long a stop may take: the profiles, the browser and the local cell closing.</summary>
     private static readonly TimeSpan StopBound = TimeSpan.FromSeconds(30);
 
     /// <summary>How long the built executable may take to print its ready line: the browser installer's check, the cell, Chromium.</summary>
     private static readonly TimeSpan ReadyBound = TimeSpan.FromMinutes(3);
+
+    private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     [Fact]
     public async Task The_executable_lists_with_the_console_runner_every_test_method_the_assembly_declares()
@@ -47,135 +48,502 @@ public sealed partial class SittingBrowserTests
     }
 
     [Fact]
-    public async Task It_signs_in_as_the_default_user_and_reads_the_marker_on_the_switchs_stack()
+    public async Task Each_command_answers_with_its_line_in_the_grammar_on_the_local_stack()
     {
-        Session session = await SignInAndReadMarkerAsync();
-        string[] lines = session.Lines;
+        await using Running sitting = await Running.StartAsync();
+        HarnessApp app = sitting.Engine.Stack.App("app1");
+        string api = FixtureApi("app1");
+        const string Readiness = "revision=[0-9]+ instance=[A-Za-z0-9-]+";
 
-        Assert.Matches(Line("ready", "stack=local"), lines[0]);
-        Assert.Contains(lines, line => Line("state", $"app=app1 state={Profile.SignedInState.Replace(' ', '-')}").IsMatch(line));
-        Assert.Contains(lines, line => Line("marker", $"text={Regex.Escape(JsonSerializer.Serialize(FixtureMarker("app1")))}").IsMatch(line));
-        Assert.Matches(Line("stopped", $"reason={SittingBrowser.StopCommand}"), lines[^1]);
-        Assert.Equal(SittingBrowser.StopCommand, session.Reason);
+        // The test provider approves at once, so the shell's challenge on / signs the profile in.
+        Answer opened = await sitting.SendAsync("open", "main", "--app", "app1");
+        opened.Assert(0, Line("signed-in", "main", $"app=app1 {Readiness}"));
+
+        Answer login = await sitting.SendAsync("login", "main", "--app", "app1", "--as", "bob");
+        login.Assert(0, Line("signed-in", "main", $"app=app1 as=bob {Readiness}"));
+
+        Answer reload = await sitting.SendAsync("reload", "main");
+        reload.Assert(0, Line("signed-in", "main", $"app=app1 as=bob {Readiness}"));
+
+        Answer marker = await sitting.SendAsync("marker", "main");
+        marker.Assert(0, Line("marker", "main", $"app=app1 text={Regex.Escape(FixtureMarker("app1"))}"));
+
+        Answer session = await sitting.SendAsync("session", "main");
+        session.Assert(0, Line("session", "main", "app=app1 http=200 problem=-"));
+
+        Answer whoami = await sitting.SendAsync("api", "main", $"{api}/whoami");
+        whoami.Assert(0, Line("api", "main", $"app=app1 path=/api/{api}/whoami http=200 problem=-"));
+
+        // One cookie on the provider's host, which the test provider sets none of by default.
+        IBrowserContext context = sitting.Engine.ProfileNamed("main")!.Context;
+        await context.AddCookiesAsync([new Cookie { Name = "provider-probe", Value = "provider-cookie-value", Url = sitting.Engine.Stack.AuthorizeEndpoint }]);
+        IReadOnlyList<BrowserContextCookiesResult> appCookies = await context.CookiesAsync([app.Origin.ToString()]);
+        Assert.NotEmpty(appCookies);
+        Answer cleared = await sitting.SendAsync("clear-provider", "main");
+        cleared.Assert(0, Line("clear-provider", "main", "app=app1 removed=1"));
+        Assert.Equal(appCookies.Select(cookie => cookie.Name).Order(), (await context.CookiesAsync([app.Origin.ToString()])).Select(cookie => cookie.Name).Order());
+        Assert.Empty(await context.CookiesAsync([sitting.Engine.Stack.AuthorizeEndpoint]));
+
+        Answer status = await sitting.SendAsync("status");
+        status.Assert(0, Line("status", "main", $"app=app1 last=clear-provider at={TimePattern}"));
+
+        Answer closed = await sitting.SendAsync("close", "main");
+        closed.Assert(0, Line("closed", "main", "app=app1"));
+
+        Answer none = await sitting.SendAsync("status");
+        none.Assert(0, Line("status", "-", "profiles=0"));
+
+        Answer unknown = await sitting.SendAsync("marker", "main");
+        unknown.Assert(1, Line("failed", "main", "command=marker reason=unknown-profile"));
+
+        await sitting.SendAsync("open", "other", "--app", "app1");
+        Answer stopped = await sitting.SendAsync("stop");
+        stopped.Assert(0, Line("closed", "other", "app=app1"));
+        Assert.Equal(0, await sitting.Run.WaitAsync(StopBound, Ct));
+        Assert.Matches(Line("stopped", "-", "reason=stop"), sitting.ServerLines.Lines[^1]);
+
+        foreach (string line in sitting.Everything)
+        {
+            AssertGrammar(line);
+        }
     }
 
     [Fact]
-    public async Task What_it_prints_holds_no_cookie_value_and_no_url_with_a_query()
+    public async Task Every_line_shape_comes_out_of_the_redactor_unchanged_in_stream_and_post_mode()
     {
-        Session session = await SignInAndReadMarkerAsync();
-
-        Assert.NotEmpty(session.Cookies);
-        foreach (string value in session.Cookies.Select(cookie => cookie.Value).Where(value => value.Length > 0))
+        string[] shapes = [.. LineShapes().Select(shape => shape.Line)];
+        HashSet<string> sampled = [.. LineShapes().Select(shape => shape.Member)];
+        HashSet<string> members = [.. typeof(Observations).GetMethods(BindingFlags.Public | BindingFlags.Static)
+            .Where(method => method.ReturnType == typeof(string)).Select(method => method.Name)];
+        Assert.Equal(members.Order(StringComparer.Ordinal), sampled.Order(StringComparer.Ordinal));
+        foreach (string line in shapes)
         {
-            Assert.DoesNotContain(value, session.Text, StringComparison.Ordinal);
+            AssertGrammar(line);
         }
 
-        Assert.DoesNotMatch(UrlWithQuery(), session.Text);
+        string input = string.Join('\n', shapes) + "\n";
+        (int streamExit, string streamed) = await RedactAsync(["--stream"], input);
+        Assert.Equal(0, streamExit);
+        Assert.Equal(input, streamed);
+
+        // Post mode holds any post naming AccessDenied (exit 3) by design, so the SSM refusal's line is fed to the stream alone.
+        string postInput = string.Join('\n', shapes.Where(line => !line.Contains("AccessDenied", StringComparison.Ordinal))) + "\n";
+        (int postExit, string posted) = await RedactAsync([], postInput);
+        Assert.Equal(0, postExit);
+        Assert.Equal(postInput, posted);
+    }
+
+    [Theory]
+    [InlineData("state")]
+    [InlineData("code")]
+    [InlineData("id")]
+    [InlineData("value")]
+    [InlineData("client_id")]
+    [InlineData("State")]
+    public void A_line_refuses_a_key_the_redactor_elides(string key)
+    {
+        Assert.Throws<ArgumentException>(() => ObservationLine.Format("other", DateTimeOffset.UtcNow, "main", [(key, "x")]));
+        Assert.Throws<ArgumentException>(() => ObservationLine.Format("other", DateTimeOffset.UtcNow, "main", [], (key, "x y")));
     }
 
     [Fact]
-    public async Task A_command_it_cannot_answer_is_one_line_that_echoes_nothing_typed_and_it_goes_on()
+    public async Task Watch_prints_one_line_a_tick_at_its_interval_appends_them_to_the_log_and_stops_on_unwatch()
     {
-        SkipUnlessTheSwitchIsUnset();
-        using CancellationTokenSource stop = new();
-        CapturedLines lines = new();
-        Commands commands = new();
-        IBrowserStack stack = await Stacks.StartAsync();
-        await using SittingBrowser sitting = new(stack, lines, stop.Token);
-        Task<string> run = sitting.RunAsync(commands);
-        await lines.WaitForAsync("ready", run);
+        await using Running sitting = await Running.StartAsync();
+        (await sitting.SendAsync("open", "main", "--app", "app1")).Assert(0, Line("signed-in", "main", "app=app1 .*"));
 
-        commands.Send("sign-in no-such-app");
-        await lines.WaitForAsync("failed", run);
-        commands.Send("typed-by-mistake s3cr3t-value");
-        await lines.WaitForAsync("refused", run);
-        commands.Send("stop");
-        await run.WaitAsync(StopBound, TestContext.Current.CancellationToken);
+        TimedLines watched = new();
+        string[] words = ["watch", "main", "--every", "2s", "--clear-provider", "--relogin"];
+        Task<int> watch = SittingBrowserClient.SendAsync(sitting.Bundle.FullName, SittingCommand.Parse(words).Command!, words, watched, Ct);
+        await watched.WaitForCountAsync(3, watch);
 
-        Assert.Contains(lines.Lines, line => Line("failed", "command=sign-in error=KeyNotFoundException").IsMatch(line));
-        Assert.Contains(lines.Lines, line => Line("refused", "reason=unknown-command").IsMatch(line));
-        Assert.DoesNotContain("no-such-app", lines.Text, StringComparison.Ordinal);
-        Assert.DoesNotContain("s3cr3t-value", lines.Text, StringComparison.Ordinal);
-        Assert.Matches(Line("stopped", $"reason={SittingBrowser.StopCommand}"), lines.Lines[^1]);
-    }
+        Answer unwatched = await sitting.SendAsync("unwatch", "main");
+        Assert.Equal(0, await watch.WaitAsync(StopBound, Ct));
+        unwatched.Assert(0, Line("unwatched", "main", "app=app1 ticks=[0-9]+"));
 
-    [Fact]
-    public async Task Cancelling_its_token_stops_it_within_a_bound_and_closes_its_browser()
-    {
-        SkipUnlessTheSwitchIsUnset();
-        using CancellationTokenSource stop = new();
-        CapturedLines lines = new();
-        Commands commands = new();
-        IBrowserStack stack = await Stacks.StartAsync();
-        await using SittingBrowser sitting = new(stack, lines, stop.Token);
-        Task<string> run = sitting.RunAsync(commands);
-        await lines.WaitForAsync("ready", run);
-
-        // A command is waiting on its input, which never ends: only the token can stop it.
-        await stop.CancelAsync();
-        string reason = await run.WaitAsync(StopBound, TestContext.Current.CancellationToken);
-
-        Assert.Equal(SittingBrowser.Cancelled, reason);
-        Assert.Matches(Line("stopped", $"reason={SittingBrowser.Cancelled}"), lines.Lines[^1]);
-        IBrowser browser = sitting.Profile!.Context.Browser!;
-        Assert.False(browser.IsConnected, "the stop should have closed the stack, and its Chromium with it.");
-    }
-
-    [Fact]
-    public async Task The_executable_with_sitting_browser_prints_its_ready_line_and_exits_0_at_the_end_of_its_input()
-    {
-        ChildResult child = await RunExecutableAsync([Program.SittingBrowserCommand], atReady: process =>
+        (string Line, TimeSpan At)[] ticks = [.. watched.Lines];
+        Assert.True(ticks.Length >= 3, $"{ticks.Length} lines");
+        Assert.All(ticks, tick => Assert.Matches(Line("signed-in", "main", "app=app1 revision=[0-9]+ instance=[A-Za-z0-9-]+"), tick.Line));
+        foreach (((string _, TimeSpan earlier), (string _, TimeSpan later)) in ticks.Zip(ticks.Skip(1)))
         {
-            process.StandardInput.Close();
-            return Task.CompletedTask;
+            TimeSpan gap = later - earlier;
+            Assert.True(gap >= TimeSpan.FromSeconds(1) && gap <= TimeSpan.FromSeconds(4), $"a tick {gap.TotalSeconds:F1}s after the last, at an interval of 2s.");
+        }
+
+        Assert.Equal(ticks.Length, int.Parse(TicksField().Match(unwatched.Lines[0]).Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture));
+        string log = Path.Combine(sitting.Bundle.FullName, SittingBrowser.WatchLog);
+        Assert.Equal(ticks.Select(tick => tick.Line), await File.ReadAllLinesAsync(log, Ct));
+
+        // Nothing more after unwatch, for longer than two intervals.
+        await Task.Delay(TimeSpan.FromSeconds(5), Ct);
+        Assert.Equal(ticks.Length, (await File.ReadAllLinesAsync(log, Ct)).Length);
+        Assert.Equal(ticks.Length, watched.Lines.Count);
+        (await sitting.SendAsync("unwatch", "main")).Assert(1, Line("failed", "main", "command=unwatch reason=not-watching"));
+    }
+
+    [Fact]
+    public async Task What_it_prints_holds_no_cookie_value_no_url_with_a_query_and_no_csrf_token()
+    {
+        await using Running sitting = await Running.StartAsync();
+        HarnessApp app = sitting.Engine.Stack.App("app1");
+        await sitting.SendAsync("login", "main", "--app", "app1");
+        await sitting.SendAsync("reload", "main");
+        await sitting.SendAsync("marker", "main");
+        (await sitting.SendAsync("session", "main")).Assert(0, Line("session", "main", "app=app1 http=200 problem=-"));
+        await sitting.SendAsync("api", "main", $"{FixtureApi("app1")}/whoami");
+        await sitting.SendAsync("status");
+
+        Profile profile = sitting.Engine.ProfileNamed("main")!;
+        IReadOnlyList<BrowserContextCookiesResult> cookies = await profile.Context.CookiesAsync();
+        FetchResult session = await profile.FetchAsync(app.Url("/bff/session").ToString());
+        string csrf = JsonDocument.Parse(session.Body).RootElement.GetProperty("csrfToken").GetString()!;
+        await sitting.SendAsync("stop");
+        await sitting.Run.WaitAsync(StopBound, Ct);
+
+        string text = string.Join('\n', sitting.Everything);
+        Assert.NotEmpty(cookies);
+        foreach (string value in cookies.Select(cookie => cookie.Value).Where(value => value.Length > 0))
+        {
+            Assert.DoesNotContain(value, text, StringComparison.Ordinal);
+        }
+
+        Assert.True(csrf.Length >= 16);
+        Assert.DoesNotContain(csrf, text, StringComparison.Ordinal);
+        Assert.DoesNotMatch(UrlWithQuery(), text);
+    }
+
+    [Fact]
+    public async Task The_server_log_holds_no_url_with_a_query_no_csrf_token_and_no_cookie_value()
+    {
+        // The executable's own output, the local cell's hosts among it, goes to the server log. Its
+        // cookie values are the child's, out of this process's reach, so they are read back with the
+        // browser's own cookie header shape: no Cookie or Set-Cookie line, no session cookie's name with a value.
+        using TempBundle bundle = new();
+        ChildResult child = await RunExecutableAsync(Start(bundle), atReady: async _ =>
+        {
+            Assert.Equal(0, (await RunClientAsync(bundle, ["login", "main", "--app", "app1"])).ExitCode);
+            ChildResult session = await RunClientAsync(bundle, ["session", "main"]);
+            Assert.Equal(0, session.ExitCode);
+            Assert.Matches(Line("session", "main", "app=app1 http=200 problem=-"), session.Output.TrimEnd('\n'));
+            Assert.Equal(0, (await RunClientAsync(bundle, ["reload", "main"])).ExitCode);
+            Assert.Equal(0, (await RunClientAsync(bundle, ["stop"])).ExitCode);
+        }, ReadyBound);
+        Assert.True(child.ExitCode == 0, $"exit {child.ExitCode}; standard error: {child.Error}");
+
+        string log = await File.ReadAllTextAsync(Path.Combine(bundle.Path, SittingBrowserServer.ServerLog), Ct);
+        Assert.NotEmpty(log);
+        Assert.DoesNotMatch(UrlWithQuery(), log);
+        Assert.DoesNotContain("csrfToken", log, StringComparison.Ordinal);
+        Assert.DoesNotMatch(CookieWithValue(), log);
+        if (!OperatingSystem.IsWindows())
+        {
+            Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, File.GetUnixFileMode(Path.Combine(bundle.Path, SittingBrowserServer.ServerLog)));
+        }
+    }
+
+    [Fact]
+    public async Task A_client_with_no_socket_prints_not_running_and_exits_1()
+    {
+        using TempBundle bundle = new();
+        string[] words = ["marker", "main"];
+        StringWriter output = new();
+        Assert.Equal(1, await SittingBrowserClient.SendAsync(bundle.Path, SittingCommand.Parse(words).Command!, words, output, Ct));
+        Assert.Matches(Line("not-running", "main", ""), output.ToString().TrimEnd('\n'));
+
+        // A socket file nothing listens on, a crashed process's, is the same.
+        await File.WriteAllTextAsync(Path.Combine(bundle.Path, SittingBrowserServer.SocketName), "", Ct);
+        output = new();
+        Assert.Equal(1, await SittingBrowserClient.SendAsync(bundle.Path, SittingCommand.Parse(words).Command!, words, output, Ct));
+        Assert.Matches(Line("not-running", "main", ""), output.ToString().TrimEnd('\n'));
+
+        // The executable, as a sitting calls it.
+        ChildResult child = await RunClientAsync(bundle, ["status"]);
+        Assert.Equal(1, child.ExitCode);
+        Assert.Matches(Line("not-running", "-", ""), child.Output.TrimEnd('\n'));
+    }
+
+    [Fact]
+    public async Task A_second_start_on_a_live_socket_refuses_and_leaves_the_first_running()
+    {
+        await using Running sitting = await Running.StartAsync();
+        CapturedLines second = new();
+        int exit = await SittingBrowserServer.RunAsync(sitting.Bundle.FullName, second,
+            _ => throw new InvalidOperationException("a refused start started a stack."), NoEnvironment, Ct);
+
+        Assert.Equal(1, exit);
+        Assert.Matches(Line("refused", "-", "reason=running"), Assert.Single(second.Lines));
+        (await sitting.SendAsync("status")).Assert(0, Line("status", "-", "profiles=0"));
+    }
+
+    [Theory]
+    [InlineData("PWDEBUG", "1", "pwdebug")]
+    [InlineData("PWDEBUG", "", "pwdebug")]
+    [InlineData("DEBUG", "pw:api", "debug-pw")]
+    [InlineData("DEBUG", "express:*,pw:browser", "debug-pw")]
+    public async Task The_process_refuses_to_start_under_a_playwright_debug_switch(string variable, string value, string reason)
+    {
+        using TempBundle bundle = new();
+        CapturedLines lines = new();
+        int exit = await SittingBrowserServer.RunAsync(bundle.Path, lines,
+            _ => throw new InvalidOperationException("a refused start started a stack."), new Dictionary<string, string?> { [variable] = value }, Ct);
+
+        Assert.Equal(1, exit);
+        Assert.Matches(Line("refused", "-", $"reason={reason}"), Assert.Single(lines.Lines));
+        Assert.False(File.Exists(Path.Combine(bundle.Path, SittingBrowserServer.SocketName)), "a refused start left a socket.");
+    }
+
+    [Fact]
+    public void A_debug_channel_that_is_not_playwrights_does_not_refuse_a_start()
+    {
+        Assert.Null(SittingBrowserServer.RefusalOf(new Dictionary<string, string?> { ["DEBUG"] = "express:*" }));
+        Assert.Null(SittingBrowserServer.RefusalOf(NoEnvironment));
+    }
+
+    [Theory]
+    [InlineData("PWDEBUG", "1", "pwdebug")]
+    [InlineData("DEBUG", "pw:api", "debug-pw")]
+    public async Task The_executable_refuses_to_start_with_pwdebug_set_and_with_debug_pw_api(string variable, string value, string reason)
+    {
+        using TempBundle bundle = new();
+        ChildResult child = await RunExecutableAsync(Start(bundle), atReady: null, TimeSpan.FromMinutes(1), new Dictionary<string, string> { [variable] = value });
+
+        Assert.Equal(1, child.ExitCode);
+        Assert.Matches(Line("refused", "-", $"reason={reason}"), child.Output.TrimEnd('\n'));
+    }
+
+    [Theory]
+    [InlineData("open main")]
+    [InlineData("login main --app app1 --as mallory")]
+    [InlineData("api main orders/whoami?x=1")]
+    [InlineData("watch main --every 0s")]
+    [InlineData("hold main")]
+    [InlineData("login main --app app1 --password s3cr3t")]
+    public async Task A_usage_error_exits_2_before_any_connection_and_echoes_nothing(string command)
+    {
+        using TempBundle bundle = new();
+        ChildResult child = await RunClientAsync(bundle, command.Split(' '));
+
+        Assert.Equal(2, child.ExitCode);
+        Assert.Empty(child.Output);
+        Assert.DoesNotContain("s3cr3t", child.Error, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task The_executable_starts_answers_a_client_and_stops_on_stop_and_exits_0()
+    {
+        using TempBundle bundle = new();
+        ChildResult child = await RunExecutableAsync(Start(bundle), atReady: async _ =>
+        {
+            ChildResult status = await RunClientAsync(bundle, ["status"]);
+            Assert.Equal(0, status.ExitCode);
+            Assert.Matches(Line("status", "-", "profiles=0"), status.Output.TrimEnd('\n'));
+            Assert.Equal(0, (await RunClientAsync(bundle, ["stop"])).ExitCode);
         }, ReadyBound);
 
         Assert.True(child.ExitCode == 0, $"exit {child.ExitCode}; standard error: {child.Error}");
-        string[] lines = [.. child.Output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)];
-        Assert.Matches(Line("ready", "stack=local"), lines[0]);
-        Assert.Matches(Line("stopped", $"reason={SittingBrowser.EndOfCommands}"), lines[^1]);
-
-        // Standard output is observation lines alone: the local cell's hosts log to the console too.
-        Assert.All(lines, line => Assert.Matches(Line("[a-z-]+", ".*"), line));
+        string[] lines = [.. child.Output.Split('\n', StringSplitOptions.RemoveEmptyEntries)];
+        Assert.Matches(Line("ready", "-", "stack=local"), lines[0]);
+        Assert.Matches(Line("stopped", "-", "reason=stop"), lines[^1]);
+        Assert.Equal(2, lines.Length);
+        Assert.False(File.Exists(Path.Combine(bundle.Path, SittingBrowserServer.SocketName)), "the stop left its socket.");
     }
 
     [Fact]
     public async Task The_executable_stops_on_sigterm_through_its_own_token_and_exits_0()
     {
         // kill(1) sends SIGTERM by name on macOS and Linux, the machines the suite runs on; Process.Kill sends SIGKILL.
-        ChildResult child = await RunExecutableAsync([Program.SittingBrowserCommand], atReady: async process =>
+        using TempBundle bundle = new();
+        ChildResult child = await RunExecutableAsync(Start(bundle), atReady: async process =>
         {
             using Process kill = Process.Start("kill", ["-TERM", process.Id.ToString(System.Globalization.CultureInfo.InvariantCulture)]);
-            await kill.WaitForExitAsync(TestContext.Current.CancellationToken);
+            await kill.WaitForExitAsync(Ct);
             Assert.Equal(0, kill.ExitCode);
         }, ReadyBound);
 
         Assert.True(child.ExitCode == 0, $"exit {child.ExitCode}; standard error: {child.Error}");
-        string[] lines = [.. child.Output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)];
-        Assert.Matches(Line("stopped", $"reason={SittingBrowser.Cancelled}"), lines[^1]);
+        string[] lines = [.. child.Output.Split('\n', StringSplitOptions.RemoveEmptyEntries)];
+        Assert.Matches(Line("stopped", "-", $"reason={SittingBrowserServer.CancelledReason}"), lines[^1]);
     }
 
-    /// <summary>A sign-in, a marker read and a stop on the switch's stack, with the cookies the profile held before the stop.</summary>
-    private static async Task<Session> SignInAndReadMarkerAsync()
+    /// <summary>One sample of every shape <see cref="Observations"/> prints, with the values a sitting would see: a 32-hex instance, Cognito's paths, an SSM refusal.</summary>
+    private static IEnumerable<(string Member, string Line)> LineShapes()
     {
-        SkipUnlessTheSwitchIsUnset();
-        using CancellationTokenSource stop = new();
-        CapturedLines lines = new();
-        Commands commands = new();
-        IBrowserStack stack = await Stacks.StartAsync();
-        await using SittingBrowser sitting = new(stack, lines, stop.Token);
-        Task<string> run = sitting.RunAsync(commands);
-        await lines.WaitForAsync("ready", run);
-
-        commands.Send("sign-in");
-        await lines.WaitForAsync("state", run);
-        commands.Send("marker");
-        await lines.WaitForAsync("marker", run);
-        IReadOnlyList<BrowserContextCookiesResult> cookies = await sitting.Profile!.CookiesOfAsync(stack.App("app1"));
-        commands.Send("stop");
-        string reason = await run.WaitAsync(StopBound, TestContext.Current.CancellationToken);
-        return new Session(lines.Text, [.. lines.Lines], cookies, reason);
+        DateTimeOffset at = new(2026, 11, 4, 10, 0, 10, TimeSpan.Zero);
+        Readiness ready = new("12", "4f1c2b7ad9e84a6bb03e5f17c2a9d8e4");
+        yield return (nameof(Observations.SignedIn), Observations.SignedIn(at, "main", "app1", "alice", ready));
+        yield return (nameof(Observations.SignedIn), Observations.SignedIn(at, "fresh", "app2", null, ready));
+        yield return (nameof(Observations.LoginPrompt), Observations.LoginPrompt(at, "main", "app1", Readiness.Unknown));
+        yield return (nameof(Observations.NotFound), Observations.NotFound(at, "old", "app1", ready));
+        yield return (nameof(Observations.TunnelDown), Observations.TunnelDown(at, "main", "app1"));
+        yield return (nameof(Observations.Timeout), Observations.Timeout(at, "main", "app1"));
+        yield return (nameof(Observations.Other), Observations.Other(at, "main", "app1", "provider", "/oauth2/authorize", Readiness.Unknown, null));
+        yield return (nameof(Observations.Other), Observations.Other(at, "main", "app1", "app1", "/", ready, "session: 500"));
+        yield return (nameof(Observations.Other), Observations.Other(at, "main", "app1", "elsewhere", "/x", Readiness.Unknown, null));
+        yield return (nameof(Observations.Marker), Observations.Marker(at, "main", "app1", "Fixture SPA app1"));
+        yield return (nameof(Observations.Session), Observations.Session(at, "main", "app1", 401, "unauthenticated"));
+        yield return (nameof(Observations.Session), Observations.Session(at, "main", "app1", 401, "session_ended"));
+        yield return (nameof(Observations.Session), Observations.Session(at, "main", "app1", 200, null));
+        yield return (nameof(Observations.Api), Observations.Api(at, "old", "app1", "/api/orders/whoami", 200, null));
+        yield return (nameof(Observations.ClearProvider), Observations.ClearProvider(at, "main", "app1", 3));
+        yield return (nameof(Observations.Status), Observations.Status(at, "main", "app1", Observations.LoginPromptToken, at));
+        yield return (nameof(Observations.Status), Observations.Status(at, "fresh", "app2", null, null));
+        yield return (nameof(Observations.NoProfiles), Observations.NoProfiles(at));
+        yield return (nameof(Observations.Closed), Observations.Closed(at, "main", "app1"));
+        yield return (nameof(Observations.Unwatched), Observations.Unwatched(at, "main", "app1", 42));
+        yield return (nameof(Observations.Ready), Observations.Ready(at, "deployed"));
+        yield return (nameof(Observations.Stopped), Observations.Stopped(at, "cancelled"));
+        yield return (nameof(Observations.Refused), Observations.Refused(at, "running"));
+        yield return (nameof(Observations.NotRunning), Observations.NotRunning(at, "main"));
+        yield return (nameof(Observations.Failed), Observations.Failed(at, "main", "marker", "unknown-profile"));
+        yield return (nameof(Observations.Failed), Observations.Failed(at, "main", "login", "aws",
+            "aws ssm exited 254: An error occurred (AccessDeniedException) when calling the GetParameter operation: not authorized to perform ssm:GetParameter"));
     }
+
+    private static async Task<(int Exit, string Output)> RedactAsync(string[] arguments, string input)
+    {
+        ProcessStartInfo start = new("python3") { RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
+        foreach (string argument in (string[])["-I", Path.Combine(FixtureFiles.RepositoryRoot, "tools", "wiz_redact.py"), .. arguments])
+        {
+            start.ArgumentList.Add(argument);
+        }
+
+        using Process process = Process.Start(start) ?? throw new InvalidOperationException("python3 did not start.");
+        Task<string> output = process.StandardOutput.ReadToEndAsync(Ct);
+        Task<string> error = process.StandardError.ReadToEndAsync(Ct);
+        await process.StandardInput.WriteAsync(input);
+        process.StandardInput.Close();
+        await process.WaitForExitAsync(Ct);
+        Assert.True(process.ExitCode is 0 or 3, $"wiz_redact.py exited {process.ExitCode}: {await error}");
+        return (process.ExitCode, await output);
+    }
+
+    /// <summary>
+    /// The grammar of #1024 Q3: the token, the UTC time to the second, the profile, then <c>key=value</c>
+    /// fields whose keys the redactor never elides, and at most one free text, <c>text=</c> or <c>shell=</c>, last.
+    /// </summary>
+    private static void AssertGrammar(string line)
+    {
+        Assert.True(ObservationLine.Head(line) is not null, $"not an observation line: {line}");
+        string[] words = Whitespace().Split(line);
+        foreach (string word in words.Skip(3))
+        {
+            Match field = FieldPattern().Match(word);
+            Assert.True(field.Success, $"not a key=value field: {word} in {line}");
+            string key = field.Groups[1].Value;
+            Assert.DoesNotContain(key, ObservationLine.ElidedKeys);
+            if (key is "text" or "shell")
+            {
+                break;
+            }
+        }
+
+        Assert.DoesNotContain('{', line);
+    }
+
+    /// <summary>The resident process in this test process on the switch's stack, at a bundle of its own.</summary>
+    private sealed class Running : IAsyncDisposable
+    {
+        private readonly TempBundle bundle = new();
+        private readonly CancellationTokenSource cancel = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        private readonly List<string> answers = [];
+
+        public DirectoryInfo Bundle => new(bundle.Path);
+
+        public CapturedLines ServerLines { get; } = new();
+
+        public Task<int> Run { get; private set; } = Task.FromResult(-1);
+
+        public SittingBrowser Engine { get; private set; } = null!;
+
+        /// <summary>Every line it printed, its own and every client's, in order of arrival per source.</summary>
+        public IEnumerable<string> Everything
+        {
+            get
+            {
+                lock (answers)
+                {
+                    return [.. ServerLines.Lines, .. answers];
+                }
+            }
+        }
+
+        public static async Task<Running> StartAsync()
+        {
+            SkipUnlessTheSwitchIsUnset();
+            Running running = new();
+            TaskCompletionSource<SittingBrowser> started = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            running.Run = SittingBrowserServer.RunAsync(running.bundle.Path, running.ServerLines, Stacks.StartCancellableAsync, NoEnvironment, running.cancel.Token, started.SetResult);
+            await running.ServerLines.WaitForAsync("ready", running.Run);
+            running.Engine = await started.Task;
+            return running;
+        }
+
+        public async Task<Answer> SendAsync(params string[] words)
+        {
+            (SittingCommand? command, string? usage) = SittingCommand.Parse(words);
+            Assert.True(command is not null, usage);
+            StringWriter output = new();
+            int exit = await SittingBrowserClient.SendAsync(bundle.Path, command, words, output, Ct);
+            string[] lines = output.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries);
+            lock (answers)
+            {
+                answers.AddRange(lines);
+            }
+
+            return new Answer(exit, lines);
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            if (!Run.IsCompleted)
+            {
+                await cancel.CancelAsync();
+                await Run.WaitAsync(StopBound, CancellationToken.None);
+            }
+
+            cancel.Dispose();
+            bundle.Dispose();
+        }
+    }
+
+    /// <summary>A client call's lines and exit code.</summary>
+    private sealed record Answer(int Exit, string[] Lines)
+    {
+        /// <summary>Exits <paramref name="exit"/> with one line that matches <paramref name="line"/>, which is the last of its lines.</summary>
+        public void Assert(int exit, Regex line)
+        {
+            Xunit.Assert.True(exit == Exit, $"exit {Exit}, not {exit}: {string.Join(" | ", Lines)}");
+            Xunit.Assert.NotEmpty(Lines);
+            Xunit.Assert.Matches(line, Lines[^1]);
+        }
+    }
+
+    /// <summary>A bundle directory of its own, short enough for a Unix socket's path (at most 103 bytes on macOS), removed at the end.</summary>
+    private sealed class TempBundle : IDisposable
+    {
+        private readonly DirectoryInfo directory = Directory.CreateTempSubdirectory("sb-");
+
+        public string Path => directory.FullName;
+
+        public void Dispose()
+        {
+            try
+            {
+                directory.Delete(recursive: true);
+            }
+            catch (IOException)
+            {
+                // A browser file still closing; the temporary directory is the system's to clear.
+            }
+        }
+    }
+
+    private static readonly IReadOnlyDictionary<string, string?> NoEnvironment = new Dictionary<string, string?>();
+
+    private static string[] Start(TempBundle bundle) => [Program.SittingBrowserCommand, Program.BundleOption, bundle.Path, SittingCommand.Start];
+
+    private static Task<ChildResult> RunClientAsync(TempBundle bundle, string[] words) =>
+        RunExecutableAsync([Program.SittingBrowserCommand, Program.BundleOption, bundle.Path, .. words], atReady: null, TimeSpan.FromMinutes(2));
 
     /// <summary>
     /// Skips the calling in-process fact (Assert.Skip) unless the switch names the local stack. #1032 states
@@ -202,16 +570,27 @@ public sealed partial class SittingBrowserTests
         return marker.Groups[1].Value;
     }
 
-    /// <summary>An observation line: a UTC time to the millisecond, the token, the profile, then <paramref name="fields"/> as a pattern.</summary>
-    private static Regex Line(string token, string fields) =>
-        new($@"^\d{{4}}-\d{{2}}-\d{{2}}T\d{{2}}:\d{{2}}:\d{{2}}\.\d{{3}}Z {token} profile={SittingBrowser.ProfileName} {fields}$", RegexOptions.None, TimeSpan.FromSeconds(1));
+    /// <summary>The API the fixture shell calls, its <c>data-api</c> (fixtures/spa).</summary>
+    private static string FixtureApi(string appId)
+    {
+        string html = Encoding.UTF8.GetString(FixtureFiles.Spa(appId)["index.html"]);
+        Match api = DataApi().Match(html);
+        Assert.True(api.Success, $"fixtures/spa/{appId}/index.html names no data-api.");
+        return api.Groups[1].Value;
+    }
+
+    private const string TimePattern = @"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z";
+
+    /// <summary>An observation line: the token padded as #1024's examples are, the UTC time to the second, the profile, then <paramref name="fields"/> as a pattern.</summary>
+    private static Regex Line(string token, string profile, string fields) =>
+        new($"^{token} +{TimePattern} {Regex.Escape(profile)}{(fields.Length > 0 ? " " + fields : "")}$", RegexOptions.None, TimeSpan.FromSeconds(1));
 
     /// <summary>
     /// The suite's own executable, as <c>ProcessCommandRunner</c> starts a command, with the stack switch
-    /// unset. With <paramref name="atReady"/> set, standard input is held open and the action runs once
-    /// a ready line appears; without it, standard input is closed at once.
+    /// unset and <paramref name="environment"/> set. With <paramref name="atReady"/> set, the action runs
+    /// once a ready line appears; standard input is closed at once either way.
     /// </summary>
-    private static async Task<ChildResult> RunExecutableAsync(string[] arguments, Func<Process, Task>? atReady, TimeSpan bound)
+    private static async Task<ChildResult> RunExecutableAsync(string[] arguments, Func<Process, Task>? atReady, TimeSpan bound, IReadOnlyDictionary<string, string>? environment = null)
     {
         string executable = Path.Combine(AppContext.BaseDirectory, OperatingSystem.IsWindows() ? "Gateway.E2ETests.exe" : "Gateway.E2ETests");
         Assert.True(File.Exists(executable), $"the suite's executable is not at {executable}.");
@@ -228,22 +607,25 @@ public sealed partial class SittingBrowserTests
         }
 
         start.Environment.Remove(StackSwitch.Variable);
+        start.Environment.Remove("PWDEBUG");
+        start.Environment.Remove("DEBUG");
+        foreach ((string name, string value) in environment ?? new Dictionary<string, string>())
+        {
+            start.Environment[name] = value;
+        }
+
         using Process process = Process.Start(start) ?? throw new InvalidOperationException($"{executable} did not start.");
-        using CancellationTokenSource timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        using CancellationTokenSource timeout = CancellationTokenSource.CreateLinkedTokenSource(Ct);
         timeout.CancelAfter(bound);
         StringBuilder output = new();
         Task<string> error = process.StandardError.ReadToEndAsync(timeout.Token);
         try
         {
-            if (atReady is null)
-            {
-                process.StandardInput.Close();
-            }
-
+            process.StandardInput.Close();
             while (await process.StandardOutput.ReadLineAsync(timeout.Token) is { } line)
             {
                 output.Append(line).Append('\n');
-                if (atReady is not null && line.Contains(" ready ", StringComparison.Ordinal))
+                if (atReady is not null && line.StartsWith("ready ", StringComparison.Ordinal))
                 {
                     await atReady(process);
                 }
@@ -263,26 +645,81 @@ public sealed partial class SittingBrowserTests
     [GeneratedRegex("""<h1 id="marker">([^<]+)</h1>""", RegexOptions.None, 1000)]
     private static partial Regex MarkerHeading();
 
+    [GeneratedRegex("data-api=\"([a-z0-9-]+)\"", RegexOptions.None, 1000)]
+    private static partial Regex DataApi();
+
     /// <summary>A scheme, <c>://</c>, then a query somewhere before the next whitespace or quote.</summary>
     [GeneratedRegex("""[A-Za-z][A-Za-z0-9+.-]*://[^\s"']*\?""", RegexOptions.None, 1000)]
     private static partial Regex UrlWithQuery();
 
-    private sealed record Session(string Text, string[] Lines, IReadOnlyList<BrowserContextCookiesResult> Cookies, string Reason);
+    /// <summary>A cookie header with a value, or the gateway's session cookie's name followed by one.</summary>
+    [GeneratedRegex("""(?i)(?:^|\s)(?:set-)?cookie:\s*[^\s=;]+=[^\s;]+|__Host-spa[^\s=]*=[^\s;"]+""", RegexOptions.None, 1000)]
+    private static partial Regex CookieWithValue();
+
+    [GeneratedRegex(@"\s+", RegexOptions.None, 1000)]
+    private static partial Regex Whitespace();
+
+    [GeneratedRegex("ticks=([0-9]+)", RegexOptions.None, 1000)]
+    private static partial Regex TicksField();
+
+    [GeneratedRegex("^([a-z][a-z-]*)=(.+)$", RegexOptions.None, 1000)]
+    private static partial Regex FieldPattern();
 
     private sealed record ChildResult(int ExitCode, string Output, string Error);
 
-    /// <summary>Commands sent one line at a time, whose input never ends: only a stop ends a run over it.</summary>
-    private sealed class Commands : TextReader
+    /// <summary>What a client printed, by line, with when each arrived.</summary>
+    private sealed class TimedLines : TextWriter
     {
-        private readonly Channel<string> pending = Channel.CreateUnbounded<string>();
+        private readonly Stopwatch clock = Stopwatch.StartNew();
+        private readonly StringBuilder pending = new();
+        private readonly List<(string, TimeSpan)> lines = [];
 
-        public void Send(string line) => Assert.True(pending.Writer.TryWrite(line));
+        public override Encoding Encoding => Encoding.UTF8;
 
-        public override async ValueTask<string?> ReadLineAsync(CancellationToken cancellationToken) =>
-            await pending.Reader.WaitToReadAsync(cancellationToken) && pending.Reader.TryRead(out string? line) ? line : null;
+        public IReadOnlyList<(string Line, TimeSpan At)> Lines
+        {
+            get
+            {
+                lock (lines)
+                {
+                    return [.. lines];
+                }
+            }
+        }
+
+        public override void Write(char value)
+        {
+            lock (lines)
+            {
+                if (value == '\n')
+                {
+                    lines.Add((pending.ToString(), clock.Elapsed));
+                    pending.Clear();
+                }
+                else if (value != '\r')
+                {
+                    pending.Append(value);
+                }
+            }
+        }
+
+        public async Task WaitForCountAsync(int count, Task watch)
+        {
+            Stopwatch waited = Stopwatch.StartNew();
+            while (Lines.Count < count)
+            {
+                if (watch.IsCompleted)
+                {
+                    Assert.Fail($"the watch ended after {Lines.Count} lines, exit {await (Task<int>)watch}: {string.Join(" | ", Lines.Select(line => line.Line))}");
+                }
+
+                Assert.True(waited.Elapsed < TimeSpan.FromMinutes(1), $"{Lines.Count} watch lines within a minute.");
+                await Task.Delay(100, Ct);
+            }
+        }
     }
 
-    /// <summary>What the sitting browser wrote, by line, readable while it runs.</summary>
+    /// <summary>What the process wrote on its own output, by line, readable while it runs.</summary>
     private sealed class CapturedLines : TextWriter
     {
         private readonly StringBuilder text = new();
@@ -310,11 +747,11 @@ public sealed partial class SittingBrowserTests
 
         public string[] Lines => Text.Split(NewLine, StringSplitOptions.RemoveEmptyEntries);
 
-        /// <summary>Waits for a line carrying <paramref name="token"/>; fails if the run ends first or none comes within a minute.</summary>
+        /// <summary>Waits for a line starting with <paramref name="token"/>; fails if the run ends first or none comes within two minutes.</summary>
         public async Task WaitForAsync(string token, Task run)
         {
             Stopwatch waited = Stopwatch.StartNew();
-            while (!Lines.Any(line => line.Contains($" {token} ", StringComparison.Ordinal)))
+            while (!Lines.Any(line => line.StartsWith($"{token} ", StringComparison.Ordinal)))
             {
                 if (run.IsCompleted)
                 {
@@ -322,8 +759,8 @@ public sealed partial class SittingBrowserTests
                     Assert.Fail($"the sitting browser stopped before a {token} line; it printed: {Text}");
                 }
 
-                Assert.True(waited.Elapsed < TimeSpan.FromMinutes(1), $"no {token} line within a minute; it printed: {Text}");
-                await Task.Delay(50, TestContext.Current.CancellationToken);
+                Assert.True(waited.Elapsed < TimeSpan.FromMinutes(2), $"no {token} line within two minutes; it printed: {Text}");
+                await Task.Delay(50, Ct);
             }
         }
     }
