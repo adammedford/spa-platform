@@ -669,8 +669,10 @@ try {
   // path or basename, and nothing else, owns every failing name in its run: reproduced, no caught
   // cell, merge, with no catch accepted, and it keeps its own row beside a candidate in the same file.
   // Anything else red only on another test is a catch the verdict did not accept, did-not-fail, and
-  // holds (#794): a test that adds to the name; a file-shaped test that is not its file; and a
-  // Terraform test file, whose project is its directory, red on a sibling file's run.
+  // holds (#794): a test that adds to the name; a file-shaped test that is not its file; a
+  // Terraform test file, whose project is its directory, red on a sibling file's run; and a test
+  // named as its project's path or basename but written in another file, since the whole file is
+  // keyed off the candidate's file as well as its project (#805).
   checks++
   {
     const F = 'tools/overnight_answers_tests.py'
@@ -699,10 +701,12 @@ try {
       [comp('tools/other_tests.py'), RED],
       [comp('module.tftest.hcl', 'infra/modules/cell', TF), TF_RED],
       [comp(TF, 'infra/modules/cell', TF), TF_RED],
+      [comp(F, F, 'tools/other_tests.py'), RED],
+      [comp('overnight_answers_tests.py', F, 'tools/other_tests.py'), RED],
     ]) {
       const c = await verdictOf([cand], { [cand.test]: { ...row('reproduced', red.length, 18), failingNames: red } })
       const m = (c.mutations || []).find((x) => x.test === cand.test) || {}
-      if (m.result !== 'did-not-fail' || c.verdict !== 'hold') fail(`PR 210 with the candidate ${JSON.stringify(cand.test)} (project ${cand.project}) red only on another test: row ${m.result}, verdict ${c.verdict}, expected did-not-fail and hold`)
+      if (m.result !== 'did-not-fail' || c.verdict !== 'hold') fail(`PR 210 with the candidate ${JSON.stringify(cand.test)} (project ${cand.project}, file ${cand.file}) red only on another test: row ${m.result}, verdict ${c.verdict}, expected did-not-fail and hold`)
     }
   }
 
