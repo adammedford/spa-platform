@@ -352,7 +352,7 @@ const AXIS_GUIDE = `Read docs/agents/review.md (at origin/main) before anything 
 
 // ---------------------------------------------------------------- schemas
 // A comment or review as the inventory reports it: everything but its body, which is its length in
-// code points and whether it carries a record line (#1018). On #796 six record comments of 11 to 21 KB
+// code points once its trailing whitespace is removed (#1030) and whether it carries a record line (#1018). On #796 six record comments of 11 to 21 KB
 // outgrew what one agent would copy into one return, and it returned stand-ins for bodies 2 to 6, so
 // each record-bearing body comes back from an agent of its own (BODY below).
 const ENTRY = {
@@ -578,7 +578,7 @@ OUTPUT FILE: ${DIR(n)}/inventory.json
 6a. statedHeads: one entry per sha the body gives as this pull request's head, the head it says it describes ("head \`76704c5\`"): sha exactly as written, full or abbreviated, and quote, the sentence that gives it. Leave out the fork point, the base, a listed commit, and a sha the body names as an earlier head or as history ("the earlier head \`ed8d063\`"). [] when the body gives none. Do not compare it with the head: the script does.
 6c. description: the body exactly as gh serves it, byte for byte ("" when it is empty). commitMessages: one entry per commit of commits, in that order: sha, and message = \`git -C ${REPO} log -1 --format=%B <sha>\`, copied byte for byte, and parents = the number of shas \`git -C ${REPO} log -1 --format=%P <sha>\` prints (2 or more for a merge). Do not look for dates or Closes lines in them: the script does.
 6b. candidates: every candidate invariant test the diff adds or changes: each xUnit fact or theory (test = its class and method name, project = its test project's directory), each Terraform test file (project = its directory), each Python test companion (test and project = its path, and nothing added to the test). file: the repository path of the file the test is written in. guards: one sentence on what it guards. breaks: the source file it would take to break that, never the test itself.
-7. comments: one entry per line \`cd ${REPO} && gh api --paginate repos/{owner}/{repo}/issues/${n}/comments --jq '.[] | {id, author_association, html_url, created_at, length: (.body // "" | length), record: ((.body // "") | test("${RECORD_TEST}"))}'\` prints, its fields exactly as printed. reviews: the same for \`cd ${REPO} && gh api --paginate repos/{owner}/{repo}/pulls/${n}/reviews --jq '.[] | {id, state, author_association, html_url, submitted_at, length: (.body // "" | length), record: ((.body // "") | test("${RECORD_TEST}"))}'\`. Return no body: the script has each one that carries a record read by an agent of its own.
+7. comments: one entry per line \`cd ${REPO} && gh api --paginate repos/{owner}/{repo}/issues/${n}/comments --jq '.[] | {id, author_association, html_url, created_at, length: (.body // "" | sub("[ \\t\\r\\n]+$"; "") | length), record: ((.body // "") | test("${RECORD_TEST}"))}'\` prints, its fields exactly as printed. reviews: the same for \`cd ${REPO} && gh api --paginate repos/{owner}/{repo}/pulls/${n}/reviews --jq '.[] | {id, state, author_association, html_url, submitted_at, length: (.body // "" | sub("[ \\t\\r\\n]+$"; "") | length), record: ((.body // "") | test("${RECORD_TEST}"))}'\`. Return no body: the script has each one that carries a record read by an agent of its own.
 8. Write the whole result as JSON to the OUTPUT FILE, then return it. error is "" when nothing stopped you.`
 
 // One record-bearing comment's or review's body, read whole by an agent of its own (#1018).
@@ -589,7 +589,7 @@ ${HOUSE}
 OUTPUT FILE: ${DIR(n)}/body-${e.id}.json
 
 1. \`cd ${REPO} && gh api ${review ? `repos/{owner}/{repo}/pulls/${n}/reviews/${e.id}` : `repos/{owner}/{repo}/issues/comments/${e.id}`}\`, the ${review ? 'review' : 'comment'} at ${e.html_url}.
-2. body: the JSON's body field, its decoded value byte for byte, not --jq's printed form, which adds a newline. It runs ${e.length} characters; copy every one, and never a summary, an elision or a stand-in: the script counts them and fails the review on a body that is short or long. If gh cannot be reached, body is "" and error says why.
+2. body: the JSON's body field, its decoded value byte for byte, not --jq's printed form, which adds a newline. It runs ${e.length} characters before any whitespace at its end; copy every one, and never a summary, an elision or a stand-in: the script counts them and fails the review on a body that is short or long. If gh cannot be reached, body is "" and error says why.
 3. Write the whole result as JSON to the OUTPUT FILE, then return it. error is "" when nothing stopped you.`
 
 const rangePrompt = (n, inv, from, oldFork, sinceHeads = []) => `Read the range for a delta review of pull request #${n}: the commits since ${from}, the head its latest review record names. Read and report; judge nothing.
@@ -1147,8 +1147,11 @@ const review = async (n) => {
 // recordsIn passes over it as before. A body is taken only whole: one whose code points are fewer or
 // more than the inventory counted, or whose agent returned nothing or an error, is the reason
 // returned, naming its URL, so the review fails at the inventory and never reads a record with fewer
-// rows. null when every body came back whole.
-const codePoints = (s) => Array.from(s).length
+// rows. null when every body came back whole. Both counts leave out the whitespace at the body's end,
+// which no parser reads and a returned value can lose: on 2026-11-05 one of #796's body agents
+// returned a record without its final newline, which its file kept (#1030).
+const TRAILING_SPACE = /[ \t\r\n]+$/
+const codePoints = (s) => Array.from(s.replace(TRAILING_SPACE, '')).length
 const readBodies = async (n, inv) => {
   const wanted = [
     ...(inv.comments || []).map((e) => ({ e, review: false })),
