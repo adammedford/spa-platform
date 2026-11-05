@@ -139,17 +139,33 @@ public sealed class ContinuityRun(ContinuityEvidence evidence, ContinuityLog log
 
 /// <summary>
 /// The raw client's requests as a continuity row sends them (Q137): each with a fresh sampled
-/// <c>traceparent</c>, the session's cookies when it has one, and nothing kept of the answer but its
-/// status. A connection error becomes missing coverage (<see cref="Step.Failed"/>).
+/// <c>traceparent</c>, the fetch metadata of <see cref="FetchMetadata"/>, the session's cookies when it
+/// has one, and nothing kept of the answer but its status. A connection error becomes missing coverage
+/// (<see cref="Step.Failed"/>).
 /// </summary>
 public sealed class TracedClient(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> send)
 {
+    /// <summary>
+    /// What a browser's same-origin <c>fetch</c> from the app's page sends, as the fixture shell's calls
+    /// do: the request gate refuses <c>/api</c> and <c>/bff</c> without <c>Sec-Fetch-Site: same-origin</c>
+    /// (contracts/request-gate.md, <c>gate.fetch-site</c>), and the raw HTTP client carries only the
+    /// headers given (<see cref="RawClient"/>). Without them every row call with a session was refused
+    /// on the cell (#348, #1001).
+    /// </summary>
+    public static readonly IReadOnlyList<(string Name, string Value)> FetchMetadata =
+        [("Sec-Fetch-Site", "same-origin"), ("Sec-Fetch-Mode", "cors"), ("Sec-Fetch-Dest", "empty")];
+
     public async Task<Step> SendAsync(string name, HttpMethod method, Uri url, SessionCookies? cookies, int? expect, CancellationToken ct, string? route = null)
     {
         ClientTrace trace = ClientTrace.Fresh();
         DateTimeOffset at = DateTimeOffset.UtcNow;
         using HttpRequestMessage request = new(method, url);
         request.Headers.TryAddWithoutValidation(ClientTrace.Header, trace.Traceparent);
+        foreach ((string header, string value) in FetchMetadata)
+        {
+            request.Headers.TryAddWithoutValidation(header, value);
+        }
+
         if (cookies is not null)
         {
             request.Headers.TryAddWithoutValidation("Cookie", cookies.Reveal());

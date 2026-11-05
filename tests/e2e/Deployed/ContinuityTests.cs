@@ -37,8 +37,8 @@ public sealed class ContinuityTests
             RowResult result = await driver.Run.TwoTaskRowAsync("row3", control, null,
                 async (n, ct) => new Attempt(n,
                 [
-                    await driver.SendAsync("session-1", HttpMethod.Get, "/bff/session", cookies, 200, ct),
-                    await driver.SendAsync("session-2", HttpMethod.Get, "/bff/session", cookies, 200, ct),
+                    await driver.SendAsync("session-1", HttpMethod.Get, ContinuityDriver.SessionPath, cookies, 200, ct),
+                    await driver.SendAsync("session-2", HttpMethod.Get, ContinuityDriver.SessionPath, cookies, 200, ct),
                 ]),
                 (attempts, capture) => ContinuityObserver.Crossing(attempts, capture, SessionPair),
                 Ct);
@@ -63,7 +63,7 @@ public sealed class ContinuityTests
                     List<Step> calls = [];
                     for (int i = 1; i <= 30; i++)
                     {
-                        calls.Add(await driver.SendAsync($"call-{n}-{i}", HttpMethod.Get, "/bff/session", cookies, 200, ct));
+                        calls.Add(await driver.SendAsync($"call-{n}-{i}", HttpMethod.Get, ContinuityDriver.SessionPath, cookies, 200, ct));
                         await Task.Delay(TimeSpan.FromSeconds(1), ct);
                     }
 
@@ -160,7 +160,7 @@ public sealed class ContinuityTests
         {
             RowResult result = await driver.Run.OnceAsync("row8", control,
                 async ct => (IReadOnlyList<Step>)await Task.WhenAll(Enumerable.Range(1, ContinuityBounds.Row8Calls)
-                    .Select(i => driver.SendAsync($"call-{i}", HttpMethod.Get, "/api/orders/whoami", cookies, 200, ct))),
+                    .Select(i => driver.SendAsync($"call-{i}", HttpMethod.Get, ContinuityDriver.ApiPath, cookies, 200, ct))),
                 calls => calls,
                 ContinuityObserver.FiftyCalls,
                 Ct);
@@ -179,9 +179,9 @@ public sealed class ContinuityTests
                 (Profile profile, SessionCookies cookies) = await driver.SignInAsync(driver.App1);
                 await using (profile)
                 {
-                    Step before = await driver.SendAsync("pre-logout-replay", HttpMethod.Get, "/bff/session", cookies, null, ct);
+                    Step before = await driver.SendAsync("pre-logout-replay", HttpMethod.Get, ContinuityDriver.SessionPath, cookies, null, ct);
                     Step logout = await driver.LogoutAsync(profile, driver.App1);
-                    Step replay = await driver.SendAsync("replay", HttpMethod.Get, "/bff/session", cookies, Contract.Error("unauthenticated").Status, ct);
+                    Step replay = await driver.SendAsync("replay", HttpMethod.Get, ContinuityDriver.SessionPath, cookies, Contract.Error("unauthenticated").Status, ct);
                     return new Attempt(n, [before, logout, replay]);
                 }
             },
