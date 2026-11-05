@@ -64,7 +64,8 @@ public sealed class InboundTraceContextTests
         // trace id on a request line is the request's own, so a line found by a client's trace id is
         // found by the header and never because every line shares a trace id or carries a stale one.
         // Mutation: every request line written under one fixed trace id; the two lines are no longer
-        // distinct. A second: no activity started, so trace_id is null; the shape check fails.
+        // distinct. A second: no activity started, so the formatter omits trace_id and GetProperty
+        // throws before the shape check.
         await using GatewayHarness harness = await GatewayHarness.StartAsync(ct: Ct);
         using TestBrowser browser = harness.CreateBrowser();
         (string unsent, _) = Sampled();
