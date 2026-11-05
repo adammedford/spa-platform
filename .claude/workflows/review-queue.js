@@ -774,9 +774,13 @@ const dotted = (f, withClass = true) => {
 // one: on #764 the bare reading took another class's red test_x for the nomination. A failing name
 // xUnit printed, 'Ns.Class.Nom', is matched by the bare name, so 'Nom (Assert.Null)' still reads
 // its own red test. A candidate keyed by the bare name lends the row what it guards. A cell with no
-// name before its first space or '(' keeps its whole text, so its row still reaches the verdict.
-const nominated = (s, byTest) => {
+// name before its first space or '(' keeps its whole text, so its row still reaches the verdict. A
+// cell that names no test, empty or whitespace only, reads as its place in the list, which no other
+// row's test can equal, and is unnamed: no agent can break a test it is not told, so execute() makes
+// its row could-not-run, which holds (#811). Read as the empty name, mutationList dropped it.
+const nominated = (s, byTest, i = 0) => {
   const cell = (s.test || '').trim()
+  if (!cell) return { ...s, test: `(nomination ${i + 1} names no test)`, why: `the Standards axis nomination names no test: ${s.why}`, kind: 'nominated', cls: '', unnamed: true }
   const bare = (/^[^\s(]*/.exec(cell) || [''])[0]
   const whole = dotted(cell, false)
   const test = whole !== bare && whole.endsWith(`.${bare}`) ? whole : bare || cell
@@ -825,7 +829,7 @@ const mutationList = (inv, standards, d, prior = { held: null, clearers: [] }) =
   const all = [
     ...held,
     ...(inv.statedMutations || []).map((s) => ({ ...byTest.get(s.test), ...s, kind: 'stated' })),
-    ...((standards && standards.nominations) || []).map((s) => nominated(s, byTest)), // empty-ok: a null Standards axis fails the pull request before mutationList runs, so standards is never null here
+    ...((standards && standards.nominations) || []).map((s, i) => nominated(s, byTest, i)), // empty-ok: a null Standards axis fails the pull request before mutationList runs, so standards is never null here
     ...candidates.filter(touched).map((c) => ({ ...c, kind: 'candidate' })),
     ...candidates.filter((c) => !touched(c)).map((c) => ({ ...c, kind: 'candidate' })),
   ]
@@ -862,7 +866,8 @@ const mutationRow = (n, m, i, got) => {
     total: ok && Number.isInteger(got.total) ? got.total : 0, failingNames: (ok && got.failingNames) || [],
     result: ok ? (got.result === 'removed' && m.kind !== 'held' ? 'could-not-run' : got.result) : 'could-not-run',
     why: ok ? (got.result === 'removed' && m.kind !== 'held' ? `removed is only for a held mutation: ${got.why || ''}` : (got.why || '')) : (got ? `the mutation agent returned the result ${JSON.stringify(got.result)}, which is none of ${RESULTS.join(', ')}` : 'the mutation agent died or returned nothing'),
-    countsMatched: null, logFile: mutationLog(n, i),
+    // An unnamed nomination ran no agent, so it has no log to name (#811).
+    countsMatched: null, logFile: m.unnamed ? '-' : mutationLog(n, i),
   }
   // A held or candidate break the project caught through other tests, the named one not among them
   // (#684, #689): the tests that went red, which the verdict must accept before the row answers the
@@ -1252,6 +1257,7 @@ const reviewOne = async (n, res, at) => {
   at.stage = 'mutate'
   const { list, cut, cutHeld, outside, cleared } = mutationList(inv, standards, d, priorOf(records, inv, rg))
   const got = await parallel(list.map((m, i) => async () => {
+    if (m.unnamed) return { result: 'could-not-run', why: m.why }
     try { return await run(mutatePrompt(n, inv, m, i + 1), { label: `mutate:${n}:${i + 1}`, phase: 'Mutate', schema: MUTATION }) } catch (e) { return null }
   }))
   const rows = list.map((m, i) => mutationRow(n, m, i + 1, got && got[i]))
