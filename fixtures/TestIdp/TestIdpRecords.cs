@@ -41,8 +41,22 @@ public sealed record TestIdpClient(string ClientId, string Secret, IReadOnlySet<
 }
 
 /// <summary>One answered request at the authorize endpoint. It holds no <c>state</c> and no code.</summary>
-public sealed record Authorization(int Seq, string ClientId, string RedirectUri, string Scope, string? Resource, string Subject, string Outcome)
+/// <param name="Seq">Position in the log, from 1.</param>
+/// <param name="ClientId">The <c>client_id</c> the request named.</param>
+/// <param name="RedirectUri">The <c>redirect_uri</c> the request named.</param>
+/// <param name="Scope">The <c>scope</c> the request named.</param>
+/// <param name="Resource">The <c>resource</c> the request named, when it named one.</param>
+/// <param name="Subject">Who the code was issued for; for a refusal, who it would have been, and the empty
+/// string for a <c>login_required</c> answer, which has no one signed in.</param>
+/// <param name="Outcome"><c>ok</c>, <c>login_required</c>, or why the request was refused with a 400.</param>
+/// <param name="Silent">Whether the request was a <c>prompt=none</c> request the provider session answered
+/// (<see cref="TestIdpFaults.ModelProviderSession"/>), with a code or with <c>login_required</c>.</param>
+public sealed record Authorization(int Seq, string ClientId, string RedirectUri, string Scope, string? Resource, string Subject, string Outcome,
+    bool Silent = false)
 {
+    /// <summary>The outcome of a <c>prompt=none</c> request that found no live provider session.</summary>
+    public const string LoginRequired = "login_required";
+
     /// <summary>Whether the request was answered with a code.</summary>
     public bool Ok => Outcome == "ok";
 }
