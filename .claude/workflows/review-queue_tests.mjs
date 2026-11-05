@@ -1220,12 +1220,14 @@ try {
       const verdictPrompt = env.prompts['verdict:287'] || ''
       if (!/A removed row is a held break whose target the range deleted/.test(verdictPrompt) || !/otherwise, or if you cannot show either, the held test is unanswered and the verdict is hold/.test(verdictPrompt)) fail('the verdict prompt does not tell the agent to hold on a removed row whose deletion is not shown sound')
       if (!new RegExp(`${LIB2}[^\\n]*removed`).test(commentOf(env, 287))) fail('the comment\'s table does not show the removed row')
-      // The held mutation's prompt offers removed and asks for its proof (#886): the git log -S that
-      // must name the removing commit, run in the mutation's worktree over this review's range from
-      // the fork point to the head, and the boundary that keeps moved or renamed code could-not-run.
+      // The held mutation's prompt offers removed and asks for its proof (#886): a search of the head
+      // for the quoted code, the git log -S that must name the removing commit, run in the mutation's
+      // worktree over this review's range from the fork point to the head, and the boundary that
+      // keeps moved or renamed code could-not-run.
       const asked = env.mutations.find((m) => m.test === LIB2) || {}
       const p = asked.prompt || ''
       if (!p.includes('removed, for this held mutation only')) fail(`the held ${LIB2} mutation prompt does not offer removed`)
+      if (!p.includes('Prove it before you say so: search the head for the quoted code')) fail(`the held ${LIB2} mutation prompt does not ask to search the head for the quoted code`)
       if (!asked.worktree || !p.includes(`git -C ${asked.worktree} log -S'`)) fail(`the held ${LIB2} mutation prompt does not ask for git log -S in its worktree ${asked.worktree}`)
       if (!p.includes(`--oneline ${FORK}..${H3}\``)) fail(`the held ${LIB2} mutation prompt's git log -S does not search the range ${FORK}..${H3}`)
       if (!p.includes('must name the commit that removed it; why names that commit and quotes what it removed')) fail(`the held ${LIB2} mutation prompt does not ask why to name and quote the removing commit`)
