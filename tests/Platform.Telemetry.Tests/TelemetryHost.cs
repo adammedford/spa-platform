@@ -218,17 +218,15 @@ public sealed class TelemetryHost : IAsyncDisposable
                 return;
             }
 
-            // The asset route's refused read: the class of key, never the key, and the status that
-            // class answers in Platform.Hosting's Assets.cs since #428: a refused shell answers 500
-            // shell_unavailable and a refused asset 404 not_found. The telemetry stage reads the class
+            // The asset route's refused read: the class of key, never the key. The double writes the
+            // class and answers no status of its own; the request goes on to the terminal. What each
+            // class answers is Platform.Hosting's rule in Assets.cs, which this project may not
+            // reference (A-03), so it is proved there (Platform.Hosting.Tests' AssetReadRefusalTests)
+            // and on the composed gateway, not copied here (#869). The telemetry stage reads the class
             // and not the status.
             if (context.Request.Headers[ReadRefusedHeader] is [{ } refused, ..])
             {
                 fields?.ReadRefused = refused;
-                context.Response.StatusCode = refused == "shell"
-                    ? StatusCodes.Status500InternalServerError
-                    : StatusCodes.Status404NotFound;
-                return;
             }
 
             await next(context);
