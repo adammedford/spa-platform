@@ -8,8 +8,8 @@ owner OWNERSHIP.md names for tools/bench/.
 `SPA_E2E_STACK=deployed dotnet test --project tests/e2e --report-xunit-junit`. That report holds the
 Functional and Negative gate tests and, beside them, the `Deployed/*` meta-tests, some of which carry
 ids in their data. Twice a session tallied ids by hand and counted meta-tests: on 2026-10-24 N-07 was
-given 5 where its gate tests were 3, and a draft of 2026-10-27 took an "N-28", which is no row, from
-DeployedSubsetTests' InlineData. So:
+given 5 where its gate tests were 3, and a draft of 2026-10-27 took an "N-28", which was then no row,
+from DeployedSubsetTests' InlineData. So:
 
 **What counts.** Only a testcase whose `classname` is in `Gateway.E2ETests.Functional.` or
 `Gateway.E2ETests.Negative.`, the namespaces of tests/e2e/Functional and tests/e2e/Negative, or the
@@ -28,7 +28,8 @@ one row naming two methods, since crediting the first would leave the second unr
 named twice in a row is one method.
 
 **What an id is.** A row of a table in docs/plan/04-tests.md or contracts/test-ids.md, read from the
-row's first cell only: test-ids.md names "N-33" in prose as the next number, which defines nothing.
+row's first cell only: the next number of each prefix, which test-ids.md's "Numbering" paragraph
+names in prose, is defined by nothing until its row lands.
 
 **Outcome.** A testcase with a `failure` or `error` child failed, one with `skipped` was skipped, and
 any other passed. An id passed only when every one of its tests passed, so a skipped gate test leaves
