@@ -50,6 +50,7 @@
   { "why": "a URL refuses before a local reference is judged", "description": "Closes #35\nFixes https://github.com/o/r/issues/352", "commits": ["Task issue-806: repair #35 and #352"], "otherRepository": "https://github.com/o/r/issues/352" },
   { "why": "a URL without a closing keyword closes nothing", "description": "See https://github.com/o/r/issues/352", "commits": ["Task issue-806: the change"], "unnamed": [] },
   { "why": "a keyword suffix before a URL closes nothing", "description": "prefixes https://github.com/o/r/issues/352", "commits": ["Task issue-806: the change"], "unnamed": [] },
-  { "why": "a non-GitHub URL closes nothing", "description": "Closes https://example.com/o/r/issues/352", "commits": ["Task issue-806: the change"], "unnamed": [] }
+  { "why": "a non-GitHub URL closes nothing", "description": "Closes https://example.com/o/r/issues/352", "commits": ["Task issue-806: the change"], "unnamed": [] },
+  { "why": "an http URL is refused as an https one is", "description": "Closes http://github.com/o/r/issues/352", "commits": ["Task issue-806: repair #35 and #352"], "otherRepository": "http://github.com/o/r/issues/352" }
  ]
 }

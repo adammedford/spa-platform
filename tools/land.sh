@@ -54,8 +54,8 @@
 # closes a ticket on (#578), names a ticket some non-merge commit between the base and that head
 # names in its message, as `#n` or as `issue-n`, because the merge closes each one (#566). A refusal
 # names each #n no commit names, and --unreviewed does not lift it. A keyword before `owner/repo#n`,
-# GitHub's form for another repository's ticket, is refused outright, because the check cannot tell
-# whether it names a ticket here; the remedy is `Closes #n`.
+# GitHub's form for another repository's ticket, or before a GitHub issue URL (#806), is refused
+# outright, because the check cannot tell whether it names a ticket here; the remedy is `Closes #n`.
 #
 # It merges only a body that cites each decision it owes (#530). A closing reference that names a
 # change request decided `ADR: no` closes a request whose why lives nowhere but the merge body, so
