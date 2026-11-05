@@ -412,6 +412,9 @@ class CommandLine(unittest.TestCase):
         self.assertNotIn("nothing judged", last)
 
     def test_a_label_write_that_fails_says_what_was_made(self):
+        # The case that holds run_labels()'s write-failed verdict (#829): the count alone is also in a
+        # nothing-judged line, so the prefix is what tells them apart. Raising Unreadable in place of
+        # WriteFailed, or dropping the try around change(), ends "nothing judged" and turns this red.
         self.world({"issues": [], "labels": []})
         done = self.run_script("labels", "apply", GH_FAIL_WRITES_AFTER="2")
         self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
