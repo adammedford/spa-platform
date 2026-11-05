@@ -369,8 +369,32 @@ class Endings(CaseBase):
         self.assertEqual("ServiceSchedulerInitiated", restarts[1]["stop"]["code"])
         self.assertIn("<arn>", restarts[1]["stop"]["reason"])
         self.assertTrue(restarts[1]["lines"], "the breach row keeps the task's log lines")
-        self.assertIn("BREACH of the T0 + 60 s hard bound on restart 2", run.txt)
-        self.assertRegex(run.txt, r"#2 task \w+ breach: .*S - T0 -?\d+\.\.-?\d+ cross-clock")
+        # The breach is the scheduler's stop (#286 Q148), placed against the hard bound as observed on
+        # T0's clock, never asserted past it (#919): the doubles stop the task milliseconds after T0.
+        self.assertRegex(run.txt, r"ending: BREACH on restart 2: the scheduler stopped task \w+ for failing the load "
+                                  r"balancer's health checks \(ServiceSchedulerInitiated\), seen at T0 \+ -?\d+\.\.-?\d+ s, "
+                                  r"before the T0 \+ 60 s hard bound\n")
+        self.assertNotIn("past the T0", run.txt)
+        seen = restarts[1]["stop"]["seen"]
+        # From the describe-tasks before the one that saw the stop, which came after the T0 sample.
+        self.assertGreater(seen["after_ns"], restarts[1]["t0"]["at_ns"])
+        self.assertLess(seen["after_ns"], seen["at_ns"])
+        self.assertRegex(run.txt, r"#2 task \w+ breach: .*S - T0 -?\d+\.\.-?\d+ cross-clock.*; stopped "
+                                  r"ServiceSchedulerInitiated: [^\n]*; seen at T0 \+ -?\d+\.\.-?\d+ s, before the T0 \+ 60 s hard bound")
+        self.assertNoSecrets(run)
+
+    def test_a_breach_before_any_t0_sample_is_reported_unplaced_and_exits_3(self):
+        plans = [plan() for _ in range(10)]
+        plans[0] = plan(health=[None, ["initial", "Elb.RegistrationInProgress"]], stop_at_sample=2)
+        run = run_case(world(plans))
+        self.assertEqual(3, run.code, run.stderr)
+        self.assertNoUnexpectedCalls(run)
+        self.assertEqual("breach", run.json["ending"])
+        self.assertIsNone(run.json["restarts"][0]["t0"])
+        self.assertIn("ending: BREACH on restart 1: the scheduler stopped task ", run.txt)
+        self.assertIn("(ServiceSchedulerInitiated), with no T0 (no sample saw Elb.InitialHealthChecking), "
+                      "not placed against the T0 + 60 s hard bound\n", run.txt)
+        self.assertNotIn("past the T0", run.txt)
         self.assertNoSecrets(run)
 
     def test_a_deployment_not_stable_within_the_waiters_bound_is_incomplete_and_exits_4(self):
@@ -599,6 +623,26 @@ class Arithmetic(unittest.TestCase):
         self.assertEqual(2, fargate.check_count(t0, self.window(129, 130)))
         self.assertEqual(3, fargate.check_count(t0, self.window(159.5, 160.5)))
         self.assertIsNone(fargate.check_count(None, self.window(1, 2)))
+
+    def test_a_stop_is_placed_against_the_hard_bound_on_t0s_clock(self):
+        t0 = self.window(99, 100)
+        self.assertEqual("seen at T0 + 61..63 s, past the T0 + 60 s hard bound",
+                         fargate.stop_after_t0(t0, self.window(161, 162)))
+        self.assertEqual("seen at T0 + 30..32 s, before the T0 + 60 s hard bound",
+                         fargate.stop_after_t0(t0, self.window(130, 131)))
+        self.assertEqual("seen at T0 + 59..62 s, across the T0 + 60 s hard bound: the poll cannot place it",
+                         fargate.stop_after_t0(t0, self.window(159, 161)))
+        # A stop on the first describe has no describe before it: the window is its one instant.
+        self.assertEqual("seen at T0 + 70..71 s, past the T0 + 60 s hard bound",
+                         fargate.stop_after_t0(t0, {"after_ns": None, "at_ns": 170 * self.S}))
+        # A T0 the first sample saw may have begun any time before it, so the stop is never "before".
+        first = {"after_ns": None, "at_ns": 100 * self.S}
+        self.assertEqual("seen at T0 + 30..? s, across the T0 + 60 s hard bound: the poll cannot place it",
+                         fargate.stop_after_t0(first, self.window(130, 131)))
+        self.assertEqual("seen at T0 + 61..? s, past the T0 + 60 s hard bound",
+                         fargate.stop_after_t0(first, self.window(161, 162)))
+        self.assertEqual("with no T0 (no sample saw Elb.InitialHealthChecking), not placed against the T0 + 60 s hard bound",
+                         fargate.stop_after_t0(None, self.window(1, 2)))
 
     def test_the_log_cross_check_allows_one_line_per_node_per_check(self):
         self.assertTrue(fargate.log_check(2, 4).startswith("consistent"))
