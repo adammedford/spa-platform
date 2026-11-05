@@ -76,6 +76,7 @@ public sealed partial class SittingBrowserTests
     [Fact]
     public async Task A_command_it_cannot_answer_is_one_line_that_echoes_nothing_typed_and_it_goes_on()
     {
+        SkipUnlessTheSwitchIsUnset();
         using CancellationTokenSource stop = new();
         CapturedLines lines = new();
         Commands commands = new();
@@ -101,6 +102,7 @@ public sealed partial class SittingBrowserTests
     [Fact]
     public async Task Cancelling_its_token_stops_it_within_a_bound_and_closes_its_browser()
     {
+        SkipUnlessTheSwitchIsUnset();
         using CancellationTokenSource stop = new();
         CapturedLines lines = new();
         Commands commands = new();
@@ -156,6 +158,7 @@ public sealed partial class SittingBrowserTests
     /// <summary>A sign-in, a marker read and a stop on the switch's stack, with the cookies the profile held before the stop.</summary>
     private static async Task<Session> SignInAndReadMarkerAsync()
     {
+        SkipUnlessTheSwitchIsUnset();
         using CancellationTokenSource stop = new();
         CapturedLines lines = new();
         Commands commands = new();
@@ -172,6 +175,22 @@ public sealed partial class SittingBrowserTests
         commands.Send("stop");
         string reason = await run.WaitAsync(StopBound, TestContext.Current.CancellationToken);
         return new Session(lines.Text, [.. lines.Lines], cookies, reason);
+    }
+
+    /// <summary>
+    /// Skips the calling in-process fact (Assert.Skip) unless the switch names the local stack. #1032 states
+    /// these facts with <c>SPA_E2E_STACK</c> unset, and a sitting's suite run sets it to <c>deployed</c>
+    /// (the wiz skill's C2 command): there the ready line names the cell and an app the cell does not
+    /// name is its <see cref="InvalidOperationException"/>, so the facts would fail on what they do not
+    /// prove. The cell's own proof is the first sitting's (#1027). The executable facts unset the switch
+    /// in their child, so they run there as here.
+    /// </summary>
+    private static void SkipUnlessTheSwitchIsUnset()
+    {
+        if (StackSwitch.FromEnvironment() != StackKind.Local)
+        {
+            Assert.Skip($"{StackSwitch.Variable} names the deployed cell: the in-process sitting-browser facts are stated with it unset (#1032), and the cell's proof is #1027's.");
+        }
     }
 
     /// <summary>The fixture shell's <c>#marker</c> heading, read from the fixture (fixtures/spa).</summary>
