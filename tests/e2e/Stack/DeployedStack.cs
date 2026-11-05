@@ -139,9 +139,11 @@ public sealed class DeployedStack : IBrowserStack
 
     public TimeSpan RegistryPropagation => CellRegistryPropagation;
 
-    public static async Task<DeployedStack> StartAsync()
+    public static Task<DeployedStack> StartAsync() => StartCancellableAsync(TestContext.Current.CancellationToken);
+
+    /// <summary>The same, under <paramref name="ct"/>: the sitting browser's start (#1032), outside any test.</summary>
+    public static async Task<DeployedStack> StartCancellableAsync(CancellationToken ct)
     {
-        CancellationToken ct = TestContext.Current.CancellationToken;
         string outputsPath = Environment.GetEnvironmentVariable(OutputsVariable) is { Length: > 0 } named
             ? named
             : Path.Combine(FixtureFiles.RepositoryRoot, "infra", "envs", "poc", "outputs.json");
@@ -152,7 +154,7 @@ public sealed class DeployedStack : IBrowserStack
         }
 
         Cell cell = Cell.Parse(await File.ReadAllTextAsync(outputsPath, ct));
-        return await StartAsync(new DeployedStackSetup(cell, outputsPath, new ProcessCommandRunner(), TunnelPort()));
+        return await StartCancellableAsync(new DeployedStackSetup(cell, outputsPath, new ProcessCommandRunner(), TunnelPort()), ct);
     }
 
     /// <summary>
@@ -160,9 +162,11 @@ public sealed class DeployedStack : IBrowserStack
     /// from the environment, and what a test builds over a loopback listener standing in for the tunnel
     /// and a recorded runner standing in for AWS (#211).
     /// </summary>
-    internal static async Task<DeployedStack> StartAsync(DeployedStackSetup setup)
+    internal static Task<DeployedStack> StartAsync(DeployedStackSetup setup) => StartCancellableAsync(setup, TestContext.Current.CancellationToken);
+
+    /// <inheritdoc cref="StartAsync(DeployedStackSetup)"/>
+    internal static async Task<DeployedStack> StartCancellableAsync(DeployedStackSetup setup, CancellationToken ct)
     {
-        CancellationToken ct = TestContext.Current.CancellationToken;
         Cell cell = setup.Cell;
         int port = setup.TunnelPort;
         await TunnelIsUpAsync(port, ct);
@@ -208,8 +212,13 @@ public sealed class DeployedStack : IBrowserStack
 
     public HarnessApp App(string appId) => Cell.App(appId);
 
-    public async Task<Profile> OpenAsync()
+    public Task<Profile> OpenAsync() => OpenCancellableAsync(TestContext.Current.CancellationToken);
+
+    /// <summary>The same; Playwright's calls take no token, so <paramref name="ct"/> is checked before each.</summary>
+    public async Task<Profile> OpenCancellableAsync(CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
+
         // No IgnoreHTTPSErrors: Chromium must trust the cell's certificate through the local authority.
         IBrowserContext context = await browser.NewContextAsync(new() { IgnoreHTTPSErrors = false });
 
@@ -229,10 +238,13 @@ public sealed class DeployedStack : IBrowserStack
     /// wait: F-07 calls it on the stack directly, and the form's submit is what sends the browser to the
     /// callback with its code (#253).
     /// </summary>
-    public Task CompleteLoginAsync(Profile profile, HarnessApp app)
+    public Task CompleteLoginAsync(Profile profile, HarnessApp app) => CompleteLoginCancellableAsync(profile, app, TestContext.Current.CancellationToken);
+
+    /// <inheritdoc cref="CompleteLoginAsync(Profile, HarnessApp)"/>
+    public Task CompleteLoginCancellableAsync(Profile profile, HarnessApp app, CancellationToken ct)
     {
         string shell = app.Url("/").ToString();
-        return Redacted.PlaywrightAsync(() => FillLoginFormIfShownAsync(profile, url => url == shell));
+        return Redacted.PlaywrightAsync(() => FillLoginFormIfShownAsync(profile, url => url == shell, ct));
     }
 
     /// <summary>
@@ -240,7 +252,7 @@ public sealed class DeployedStack : IBrowserStack
     /// (<paramref name="arrived"/>), and at the provider fills the managed login form as
     /// <see cref="SignInAs"/> last named.
     /// </summary>
-    private async Task FillLoginFormIfShownAsync(Profile profile, Func<string, bool> arrived)
+    private async Task FillLoginFormIfShownAsync(Profile profile, Func<string, bool> arrived, CancellationToken ct)
     {
         IPage page = profile.Page;
         await Redacted.PlaywrightAsync(() => page.WaitForURLAsync(url => arrived(url) || new Uri(url).Host == ProviderHost));
@@ -251,7 +263,7 @@ public sealed class DeployedStack : IBrowserStack
 
         if (!passwords.TryGetValue(user, out Password? password))
         {
-            password = await aws.PasswordAsync(user, TestContext.Current.CancellationToken);
+            password = await aws.PasswordAsync(user, ct);
             passwords[user] = password;
         }
 
@@ -303,6 +315,9 @@ public sealed class DeployedStack : IBrowserStack
     /// <summary>Through the tunnel, validating the ALB's certificate as the workstation does (<see cref="RawClient"/>).</summary>
     public Task<HttpResponseMessage> SendRawAsync(HttpRequestMessage request) => SendRawAsync(request, TestContext.Current.CancellationToken);
 
+    /// <inheritdoc cref="SendRawAsync(HttpRequestMessage)"/>
+    public Task<HttpResponseMessage> SendRawCancellableAsync(HttpRequestMessage request, CancellationToken ct) => SendRawAsync(request, ct);
+
     private Task<HttpResponseMessage> SendRawAsync(HttpRequestMessage request, CancellationToken ct)
     {
         raw ??= RawClient.To($"127.0.0.1:{tunnelPort}", rawValidation);
@@ -320,7 +335,7 @@ public sealed class DeployedStack : IBrowserStack
         return NavigationHold.HoldAsync(profile.Page, callback, async () =>
         {
             await start();
-            await FillLoginFormIfShownAsync(profile, url => url.StartsWith(callback, StringComparison.Ordinal));
+            await FillLoginFormIfShownAsync(profile, url => url.StartsWith(callback, StringComparison.Ordinal), TestContext.Current.CancellationToken);
         });
     }
 
