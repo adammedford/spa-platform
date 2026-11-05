@@ -1747,6 +1747,15 @@ try {
     const longNote = comment(45, ' '.repeat(130) + 'A review note of some length, ' + 'n'.repeat(80) + '\nAnd more.\n', '2026-10-21T09:50:00Z')
     const noted = await execute(newRepo(), { date: DATE }, { issue: issueWith([big(1, 0), longNote]) })
     if (cutAt(noted) !== '0') fail(`a long note: the batch reads ${cutAt(noted)}, expected 0: only a comment the readers could read is fetched`)
+    // The cut-heading rule judges only a head whose first line is cut (#833). A full-length head with a
+    // newline in it shows its first line whole, so HEADING decides it: here "## Questions: #346, issue-346"
+    // has two fields, is no heading, and is left out. With no comma after the newline the trimmed head
+    // still matches HEADING_CUT, whose [^,]* runs across lines, so only the newline clause leaves it out.
+    const twoFields = comment(48, '## Questions: #346, issue-346\n\n' + 'n'.repeat(250) + '\n', '2026-10-21T09:55:00Z')
+    const twoHead = twoFields.body.slice(0, 200)
+    if (twoFields.body.length <= 200 || !twoHead.includes('\n') || twoHead.slice(twoHead.indexOf('\n')).includes(',')) fail(`a whole first line: the fixture's head ${JSON.stringify(twoHead.slice(0, 40))} is short of 200 characters, has no newline, or has a comma after it`)
+    const whole = await execute(newRepo(), { date: DATE }, { issue: issueWith([big(1, 0), twoFields]) })
+    if (cutAt(whole) !== '0') fail(`a whole first line that is no heading: the batch reads ${cutAt(whole)}, expected 0: a head whose first line is whole is judged by HEADING, not by the cut-heading rule`)
     // A reader that changes a body (2026-11-02: a dropped **Q46.** marker, twice) is caught against the
     // index: re-read alone it is accepted, and a body still changed after the re-reads is refused by name.
     const first = await execute(newRepo(), { date: DATE }, { mangle: 'first' })
