@@ -29,6 +29,8 @@ import importlib.util
 import json
 import pathlib
 import re
+import select
+import subprocess
 import sys
 
 _spec = importlib.util.spec_from_file_location("cell_doubles", pathlib.Path(__file__).resolve().parent / "cell_doubles.py")
@@ -235,6 +237,26 @@ class LogsRequestsSummarisesTheGatewayRequests(cell.CompanionTestCase):
         world["log_events"] = [[stream, request("api", 403, "Qz7vQclient", f"rule-{cell.ACCOUNT}")]]
         lines, _ = self.read(world)
         self.assertEqual(["2026-11-04T21:13:03.1234567+00:00 01234567 <client-id:app1> api rule-<account> 403"], lines)
+
+    def test_a_followed_read_prints_each_request_as_it_arrives(self):
+        # #1014: with --follow it behaves as plain mode, whose redact_stream flushes every line. The
+        # logs tail double writes all its events and exits, so it cannot show a held buffer: this
+        # case feeds the filter one record over a pipe it keeps open, and waits for its line.
+        process = subprocess.Popen([sys.executable, "-I", str(REPO / "tools/scripts/cell_documents.py"), "requests"],
+                                   stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        try:
+            stream = f"{cell.GATEWAY}/{cell.GATEWAY}/0123456789abcdef"
+            process.stdin.write(f"2026-11-04T21:13:00.123000+00:00 {stream} {request('api', 401, 'app2', 'auth.session')}\n".encode())
+            process.stdin.flush()
+            readable, _, _ = select.select([process.stdout], [], [], 10)
+            self.assertTrue(readable, "the filter held a request's line while its input stayed open")
+            self.assertEqual(b"2026-11-04T21:13:01.1234567+00:00 01234567 app2 api auth.session 401\n",
+                             process.stdout.readline())
+        finally:
+            process.kill()
+            process.wait()
+            process.stdin.close()
+            process.stdout.close()
 
 
 class LogsRefuses(cell.CompanionTestCase):

@@ -303,7 +303,8 @@ HEALTH_ROUTE = "health"
 def request_line(line: str) -> str | None:
     """`<time> <task id's first eight> <app> <route> <rule> <status>` for one tail line that holds a
     gateway request record, else None. The tail's detailed format is the event's timestamp, its
-    stream and its message; the stream is <container>/<container>/<task id> (infra/modules/cell/ecs.tf).
+    stream and its message (https://awscli.amazonaws.com/v2/documentation/api/latest/reference/logs/tail.html,
+    `--format`); the stream is <container>/<container>/<task id> (infra/modules/cell/ecs.tf).
     A null app (a request refused before its app was resolved) or rule prints as -."""
     parts = line.rstrip("\n").split(" ", 2)
     if len(parts) < 3:
