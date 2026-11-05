@@ -5,7 +5,7 @@ export const meta = {
   phases: [
     { title: 'Collect', detail: 'open issues labelled ready-for-agent / ready-for-human become tonight\'s tickets; plan rows with no issue yet get one' },
     { title: 'Route', detail: 'needs-triage tickets routed with ask-matt; routing is a comment and a label swap' },
-    { title: 'Implement', detail: 'one lane per owner, one worktree per ticket, so a lane implements its next ticket while its last is in review or integrating (#136); implement skill text with tdd, one check; the issue is claimed, commented and ticked, and stays open until the landing closes it (#100); first a resume probe asks whether the ticket\'s branch is already on the run branch, and one that is skips implement and review for the gate alone, which passes on the record or runs once (#712); then a live read of the issue\'s labels, so a ticket relabelled since collect, ready-for-human above all, is not built again on a resume\'s cached snapshot (#721)' },
+    { title: 'Implement', detail: 'one lane per owner, one worktree per ticket, so a lane implements its next ticket while its last is in review or integrating (#136); a ticket whose Touches paths overlap an earlier ticket\'s of the night waits to start until that one settles, and one with no readable path waits on every ticket ahead of it in its lane\'s downstream-first order, then by n (#665; #706 Q1 (b)); every fork takes the run branch\'s last verified tip, or the run base before any gate has passed (#665); implement skill text with tdd, one check; the issue is claimed, commented and ticked, and stays open until the landing closes it (#100); first a resume probe asks whether the ticket\'s branch is already on the run branch, and one that is skips implement and review for the gate alone, which passes on the record or runs once (#712); then a live read of the issue\'s labels, so a ticket relabelled since collect, ready-for-human above all, is not built again on a resume\'s cached snapshot (#721)' },
     { title: 'Review', detail: 'code-review against the fork point, reusing the implement gate; findings as a comment' },
     { title: 'Integrate', detail: 'serialized merge into overnight/<date>, integration gate with smoke; the merge body cites #<n>; a complete lane\'s subject is asked of tools/landing_subjects.py, so a row with an open part ticket merges in part and a row\'s last open part names it (#388, #457); tickets whose branches changed the same file integrate in order (#279); a conflict sends the ticket back to its lane, which back-merges the run branch, resolves, re-runs the check and passes a second review, and integrate retries once (#136, #279); a gate red only on test projects the change cannot reach re-runs them once, alone, then the rest of the check, and keeps the merge when both pass (#375), read from the pass recorded for each project on the head the gate ran, not from the ok the re-run agent answers, resetting the run branch when it keeps none (#397)' },
     { title: 'Grill', detail: 'grilling + domain-modeling on paper, record and questions as comments on the issue; a change request gets a draft decision and no questions (#436)' },
@@ -190,8 +190,13 @@ const TICKET = {
     willEndPartial: { type: 'array', items: { type: 'object', properties: {
       rule: { type: 'string' }, reason: { type: 'string' },
     }, required: ['rule', 'reason'] } },
+    // tools/overnight_collect.py's Touches paths (#665), as tools/ticket_shape.py's touches() reads them, [] when the
+    // tool printed null (no Touches line), listed none, or did not run. The path waits read it; [] waits on every
+    // ticket ahead of it in its lane's run order, downstream first and then by n, not by n alone, and a later ticket
+    // of the lane in that order waits on it (#706 Q1 (b)).
+    touches: { type: 'array', items: { type: 'string' } },
   },
-  required: ['n', 'id', 'slug', 'issue', 'url', 'title', 'status', 'owner', 'blockedBy', 'why', 'openBoxes', 'changeRequest', 'willEndPartial'],
+  required: ['n', 'id', 'slug', 'issue', 'url', 'title', 'status', 'owner', 'blockedBy', 'why', 'openBoxes', 'changeRequest', 'willEndPartial', 'touches'],
 }
 const COLLECT = {
   type: 'object',
@@ -389,7 +394,7 @@ NEW TICKETS. Every open row of docs/plan/03 that is not landed, not SKIP, and no
   3. Only when that exits 0, its last line starting "ticket-shape: pass:", file it: \`cd ${REPO} && gh issue create --title "<id> — <short title>" --label <ready-for-agent|ready-for-human> --parent ${PARENT_ISSUE} --body-file ${LOG}/new-ticket-<id>.md\`. On exit 1 file nothing for that row and name the row and each "ticket-shape: <rule>:" line in "reason"; on any other exit file nothing either and say in "reason" that the check did not judge it, quoting its last line. Never reword a body to get past the check: a failure is reported, not repaired.
 Choose the label by this rule: ready-for-agent when the repo part is provable on this Mac by build, tests, or terraform validate; it writes only its owner's paths; and every Need is landed or is itself an issue (then \`--blocked-by <that issue's number>\`, which also makes tonight's status "blocked"). Terraform rows count: written and validated, not applied, is how 1.0 and 1.6a landed. A row needing tooling not installed here is not ready-for-agent. The headless-browser test is NOT \`which chromium\`: Playwright keeps its browsers under ~/Library/Caches/ms-playwright. Read the Microsoft.Playwright version from Directory.Packages.props and the chromium revision from ~/.nuget/packages/microsoft.playwright/<version>/.playwright/package/browsers.json; the browser is present when ~/Library/Caches/ms-playwright/chromium-<revision> exists. ready-for-human when the next step is a human's: an AWS apply or credentials, a gate decision (a gate is closed when the JSON's "closed_gates" lists it, and open otherwise), an integrator decision, an open change request, a decision the plan leaves open. The owner is the workstream's OWNERSHIP.md role; integrator for I-* rows. A row whose Need is an open change-request issue is filed \`--blocked-by\` that issue. Add each created issue to "tickets" with the status its label and blockers give it, and name each one in "reason" ("created #<n> for <id>").
 
-FORECAST (#228), after NEW TICKETS: run \`cd ${REPO} && python3 -I tools/overnight_collect.py --json\` (it only reads: gh, each ready-for-agent issue's timeline among it, the task branches, the roadmap, OWNERSHIP.md and docs/agents/tracker-policy.md). Give each ticket in "tickets" the "willEndPartial" list of the tool's ticket with the same issue number, copied as printed, and [] for a ticket the tool does not list. Each entry is a failure of tools/ticket_shape.py, the check that holds #227's rules where a ticket is written (#248): its "rule" (one-owner, owner-line, sitting-or-landing, blocker-edge or foreground) and its "reason", the line the check prints. A ticket is judged under its own label, so sitting-or-landing and foreground flag only a ready-for-agent one, and blocker-edge flags a wait the body states with no blocked-by edge, which would let a lane start before its blocker. Do not judge a ticket by reading it: the tool's list is the forecast. The status the tool gives is the ticket's (#316): give each ticket in "tickets" the "status" and "why" of the tool's ticket with the same issue number, copied as printed, in place of yours, since the tool alone reads who applied ready-for-agent; a ticket the tool does not list keeps yours. Set "forecastFailed" to "" when the tool exits 0. If it exits non-zero, give every ticket [], set "forecastFailed" to its stderr's last line (non-empty: "exit <code>" when stderr is empty), and say in "reason" that the forecast did not run; and, since who applied each label then went unread, give every ticket whose status would be "ready-for-agent" the status "blocked", blockedBy [], and the why "tools/overnight_collect.py did not run, so who applied ready-for-agent is unread (#316)", so no lane starts on a label nobody checked.
+FORECAST (#228), after NEW TICKETS: run \`cd ${REPO} && python3 -I tools/overnight_collect.py --json\` (it only reads: gh, each ready-for-agent issue's timeline among it, the task branches, the roadmap, OWNERSHIP.md and docs/agents/tracker-policy.md). Give each ticket in "tickets" the "willEndPartial" list of the tool's ticket with the same issue number, copied as printed, and [] for a ticket the tool does not list. Each entry is a failure of tools/ticket_shape.py, the check that holds #227's rules where a ticket is written (#248): its "rule" (one-owner, owner-line, sitting-or-landing, blocker-edge or foreground) and its "reason", the line the check prints. A ticket is judged under its own label, so sitting-or-landing and foreground flag only a ready-for-agent one, and blocker-edge flags a wait the body states with no blocked-by edge, which would let a lane start before its blocker. Do not judge a ticket by reading it: the tool's list is the forecast. The status the tool gives is the ticket's (#316): give each ticket in "tickets" the "status" and "why" of the tool's ticket with the same issue number, copied as printed, in place of yours, since the tool alone reads who applied ready-for-agent; a ticket the tool does not list keeps yours. Give each ticket in "tickets" the "touches" list of the tool's ticket with the same issue number, copied as printed (#665): the paths tools/ticket_shape.py's touches() reads from its Touches line, which the script's path waits read; give [] where the tool prints null (no Touches line) and for a ticket the tool does not list, and never read a Touches line yourself. Set "forecastFailed" to "" when the tool exits 0. If it exits non-zero, give every ticket [] for willEndPartial and for touches, set "forecastFailed" to its stderr's last line (non-empty: "exit <code>" when stderr is empty), and say in "reason" that the forecast did not run; and, since who applied each label then went unread, give every ticket whose status would be "ready-for-agent" the status "blocked", blockedBy [], and the why "tools/overnight_collect.py did not run, so who applied ready-for-agent is unread (#316)", so no lane starts on a label nobody checked.
 
 Return outcome "ok", tickets (sorted by n), landed, reason, base: the base's full sha (on "dirty-start", whatever HEAD is), and shell and shellCommand from SETUP 0.`
 
@@ -442,7 +447,7 @@ STEP 0 — durable state (this may be a resumed run):
 - First, the issue's state now: \`cd ${REPO} && gh issue view ${t.issue} --json state --jq .state\`. Tonight's tickets are a snapshot taken at collect, so a ticket can close before its lane starts (#108). If it prints CLOSED, return outcome "skipped" with summary "closed before the lane started", branch "", forkSha "", headSha "", complete false, outstanding "", question "" and no decisions; do nothing else and write nothing.
 - If branch task/${t.id}-${t.slug} exists and its log (\`git -C ${REPO} log ${INT_BRANCH}..task/${t.id}-${t.slug} --format=%s\`) has a commit whose subject starts "Task ${t.id}:", the implementation is done: make sure the worktree has it checked out (\`git -C ${REPO} worktree add ${WT(t)} task/${t.id}-${t.slug}\` if ${WT(t)} is missing, else \`git -C ${WT(t)} checkout task/${t.id}-${t.slug}\`), read the issue's state and its "## Answer" comment (\`cd ${REPO} && gh issue view ${t.issue} --json state,labels,comments\`), and return those facts (forkSha = \`git -C ${REPO} merge-base ${INT_BRANCH} task/${t.id}-${t.slug}\`). Do no other work.
 - If the branch exists without that commit, check it out as above and continue the work on it; read the issue's comments once for what an earlier attempt recorded.
-- Otherwise fork from the integration tip: forkSha = \`git -C ${REPO} rev-parse ${INT_BRANCH}\`. If ${WT(t)} is not a worktree: \`git -C ${REPO} worktree add -b task/${t.id}-${t.slug} ${WT(t)} <forkSha>\`. If it is, it must be clean (\`git -C ${WT(t)} status --porcelain\` empty; if not, return "failed" saying so), then \`git -C ${WT(t)} checkout -b task/${t.id}-${t.slug} <forkSha>\`.
+- Otherwise fork from ${forkFrom().why}: forkSha = ${forkFrom().sha}. Take that sha, never \`git -C ${REPO} rev-parse ${INT_BRANCH}\`: the branch may hold a merge whose integration gate is still running, which a red gate resets away (#665, #279). If ${WT(t)} is not a worktree: \`git -C ${REPO} worktree add -b task/${t.id}-${t.slug} ${WT(t)} <forkSha>\`. If it is, it must be clean (\`git -C ${WT(t)} status --porcelain\` empty; if not, return "failed" saying so), then \`git -C ${WT(t)} checkout -b task/${t.id}-${t.slug} <forkSha>\`.
 Claim the issue: \`cd ${REPO} && gh issue edit ${t.issue} --add-assignee @me\`. The branch remains the claim git sees.
 ${t.changeRequest ? REQUEST_DECISION(t) : ''}
 STEP 1 — build it, following ${SKILLS}/implement/SKILL.md (read it; it is not callable) with two changes: do NOT run its code-review step (a separate reviewer does that next), and the ticket is GitHub issue #${t.issue}: read its body (\`cd ${REPO} && gh issue view ${t.issue} --json title,body\`), which is the spec and the acceptance list; the comments are history and you need them only in the resumed cases of STEP 0.
@@ -660,8 +665,8 @@ Worktree ${WT(t)}, branch ${impl.branch}, fork point ${impl.forkSha}. Merging it
 The implementer's summary: ${impl.summary}
 The reviewer's summary: ${rev.summary}
 
-STEP 0 — durable state: ${verified ? `tip=${verified}, the head of ${INT_BRANCH} whose integration gate last passed. Take it, not \`git -C ${REPO} rev-parse ${INT_BRANCH}\`: outside the integration lock the branch may hold a merge whose gate is still running, and a red gate resets it away (#279).` : `tip=\`git -C ${REPO} rev-parse ${INT_BRANCH}\`, read once and used below; no integration gate has passed in this run, so no verified tip was handed over.`} If \`git -C ${WT(t)} merge-base --is-ancestor <tip> HEAD\` succeeds, the back-merge is in: skip to STEP 2. In every case before=${rev.headSha}, the reviewed head the ticket arrived with, so a reset below undoes the back-merge and every resolution commit even on a resumed run. If \`git -C ${WT(t)} rev-parse -q --verify MERGE_HEAD\` succeeds, a back-merge is under way: continue it at STEP 1's resolution.
-STEP 1 — the back-merge. \`git -C ${WT(t)} merge --no-ff ${verified || '<tip>'}\`. For each conflicted file (\`git -C ${WT(t)} diff --name-only --diff-filter=U\`), read both sides and what the run branch landed there since the fork (\`git -C ${WT(t)} log --oneline ${impl.forkSha}..<tip> -- <file>\`), and keep both intents: the ticket's change and every change the run branch already holds. Never take one side whole when the other changed lines this ticket did not. A conflict in the generated blocks of README.md or docs/roadmap.md takes the run branch's side, then \`python3 -I tools/roadmap.py\` in ${WT(t)} regenerates them. Commit the merge with subject "Merge ${INT_BRANCH} into ${impl.branch}: resolve <files>", a body saying how each file was resolved, and the attribution line. If a file cannot be resolved without deciding something the ticket did not (a human-owned choice, another owner's change to undo), \`git -C ${WT(t)} merge --abort\` and return "unresolved" with why.
+STEP 0 — durable state: tip=${verified || BASE}, ${verified ? `the head of ${INT_BRANCH} whose integration gate last passed` : `the run base, since no integration gate has passed in this run (#665)`}. Take it, not \`git -C ${REPO} rev-parse ${INT_BRANCH}\`: outside the integration lock the branch may hold a merge whose gate is still running, and a red gate resets it away (#279). If \`git -C ${WT(t)} merge-base --is-ancestor <tip> HEAD\` succeeds, the back-merge is in: skip to STEP 2. In every case before=${rev.headSha}, the reviewed head the ticket arrived with, so a reset below undoes the back-merge and every resolution commit even on a resumed run. If \`git -C ${WT(t)} rev-parse -q --verify MERGE_HEAD\` succeeds, a back-merge is under way: continue it at STEP 1's resolution.
+STEP 1 — the back-merge. \`git -C ${WT(t)} merge --no-ff ${verified || BASE}\`. For each conflicted file (\`git -C ${WT(t)} diff --name-only --diff-filter=U\`), read both sides and what the run branch landed there since the fork (\`git -C ${WT(t)} log --oneline ${impl.forkSha}..<tip> -- <file>\`), and keep both intents: the ticket's change and every change the run branch already holds. Never take one side whole when the other changed lines this ticket did not. A conflict in the generated blocks of README.md or docs/roadmap.md takes the run branch's side, then \`python3 -I tools/roadmap.py\` in ${WT(t)} regenerates them. Commit the merge with subject "Merge ${INT_BRANCH} into ${impl.branch}: resolve <files>", a body saying how each file was resolved, and the attribution line. If a file cannot be resolved without deciding something the ticket did not (a human-owned choice, another owner's change to undo), \`git -C ${WT(t)} merge --abort\` and return "unresolved" with why.
 STEP 2 — the check, against the run branch's tip that was merged in, so the diff judged is this ticket's change and its resolution:
 ${GATE({ dir: WT(t), log: `${LOG}/${t.id}-resolve.txt`, kind: 'task', fork: '<tip>', port: PORT(t.n) })}
   Red: fix the resolution only (never the ticket's own behaviour) and re-run, at most two runs in total. Still red: \`git -C ${WT(t)} reset --hard <before>\` and return "unresolved" with the failing lines.
@@ -727,6 +732,7 @@ The results JSON already holds what the lanes returned (#129): each grill's full
    - Collect: will end partial (#228): the run results' "willEndPartial", the lane tickets collect flagged before any lane started, each as #<issue> with every reason it gives, and after each whether it did end partial; "none" when the list is empty and "forecastFailed" is "". When "forecastFailed" is not empty, the section says the forecast did not run and quotes it, never "none". This section comes before Integrated, so the forecast reads as made before the lanes ran;
    - Integrated: task, #issue, merge sha, what landed (from \`git -C ${REPO} log --oneline ${BASE}..${INT_BRANCH}\`);
    - Conflicts at integrate (#136): every entry of the run results' "conflicts", each as #<issue>, its files and "resolved" (merged after the back-merge) or "unresolved" (reported, not merged), from its "## Conflict at integrate" comment; then the count of each; "none" when the list is empty;
+   - Path waits (#665): every entry of the run results' "pathWaits", a ticket whose implement waited to start behind an earlier ticket of the night whose Touches paths overlap its own, or, where it or the ticket ahead has no readable Touches path, behind every ticket ahead of it in its lane's downstream-first order. Under its own heading \`### Path waits\`, the same text every night, one line per entry: #<issue>, the task, each ticket it waited behind as #<issue> with the paths the entry gives (as printed, "every path: ..." included), and its elapsed minutes, "minutes" as the entry gives it, or "not measured" when that is null; then the count and the total minutes; "none" under the heading when the list is empty. It claims no conflict saved: the waits are recorded so a later night can weigh them against its conflicts;
    - Flakes at integrate (#375): every entry of the run results' "flakes", a gate red on test projects the ticket's change could not reach, re-run once alone. Give each project its own heading, \`### Flake: <project>\` (the project's path exactly as the entry gives it, as in \`### Flake: tests/Spactl.Tests\`), the same text every night, so a recurring flake is found by searching the Overnight issues for its heading; under it, one line per entry naming that project: #<issue>, the task, "passed alone" or "failed again", its re-run log, the first gate's log, and "merge kept", "re-run failed, reset", or, when the entry's "reset" is not "", "not kept: <its why>" and its reset (#397); "none" under the section's own heading when the list is empty;
    - Closing check (#629): the run results' "closingCheck", under its own heading \`### Closing check\`, the same text every night: its status, its log and its last line quoted unchanged, the head it ran on and the run base it was judged against. "pass" says the whole run was judged once against the run base and passed. "fail" says so plainly, and that every merge was kept, since each passed its own check against its first parent and this one cannot name the merge that broke it, and that there is no morning hold: the landing pull request's CI and required checks hold the landing as the existing rules say. "not-run" gives its why. Never call it a gate;
    - Close in the morning: every entry of the run results' "closeInMorning", the tickets collect gave the status close-in-morning, whose result's "why" is "${CLOSE_WHY}": no lane ran, because collect found no open acceptance box on its issue (#129, #379); list them with the issues to close, each as #<issue>, so Adam closes it, or reopens a box if one is not met;
@@ -849,6 +855,11 @@ let failures = 0
 // The head of the run branch whose integration gate last passed (#279): a ticket sent back to its lane back-merges
 // this, since outside the integration lock the branch's tip may be a merge still under its gate.
 let verifiedTip = ''
+// Where an implement forks (#665; #659 Q2): the last verified tip, or the immutable run base before any integration
+// gate has passed, never the branch's tip as read, which may be a merge still under its gate.
+const forkFrom = () => verifiedTip
+  ? { sha: verifiedTip, why: `the run branch's last verified tip, the head of ${INT_BRANCH} whose integration gate last passed` }
+  : { sha: BASE, why: `the run base, since no integration gate has passed in this run yet` }
 const conflicts = []    // {id, issue, files, resolved}, one per ticket whose first merge conflicted (#136)
 const flakes = []       // {id, issue, projects: [{project, log, passed}], gateLog, rerunLog, kept, notes, why, reset}, one per re-run (#375); why and reset are "" when the merge was kept (#397)
 // A ticket the usage limit stopped (#710): its agent died on the limit, or was not started after it. It counts as no
@@ -890,7 +901,8 @@ agentT.forEach((t) => { done[t.id].then((ok) => { settled[t.id] = ok }, () => { 
 const lanes = {}
 ;[...agentT].sort((a, b) => a.n - b.n).forEach((t) => { (lanes[t.owner] = lanes[t.owner] || []).push(t) })
 const laneBlockers = (t) => t.blockedBy.filter((b) => byId[b] && done[b])   // blockers that are tonight's agent tickets
-const ready = (t) => laneBlockers(t).every((b) => b in settled)
+// Ready also waits out a ticket's path predecessors (#665), so a lane takes other ready work while one is held.
+const ready = (t) => laneBlockers(t).every((b) => b in settled) && pathPreds(t).every((p) => p.id in settled)
 
 // Every acceptance box is already ticked (#129, #379): collect gives the ticket the status close-in-morning, and it
 // gets no lane. It counts as met for the tickets it blocks, settled before any lane starts so a dependant in another
@@ -914,6 +926,9 @@ closeT.forEach((t) => {
 // close-in-morning tickets left their lanes: through blockedBy edges, transitively and across lanes, but only through
 // tickets a lane will implement, since a ticket waiting on one that no lane runs is skipped and gains nothing. Each
 // ticket downstream counts once, however many paths reach it.
+// Each lane ticket's place in its lane's run order once sorted, 0 first: the order a ticket with no readable Touches
+// path reads "earlier" by (#706 Q1 (b)).
+const laneRank = {}
 {
   const laneT = Object.values(lanes).flat()
   const inLane = new Set(laneT.map((t) => t.id))
@@ -926,6 +941,7 @@ closeT.forEach((t) => {
     downstream[t.id] = seen.size
   })
   Object.values(lanes).forEach((q) => q.sort((a, b) => downstream[b.id] - downstream[a.id] || a.n - b.n))
+  Object.values(lanes).forEach((q) => q.forEach((t, i) => { laneRank[t.id] = i }))
   const ahead = laneT.filter((t) => downstream[t.id]).sort((a, b) => downstream[b.id] - downstream[a.id] || a.n - b.n)
   if (ahead.length) log(`downstream first: ${ahead.map((t) => `${t.id} (${downstream[t.id]})`).join(', ')}`)
 }
@@ -940,6 +956,88 @@ const willEndPartial = Object.values(lanes).flat().filter((t) => (t.willEndParti
 log(forecastFailed ? `forecast: did not run: ${forecastFailed}`
   : `forecast: ${willEndPartial.length} of ${Object.values(lanes).flat().length} lane tickets will end partial`
   + willEndPartial.map((w) => `\n  ${w.id} (#${w.issue}): ${w.reasons.join('; ')}`).join(''))
+
+// Path waits (#665; #659 Q1, Q4 to Q8, Q10). Four of 24 first merges stopped on a conflict at integrate on
+// 2026-10-27 to -30 (#481, #484, #512, #513), each against an earlier ticket of the same night whose Touches line
+// named the same files. So a lane ticket waits to start its implement until every earlier lane ticket, by collect's
+// ordinal n and in any lane, whose Touches paths overlap its own has settled, with any outcome: the wait orders two
+// tickets, and only a blocked-by edge means one needs the other, so a predecessor that fails releases its waiter and
+// skips nothing. Two paths overlap when they are equal or one is a directory holding the other, compared on whole path
+// segments, never on a textual prefix: tools/overnight_collect.py does not hold tools/overnight_collect_tests.py. A
+// segment with a * matches as a glob within that segment, so `tests/Gateway.*` holds tests/Gateway.Tests. A ticket
+// with no readable Touches path waits for every ticket ahead of it in its lane, and a later ticket of the lane waits for
+// it, since a check fails closed (CODING_STANDARDS.md), as #279's empty file list locks every file. Ahead, for such a
+// pair, is the lane's run order, downstream first and then by n (#662), not n alone (#706 Q1 (b)): a ticket with no
+// path and the most downstream runs first, as #662 has it, and does not wait on a lower-n ticket of its lane. An
+// overlap of readable paths, in any lane, stays earlier by n. So a wait may point forwards in n, and a blocked-by edge
+// may too: a path wait that would close a cycle with the edges already taken is dropped and logged, since the edges
+// taken already order the two. #279's file locks at integrate and
+// its back-to-lane resolve stay as the backstop for a change beyond its Touches line (#659 Q9).
+const laneT = Object.values(lanes).flat()
+const pathsOf = (t) => (Array.isArray(t.touches) ? t.touches : [])
+  .map((p) => String(p).trim().replace(/^\.\//, '').replace(/^\/+|\/+$/g, '')).filter(Boolean)
+const segmentsMatch = (a, b) => {
+  if (a === b) return true
+  const glob = (s) => new RegExp('^' + s.split('*').map((x) => x.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('[^/]*') + '$')
+  return (a.includes('*') && glob(a).test(b)) || (b.includes('*') && glob(b).test(a))
+}
+// a and b overlap when the shorter's segments match the longer's first segments: equal, or a directory holding the other.
+const overlap = (a, b) => {
+  const x = a.split('/'), y = b.split('/'), k = Math.min(x.length, y.length)
+  for (let i = 0; i < k; i++) if (!segmentsMatch(x[i], y[i])) return false
+  return true
+}
+const NO_PATHS = (t) => col.forecastFailed
+  ? `${t.id} has no readable Touches path, since tools/overnight_collect.py did not run`
+  : `${t.id} has no readable Touches path (no Touches line, or one naming no path)`
+const shares = (t, p) => {
+  const a = pathsOf(t), b = pathsOf(p)
+  if (!a.length || !b.length) return t.owner === p.owner ? [`every path: ${NO_PATHS(a.length ? p : t)}`] : []
+  return [...new Set(a.flatMap((x) => b.filter((y) => overlap(x, y)).flatMap((y) => x === y ? [x] : [x, y])))]
+}
+// Whether p is ahead of t for a path wait: in t's lane's run order when either has no readable path, else by n.
+const ahead = (p, t) => p !== t && (p.owner === t.owner && (!pathsOf(p).length || !pathsOf(t).length)
+  ? laneRank[p.id] < laneRank[t.id] : p.n < t.n)
+const pathEdges = {}   // id -> [{id, issue, paths}], the lane tickets ahead of it that it waits behind
+const waitsOn = (t) => [...laneBlockers(t), ...(pathEdges[t.id] || []).map((p) => p.id)]
+const reaches = (from, to, seen = new Set()) => from === to || (!seen.has(from) && (seen.add(from), waitsOn(byId[from]).some((x) => reaches(x, to, seen))))
+;[...laneT].sort((a, b) => a.n - b.n).forEach((t) => {
+  pathEdges[t.id] = []
+  for (const p of laneT.filter((o) => ahead(o, t)).sort((a, b) => a.n - b.n)) {
+    const paths = shares(t, p)
+    if (!paths.length) continue
+    if (reaches(p.id, t.id)) { log(`${t.id}: no path wait behind ${p.id} (${paths.join(', ')}): ${p.id} already waits on ${t.id}, so the wait would close a cycle`); continue }
+    pathEdges[t.id].push({ id: p.id, issue: p.issue, paths })
+  }
+})
+const pathPreds = (t) => pathEdges[t.id] || []
+// Each wait's elapsed minutes (#659 Q10): a Workflow script has no clock (Date.now() throws), so an agent reads one,
+// once when the wait starts and once when it ends. A clock that dies leaves the wait unmeasured, never zero.
+const CLOCK = { type: 'object', properties: { epoch: { type: 'integer' } }, required: ['epoch'] }
+const clockPrompt = 'Run `date -u +%s` as one Bash call and return the integer it prints as epoch. Run nothing else and write nothing.'
+const clock = (label) => agent(clockPrompt, { label, phase: 'Implement', schema: CLOCK, effort: 'low' })
+  .then((c) => (c && Number.isInteger(c.epoch) ? c.epoch : null), () => null)
+const pathWaits = []   // {id, issue, behind: [{id, issue, paths}], startEpoch, endEpoch, minutes}, one per ticket that waited
+// A wait starts when its lane, free to take work, would take the ticket but for a path predecessor that has not
+// settled: the minutes are what the wait cost (#659 Q10, Q11), so they never hold time the lane spent implementing a
+// ticket it would have taken first anyway. It ends when the last of those predecessors has settled.
+const watchPath = async (t, open) => {
+  for (const p of open) log(`${t.id}: waiting to start behind ${p.id} (${p.paths.join(', ')})`)
+  const start = clock(`clock:${t.id}:start`)
+  await Promise.all(open.map((p) => done[p.id].then(() => true, () => false)))
+  const end = clock(`clock:${t.id}:end`)
+  const [s, e] = await Promise.all([start, end])
+  pathWaits.push({ id: t.id, issue: t.issue, behind: open, startEpoch: s, endEpoch: e,
+    minutes: s !== null && e !== null && e >= s ? Math.round((e - s) / 6) / 10 : null })
+}
+const pathWatch = {}   // id -> the wait's promise, started once, by its lane (runLane)
+const startPathWait = (t) => {
+  if (t.id in pathWatch) return
+  const open = pathPreds(t).filter((p) => !(p.id in settled))
+  if (!open.length) return
+  // A wait that throws is said so in the log, never dropped silently (CODING_STANDARDS.md: a check fails closed).
+  pathWatch[t.id] = watchPath(t, open).catch((e) => log(`${t.id}: path wait not recorded: ${e && e.message ? e.message : e}`))
+}
 
 // A ticket's implement stage. It returns true or false when the ticket settles here (skipped, stopped, failed), or
 // the implementer's result when it goes on to review and integrate, which the lane runs as a tail (#136).
@@ -1163,9 +1261,13 @@ const runLane = async (owner, queue) => {
   // A stop is the usage limit's (#710), not a lane that threw: the ticket is stopped, and counts as no failure.
   const guard = (t, at, p) => p.catch((e) => isStop(e) ? stop(t, at.stage, e.note ? { note: e.note } : undefined) : fail(t, at.stage, { why: `lane threw: ${e && e.message ? e.message : e}` }))
   while (queue.length) {
+    // The ticket this lane would take now but for the path waits (#665): if a path predecessor holds it, its wait
+    // starts here, when the lane is free for it.
+    const next = queue.find((q) => laneBlockers(q).every((b) => b in settled))
+    if (next) startPathWait(next)
     const t = queue.find(ready)
     if (!t) {
-      const waitFor = [...new Set(queue.flatMap((q) => laneBlockers(q).filter((b) => !(b in settled))))]
+      const waitFor = [...new Set(queue.flatMap((q) => [...laneBlockers(q), ...pathPreds(q).map((p) => p.id)].filter((b) => !(b in settled))))]
       log(`${owner}: nothing ready; waiting on ${waitFor.join(', ')}`)
       await Promise.race(waitFor.map((b) => done[b].then(() => true, () => false)))
       continue
@@ -1181,6 +1283,9 @@ const runLane = async (owner, queue) => {
 
 phase('Implement')
 await Promise.all(Object.entries(lanes).map(([owner, queue]) => runLane(owner, queue)))
+// Every predecessor has settled once the lanes have, so the last clocks are all that is left (#665).
+await Promise.all(Object.values(pathWatch))
+log(`path waits: ${pathWaits.length}` + pathWaits.map((w) => `\n  ${w.id} behind ${w.behind.map((p) => p.id).join(', ')}: ${w.minutes === null ? 'not measured' : `${w.minutes} min`}`).join(''))
 
 // The closing check (#629), once every lane has settled, so no merge lands after it; it runs beside the grills still
 // going, which write no file in the integration worktree. The verdict is read from the log's last line, not from the
@@ -1238,6 +1343,7 @@ const summary = {
   outOfScope: tickets.filter((t) => !inScope(t)).map((t) => t.id),
   willEndPartial, forecastFailed,
   conflicts, flakes, changeRequests,
+  pathWaits,
   closingCheck,
   stopped: Object.entries(results).filter(([, r]) => r.outcome === 'stopped').map(([id, r]) => ({ id, issue: byId[id].issue, stage: r.stage })),
   results,
@@ -1296,6 +1402,7 @@ return {
   mainCheckoutClean: rep ? rep.mainCheckoutClean : null,
   conflicts,
   flakes,
+  pathWaits,
   closingCheck,
   reasons,
   reportIssue: rep ? rep.issue : null,

@@ -27,18 +27,28 @@
 // Change requests lists. Each integrate's check is judged against its merge's first parent, and one closing check,
 // which answers red, judges the whole run against the run base once every lane has settled; three short runs after the
 // main one cover a run that integrated nothing, a closing agent that died, and an ok contradicting its last line
-// (#629). Five more short runs on synthetic tickets check that a lane runs first the ready ticket with the most of
-// tonight's tickets downstream, counted transitively, across lanes, once per ticket and only over tickets a lane
-// runs, ties by n (#662). One more short run has an agent die on the account's usage limit, and checks that the run
-// halts naming the reset, counts that death as no failure, lists the tickets it stopped apart from the failed ones,
-// and starts no agent after it (#710); one more checks that a re-run dying on the limit says the run branch may
-// hold its merge, and that a grill the limit stopped does not read as died. One more short run has the resume probe
-// find tickets already on the run branch (#712), #677's case with its gate on record and #634's with no pass line,
-// and checks that each skips implement and review, runs the gate once and integrates. A last short run has the live
-// read find tickets relabelled since collect (#721), #544's case relabelled ready-for-human among them, and checks
-// that none is implemented, that each takes its live status, and that a read that died fails closed. Every
-// house-rules prompt sends docker to ~/.docker/bin before an agent may call it absent (#742). No agent,
-// gh or git call is made.
+// (#629). Every implement must fork from the last verified tip, or the run base before any gate passed, never from a
+// merge still under its gate; and a run of its own, on tickets whose Touches paths overlap, proves the path waits:
+// equal paths and directory containment wait, a textual prefix does not, waits point backwards by n, a failed
+// predecessor releases its waiter, no readable path waits on its lane, a cycle with a blocked-by edge is dropped, and
+// each wait is reported with its paths and clocked minutes (#665); one more, where the lane's downstream-first order is
+// not n's, proves that a ticket with no readable path waits on the tickets ahead of it in that order, and that a wait
+// whose clock dies is reported unmeasured, never zero (#706 Q1 (b)). One more has a ticket both blocked by
+// one ticket and path-waiting on another, and proves that its wait is clocked and logged only once its blocker has
+// settled, and that it starts with that wait logged and reported (#665). Two more close a cycle through a path wait
+// that points forwards in n, and prove that the cycle guard drops the closing wait whether it points forwards or
+// backwards, following path waits as well as blocked-by edges (#916). Five more short runs on synthetic tickets check that
+// a lane runs first the ready ticket with the most of tonight's tickets downstream, counted transitively, across lanes,
+// once per ticket and only over tickets a lane runs, ties by n (#662). One more short run has an agent die on the
+// account's usage limit, and checks that the run halts naming the reset, counts that death as no failure, lists the
+// tickets it stopped apart from the failed ones, and starts no agent after it (#710); one more checks that a re-run
+// dying on the limit says the run branch may hold its merge, and that a grill the limit stopped does not read as died.
+// One more short run has the resume probe find tickets already on the run branch (#712), #677's case with its gate on
+// record and #634's with no pass line, and checks that each skips implement and review, runs the gate once and
+// integrates. A last short run has the live read find tickets relabelled since collect (#721), #544's case relabelled
+// ready-for-human among them, and checks that none is implemented, that each takes its live status, and that a read
+// that died fails closed. Every house-rules prompt sends docker to ~/.docker/bin before an agent may call it
+// absent (#742). No agent, gh or git call is made.
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -86,7 +96,8 @@ const FLAKE_FAILED = [FLAKE_REACHED, FLAKE_AGAIN, FLAKE_OTHER, FLAKE_GARBLED, ..
 // blocker labelled ready-for-human, so it routes to a human whatever its route agent says, and its routing names the
 // blocker; TRIAGED is needs-triage with a ready-for-agent blocker, so it routes as before and integrates after it.
 const synthetic = (n, id, status, blockedBy, openBoxes, changeRequest = false) => ({ n, id, slug: id, issue: Number(id.slice(6)), url: `https://example.invalid/${id}`,
-  title: `Synthetic ${id}`, status, owner: 'integrator', blockedBy, why: `companion ${status}`, openBoxes, willEndPartial: [], changeRequest })
+  title: `Synthetic ${id}`, status, owner: 'integrator', blockedBy, why: `companion ${status}`, openBoxes, willEndPartial: [], changeRequest,
+  touches: [`files/${id}.txt`] })
 const HELD_BY = 'issue-135', TRIAGED_AFTER = 'issue-144'
 if (byId[HELD_BY].status !== 'ready-for-human' || byId[TRIAGED_AFTER].status !== 'ready-for-agent') throw new Error('the fixture no longer has issue-135 ready-for-human and issue-144 ready-for-agent')
 const [CLOSE, AFTER_CLOSE, HELD, TRIAGED] = [
@@ -140,6 +151,10 @@ const reviewCalls = {}     // id -> review calls so far, so a ticket's first and
 // none, which collect gives the status foreground: no lane, no Route, no grill, and the report's Foreground section.
 const FOREGROUND_T = { ...synthetic(908, 'issue-908', 'foreground', [], 1), title: 'Apply Q4 of Overnight 2026-10-28 to #248' }
 tickets.push(FOREGROUND_T); byId[FOREGROUND_T.id] = FOREGROUND_T
+// Every ticket above names a Touches path of its own (#665), so none waits to start behind another and the checks
+// above keep their meaning: a ticket with no readable path would wait on every ticket ahead of it in its lane. Checks
+// 43 to 46 run ticket sets of their own whose paths overlap.
+for (const t of tickets) if (!('touches' in t)) t.touches = [`files/${t.id}.txt`]
 const UNREACHED = ['tests/Spactl.Tests', 'tests/e2e']
 const OLD = 'b'.repeat(40), RED = 'c'.repeat(40)
 const TESTS_FAILED = 'check: fail: the tests failed.'
@@ -1721,6 +1736,421 @@ const LIMIT_HALTED = 'usage limit; resume after 10pm (America/Chicago)'
     const item = (/^   - Decisions taken overnight:.*$/m.exec(reportPrompt) || [''])[0]
     if (!item.includes(REPORT)) fail('#631: the report\'s "Decisions taken overnight" item does not take a gap decision\'s alternatives from the Answer\'s "Decided by implementer" list')
     if (!reportPrompt.includes(READS)) fail('#631: the report does not read the Answer\'s "Decided by implementer" list among the comments the results JSON lacks')
+  }
+}
+
+// 42. Every implement forks from the run branch's last verified tip, or the run base before any gate has passed (#665;
+//     #659 Q2): never the branch's tip as read, which may be a merge still under its gate, which a red gate resets
+//     away. The main run's mocked integrates are in progress between their start and end, and only an integrate that
+//     answered green has a verified head, so each implement prompt's fork is the last green head before it started.
+const RUN_BASE_665 = 'a'.repeat(40)
+const forkOf = (prompt) => (/Otherwise fork from [^:]+: forkSha = (\S+?)\. Take that sha, never/.exec(prompt) || [])[1]
+{
+  const implStarts = events.filter((e) => e.kind === 'implement' && e.edge === 'start')
+  let duringMerge = 0, beforeGreen = 0
+  for (const s of implStarts) {
+    const c = allPrompts.find((x) => x.label === `implement:${s.id}`)
+    const fork = c && forkOf(c.prompt)
+    if (!fork) { fail(`#665: the implement prompt of ${s.id} names no fork sha`); continue }
+    if (c.prompt.includes(`forkSha = \`git -C ${fixture.args.repo} rev-parse overnight/`)) fail(`#665: the implement prompt of ${s.id} still forks from the branch's tip as read`)
+    const before = greens.filter((g) => g.at < s.at), same = greens.filter((g) => g.at === s.at).map((g) => g.head)
+    const want = before.length ? before[before.length - 1].head : RUN_BASE_665
+    if (fork !== want && !same.includes(fork)) fail(`#665: ${s.id} forks from ${fork}, not ${want}, the last verified tip when it started`)
+    if (!before.length) beforeGreen++
+    // An integrate running when this implement started: its head is not yet verified, so it is never the fork.
+    const running = events.filter((e) => e.kind === 'integrate' && e.edge === 'start' && e.at < s.at
+      && !events.some((x) => x.kind === 'integrate' && x.edge === 'end' && x.n === e.n && x.at <= s.at))
+    if (running.length) duringMerge++
+    for (const r of running) if (fork === `verified-${r.id}`) fail(`#665: ${s.id} forks from ${fork}, the head of a merge still under its gate`)
+  }
+  if (!duringMerge) fail('#665: no implement started while a merge was under its gate, so the in-progress check read nothing')
+  if (!beforeGreen) fail('#665: no implement started before any gate passed, so the run-base fallback check read nothing')
+}
+
+// 43. Path waits (#665; #659 Q1, Q4 to Q10): a run of its own, on tickets whose Touches paths overlap. A ticket waits
+//     to start its implement until every earlier ticket by n, in any lane, whose paths are equal to or a directory
+//     holding its own has settled with any outcome; a textual prefix alone is no overlap; a ticket with no readable
+//     path waits on every ticket ahead of it in its lane, saying why (here the lane's order is n's; check 44 has
+//     one where it is not); a wait that would close a cycle with a blocked-by edge
+//     is dropped; each wait is logged in the confirmed form and reported with its paths and elapsed minutes; and a
+//     conflict before any gate has passed back-merges the run base.
+{
+  const T = (n, owner, touches, blockedBy = []) => ({ n, id: `issue-${1000 + n}`, slug: `p${n}`, issue: 1000 + n, url: `https://example.invalid/${1000 + n}`,
+    title: `Path ${n}`, status: 'ready-for-agent', owner, blockedBy, why: 'companion', openBoxes: 1, changeRequest: false, willEndPartial: [], touches })
+  const id = (n) => `issue-${1000 + n}`
+  const set = [
+    T(1, 'integrator', ['tools/shared.py']),                    // A: fails at implement
+    T(2, 'ws6-verification', ['tools/shared.py']),              // B: equal path, another lane
+    T(3, 'ws2-hosting', ['tools/']),                            // C: a directory holding A's and B's path
+    T(5, 'ws5-fixtures', ['fixtures/Mock']),                    // E
+    T(6, 'ws3-identity', ['fixtures/MockApi/Program.cs']),      // D: a textual prefix of E's, no overlap
+    T(7, 'ws4-proxy', ['fixtures/Mock*']),                      // G: a glob segment holding E's and D's
+    T(8, 'integrator', ['docs/x.md'], [id(10)]),                // H: starts late, behind its blocker J
+    T(9, 'ws6-verification', ['docs']),                         // I: later by n, so it waits on H, though H starts after it could
+    T(10, 'ws1-infra', ['infra/a.tf']),                         // J: slow
+    T(11, 'integrator', []),                                    // M: no readable path
+    T(12, 'integrator', ['other/n.txt']),                       // N: readable, behind M in its lane
+    T(13, 'ws2-hosting', ['cyc/a'], [id(14)]),                  // K1: needs K2
+    // K2 has K1 downstream, so a lane would take it first (#662): it sits in J's lane, behind J by n, rather than ahead
+    // of B in B's lane, where it would hold B until A had settled and B would have nothing to wait on.
+    T(14, 'ws1-infra', ['cyc/a']),                              // K2: a path wait on K1 would close a cycle
+    T(15, 'ws6-verification', ['zz/z'], [id(1)]),               // Z: a real blocker on A, which fails
+  ]
+  const pById = Object.fromEntries(set.map((t) => [t.id, t]))
+  const ev = [], logged = [], prompts = [], clocks = {}, clockSeq = {}
+  const pGreens = []
+  let k = 0, seq = 0   // seq orders the agent calls, where two in one tick tie
+  globalThis.args = { ...fixture.args, skills: OTHER_SKILLS, only: null, skip: [], maxParallel: 6, maxFailures: 8 }
+  globalThis.log = (text) => logged.push({ at: tick, text })
+  globalThis.agent = async (prompt, opts) => {
+    prompts.push({ label: opts.label, prompt })
+    const [kind, tid, edge] = opts.label.split(':')
+    if (kind === 'collect') return { outcome: 'ok', reason: 'companion', tickets: set.map((t) => ({ ...t })), landed: [], base: RUN_BASE_665, shell: '3.2', shellCommand: '/bin/bash' }
+    if (kind === 'resume') return NOT_MERGED   // the resume probe (#712): nothing of this run is on the run branch yet
+    if (kind === 'live') return LIVE_READY   // the live read (#721): still ready-for-agent
+    if (kind === 'clock') { clocks[`${tid}:${edge}`] = tick; clockSeq[`${tid}:${edge}`] = ++seq; return { epoch: tick * 6 } }   // one tick reads as a tenth of a minute
+    if (kind === 'report') return { questions: 0, mainCheckoutClean: true, leftovers: '', issue: 0, url: '' }
+    if (kind === 'closing') return { ok: true, headSha: 'd'.repeat(40), lastLine: 'check: pass: companion', notes: '' }
+    const n = ++k
+    ev.push({ at: tick, kind, id: tid, edge: 'start', n, seq: ++seq })
+    await sleep(kind === 'implement' ? (tid === id(10) ? 150 : 25) : 15)
+    ev.push({ at: tick, kind, id: tid, edge: 'end', n, seq: ++seq })
+    if (kind === 'implement' && tid === id(1)) return { outcome: 'failed', branch: 'b', forkSha: 'f', headSha: 'f', complete: false, outstanding: '', summary: 'failed on purpose', question: '', delegatedDecisions: [], changeRequests: [] }
+    if (kind === 'implement') return { outcome: 'resolved', branch: 'b', forkSha: 'f', headSha: 'h', complete: true, outstanding: '', summary: 's', question: '', delegatedDecisions: [], changeRequests: [] }
+    if (kind === 'review') return { outcome: 'committed', headSha: 'h', findingsFixed: [], findingsSkipped: [], summary: 's', question: '', changeRequests: [], changedFiles: [`files/${tid}.txt`] }
+    if (kind === 'integrate') { pGreens.push({ at: tick, head: `verified-${tid}` }); return { ok: true, mergeSha: 'm', notes: '', conflictFiles: [], headSha: `verified-${tid}`, old: '', redHead: '', reach: '' } }
+    throw new Error(`unexpected agent label ${opts.label} in the path-wait run`)
+  }
+  const src = fs.readFileSync(scriptPath, 'utf8').replace(/^export const meta/m, 'const meta')
+  // The main run's tick stopped with it; this run keeps time of its own.
+  const pathTick = setInterval(() => { tick++ }, 1)
+  let stop
+  const r = await Promise.race([new Function('return (async () => {' + src + '\n})()')(), new Promise((res) => { stop = setTimeout(() => res(STALLED), LIMIT_MS) })])
+  clearTimeout(stop)
+  clearInterval(pathTick)
+  if (r === STALLED) fail('#665: the path-wait run did not finish: a wait never released, or two waits formed a cycle')
+  else {
+    const startOf = (x) => (ev.find((e) => e.kind === 'implement' && e.id === x && e.edge === 'start') || {}).at
+    const settledAt = (x) => Math.max(...ev.filter((e) => e.id === x && e.edge === 'end').map((e) => e.at))
+    const waitLine = (w, b, paths) => `${id(w)}: waiting to start behind ${id(b)} (${paths})`
+    const hasLine = (s) => logged.some((l) => l.text === s)
+    const waitsBehind = (w, b) => logged.some((l) => l.text.startsWith(`${id(w)}: waiting to start behind ${id(b)} (`))
+    const after = (w, b, why) => { const s = startOf(id(w)); if (s === undefined || s < settledAt(id(b))) fail(`#665: ${id(w)} started at ${s}, before ${id(b)} settled at ${settledAt(id(b))} (${why})`) }
+    // Equal paths, across lanes, behind a predecessor that fails: the waiter is released and integrates.
+    if (!hasLine(waitLine(2, 1, 'tools/shared.py'))) fail(`#665: no "${waitLine(2, 1, 'tools/shared.py')}" line: equal paths did not wait`)
+    after(2, 1, 'equal paths')
+    // Directory containment on whole segments.
+    if (!hasLine(waitLine(3, 1, 'tools, tools/shared.py')) || !hasLine(waitLine(3, 2, 'tools, tools/shared.py'))) fail('#665: a directory holding an earlier ticket\'s path did not wait on it: ' + JSON.stringify(logged.filter((l) => l.text.startsWith(id(3))).map((l) => l.text)))
+    after(3, 2, 'directory containment')
+    // A textual prefix alone is no overlap.
+    if (waitsBehind(6, 5)) fail(`#665: ${id(6)} (fixtures/MockApi/Program.cs) waited behind ${id(5)} (fixtures/Mock), a textual prefix only`)
+    if ((r.pathWaits || []).some((w) => w.id === id(6))) fail(`#665: the run reports a path wait for ${id(6)}, whose paths overlap no earlier ticket's`)
+    // A glob segment holds what it matches.
+    if (!waitsBehind(7, 5) || !waitsBehind(7, 6)) fail(`#665: ${id(7)}'s fixtures/Mock* did not wait on the paths it matches`)
+    // Strictly backwards by n: I waits on H, which has the lower n though it starts later; H never waits on I.
+    if (!hasLine(waitLine(9, 8, 'docs, docs/x.md'))) fail(`#665: ${id(9)} did not wait on ${id(8)}, the earlier ticket by n`)
+    if (waitsBehind(8, 9)) fail(`#665: ${id(8)} waited on ${id(9)}, a later ticket by n`)
+    after(9, 8, 'backwards by n'); after(8, 10, 'its blocker')
+    // No readable path: every ticket ahead of it in its lane (by n here), and none of another lane's, with the reason.
+    const reason = `every path: ${id(11)} has no readable Touches path (no Touches line, or one naming no path)`
+    // Not behind issue-1001: it failed and settled before the lane was free to take issue-1011, so that wait cost nothing.
+    if (!hasLine(waitLine(11, 8, reason)) || waitsBehind(11, 1)) fail(`#665: ${id(11)}, with no readable path, did not wait on every earlier ticket of its lane naming why: ` + JSON.stringify(logged.filter((l) => l.text.startsWith(id(11))).map((l) => l.text)))
+    if (waitsBehind(11, 2) || waitsBehind(11, 3)) fail(`#665: ${id(11)}, with no readable path, waited on a ticket of another lane`)
+    if (!hasLine(waitLine(12, 11, reason))) fail(`#665: ${id(12)} did not wait on ${id(11)}, the earlier ticket of its lane with no readable path`)
+    after(11, 8, 'no readable path'); after(12, 11, 'behind no readable path')
+    // A path wait that would close a cycle with a blocked-by edge is dropped and said so.
+    if (waitsBehind(14, 13)) fail(`#665: ${id(14)} waits on ${id(13)}, which needs it by a blocked-by edge`)
+    if (!logged.some((l) => l.text.startsWith(`${id(14)}: no path wait behind ${id(13)} (cyc/a): `))) fail(`#665: the dropped wait of ${id(14)} behind ${id(13)} is not logged`)
+    // The wait orders two tickets, the edge means one needs the other: a failed predecessor releases its waiters,
+    // and a real blocker on it still skips.
+    const want = [2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14].map(id)
+    for (const x of want) if (!(r.integrated || []).includes(x)) fail(`#665: ${x} did not integrate: ${JSON.stringify((r.reasons || []).find((y) => y.id === x))}`)
+    if (!(r.failed || []).includes(id(1))) fail(`#665: ${id(1)} is not reported failed`)
+    const z = (r.reasons || []).find((y) => y.id === id(15))
+    if (!(r.skipped || []).includes(id(15)) || !z || !z.reason.includes(`blocker not integrated: ${id(1)}`)) fail(`#665: ${id(15)}, blocked by the failed ${id(1)}, is not skipped for it: ${JSON.stringify(z)}`)
+    if (startOf(id(15)) !== undefined) fail(`#665: ${id(15)} started although its blocker failed`)
+    // Each wait is reported with its paths and its elapsed minutes, read from the clock agents at its start and end.
+    const waits = Object.fromEntries((r.pathWaits || []).map((w) => [w.id, w]))
+    for (const x of [2, 3, 7, 9, 11, 12].map(id)) {
+      const w = waits[x]
+      if (!w) { fail(`#665: the run's pathWaits hold no entry for ${x}`); continue }
+      const s = clocks[`${x}:start`], e = clocks[`${x}:end`]
+      if (s === undefined || e === undefined) { fail(`#665: ${x}'s wait was not clocked at its start and end`); continue }
+      if (w.minutes !== (e - s) / 10) fail(`#665: ${x}'s wait reads ${w.minutes} minutes, not ${(e - s) / 10}, the clocks' difference`)
+      if (!(e > s)) fail(`#665: ${x}'s wait was clocked to end at ${e}, not after its start at ${s}`)
+      if (e < Math.max(...w.behind.map((b) => settledAt(b.id)))) fail(`#665: ${x}'s wait was clocked to end at ${e}, before its last predecessor settled`)
+      if (startOf(x) !== undefined && startOf(x) < e) fail(`#665: ${x} started at ${startOf(x)}, before its wait ended at ${e}`)
+      if (w.behind.some((b) => !Array.isArray(b.paths) || !b.paths.length || !b.issue)) fail(`#665: ${x}'s wait does not give each predecessor's issue and paths: ${JSON.stringify(w.behind)}`)
+      // The minutes are time the path wait cost (#659 Q10, Q11), so a wait starts when its lane is free to take the
+      // ticket, never while the lane is still implementing another of its tickets, which it would wait out anyway.
+      const q = clockSeq[`${x}:start`]
+      const busy = ev.filter((b) => b.kind === 'implement' && b.edge === 'start' && b.id !== x && pById[b.id] && pById[b.id].owner === pById[x].owner)
+        .find((b) => { const end = ev.find((y) => y.kind === 'implement' && y.edge === 'end' && y.n === b.n); return b.seq < q && (!end || q < end.seq) })
+      if (busy) fail(`#665: ${x}'s wait was clocked to start at ${s}, while its lane was still implementing ${busy.id}, so its minutes hold time it could not have started in`)
+      // An earlier ticket of its lane with no blocker is taken first in any case, so the wait starts after its implement.
+      for (const y of set.filter((o) => o.owner === pById[x].owner && o.n < pById[x].n && !o.blockedBy.length)) {
+        const end = ev.find((e2) => e2.kind === 'implement' && e2.edge === 'end' && e2.id === y.id)
+        if (end && q < end.seq) fail(`#665: ${x}'s wait was clocked to start before ${y.id}, earlier in its lane, finished its implement, so its minutes hold time it could not have started in`)
+      }
+    }
+    const rep = prompts.find((x) => x.label === 'report')
+    const sum = rep ? JSON.parse((/^Run results \(JSON\): (.*)$/m.exec(rep.prompt) || [, 'null'])[1]) : null
+    if (!sum || JSON.stringify(sum.pathWaits) !== JSON.stringify(r.pathWaits)) fail('#665: the report\'s results do not carry the run\'s pathWaits')
+    const item = rep ? (rep.prompt.split('\n').find((l) => l.includes('- Path waits (#665)')) || '') : ''
+    for (const rule of ['`### Path waits`', 'the paths the entry gives', 'elapsed minutes', '"not measured"', 'It claims no conflict saved']) if (!item.includes(rule)) fail(`#665: the report prompt's Path waits item lacks "${rule}"`)
+    // Forks in this run too: the last green head before each implement started, or the run base.
+    for (const s of ev.filter((e) => e.kind === 'implement' && e.edge === 'start')) {
+      const fork = forkOf((prompts.find((x) => x.label === `implement:${s.id}`) || {}).prompt || '')
+      const before = pGreens.filter((g) => g.at < s.at), same = pGreens.filter((g) => g.at === s.at).map((g) => g.head)
+      const want2 = before.length ? before[before.length - 1].head : RUN_BASE_665
+      if (fork !== want2 && !same.includes(fork)) fail(`#665: in the path-wait run ${s.id} forks from ${fork}, not ${want2}`)
+    }
+  }
+  // Collect copies the tool's paths and reads no Touches line itself.
+  for (const c of allPrompts.filter((x) => x.label === 'collect')) {
+    if (!c.prompt.includes('Give each ticket in "tickets" the "touches" list of the tool\'s ticket with the same issue number, copied as printed (#665)')) fail('#665: the collect prompt does not copy each ticket\'s touches from tools/overnight_collect.py')
+    if (!c.prompt.includes('never read a Touches line yourself')) fail('#665: the collect prompt lets the agent read a Touches line')
+  }
+  // A conflict before any integration gate has passed back-merges the run base, never the branch's tip as read.
+  {
+    const solo = T(1, 'integrator', ['solo/a'])
+    const seen = []
+    let merged = 0
+    globalThis.args = { ...fixture.args, skills: OTHER_SKILLS, only: null, skip: [] }
+    globalThis.log = () => {}
+    globalThis.agent = async (prompt, opts) => {
+      seen.push({ label: opts.label, prompt })
+      const [kind] = opts.label.split(':')
+      if (kind === 'collect') return { outcome: 'ok', reason: 'companion', tickets: [{ ...solo }], landed: [], base: RUN_BASE_665, shell: '3.2', shellCommand: '/bin/bash' }
+      if (kind === 'resume') return NOT_MERGED
+      if (kind === 'live') return LIVE_READY
+      if (kind === 'implement') return { outcome: 'resolved', branch: 'b', forkSha: RUN_BASE_665, headSha: 'h', complete: true, outstanding: '', summary: 's', question: '', delegatedDecisions: [], changeRequests: [] }
+      if (kind === 'review') return { outcome: 'committed', headSha: 'h', findingsFixed: [], findingsSkipped: [], summary: 's', question: '', changeRequests: [], changedFiles: ['solo/a'] }
+      if (kind === 'integrate') return ++merged === 1 ? { ok: false, mergeSha: '', notes: 'conflict', conflictFiles: ['solo/a'], headSha: '', old: '', redHead: '', reach: '' }
+        : { ok: true, mergeSha: 'm', notes: '', conflictFiles: [], headSha: 'v'.repeat(40), old: '', redHead: '', reach: '' }
+      if (kind === 'resolve') return { outcome: 'resolved', headSha: 'h2', tip: RUN_BASE_665, notes: 'companion' }
+      if (kind === 'closing') return { ok: true, headSha: 'v'.repeat(40), lastLine: 'check: pass: companion', notes: '' }
+      if (kind === 'report') return { questions: 0, mainCheckoutClean: true, leftovers: '', issue: 0, url: '' }
+      throw new Error(`unexpected agent label ${opts.label} in the resolve-fallback run`)
+    }
+    await new Function('return (async () => {' + src + '\n})()')()
+    const res = (seen.find((x) => x.label === `resolve:${solo.id}`) || {}).prompt || ''
+    if (!res) fail('#665: the resolve-fallback run sent no ticket back to its lane, so the fallback check read nothing')
+    else {
+      if (!res.includes(`tip=${RUN_BASE_665}, the run base`) || !res.includes(`merge --no-ff ${RUN_BASE_665}\``)) fail('#665: a conflict before any gate passed does not back-merge the run base')
+      if (res.includes(`tip=\`git -C ${fixture.args.repo} rev-parse`)) fail('#665: a conflict before any gate passed still reads the branch\'s tip as its back-merge')
+    }
+  }
+}
+
+// 44. A ticket with no readable Touches path waits on the tickets ahead of it in its lane's run order, downstream first
+//     and then by n, not on every lower-n ticket of its lane (#706 Q1 (b)). One lane, the integrator's: P (n 1) has
+//     a path and nothing downstream; M (n 2) has no readable path and D downstream, so the lane takes M first; X (n 4)
+//     has no path and nothing downstream, so it comes after P by n; Q (n 5) has a path and comes last. D sits in another
+//     lane. M waits on nothing; P waits on M while M is in review and integrating (the predecessor held in flight); X
+//     waits on M and P, and its logged wait names P alone, since M has settled by then and a settled one costs no
+//     wait; Q waits on X. P's end clock dies, so its wait is reported unmeasured: minutes null, never zero (#659 Q10).
+{
+  const T = (n, owner, touches, blockedBy = []) => ({ n, id: `issue-${2000 + n}`, slug: `q${n}`, issue: 2000 + n, url: `https://example.invalid/${2000 + n}`,
+    title: `Lane order ${n}`, status: 'ready-for-agent', owner, blockedBy, why: 'companion', openBoxes: 1, changeRequest: false, willEndPartial: [], touches })
+  const id = (n) => `issue-${2000 + n}`
+  const set = [
+    T(1, 'integrator', ['p/a.txt']),            // P: a path, nothing downstream
+    T(2, 'integrator', []),                     // M: no readable path, D downstream
+    T(3, 'ws6-verification', ['d/d.txt'], [id(2)]),   // D: needs M
+    T(4, 'integrator', []),                     // X: no readable path, nothing downstream
+    T(5, 'integrator', ['q/q.txt']),            // Q: a path, after X
+  ]
+  const ev = [], logged = [], prompts = []
+  globalThis.args = { ...fixture.args, skills: OTHER_SKILLS, only: null, skip: [], maxParallel: 6, maxFailures: 8 }
+  globalThis.log = (text) => logged.push({ at: tick, text })
+  globalThis.agent = async (prompt, opts) => {
+    prompts.push({ label: opts.label, prompt })
+    const [kind, tid, edge] = opts.label.split(':')
+    if (kind === 'collect') return { outcome: 'ok', reason: 'companion', tickets: set.map((t) => ({ ...t })), landed: [], base: RUN_BASE_665, shell: '3.2', shellCommand: '/bin/bash' }
+    if (kind === 'resume') return NOT_MERGED
+    if (kind === 'live') return LIVE_READY
+    // P's end clock dies, as an agent that returns nothing does.
+    if (kind === 'clock') return tid === id(1) && edge === 'end' ? null : { epoch: tick * 6 }
+    if (kind === 'report') return { questions: 0, mainCheckoutClean: true, leftovers: '', issue: 0, url: '' }
+    if (kind === 'closing') return { ok: true, headSha: 'd'.repeat(40), lastLine: 'check: pass: companion', notes: '' }
+    ev.push({ at: tick, kind, id: tid, edge: 'start' })
+    await sleep(kind === 'implement' ? 20 : 40)   // review and integrate outlast an implement, so a ticket stays in flight
+    ev.push({ at: tick, kind, id: tid, edge: 'end' })
+    if (kind === 'implement') return { outcome: 'resolved', branch: 'b', forkSha: 'f', headSha: 'h', complete: true, outstanding: '', summary: 's', question: '', delegatedDecisions: [], changeRequests: [] }
+    if (kind === 'review') return { outcome: 'committed', headSha: 'h', findingsFixed: [], findingsSkipped: [], summary: 's', question: '', changeRequests: [], changedFiles: [`files/${tid}.txt`] }
+    if (kind === 'integrate') return { ok: true, mergeSha: 'm', notes: '', conflictFiles: [], headSha: `verified-${tid}`, old: '', redHead: '', reach: '' }
+    throw new Error(`unexpected agent label ${opts.label} in the lane-order path-wait run`)
+  }
+  const src = fs.readFileSync(scriptPath, 'utf8').replace(/^export const meta/m, 'const meta')
+  const orderTick = setInterval(() => { tick++ }, 1)
+  let stop
+  const r = await Promise.race([new Function('return (async () => {' + src + '\n})()')(), new Promise((res) => { stop = setTimeout(() => res(STALLED), LIMIT_MS) })])
+  clearTimeout(stop)
+  clearInterval(orderTick)
+  if (r === STALLED) fail('#706 Q1 (b): the lane-order path-wait run did not finish: a wait never released, or two waits formed a cycle')
+  else {
+    const startOf = (x) => (ev.find((e) => e.kind === 'implement' && e.id === x && e.edge === 'start') || {}).at
+    const settledAt = (x) => Math.max(...ev.filter((e) => e.id === x && e.edge === 'end').map((e) => e.at))
+    const waitsBehind = (w, b) => logged.some((l) => l.text.startsWith(`${id(w)}: waiting to start behind ${id(b)} (`))
+    const reason = (x) => `every path: ${id(x)} has no readable Touches path (no Touches line, or one naming no path)`
+    const waitLine = (w, b, why) => `${id(w)}: waiting to start behind ${id(b)} (${why})`
+    const hasLine = (s) => logged.some((l) => l.text === s)
+    const waits = Object.fromEntries((r.pathWaits || []).map((w) => [w.id, w]))
+    for (const x of [1, 2, 3, 4, 5].map(id)) if (!(r.integrated || []).includes(x)) fail(`#706 Q1 (b): ${x} did not integrate: ${JSON.stringify((r.reasons || []).find((y) => y.id === x))}`)
+    // M runs first: with no readable path it waits on nothing ahead of it in its lane's order, P included.
+    if (waitsBehind(2, 1) || waits[id(2)]) fail(`#706 Q1 (b): ${id(2)}, with no readable path and the most downstream, waited behind ${id(1)}, a lower-n ticket behind it in its lane's order`)
+    if (!(startOf(id(2)) < startOf(id(1)))) fail(`#706 Q1 (b): ${id(2)} started at ${startOf(id(2))}, not before ${id(1)} at ${startOf(id(1))}: the lane did not take its downstream-first ticket first`)
+    // P waits on M, held in flight: logged with M's reason, and P starts only once M has settled.
+    if (!hasLine(waitLine(1, 2, reason(2))) || !waits[id(1)]) fail(`#706 Q1 (b): ${id(1)} did not wait behind ${id(2)}, the ticket ahead of it in its lane with no readable path: ` + JSON.stringify(logged.filter((l) => l.text.startsWith(id(1))).map((l) => l.text)))
+    if (!(startOf(id(1)) >= settledAt(id(2)))) fail(`#706 Q1 (b): ${id(1)} started at ${startOf(id(1))}, before ${id(2)} settled at ${settledAt(id(2))}`)
+    // Then by n: X waits on P, which has the lower n and no more downstream, and the settled M costs it no logged wait.
+    if (!hasLine(waitLine(4, 1, reason(4)))) fail(`#706 Q1 (b): ${id(4)}, with no readable path, did not wait behind ${id(1)}, ahead of it in its lane by n`)
+    if (waits[id(4)] && waits[id(4)].behind.some((b) => b.id === id(2))) fail(`#706 Q1 (b): ${id(4)}'s wait names ${id(2)}, which had settled before its lane was free to take ${id(4)}`)
+    if (!(startOf(id(4)) >= settledAt(id(1))) || !(startOf(id(4)) >= settledAt(id(2)))) fail(`#706 Q1 (b): ${id(4)} started at ${startOf(id(4))}, before a ticket ahead of it in its lane settled`)
+    if (!(startOf(id(5)) >= settledAt(id(4)))) fail(`#706 Q1 (b): ${id(5)} started at ${startOf(id(5))}, before ${id(4)}, ahead of it with no readable path, settled at ${settledAt(id(4))}`)
+    // A clock that dies leaves the wait unmeasured, never zero, and the log says "not measured".
+    const p = waits[id(1)]
+    if (p && (p.minutes !== null || p.endEpoch !== null)) fail(`#659 Q10: ${id(1)}'s end clock died, but its wait reads ${p.minutes} minutes (endEpoch ${p.endEpoch}), not null`)
+    if (p && !logged.some((l) => l.text.startsWith('path waits: ') && l.text.includes(`\n  ${id(1)} behind ${id(2)}: not measured`))) fail(`#659 Q10: the path waits log line does not say ${id(1)}'s wait is not measured: ` + JSON.stringify((logged.find((l) => l.text.startsWith('path waits: ')) || {}).text))
+    const rep = prompts.find((x) => x.label === 'report')
+    const sum = rep ? JSON.parse((/^Run results \(JSON\): (.*)$/m.exec(rep.prompt) || [, 'null'])[1]) : null
+    const sw = sum && (sum.pathWaits || []).find((w) => w.id === id(1))
+    if (p && (!sw || sw.minutes !== null)) fail(`#659 Q10: the report's results do not carry ${id(1)}'s unmeasured wait as minutes null: ${JSON.stringify(sw)}`)
+  }
+}
+
+// 45. A path wait starts only once the ticket's blocked-by edges have settled (#665; #659 Q10, Q11). The lane is not
+//     free to take a ticket that a blocker still holds, so a wait clocked then would hold time the blocker cost, not
+//     the path. Three lanes: B (n 1) is quick; P (n 2) is slow and touches w/a.txt; W (n 3) needs B and touches
+//     w/a.txt, so it path-waits on P, the earlier ticket by n. W sits alone in its lane, so it is its lane's first
+//     ticket from the start. Its wait must be logged and clocked to start after B has settled, while P still holds it,
+//     and W must start after P has settled, with its wait reported behind P alone.
+{
+  const T = (n, owner, touches, blockedBy = []) => ({ n, id: `issue-${3000 + n}`, slug: `w${n}`, issue: 3000 + n, url: `https://example.invalid/${3000 + n}`,
+    title: `Blocked wait ${n}`, status: 'ready-for-agent', owner, blockedBy, why: 'companion', openBoxes: 1, changeRequest: false, willEndPartial: [], touches })
+  const id = (n) => `issue-${3000 + n}`
+  const set = [
+    T(1, 'ws1-infra', ['b/b.txt']),                    // B: quick, W's blocker
+    T(2, 'ws2-hosting', ['w/a.txt']),                  // P: slow, earlier than W by n, the same path
+    T(3, 'integrator', ['w/a.txt'], [id(1)]),          // W: needs B, path-waits on P
+  ]
+  const ev = [], logged = [], prompts = [], clockSeq = {}
+  let seq = 0   // orders the agent calls and log lines, where two in one tick tie
+  globalThis.args = { ...fixture.args, skills: OTHER_SKILLS, only: null, skip: [], maxParallel: 6, maxFailures: 8 }
+  globalThis.log = (text) => logged.push({ at: tick, seq: ++seq, text })
+  globalThis.agent = async (prompt, opts) => {
+    prompts.push({ label: opts.label, prompt })
+    const [kind, tid, edge] = opts.label.split(':')
+    if (kind === 'collect') return { outcome: 'ok', reason: 'companion', tickets: set.map((t) => ({ ...t })), landed: [], base: RUN_BASE_665, shell: '3.2', shellCommand: '/bin/bash' }
+    if (kind === 'resume') return NOT_MERGED
+    if (kind === 'live') return LIVE_READY
+    if (kind === 'clock') { clockSeq[`${tid}:${edge}`] = ++seq; return { epoch: tick * 6 } }
+    if (kind === 'report') return { questions: 0, mainCheckoutClean: true, leftovers: '', issue: 0, url: '' }
+    if (kind === 'closing') return { ok: true, headSha: 'd'.repeat(40), lastLine: 'check: pass: companion', notes: '' }
+    ev.push({ kind, id: tid, edge: 'start', seq: ++seq })
+    await sleep(kind === 'implement' && tid === id(2) ? 150 : 15)
+    ev.push({ kind, id: tid, edge: 'end', seq: ++seq })
+    if (kind === 'implement') return { outcome: 'resolved', branch: 'b', forkSha: 'f', headSha: 'h', complete: true, outstanding: '', summary: 's', question: '', delegatedDecisions: [], changeRequests: [] }
+    if (kind === 'review') return { outcome: 'committed', headSha: 'h', findingsFixed: [], findingsSkipped: [], summary: 's', question: '', changeRequests: [], changedFiles: [`files/${tid}.txt`] }
+    if (kind === 'integrate') return { ok: true, mergeSha: 'm', notes: '', conflictFiles: [], headSha: `verified-${tid}`, old: '', redHead: '', reach: '' }
+    throw new Error(`unexpected agent label ${opts.label} in the blocked path-wait run`)
+  }
+  const src = fs.readFileSync(scriptPath, 'utf8').replace(/^export const meta/m, 'const meta')
+  const blockedTick = setInterval(() => { tick++ }, 1)
+  let stop
+  const r = await Promise.race([new Function('return (async () => {' + src + '\n})()')(), new Promise((res) => { stop = setTimeout(() => res(STALLED), LIMIT_MS) })])
+  clearTimeout(stop)
+  clearInterval(blockedTick)
+  if (r === STALLED) fail('#665: the blocked path-wait run did not finish: a wait never released')
+  else {
+    const settledSeq = (x) => Math.max(...ev.filter((e) => e.id === x && e.edge === 'end').map((e) => e.seq))
+    const startSeq = (x) => (ev.find((e) => e.kind === 'implement' && e.id === x && e.edge === 'start') || {}).seq
+    for (const x of [1, 2, 3].map(id)) if (!(r.integrated || []).includes(x)) fail(`#665: ${x} did not integrate in the blocked path-wait run: ${JSON.stringify((r.reasons || []).find((y) => y.id === x))}`)
+    const line = `${id(3)}: waiting to start behind ${id(2)} (w/a.txt)`
+    const said = logged.filter((l) => l.text.startsWith(`${id(3)}: waiting to start behind `))
+    if (!said.some((l) => l.text === line)) fail(`#665: ${id(3)} started with no "${line}" line: ` + JSON.stringify(said.map((l) => l.text)))
+    for (const l of said) if (l.seq < settledSeq(id(1))) fail(`#665: ${id(3)}'s path wait was logged ("${l.text}") while its blocker ${id(1)} still held it`)
+    const s = clockSeq[`${id(3)}:start`], e = clockSeq[`${id(3)}:end`]
+    if (s === undefined || e === undefined) fail(`#665: ${id(3)}'s path wait was not clocked at its start and end`)
+    else {
+      if (s < settledSeq(id(1))) fail(`#665: ${id(3)}'s path wait was clocked to start while its blocker ${id(1)} still held it, so its minutes hold time the blocker cost`)
+      if (s > settledSeq(id(2))) fail(`#665: ${id(3)}'s path wait was clocked to start after ${id(2)}, the predecessor it waited on, had settled`)
+      if (e < settledSeq(id(2))) fail(`#665: ${id(3)}'s path wait was clocked to end before ${id(2)} settled`)
+    }
+    if (!(startSeq(id(3)) > settledSeq(id(2)))) fail(`#665: ${id(3)} started its implement before ${id(2)}, the predecessor its paths overlap, settled`)
+    const w = (r.pathWaits || []).find((x) => x.id === id(3))
+    if (!w || w.behind.map((b) => b.id).join(',') !== id(2) || typeof w.minutes !== 'number') fail(`#665: the run does not report ${id(3)}'s wait behind ${id(2)} alone, with its minutes: ${JSON.stringify(w)}`)
+  }
+}
+
+// 46. The cycle guard on a path wait that points forwards in n (#916; #706 Q1 (b)). A ticket with no readable Touches
+//     path is ahead by its lane's run order, so its waits may point forwards in n, and the guard must follow them, and
+//     path waits as well as blocked-by edges, whichever way the closing wait points. Two runs, each with one cycle the
+//     guard must break, or the run stalls. Run A, one lane: X (n 1) and Y (n 3) touch w/x.txt; A (n 2) has no
+//     readable path; Y has two tickets downstream and A one, so the lane runs Y, A, X. X waits on A and A on Y, both
+//     forwards in n, so Y's wait on X, earlier by n with the same path, would close a cycle of path waits alone and is
+//     dropped. Run B: P (n 3) has a path and M (n 4) none in one lane, M ahead with two downstream to P's one; M needs
+//     A (n 2), A path-waits on B (n 1) by x/a.txt, and B needs P. P's wait on M, forwards in n, would close the cycle
+//     M, A, B, P, through a path wait, and is dropped. Each run asserts the dropped wait and that every ticket
+//     integrates; that the other waits hold their tickets is checks 43 and 44's to prove.
+{
+  const run = async (set, label) => {
+    const ev = [], logged = []
+    globalThis.args = { ...fixture.args, skills: OTHER_SKILLS, only: null, skip: [], maxParallel: 6, maxFailures: 8 }
+    globalThis.log = (text) => logged.push({ at: tick, text })
+    globalThis.agent = async (prompt, opts) => {
+      const [kind, tid] = opts.label.split(':')
+      if (kind === 'collect') return { outcome: 'ok', reason: 'companion', tickets: set.map((t) => ({ ...t })), landed: [], base: RUN_BASE_665, shell: '3.2', shellCommand: '/bin/bash' }
+      if (kind === 'resume') return NOT_MERGED
+      if (kind === 'live') return LIVE_READY
+      if (kind === 'clock') return { epoch: tick * 6 }
+      if (kind === 'report') return { questions: 0, mainCheckoutClean: true, leftovers: '', issue: 0, url: '' }
+      if (kind === 'closing') return { ok: true, headSha: 'd'.repeat(40), lastLine: 'check: pass: companion', notes: '' }
+      ev.push({ at: tick, kind, id: tid, edge: 'start' })
+      await sleep(15)
+      ev.push({ at: tick, kind, id: tid, edge: 'end' })
+      if (kind === 'implement') return { outcome: 'resolved', branch: 'b', forkSha: 'f', headSha: 'h', complete: true, outstanding: '', summary: 's', question: '', delegatedDecisions: [], changeRequests: [] }
+      if (kind === 'review') return { outcome: 'committed', headSha: 'h', findingsFixed: [], findingsSkipped: [], summary: 's', question: '', changeRequests: [], changedFiles: [`files/${tid}.txt`] }
+      if (kind === 'integrate') return { ok: true, mergeSha: 'm', notes: '', conflictFiles: [], headSha: `verified-${tid}`, old: '', redHead: '', reach: '' }
+      throw new Error(`unexpected agent label ${opts.label} in the forward cycle run ${label}`)
+    }
+    const src = fs.readFileSync(scriptPath, 'utf8').replace(/^export const meta/m, 'const meta')
+    const cycleTick = setInterval(() => { tick++ }, 1)
+    let stop
+    const r = await Promise.race([new Function('return (async () => {' + src + '\n})()')(), new Promise((res) => { stop = setTimeout(() => res(STALLED), LIMIT_MS) })])
+    clearTimeout(stop)
+    clearInterval(cycleTick)
+    return { r, ev, logged }
+  }
+  const T = (base, n, owner, touches, blockedBy = []) => ({ n, id: `issue-${base + n}`, slug: `c${base + n}`, issue: base + n, url: `https://example.invalid/${base + n}`,
+    title: `Forward cycle ${base + n}`, status: 'ready-for-agent', owner, blockedBy, why: 'companion', openBoxes: 1, changeRequest: false, willEndPartial: [], touches })
+  const noPath = (x) => `every path: ${x} has no readable Touches path (no Touches line, or one naming no path)`
+  const dropLine = (w, b, paths) => `${w}: no path wait behind ${b} (${paths}): ${b} already waits on ${w}, so the wait would close a cycle`
+  const cases = [
+    { label: 'A', base: 4000, set: (id) => [
+      T(4000, 1, 'integrator', ['w/x.txt']),                       // X: earlier by n, last in its lane
+      T(4000, 2, 'integrator', []),                                // A: no readable path, one downstream
+      T(4000, 3, 'integrator', ['w/x.txt']),                       // Y: two downstream, first in its lane
+      T(4000, 4, 'ws6-verification', ['e/e.txt'], [id(2)]),        // E: needs A
+      T(4000, 5, 'ws1-infra', ['d/1.txt'], [id(3)]),               // D1: needs Y
+      T(4000, 6, 'ws1-infra', ['d/2.txt'], [id(3)]),               // D2: needs Y
+    ], drop: (id) => dropLine(id(3), id(1), 'w/x.txt') },
+    { label: 'B', base: 5000, set: (id) => [
+      T(5000, 1, 'ws1-infra', ['x/a.txt'], [id(3)]),               // B: needs P
+      T(5000, 2, 'ws2-hosting', ['x/a.txt']),                      // A: path-waits on B
+      T(5000, 3, 'integrator', ['p/p.txt']),                       // P: a path, one downstream (B)
+      T(5000, 4, 'integrator', [], [id(2)]),                       // M: no readable path, needs A, two downstream
+      T(5000, 5, 'ws6-verification', ['d/1.txt'], [id(4)]),        // D1: needs M
+      T(5000, 6, 'ws6-verification', ['d/2.txt'], [id(4)]),        // D2: needs M
+    ], drop: (id) => dropLine(id(3), id(4), noPath(id(4))) },
+  ]
+  for (const c of cases) {
+    const id = (n) => `issue-${c.base + n}`
+    const { r, logged } = await run(c.set(id), c.label)
+    if (r === STALLED) { fail(`#916: forward cycle run ${c.label} did not finish: the cycle guard let a path wait close a cycle through a wait that points forwards in n`); continue }
+    for (const x of [1, 2, 3, 4, 5, 6].map(id)) if (!(r.integrated || []).includes(x)) fail(`#916: ${x} did not integrate in forward cycle run ${c.label}: ${JSON.stringify((r.reasons || []).find((y) => y.id === x))}`)
+    if (!logged.some((l) => l.text === c.drop(id))) fail(`#916: forward cycle run ${c.label} did not log "${c.drop(id)}": ` + JSON.stringify(logged.filter((l) => l.text.includes('no path wait behind')).map((l) => l.text)))
   }
 }
 
