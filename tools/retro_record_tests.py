@@ -198,6 +198,111 @@ class Reports(unittest.TestCase):
             self.assertEqual(status, 1)
 
 
+# #971: a report in the table shape, one row per ticket the run touched, and one in the earlier
+# shape, cut down from Overnight 2026-11-03's body (#736), whose Integrated table, Claimed branches to
+# merge and Morning steps sections walked the tickets in prose. The two name different branches and
+# steps, so a reader that answered one shape's values for the other fails here.
+TABLE_REPORT = """Standing answer: granted for this run (2026-11-05).
+
+2 integrated, 1 partial, 0 skipped, 1 failed, 0 need you, 1 blocked.
+
+## Tickets
+
+| Ticket | Title | Lane | Outcome | Branch | Head | Morning step |
+| --- | --- | --- | --- | --- | --- | --- |
+| #971 | The overnight report is one ticket table | integrator | integrated | `task/issue-971-table` | `a1b2c3d` | none |
+| #972 | A partial \\| with a pipe | ws6-verification | integrated (partial) | task/issue-972-part | 4e5f6a7 | tick box 3 after the landing |
+| #973 | A failed lane | ws1-infra | failed | task/issue-973-red | 8b9c0d1 | retry once #974 lands |
+| #800 | Worked in another session | integrator | claimed | task/issue-800-elsewhere | 2468ace | lands after this pull request; none conflict |
+| #975 | Edit a ticket | none | carried (foreground) | none | none | edit #248 in a foreground session |
+
+## Exceptions
+
+#973: its check went red on two count tests.
+
+## Decisions taken overnight
+
+None.
+"""
+
+EARLIER_REPORT = """Standing answer: granted for this run (2026-11-03).
+
+## Integrated
+
+Merges on `overnight/2026-11-03` since base 0bc50c3, oldest first:
+
+| Task | Issue | Merge | What landed |
+| --- | --- | --- | --- |
+| issue-716 | #716 | 3efaea3 | Redaction.cs cites the dotnet/runtime source |
+| issue-710 | #710 | 0ff1b0f | a usage-limit death halts the run |
+
+## Foreground
+
+- #720 Apply Q19 of Overnight 2026-11-01 to #698. Edits #698.
+
+## Claimed branches to merge
+
+No open pull request exists, so there is no pull request head to check with `git merge-tree`.
+
+- #531 (`task/issue-531-land-sh-lists-the-overnight-answers` b9419dc): none conflict.
+- #631 (`task/issue-631-misleading-instruction` 25d2c17): conflicts in `.claude/workflows/overnight.js`.
+
+## Decisions taken overnight
+
+None.
+
+## Morning steps
+
+1. Answer the questions with one Confirm comment on this issue.
+2. Close #305.
+"""
+
+
+class ReportTickets(unittest.TestCase):
+    def read(self, text: str) -> dict:
+        with tempfile.TemporaryDirectory() as scratch:
+            body = os.path.join(scratch, "body.md")
+            with open(body, "w", encoding="utf-8") as handle:
+                handle.write(text)
+            status, out, err = reader("report", body, "--title", "Overnight 2026-11-05")
+        self.assertEqual(status, 0, err)
+        return out["tickets"]
+
+    def test_the_table_shape_gives_one_row_per_ticket_and_its_claimed_branches_and_steps(self) -> None:
+        tickets = self.read(TABLE_REPORT)
+        self.assertEqual(tickets["shape"], "table")
+        self.assertEqual([r["issue"] for r in tickets["rows"]], [971, 972, 973, 800, 975])
+        first, partial = tickets["rows"][0], tickets["rows"][1]
+        self.assertEqual(first, {"issue": 971, "title": "The overnight report is one ticket table",
+                                 "lane": "integrator", "outcome": "integrated", "detail": "",
+                                 "branch": "task/issue-971-table", "head": "a1b2c3d", "step": ""})
+        self.assertEqual(partial["title"], "A partial | with a pipe")
+        self.assertEqual((partial["outcome"], partial["detail"]), ("integrated", "partial"))
+        self.assertEqual(tickets["rows"][4]["outcome"], "carried")
+        self.assertEqual((tickets["rows"][4]["branch"], tickets["rows"][4]["head"]), ("", ""))
+        self.assertEqual(tickets["claimed"],
+                         ["#800 task/issue-800-elsewhere at 2468ace: lands after this pull request; none conflict"])
+        self.assertEqual(tickets["steps"], ["#972: tick box 3 after the landing", "#973: retry once #974 lands",
+                                            "#800: lands after this pull request; none conflict",
+                                            "#975: edit #248 in a foreground session"])
+
+    def test_the_earlier_shape_gives_its_integrated_rows_claimed_lines_and_morning_steps(self) -> None:
+        tickets = self.read(EARLIER_REPORT)
+        self.assertEqual(tickets["shape"], "sections")
+        self.assertEqual([(r["issue"], r["outcome"], r["head"]) for r in tickets["rows"]],
+                         [(716, "integrated", "3efaea3"), (710, "integrated", "0ff1b0f"), (720, "carried", "")])
+        self.assertEqual(tickets["rows"][2]["detail"], "foreground")
+        self.assertEqual(tickets["claimed"], [
+            "#531 (`task/issue-531-land-sh-lists-the-overnight-answers` b9419dc): none conflict.",
+            "#631 (`task/issue-631-misleading-instruction` 25d2c17): conflicts in `.claude/workflows/overnight.js`."])
+        self.assertEqual(tickets["steps"], ["Answer the questions with one Confirm comment on this issue.",
+                                            "Close #305."])
+
+    def test_a_body_with_neither_shape_reads_no_tickets(self) -> None:
+        tickets = self.read("Standing answer: granted.\n\n## Decisions taken overnight\n\nNone.\n")
+        self.assertEqual(tickets, {"shape": "none", "rows": [], "claimed": [], "steps": []})
+
+
 class Findings(unittest.TestCase):
     def test_two_findings_with_one_noun_merge_and_sum_their_cost(self) -> None:
         one = finding("\\;", red=1, attempts=2, lanes=1, nights=1)
