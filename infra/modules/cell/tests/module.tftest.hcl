@@ -2345,7 +2345,7 @@ run "under_memory_the_plan_is_phase_1_s_byte_for_byte" {
   }
 }
 
-# The ring is independent of the store, as in the gateway (P2-2 decision 5): a memory cell may share a
+# The ring is independent of the store, as in the gateway (P2-2 decision 16): a memory cell may share a
 # ring, and then carries the ring's grants and settings but no table.
 run "a_ring_under_memory_carries_the_ring_and_no_table" {
   command = plan
