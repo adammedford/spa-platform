@@ -170,7 +170,11 @@ locals {
     readonlyRootFilesystem = false
 
     # hostPort is the value ECS fills in under awsvpc, where it must equal containerPort, spelled out
-    # with the three empty lists below so the definition is the one ECS reads back (#1006).
+    # with the three empty lists below so the definition is the one ECS reads back (#1006). ECS's
+    # parameter reference: "The hostPort can either be kept blank or be the same value as
+    # containerPort", and "for containers in a task with the awsvpc network mode, the hostPort is set
+    # to the same value as the containerPort".
+    # https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task_definition_parameters.html#container_definition_portmappings
     portMappings = [{
       containerPort = var.gateway_port
       hostPort      = var.gateway_port
