@@ -100,12 +100,17 @@ public sealed class DependencyUnavailableContractTests
     [Fact]
     public void Parameter_store_unreadable_at_a_cold_start_leaves_the_gateway_not_ready_and_every_host_unknown()
     {
-        // Mutation: say /readyz answers 200, or drop "every app path is" or "every host is unknown",
-        // and this fails on the answer; change the Logged clause for each unreadable secret or for the
-        // revision, or the Snapshot cell, and it fails on that.
+        // RegistrySource stays without a snapshot only when no app's secret reads; when some do, those
+        // apps go live and the rest are left out (contracts/README.md, clientSecretRef), so the row's
+        // case is the every-secret one. Mutation: drop that qualification, or the pointer to the
+        // partial case, and this fails on it; say /readyz answers 200, or drop "every app path is" or
+        // "every host is unknown", and it fails on the answer; change the Logged clause for each
+        // unreadable secret or for the revision, or the Snapshot cell, and it fails on that.
         IReadOnlyList<string> cells = Cells(TableHeading, "Parameter Store cannot be read at a cold start");
         string row = string.Join(" | ", cells);
 
+        Assert.Contains("for the secret of every app in the document", cells[0]);
+        Assert.Contains("when only some cannot, those apps are left out and the rest go live: `contracts/README.md`, `clientSecretRef`", cells[0]);
         Assert.Contains("`/readyz` stays `503`", row);
         Assert.Contains("every app path is `404` `not_found`, since before a snapshot every host is unknown", cells[1]);
         Assert.Contains("One Warning per app whose secret cannot be read, naming the app and the reference, never the value", row);
