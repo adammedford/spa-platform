@@ -36,9 +36,11 @@ public sealed class LocalStack : IBrowserStack
     /// <summary>The parent domain every app host sits under, without the leading dot.</summary>
     public static string Domain => TestApps.HostSuffix.TrimStart('.');
 
-    public static async Task<LocalStack> StartAsync(GatewayHarnessOptions? options = null)
+    public static Task<LocalStack> StartAsync(GatewayHarnessOptions? options = null) => StartCancellableAsync(options, TestContext.Current.CancellationToken);
+
+    /// <summary>The same, under <paramref name="ct"/>: the sitting browser's start (#1032), outside any test.</summary>
+    public static async Task<LocalStack> StartCancellableAsync(GatewayHarnessOptions? options, CancellationToken ct)
     {
-        CancellationToken ct = TestContext.Current.CancellationToken;
         GatewayHarness harness = await GatewayHarness.StartAsync(options, ct);
         TlsLoadBalancer? balancer = null;
         try
@@ -75,6 +77,9 @@ public sealed class LocalStack : IBrowserStack
 
     /// <summary>The test provider approves every authorization at once, so a login needs nothing more from the browser.</summary>
     public Task CompleteLoginAsync(Profile profile, HarnessApp app) => Task.CompletedTask;
+
+    /// <inheritdoc cref="CompleteLoginAsync(Profile, HarnessApp)"/>
+    public Task CompleteLoginCancellableAsync(Profile profile, HarnessApp app, CancellationToken ct) => Task.CompletedTask;
 
     public Task<IReadOnlyList<Exchange>> ExchangesAsync() => Task.FromResult(LoadBalancer.Exchanges);
 
@@ -160,8 +165,12 @@ public sealed class LocalStack : IBrowserStack
     public Task OffboardAsync(string appId) => Task.CompletedTask;
 
     /// <summary>A fresh browser profile: no cookies, no storage.</summary>
-    public async Task<Profile> OpenAsync()
+    public Task<Profile> OpenAsync() => OpenCancellableAsync(TestContext.Current.CancellationToken);
+
+    /// <summary>The same; Playwright's calls take no token, so <paramref name="ct"/> is checked before each.</summary>
+    public async Task<Profile> OpenCancellableAsync(CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
         // The stand-in's certificate is this run's own, trusted by no store (TlsLoadBalancer).
         IBrowserContext context = await browser.NewContextAsync(new() { IgnoreHTTPSErrors = true });
         IPage page = await context.NewPageAsync();
@@ -175,6 +184,9 @@ public sealed class LocalStack : IBrowserStack
 
     /// <summary>A request no browser would send, through the same load balancer.</summary>
     public Task<HttpResponseMessage> SendRawAsync(HttpRequestMessage request) => LoadBalancer.SendRawAsync(request);
+
+    /// <inheritdoc cref="SendRawAsync(HttpRequestMessage)"/>
+    public Task<HttpResponseMessage> SendRawCancellableAsync(HttpRequestMessage request, CancellationToken ct) => LoadBalancer.SendRawCancellableAsync(request, ct);
 
     /// <summary>
     /// The test provider approves at once, so the login needs nothing from the browser; the load

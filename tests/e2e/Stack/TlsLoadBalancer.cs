@@ -249,12 +249,15 @@ public sealed class TlsLoadBalancer : IAsyncDisposable
     /// through the tunnel: whatever the URL's host, the connection is to this listener, and the request
     /// carries exactly the headers given (no cookies, no Fetch Metadata, no redirects followed).
     /// </summary>
-    public Task<HttpResponseMessage> SendRawAsync(HttpRequestMessage request)
+    public Task<HttpResponseMessage> SendRawAsync(HttpRequestMessage request) => SendRawCancellableAsync(request, TestContext.Current.CancellationToken);
+
+    /// <inheritdoc cref="SendRawAsync(HttpRequestMessage)"/>
+    public Task<HttpResponseMessage> SendRawCancellableAsync(HttpRequestMessage request, CancellationToken ct)
     {
         // The certificate is this run's own, trusted by no store, so the client trusts its key and no
         // other, as the browser context's SPKI list does.
         raw ??= RawClient.To(Endpoint, PinnedTo(Spki));
-        return raw.SendAsync(request, TestContext.Current.CancellationToken);
+        return raw.SendAsync(request, ct);
     }
 
     /// <summary>

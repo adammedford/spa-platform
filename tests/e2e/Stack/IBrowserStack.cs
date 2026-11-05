@@ -22,11 +22,24 @@ public interface IBrowserStack : IAsyncDisposable
     Task<Profile> OpenAsync();
 
     /// <summary>
+    /// The same, under <paramref name="ct"/> rather than the running test's token: for the sitting
+    /// browser (#1032), which runs outside a test, where <c>TestContext.Current</c>'s token never
+    /// cancels. The members the sitting browser does not call keep the test's token. A name of its own
+    /// rather than an overload: xUnit1051 asks every test calling a member that has a token-taking
+    /// overload to pass the test's token, which would move every row's call (#1023 Q8).
+    /// </summary>
+    Task<Profile> OpenCancellableAsync(CancellationToken ct);
+
+    /// <summary>
     /// Finishes a login the profile started with a navigation to <c>/bff/login</c>: nothing for the test
     /// provider, which approves at once; Cognito's managed login form for the cell, unless the provider
     /// still holds a session for this browser and sends it straight back.
     /// </summary>
     Task CompleteLoginAsync(Profile profile, HarnessApp app);
+
+    /// <inheritdoc cref="CompleteLoginAsync(Profile, HarnessApp)"/>
+    /// <remarks>Under <paramref name="ct"/>, for the sitting browser (<see cref="OpenCancellableAsync"/>).</remarks>
+    Task CompleteLoginCancellableAsync(Profile profile, HarnessApp app, CancellationToken ct);
 
     /// <summary>Every request a browser on this stack made to an app host and the response it received, body included, oldest first.</summary>
     Task<IReadOnlyList<Exchange>> ExchangesAsync();
@@ -105,6 +118,10 @@ public interface IBrowserStack : IAsyncDisposable
     /// </summary>
     Task<HttpResponseMessage> SendRawAsync(HttpRequestMessage request);
 
+    /// <inheritdoc cref="SendRawAsync(HttpRequestMessage)"/>
+    /// <remarks>Under <paramref name="ct"/>, for the sitting browser (<see cref="OpenCancellableAsync"/>).</remarks>
+    Task<HttpResponseMessage> SendRawCancellableAsync(HttpRequestMessage request, CancellationToken ct);
+
     /// <summary>
     /// Runs <paramref name="start"/>, which begins a login to the app, completes the provider's part,
     /// and stops the browser at the app's callback: the request to <c>/signin-oidc</c> with the code and
@@ -154,11 +171,14 @@ public static class Stacks
     /// </summary>
     internal static readonly AsyncLocal<Func<Task<IBrowserStack>>?> Instead = new();
 
-    public static async Task<IBrowserStack> StartAsync() => Instead.Value is { } start
+    public static Task<IBrowserStack> StartAsync() => StartCancellableAsync(TestContext.Current.CancellationToken);
+
+    /// <summary>The same, under <paramref name="ct"/>: the sitting browser's start (#1032), outside any test.</summary>
+    public static async Task<IBrowserStack> StartCancellableAsync(CancellationToken ct) => Instead.Value is { } start
         ? await start()
         : StackSwitch.FromEnvironment() switch
         {
-            StackKind.Deployed => await DeployedStack.StartAsync(),
-            _ => await LocalStack.StartAsync(),
+            StackKind.Deployed => await DeployedStack.StartCancellableAsync(ct),
+            _ => await LocalStack.StartCancellableAsync(null, ct),
         };
 }

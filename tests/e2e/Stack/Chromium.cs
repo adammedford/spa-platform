@@ -37,4 +37,23 @@ public static class Chromium
 
         return await playwright.Chromium.LaunchAsync(new() { Headless = true, Args = ["--no-proxy-server", .. args] });
     }
+
+    /// <summary>
+    /// Stops the Playwright driver this process started, if any: the end of a process that launched its
+    /// browsers here, such as the sitting browser's (#1032). The driver is the whole process's, and the
+    /// suite's tests run in parallel in one process, so nothing a test calls stops it.
+    /// </summary>
+    public static async Task StopDriverAsync()
+    {
+        await Once.WaitAsync();
+        try
+        {
+            playwright?.Dispose();
+            playwright = null;
+        }
+        finally
+        {
+            Once.Release();
+        }
+    }
 }
