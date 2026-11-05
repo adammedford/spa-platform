@@ -2004,27 +2004,36 @@ try {
 
   // A body whose return differs from it only in whitespace at its end is whole (#1030): on 2026-11-05
   // one of #796's body agents returned a record without its final newline, which its file kept, and
-  // the review failed at the inventory. No parser reads that whitespace, so a body returned without
-  // its final newline, or with one added, is read, and its record, follow-up rows and held mutation
-  // rows reach the parsers as from the whole body. The target here ends in a newline, as the live
-  // records on #796 do.
+  // the review failed at the inventory. No parser reads that whitespace, so a body returned whole with
+  // its final newline (the count the inventory gives leaves it out), without it, or with one added, is
+  // read, and its record, follow-up rows and held mutation rows reach the parsers as from the whole
+  // body. The target here ends in a newline, as the live records on #796 do. The script's trim and the
+  // jq's are one class of characters, spaces, tabs, carriage returns and newlines.
   checks++
   {
     const RECORDS_NL = RECORDS796.map((r, i) => (i === 3 ? { ...r, body: r.body + '\n' } : r))
     const SERVED_NL = { 796: { ...SERVED796[796], comments: [HUMAN796, ...RECORDS_NL] } }
     const target = RECORDS_NL[3].html_url
     const cases = {
+      'whole, ending in its newline': (b) => b,
       'without its final newline': (b) => b.replace(/\n$/, ''),
       'with a newline added': (b) => b + '\n',
     }
     for (const [what, b] of Object.entries(cases)) {
-      if (b(RECORDS_NL[3].body) === RECORDS_NL[3].body) fail(`a body ${what}: the fixture body is unchanged by the case, so it tests nothing`)
+      if (what !== 'whole, ending in its newline' && b(RECORDS_NL[3].body) === RECORDS_NL[3].body) fail(`a body ${what}: the fixture body is unchanged by the case, so it tests nothing`)
       env = run({ prs: [796], maxMutationsPerPr: 20 }, SERVED_NL, { followUps: { 796: CARRIED796 }, bodies: { [target]: b } })
       result = await execute(env)
       const r = resultOf(796, result)
       if (r.outcome !== 'recorded') fail(`a body returned ${what}: outcome ${r.outcome} at ${JSON.stringify(r.stage)}, expected recorded`)
       if ((r.earlierRecords || []).length !== RECORDS796.length) fail(`a body returned ${what}: ${(r.earlierRecords || []).length} earlier record(s) read, expected ${RECORDS796.length}`)
+      const want = CARRIED796.map((f, k) => ({ axis: f.axis, title: f.title, where: f.where, firstCarried: RECORDS796[Math.floor(k / 2)].html_url }))
+      if (JSON.stringify(r.followUps) !== JSON.stringify(want)) fail(`a body returned ${what}: followUpsOf gave ${(r.followUps || []).length} row(s), expected the twelve each record carries`)
+      const mutated = env.mutations.filter((m) => m.n === 796).map((m) => m.test)
+      const missing = HELD796.filter((t) => !mutated.includes(t))
+      if (missing.length) fail(`a body returned ${what}: mutationTableOf lost the held row(s) ${missing.join(', ')}`)
     }
+    const source = fs.readFileSync(scriptPath, 'utf8')
+    if (!source.includes('const TRAILING_SPACE = /[ \\t\\r\\n]+$/')) fail('#1030: the script\'s TRAILING_SPACE is not /[ \\t\\r\\n]+$/, the class the inventory\'s jq sub("[ \\t\\r\\n]+$"; "") strips')
   }
 
   // The launch in whenToUse (#522): /review-queue shows meta and then a launch by name, which runs a
