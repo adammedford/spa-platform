@@ -381,10 +381,10 @@ function stub(env, scriptArgs, served) {
             ...qs.filter((q) => q.kind === 'workstream-ticket').map((q, i) => ({ number: 500 + i, url: URL(500 + i), title: q.summary, questions: [q.q] })),
             ...(unit.followUps || []).map((f, i) => ({ number: 600 + i, url: URL(600 + i), title: f.title, questions: [f.q] })),
           ],
-          edits: edits.map((e) => ({ issue: e.target, preserved: `${URL(e.target)}#issuecomment-8`, removed: e.removeBoxes, questions: [e.q] })),
+          edits: edits.map((e) => ({ issue: e.target, comment: `${URL(e.target)}#issuecomment-8`, removed: e.removeBoxes, questions: [e.q] })),
           edges: (unit.edges || []).map((e) => ({ issue: e.target, blockedBy: e.addBlockedBy, questions: [e.q] })),
           candidates: qs.filter((q) => q.kind === 'decision-to-record').map((q) => ({ url: `${URL(q.issue)}#issuecomment-7`, questions: [q.q] })),
-          rewrites: unit.tickets.filter((t) => t.rewrite).map((t) => ({ issue: t.issue, preserved: `${URL(t.issue)}#issuecomment-8` })),
+          rewrites: unit.tickets.filter((t) => t.rewrite).map((t) => ({ issue: t.issue, comment: `${URL(t.issue)}#issuecomment-8` })),
           skipped: [], pushed: { branch: `integrator/morning-${DATE}`, tip: sha('f'), ok: true, reason: '' }, refused: '', unreachable: false,
         }
         // The after pass's applier (#635) also reports each question whose work is in place. A commit
@@ -569,6 +569,98 @@ const failures = []
 const fail = (msg) => failures.push(msg)
 let checks = 0
 const APPLIERS = (labels) => labels.filter((l) => l.startsWith('apply:'))
+
+// #968: a unified diff applied by its line numbers alone, every context and removed line matched
+// where its hunk header says it lies, and every count checked; null when any of that fails, so a
+// diff whose header points one line off, or which drops a line, applies to nothing.
+const applyDiff = (before, diff) => {
+  const src = before.replace(/\n$/, '').split('\n')
+  const lines = diff.replace(/\n$/, '').split('\n')
+  if (lines[0] !== '--- before' || lines[1] !== '+++ after') return null
+  const out = []
+  let at = 0
+  for (let k = 2; k < lines.length;) {
+    const h = /^@@ -(\d+),(\d+) \+(\d+),(\d+) @@$/.exec(lines[k++])
+    if (!h) return null
+    const [os, oc, ns, nc] = h.slice(1).map(Number)
+    const start = oc ? os - 1 : os
+    if (start < at) return null
+    out.push(...src.slice(at, start))
+    at = start
+    const first = out.length
+    let seenOld = 0
+    let seenNew = 0
+    while (k < lines.length && !lines[k].startsWith('@@')) {
+      const l = lines[k++]
+      if (!l || !' -+'.includes(l[0])) return null
+      if (l[0] !== '+') { if (src[at] !== l.slice(1)) return null; at++; seenOld++ }
+      if (l[0] !== '-') { out.push(l.slice(1)); seenNew++ }
+    }
+    if (seenOld !== oc || seenNew !== nc || (nc ? ns - 1 : ns) !== first) return null
+  }
+  return [...out, ...src.slice(at)].join('\n') + '\n'
+}
+
+// #968: the record a body rewrite posts, read from an applier's prompt. The prompt asks for a comment
+// headed "## Body rewritten <date>" that names the questions applied and holds the changed paragraphs
+// as a unified diff, names the edit history as the verbatim previous body, and asks for no "## Body
+// before" comment. The diff program the prompt carries is run on a fixture rewrite: one line of one
+// paragraph reworded, two boxes of the acceptance list removed, a paragraph added at the end. Its diff
+// names those paragraphs whole, old and new, and no line of the three it leaves alone, and applying it
+// to the old body gives the new one.
+const rewriteRecordChecks = (ep) => {
+  for (const [name, re] of [['rewrite', /^Rewrites \(.*$/m], ['ticket edit', /^Ticket edits: .*$/m]]) {
+    const rule = (re.exec(ep) || [''])[0]
+    if (!rule) fail(`#968: no ${name} rule in the applier's prompt`)
+    else if (!rule.includes('REWRITE RECORD') || /Body before/.test(rule) || /preserve the current body/.test(rule)) fail(`#968: the ${name} rule does not post the rewrite record, or still preserves the old body in a comment: ${rule.slice(0, 200)}`)
+  }
+  if (ep.includes(`## Body before ${DATE}`) || /preserve the current body verbatim/.test(ep)) fail(`#968: an applier is still asked for a "## Body before ${DATE}" comment`)
+  const record = (/^REWRITE RECORD: .*$/m.exec(ep) || [''])[0]
+  const shape = /Post a comment whose lines are, in order: "(## Body rewritten [^"]*)"; "(Applied: Q<n> of #\d+\.)" naming every question number applied[^;]*; "([^"]+)"; "~~~diff"; the diff's output, every line; "~~~"/.exec(record)
+  if (!shape) { fail(`#968: the rewrite record does not give the comment's lines in order: ${record.slice(0, 300)}`); return }
+  if (!record.includes('The comment carries no copy of the old body.')) fail(`#968: the rewrite record no longer says the comment carries no copy of the old body: ${record.slice(0, 300)}`)
+  const [, heading, appliedLine, history] = shape
+  if (heading !== `## Body rewritten ${DATE}`) fail(`#968: the rewrite comment is headed ${JSON.stringify(heading)}, expected "## Body rewritten ${DATE}"`)
+  if (appliedLine !== `Applied: Q<n> of #${ISSUE}.`) fail(`#968: the rewrite comment's question line is ${JSON.stringify(appliedLine)}`)
+  if (!/unified diff/.test(record)) fail('#968: the rewrite record does not ask for the changed paragraphs as a unified diff')
+  if (!/\bedit history\b/.test(history) || !/\bverbatim\b/.test(history)) fail(`#968: the rewrite comment does not name the edit history as the verbatim record: ${history}`)
+  const program = /^BEGIN body-diff\.py\n([\s\S]*?\n)END body-diff\.py$/m.exec(ep)
+  const run = /`python3 -I (\S+\/body-diff\.py) <the current body's file> <the new body's file>`/.exec(record)
+  if (!program || !run) { fail(`#968: the applier is not given the diff program${program ? '' : ' between its BEGIN and END lines'}${run ? '' : ', or the command that runs it'}`); return }
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'morning-968-'))
+  try {
+    const before = [
+      '## What to build', '', 'The morning posts one comment per', 'rewrite, headed with its date.', '',
+      'Nothing in this paragraph moves.', 'Nor in this line of it.', '',
+      '## Acceptance criteria', '- [ ] first box stays', '- [ ] second box goes', '- [ ] third box goes', '',
+      'A closing paragraph left alone.', '',
+    ].join('\n')
+    const after = [
+      '## What to build', '', 'The morning posts one comment per', 'rewrite, headed with the night it applies.', '',
+      'Nothing in this paragraph moves.', 'Nor in this line of it.', '',
+      '## Acceptance criteria', '- [ ] first box stays', '',
+      'A closing paragraph left alone.', '', 'A paragraph the rewrite adds.', '',
+    ].join('\n')
+    fs.writeFileSync(path.join(dir, 'body-diff.py'), program[1])
+    fs.writeFileSync(path.join(dir, 'before.md'), before)
+    fs.writeFileSync(path.join(dir, 'after.md'), after)
+    const r = spawnSync('python3', ['-I', path.join(dir, 'body-diff.py'), path.join(dir, 'before.md'), path.join(dir, 'after.md')], { encoding: 'utf8' })
+    if (r.status !== 0) { fail(`#968: the diff program exits ${r.status}: ${r.stderr}`); return }
+    const diff = r.stdout
+    const body = diff.split('\n').filter((l) => /^[ +-]/.test(l) && !/^(---|\+\+\+) (before|after)$/.test(l))
+    const named = new Set(body.map((l) => l.slice(1)))
+    const changed = ['The morning posts one comment per', 'rewrite, headed with its date.', 'rewrite, headed with the night it applies.', '## Acceptance criteria', '- [ ] first box stays', '- [ ] second box goes', '- [ ] third box goes', 'A paragraph the rewrite adds.']
+    const left = ['## What to build', 'Nothing in this paragraph moves.', 'Nor in this line of it.']
+    for (const l of changed) if (!named.has(l)) fail(`#968: the fixture rewrite's diff leaves out ${JSON.stringify(l)}, a line of a changed paragraph:\n${diff}`)
+    for (const l of left) if (named.has(l)) fail(`#968: the fixture rewrite's diff names ${JSON.stringify(l)}, a line of a paragraph left alone:\n${diff}`)
+    for (const [l, tag] of [['rewrite, headed with its date.', '-'], ['rewrite, headed with the night it applies.', '+'], ['- [ ] second box goes', '-'], ['A paragraph the rewrite adds.', '+']]) if (!body.includes(tag + l)) fail(`#968: the fixture rewrite's diff does not mark ${JSON.stringify(l)} with ${tag}:\n${diff}`)
+    if (applyDiff(before, diff) !== after) fail(`#968: the fixture rewrite's diff, applied to the old body by its line numbers, does not give the new body:\n${diff}`)
+    const comment = [heading, appliedLine.replace('Q<n>', 'Q2'), history, '~~~diff', diff.replace(/\n$/, ''), '~~~'].join('\n')
+    if (!comment.startsWith(`## Body rewritten ${DATE}\nApplied: Q2 of #${ISSUE}.\n`) || comment.includes('Nothing in this paragraph moves.')) fail(`#968: the fixture rewrite's comment is not the record asked for:\n${comment}`)
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+}
 
 try {
   // 1. meta names morning and its phases in order; a bad launch stops before any agent.
@@ -1029,12 +1121,12 @@ try {
     if (!/`[^`]*tools\/ticket_shape\.py[^`]*`/.test(fp)) fail('#320: the applier that files a follow-up is not told to check its shape with tools/ticket_shape.py')
     const create = (/`cd [^`]*gh issue create[^`]*FOLLOW-UP[^`]*`|`cd [^`]*gh issue create --title "<its title>"[^`]*`/.exec(fp) || [''])[0]
     if (!create || /--parent/.test(create)) fail(`#320: the follow-up is filed ${create ? 'as a sub-issue' : 'by no gh issue create'}: ${create}`)
-    // Q91's shape: #62's boxes removed, its old body saved first.
+    // Q91's shape: #62's boxes removed, the changed paragraphs posted as a diff first (#968).
     const e2 = units.flatMap((u) => u.edits || []).filter((e) => e.q === 2)
     if (e2.length !== 1 || e2[0].target !== 62 || e2[0].removeBoxes.join('|') !== `${BOX2}|${BOX3}`) fail(`#320 Q91 shape: the edit sent is ${JSON.stringify(e2)}`)
-    if (!new RegExp(`^edited #62: removed 2 box\\(es\\); the old body is at \\S+ \\(Q2\\)$`, 'm').test(done)) fail(`#320 Q91 shape: the hand-over does not name #62's edit and its saved body:\n${done}`)
+    if (!new RegExp(`^edited #62: removed 2 box\\(es\\); the diff is at \\S+ \\(Q2\\)$`, 'm').test(done)) fail(`#320 Q91 shape: the hand-over does not name #62's edit and its rewrite comment:\n${done}`)
     const ep = calls.filter((c) => c.label.startsWith('apply:') && /"edits":\[\{/.test(c.prompt)).map((c) => c.prompt).join('\n')
-    if (!ep.includes(`## Body before ${DATE}`)) fail('#320 Q91 shape: the applier is not told to save the old body as rewrites do')
+    rewriteRecordChecks(ep)
     // Q92's shape: the stated edge added, the unstated rest filed as a follow-up naming #244.
     const e3 = units.flatMap((u) => u.edges || []).filter((e) => e.q === 3)
     if (e3.length !== 1 || e3[0].target !== 244 || e3[0].addBlockedBy.join() !== '235') fail(`#320 Q92 shape: the edges sent are ${JSON.stringify(e3)}`)
