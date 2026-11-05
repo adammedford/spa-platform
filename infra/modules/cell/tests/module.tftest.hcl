@@ -718,7 +718,9 @@ run "ecs_exec_is_on_and_the_task_s_root_filesystem_stays_writable" {
 # that both containers are in the task and either one alone failing turns the run red. try() rather
 # than bare access, so a container with no linuxParameters fails the assertion instead of erroring.
 # Mutations that turn this run red: linuxParameters on the gateway only, or on the mock API only;
-# drop empty, or ["NET_RAW"]; initProcessEnabled false or absent; an add list, even SYS_PTRACE.
+# drop empty, or ["NET_RAW"]; initProcessEnabled false or absent; an add list that names anything,
+# even SYS_PTRACE. The empty add list is ECS's own value, and the run on ECS-filled values below
+# holds its presence (#1006); this one holds only that it names nothing.
 run "both_containers_drop_every_capability_and_run_an_init_process" {
   command = plan
 
@@ -747,7 +749,7 @@ run "both_containers_drop_every_capability_and_run_an_init_process" {
   assert {
     condition = alltrue([
       for c in jsondecode(aws_ecs_task_definition.gateway.container_definitions) :
-      !can(c.linuxParameters.capabilities.add)
+      length(try(c.linuxParameters.capabilities.add, [])) == 0
     ])
     error_message = "No container adds a capability back (#786): Fargate allows only SYS_PTRACE, and neither process needs it."
   }
@@ -758,6 +760,66 @@ run "both_containers_drop_every_capability_and_run_an_init_process" {
       try(c.linuxParameters.initProcessEnabled == true, false)
     ])
     error_message = "Every container runs an init process (#786), which forwards SIGTERM to the process and reaps zombies, the SSM agent's children among them."
+  }
+}
+
+# #1006. Each container spells out the values ECS fills in when they are left out, so the definition
+# the provider compares against the one ECS reads back after an apply is the same, and a re-plan
+# replaces nothing. Before this, every plan after an apply of the platform root replaced the task
+# definition and rolled the service (the 2026-11-04 sitting, #242). capabilities.add is the one the
+# provider's comparison does not normalize; the other four it does, and they are held anyway because
+# the sitting's diff named them and a later provider may stop. With the mock API image set, so both
+# containers are in the task; try() so a container missing a value fails rather than errors. The
+# mock API publishes no port, so hostPort is held on the gateway's one mapping alone, and the mock
+# API's absence of portMappings is held by the first assertion.
+# Mutations that turn this run red: add removed from the shared linuxParameters; hostPort removed,
+# or 8080 while gateway_port is 9090; mountPoints, systemControls or volumesFrom removed from either
+# container, or given an entry.
+run "both_containers_spell_out_the_values_ecs_fills_in" {
+  command = plan
+
+  variables {
+    gateway_port            = 9090
+    mock_api_image          = "111122223333.dkr.ecr.us-east-1.amazonaws.com/spa-poc/mock-api@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    mock_api_app1_client_id = "app1client"
+    mock_api_app2_client_id = "app2client"
+  }
+
+  assert {
+    condition = (
+      toset([for c in jsondecode(aws_ecs_task_definition.gateway.container_definitions) : c.name])
+      == toset(["gateway", "mock-api"])
+      && !can(one([
+        for c in jsondecode(aws_ecs_task_definition.gateway.container_definitions) : c if c.name == "mock-api"
+      ]).portMappings)
+    )
+    error_message = "Both containers are in the task, so the assertions below hold of each, and the mock API publishes no port."
+  }
+
+  assert {
+    condition = alltrue([
+      for c in jsondecode(aws_ecs_task_definition.gateway.container_definitions) :
+      try(c.linuxParameters.capabilities.add == [], false)
+    ])
+    error_message = "Every container's linuxParameters.capabilities.add is the empty list ECS reads back (#1006): the provider does not normalize it, so leaving it out replaces the task definition on every plan after an apply."
+  }
+
+  assert {
+    condition = try(
+      one(one([
+        for c in jsondecode(aws_ecs_task_definition.gateway.container_definitions) : c if c.name == "gateway"
+      ]).portMappings).hostPort == var.gateway_port,
+      false
+    )
+    error_message = "The gateway's port mapping spells out hostPort as var.gateway_port, the containerPort ECS fills it with under awsvpc (#1006)."
+  }
+
+  assert {
+    condition = alltrue([
+      for c in jsondecode(aws_ecs_task_definition.gateway.container_definitions) :
+      try(c.mountPoints == [] && c.systemControls == [] && c.volumesFrom == [], false)
+    ])
+    error_message = "Every container spells out mountPoints, systemControls and volumesFrom as the empty lists ECS reads back (#1006)."
   }
 }
 
@@ -2308,14 +2370,17 @@ run "under_memory_the_cell_is_phase_1_s_unchanged" {
 #
 # A digest is a literal, so a Phase 1 change that is meant to alter either object fails here too.
 # That is the point: the author then says, in the same change, that the Phase 1 plan moved. The
-# failing assertion prints the new digest as its "actual" value. It has moved twice. First #347 put
+# failing assertion prints the new digest as its "actual" value. It has moved three times. First #347 put
 # stopTimeout = 30 on the gateway container, whichever the inputs, because F1's shutdown relations
 # hold of a one-task cell as of a two-task one (the run on the roll above). 30 is Fargate's default,
 # so a task behaves as before, but the definition's bytes changed, the next apply registers a new
 # revision and rolls the service once. Then #786 gave the container linuxParameters, dropping every
 # capability and running an init process, whichever the inputs (the run on both containers above);
-# that too registers a new revision and rolls the service once. The digest below is the definition
-# with both.
+# that too registers a new revision and rolls the service once. Then #1006 spelled out the values ECS
+# fills in, capabilities.add, hostPort and the empty mountPoints, systemControls and volumesFrom (the
+# run on ECS-filled values above), which ends the replacement #786 caused on every plan after an
+# apply; the first apply after it registers one more revision and rolls the service once. The
+# digest below is the definition with all three.
 #
 # Mutations that turn this run red: the table's count made 1 (the table then exists under memory);
 # any environment value on the default changed, or one added or removed (Session__MaxSessions to
@@ -2335,8 +2400,8 @@ run "under_memory_the_plan_is_phase_1_s_byte_for_byte" {
   }
 
   assert {
-    condition     = sha256(aws_ecs_task_definition.gateway.container_definitions) == "a0c1c4426cdf49e9140ce1b2a0acaacf5116a06e236cd01a0fa77bfbb0d39108"
-    error_message = "Under memory the gateway's container definition is the one Phase 1 planned before #338 plus #347's stopTimeout and #786's linuxParameters, byte for byte."
+    condition     = sha256(aws_ecs_task_definition.gateway.container_definitions) == "7c4b8e80ab517f0596b894935f90667f44e644e81f6808e5ce2b46f430cb373a"
+    error_message = "Under memory the gateway's container definition is the one Phase 1 planned before #338 plus #347's stopTimeout, #786's linuxParameters and #1006's ECS-filled values, byte for byte."
   }
 
   assert {
