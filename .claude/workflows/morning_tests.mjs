@@ -2035,6 +2035,11 @@ try {
     if (!refusal || !refusal.includes('| Q-five |')) fail(`pre-accepted rows: an unnumbered row was not refused by its comment and row: ${JSON.stringify(bad.result.refusals)}`)
     const badQs = Object.keys(((bad.result.apply || {}).answers) || {})
     if (badQs.join() !== '7') fail(`pre-accepted rows: with #330's comment refused, the morning read questions ${badQs}, expected only #331's Q7`)
+    // A first cell of "Q5" with no full stop is none of the three forms the reader names, so it is refused too.
+    const BARE = ticket(78, `${FULL}\n${TABLE.replace(row(5, 5, 'Split the guide section?', 'No split; one section.'), `| Q5 | (${cite(330)} Q5) | Split the guide section? | No split; one section. |`)}`)
+    if (!BARE.body.includes('| Q5 |')) fail('pre-accepted rows: the bare-number fixture changed no row, so the refusal check below read nothing')
+    const bare = await execute(newRepo(), { date: DATE }, { issue: issueWith([BARE]) })
+    if (!bare.result.refusals.some((x) => x.includes('#330') && /cannot number/.test(x) && x.includes('| Q5 |'))) fail(`pre-accepted rows: a row numbered "Q5" with no full stop was not refused: ${JSON.stringify(bare.result.refusals)}`)
     // The heading and the rows are taken out before the full form is read: a full-form question with no Recommended:
     // line just above the table does not carry the table in its text, which is what an applier is handed once an
     // override answers it.

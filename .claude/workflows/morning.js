@@ -841,7 +841,7 @@ const HEADING = /^## Questions: #(\d+), ([^,]+), (.*)$/
 const PART = /\s*\(part (\d+) of (\d+)\)\s*$/
 const Q_MARK = /^[ \t]*(?:\*\*Q(\d+)\.?\*\*|Q(\d+)\.(?=[ \t]))[ \t]*/gm
 const PRE_ROWS_HEADING = /^[ \t]*###[ \t]+Pre-accepted\b.*$/
-const ROW_NUMBER = /^(?:\*\*Q(\d+)\.?\*\*|Q(\d+)\.?)$/
+const ROW_NUMBER = /^(?:\*\*Q(\d+)\.?\*\*|Q(\d+)\.)$/
 const isRow = (line) => /^[ \t]*\|/.test(line)
 const isSeparator = (line) => /^[ \t]*\|?[ \t]*:?-{3,}:?[ \t]*(?:\|[ \t]*:?-{3,}:?[ \t]*)*\|?[ \t]*$/.test(line)
 const rowCellsOf = (line) => line.trim().replace(/^\|/, '').replace(/(?<!\\)\|$/, '').split(/(?<!\\)\|/).map((c) => c.trim().replace(/\\\|/g, '|'))
