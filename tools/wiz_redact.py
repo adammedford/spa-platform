@@ -6,11 +6,13 @@
 
 The `wiz` skill posts each stage's evidence to its ticket from captured output, and every post goes
 through this script first (#259). It used to follow a paragraph of prose, which can fail quietly;
-tools/wiz_redact_tests.py holds each rule to a case. It applies eight rules, in this order:
+tools/wiz_redact_tests.py holds each rule to a case. It applies ten rules, in this order:
 
 1. A twelve-digit number, or one written 1234-5678-9012, becomes `<account>`. With
    --keep-last-four it becomes `<account-9012>`, for a ticket whose grill asks for the last four
-   digits, as #125 does. Without the option no twelve-digit number survives.
+   digits, as #125 does. Without the option no twelve-digit number survives on its own; a run of
+   twelve digits touching a hexadecimal letter (a-f, either case) is part of a hash, a `sha256:`
+   image digest or a file's SHA-256, and is kept, so a post carries the hash whole (#1004).
 2. An ARN, `arn:aws:<service>:<region>:<account>:<resource>`, becomes its resource field, the part
    after the account: `arn:aws:iam::<account>:role/x` becomes `role/x`.
 3. The value after `code=`, `state=`, `client_id=`, `client_secret=`, `code_verifier=`,
@@ -35,6 +37,14 @@ tools/wiz_redact_tests.py holds each rule to a case. It applies eight rules, in 
    and digits, the two lengths of the cell's client ids and a shape no other id in the roots has,
    becomes `"<elided>"`, as a plan prints the client, the managed login branding's `client_id` and
    the mock API's `MockApi__App*Client` environment value.
+9. A Cognito user pool id, a region, an underscore and nine letters and digits
+   (`us-east-2_Ab3dE6gH9`, as the identity root's apply prints it and the issuer URL carries it),
+   becomes `<user-pool>` (#1004). The nine must hold a digit or a capital, so a region beside a
+   lower-case word (`us-east-2_telemetry`) is kept.
+10. The SSM session id after `SessionId:` or `sessionId` becomes `<elided>`, as tunnel.sh's
+   session manager plugin prints it on its `Starting session with SessionId: ...`,
+   `Port 8443 opened for sessionId ....` and `Exiting session with sessionId: ....` lines, or as
+   a JSON member (#1004); a sentence's closing full stop and a member's quotes are kept.
 
 It catches shapes, not meaning, so the skill still reads the result once as a reviewer would.
 
@@ -45,7 +55,7 @@ One shape is let through (#468): a whole line of P-04's passing cases,
 `pass  <case>: 403 AccessDenied (<the kind of policy>)`, as verify-release-immutability.sh prints
 it, since there the refusal is the evidence. Any other line naming the refusal still stops.
 
---stream is the terminal's mode (#468). Each line goes through the same eight rules as it arrives
+--stream is the terminal's mode (#468). Each line goes through the same ten rules as it arrives
 and is flushed at once, so a long-running command reads live; `AccessDenied` passes through, since
 the human has to see it to stop (the skill's rule 7), and the mode always exits 0. A rule that spans
 lines, a JSON value broken over several, is applied to each line alone.
@@ -75,10 +85,11 @@ P04_CASE = re.compile(
     re.MULTILINE,
 )
 
-# The plain form goes wherever no digit touches it, a hyphen included, because a CDK bootstrap
-# bucket (cdk-hnb659fds-assets-123456789012-us-east-1) carries the account between hyphens. Only the
-# console's dashed form needs the hyphen guard, so 1234-5678-9012-3456 is not read as an account.
-ACCOUNT = re.compile(r"(?<!\d)(\d{12})(?!\d)|(?<![\d-])(\d{4}-\d{4}-\d{4})(?![\d-])")
+# The plain form goes wherever no hexadecimal digit touches it, a hyphen included, because a CDK
+# bootstrap bucket (cdk-hnb659fds-assets-123456789012-us-east-1) carries the account between
+# hyphens; a hexadecimal letter beside the run makes it part of a hash, which is kept (#1004). Only
+# the console's dashed form needs the hyphen guard, so 1234-5678-9012-3456 is not read as an account.
+ACCOUNT = re.compile(r"(?<![0-9A-Fa-f])(\d{12})(?![0-9A-Fa-f])|(?<![\d-])(\d{4}-\d{4}-\d{4})(?![\d-])")
 
 # arn:<partition>:<service>:<region>:<account>:<resource>. The resource runs to whitespace, a quote,
 # a comma or a closing bracket, so an ARN inside JSON or a sentence keeps what follows it.
@@ -128,6 +139,16 @@ TOKEN_HEADER = re.compile(rf"(?<![\w-])((?:{TOKEN_HEADERS})\s*:[ \t]*)[^\s]+", r
 TERRAFORM_CLIENT_ID = re.compile(r"(aws_cognito_user_pool_client[^\n]*\[id=)[^\]\n]+(\])")
 HCL_CLIENT_ID = re.compile(r"((?<![\w-])\"?clientId\"?\s*=\s*\")[^\"\n]*(\")")
 HCL_ID_IN_CLIENT_SHAPE = re.compile(r"((?<![\w-])\"?(?:client_id|id|value)\"?\s*=\s*\")[a-z0-9]{25,26}(\")")
+
+# A user pool id: <region>_ and nine letters and digits, at least one a digit or a capital. A hyphen
+# may come before the region, as in a name that ends with one, but no letter or digit may.
+USER_POOL_ID = re.compile(r"(?<![A-Za-z0-9])[a-z]{2}(?:-[a-z]+)+-\d_(?=[a-z]*[0-9A-Z])[0-9A-Za-z]{9}(?![0-9A-Za-z])")
+
+# The session manager plugin's session id, with or without a colon after the key, or as a JSON
+# member; the id runs to whitespace, a quote or a comma, less a closing full stop.
+SSM_SESSION_ID = re.compile(
+    r"(SessionId\b\"?[ \t]*:?[ \t]*\"?)[^\s\"',;]*[^\s\"',;.]", re.IGNORECASE
+)
 
 
 def account(keep_last_four: bool) -> typing.Callable[[re.Match], str]:
@@ -220,6 +241,7 @@ def json_members(text: str, member: re.Pattern) -> str:
 
 
 def redact(text: str, keep_last_four: bool = False) -> str:
+    text = SSM_SESSION_ID.sub(lambda m: f"{m.group(1)}<elided>", text)
     text = ACCOUNT.sub(account(keep_last_four), text)
     text = ARN.sub(lambda m: m.group(1), text)
     text = QUERY_KEY.sub(lambda m: f"{m.group(1)}=<elided>", text)
@@ -233,6 +255,7 @@ def redact(text: str, keep_last_four: bool = False) -> str:
     text = TERRAFORM_CLIENT_ID.sub(r"\1<elided>\2", text)
     text = HCL_CLIENT_ID.sub(r"\1<elided>\2", text)
     text = HCL_ID_IN_CLIENT_SHAPE.sub(r"\1<elided>\2", text)
+    text = USER_POOL_ID.sub("<user-pool>", text)
     return text
 
 
