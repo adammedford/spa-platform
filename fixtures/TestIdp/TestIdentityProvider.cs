@@ -21,7 +21,8 @@ namespace TestIdp;
 /// in the test process. It offers discovery, JWKS, the authorization code grant with PKCE required, the
 /// refresh grant with client-bound rotating refresh tokens and a grace window, revocation, end session in
 /// the standard and the Cognito style, <c>resource</c> mapped to <c>aud</c>, and the fault switches on
-/// <see cref="Faults"/>.
+/// <see cref="Faults"/>, among them the fidelity switch that models a provider session and <c>prompt=none</c>
+/// (<see cref="TestIdpFaults.ModelProviderSession"/>).
 /// <para>
 /// It starts from the provider of the G0 token-and-proxy harness (<c>spikes/g0/token-and-proxy/Idp.cs</c>,
 /// checks <c>T-</c> in <c>docs/plan/07-evidence.md</c>). This is the one place the plan writes protocol
@@ -53,6 +54,8 @@ public sealed class TestIdentityProvider : IAsyncDisposable
     private readonly ConcurrentDictionary<string, TestIdpClient> _clients = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, AuthorizationCode> _codes = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, RefreshState> _refresh = new(StringComparer.Ordinal);
+    // Provider sessions by the opaque id their cookie carries, to the subject signed in (ModelProviderSession).
+    private readonly ConcurrentDictionary<string, string> _sessions = new(StringComparer.Ordinal);
     private readonly ConcurrentQueue<Authorization> _authorizations = new();
     private readonly ConcurrentQueue<TokenGrant> _grants = new();
     private readonly ConcurrentQueue<Revocation> _revocations = new();
@@ -73,6 +76,10 @@ public sealed class TestIdentityProvider : IAsyncDisposable
 
     /// <summary>Which logout the discovery document advertises. Both endpoints are always served.</summary>
     public EndSessionStyle EndSessionStyle { get; set; } = EndSessionStyle.Standard;
+
+    /// <summary>The name of the provider session cookie <see cref="TestIdpFaults.ModelProviderSession"/> sets on
+    /// the provider's origin. Its value is an opaque id, never the subject.</summary>
+    public const string SessionCookieName = "testidp_session";
 
     /// <summary>The subject a login gets when the authorize request sends no <c>login_hint</c>.</summary>
     public string DefaultSubject { get; set; } = "alice";
@@ -326,14 +333,42 @@ public sealed class TestIdentityProvider : IAsyncDisposable
             if (query["response_type"] != "code") return Refuse("unsupported_response_type");
             if (query["code_challenge_method"] != "S256" || Empty(query["code_challenge"])) return Refuse("pkce_required");
 
+            // The request is well formed and its redirect_uri registered, so from here every answer goes back
+            // to the client: a code, or, for a silent request with no session, login_required.
+            IResult Back(string name, string value)
+            {
+                var back = new Dictionary<string, string?> { [name] = value };
+                if (!Empty(query["state"])) back["state"] = query["state"].ToString();
+                return Results.Redirect(QueryHelpers.AddQueryString(redirectUri, back));
+            }
+
+            var silent = false;
+            if (Faults.ModelProviderSession)
+            {
+                if (query["prompt"] == "none")
+                {
+                    silent = true;
+                    if (SessionSubject(context.Request) is not { } signedIn)
+                    {
+                        _authorizations.Enqueue(new Authorization(Interlocked.Increment(ref _authSeq), clientId, redirectUri, scope, resource, "",
+                            Authorization.LoginRequired, Silent: true));
+                        return Back("error", Authorization.LoginRequired);
+                    }
+
+                    subject = signedIn;
+                }
+                else
+                {
+                    StartSession(context, subject);
+                }
+            }
+
             var code = "code-" + Base64UrlEncoder.Encode(RandomNumberGenerator.GetBytes(24));
             _codes[code] = new AuthorizationCode(clientId, redirectUri, subject, Empty(query["nonce"]) ? null : query["nonce"].ToString(),
                 query["code_challenge"].ToString(), scope, resource);
-            _authorizations.Enqueue(new Authorization(Interlocked.Increment(ref _authSeq), clientId, redirectUri, scope, resource, subject, "ok"));
+            _authorizations.Enqueue(new Authorization(Interlocked.Increment(ref _authSeq), clientId, redirectUri, scope, resource, subject, "ok", silent));
 
-            var back = new Dictionary<string, string?> { ["code"] = code };
-            if (!Empty(query["state"])) back["state"] = query["state"].ToString();
-            return Results.Redirect(QueryHelpers.AddQueryString(redirectUri, back));
+            return Back("code", code);
         });
 
         app.MapPost("/token", async (HttpRequest request) =>
@@ -463,6 +498,7 @@ public sealed class TestIdentityProvider : IAsyncDisposable
             // (evidence T-B13). The URI is then matched against every client's list.
             if (back.Length == 0)
             {
+                EndSession(context);
                 _logouts.Enqueue(new Logout(Interlocked.Increment(ref _logoutSeq), EndSessionStyle.Standard, clientId, null, "ok"));
                 return Results.Text("signed out");
             }
@@ -472,6 +508,7 @@ public sealed class TestIdentityProvider : IAsyncDisposable
             var target = Empty(query["state"])
                 ? back
                 : QueryHelpers.AddQueryString(back, "state", query["state"].ToString());
+            EndSession(context);
             _logouts.Enqueue(new Logout(Interlocked.Increment(ref _logoutSeq), EndSessionStyle.Standard, clientId, back, "ok"));
             return Results.Redirect(target);
         });
@@ -494,6 +531,8 @@ public sealed class TestIdentityProvider : IAsyncDisposable
             if (back.Length == 0) return Refuse("missing_logout_uri");
             if (!client.PostLogoutUris.Contains(back)) return Refuse("unregistered_logout_uri");
 
+            // One /logout with any client id ends the domain session for every client (C-2.14).
+            EndSession(context);
             _logouts.Enqueue(new Logout(Interlocked.Increment(ref _logoutSeq), EndSessionStyle.Cognito, clientId, back, "ok"));
             return Results.Redirect(back);
         });
@@ -609,6 +648,35 @@ public sealed class TestIdentityProvider : IAsyncDisposable
         {
             return null;
         }
+    }
+
+    /// <summary>The subject of the live provider session the request's cookie names, or null when there is none.</summary>
+    private string? SessionSubject(HttpRequest request)
+        => request.Cookies.TryGetValue(SessionCookieName, out var id) && id is not null && _sessions.TryGetValue(id, out var subject)
+            ? subject
+            : null;
+
+    /// <summary>
+    /// An interactive sign-in: one session per user agent, so a session the request already names ends and a new
+    /// one names this subject. The cookie is the provider's own, on its own origin, shared by every client
+    /// (ADR-0017, C-2.6). <c>Lax</c> is what a top-level redirect to the provider carries, and the provider is
+    /// plain HTTP on loopback, so it is not <c>Secure</c>.
+    /// </summary>
+    private void StartSession(HttpContext context, string subject)
+    {
+        if (context.Request.Cookies.TryGetValue(SessionCookieName, out var previous) && previous is not null) _sessions.TryRemove(previous, out _);
+        var id = Base64UrlEncoder.Encode(RandomNumberGenerator.GetBytes(24));
+        _sessions[id] = subject;
+        context.Response.Cookies.Append(SessionCookieName, id, new CookieOptions { HttpOnly = true, SameSite = SameSiteMode.Lax, Path = "/" });
+    }
+
+    /// <summary>An accepted logout ends the session the request's cookie names and expires the cookie. A request
+    /// with no session cookie is answered as it was before the switch existed, with no cookie header.</summary>
+    private void EndSession(HttpContext context)
+    {
+        if (!context.Request.Cookies.TryGetValue(SessionCookieName, out var id) || id is null) return;
+        _sessions.TryRemove(id, out _);
+        context.Response.Cookies.Delete(SessionCookieName, new CookieOptions { HttpOnly = true, SameSite = SameSiteMode.Lax, Path = "/" });
     }
 
     private bool RegistersPostLogoutUri(string? clientId, string uri)

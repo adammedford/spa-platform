@@ -78,6 +78,22 @@ public sealed class TestIdpFaults
     /// Off retires a key for real, so tokens signed before the rotation stop validating.</summary>
     public bool PublishRetiredKeys { get; set; } = true;
 
+    /// <summary>
+    /// The fidelity switch: whether the provider models a provider session and <c>prompt=none</c> (#997).
+    /// Off, the default, it keeps no session, ignores <c>prompt</c> and takes the subject from
+    /// <c>login_hint</c> or <see cref="TestIdentityProvider.DefaultSubject"/>, as it always has.
+    /// <para>
+    /// On, an authorization that issues a code without <c>prompt=none</c> is an interactive sign-in: it sets
+    /// one provider session cookie on the provider's origin naming the subject, shared by every client, and
+    /// replaces the subject of a session already there. An authorization with <c>prompt=none</c> issues a code
+    /// for the session's subject, ignoring <c>login_hint</c>, or, with no live session, redirects to the
+    /// request's <c>redirect_uri</c> with <c>error=login_required</c> and the request's <c>state</c>. The client,
+    /// redirect URI, response type and PKCE checks run first and still answer 400. An accepted logout of either
+    /// style ends the session for every client, as Cognito's one <c>/logout</c> does (C-2.14).
+    /// </para>
+    /// </summary>
+    public bool ModelProviderSession { get; set; }
+
     /// <summary>Delay before discovery answers.</summary>
     public TimeSpan DiscoveryDelay { get; set; }
 
