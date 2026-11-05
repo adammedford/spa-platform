@@ -106,8 +106,10 @@ export const meta = {
 // deletes unreachable code could never be answered. The mutation agent may report removed for a held
 // mutation only, proving it with the commit `git log -S` names; the script then holds nothing on the
 // row, and the verdict agent holds unless it shows the removed code could never run or is enforced
-// elsewhere. A removed row answers the held test in later reviews as a reproduced one does; on a
-// stated, nominated or candidate mutation it is a could-not-run.
+// elsewhere. A removed row answers the held test in later reviews as a reproduced one does, but only
+// in a record whose verdict is merge (#884): the script cannot tell a hold on an unsound deletion from
+// a hold on something else, so a removed row in a holding record answers nothing, and the next review
+// mutates the test again as held. On a stated, nominated or candidate mutation it is a could-not-run.
 //
 // Follow-ups (#292). A finding the review carries rather than holds on lived only in records: #287's
 // three records each carried three with no ticket. The verdict agent names, for every carried finding,
@@ -711,7 +713,8 @@ The test: ${m.test}, run by ${project}. ${m.kind === 'stated'
 
 // What the earlier records say about this review's mutation list (#289). held: when the latest record
 // held on another head, the did-not-fail rows of the Mutations tables of every record on another head,
-// each with the record's url and the Test cells later records reproduced, which answer it. On #287 the
+// each with the record's url and the Test cells later records reproduced, or found removed in a record
+// that merged (#884), which answer it. On #287 the
 // latest record held for other reasons and its table had no did-not-fail row; the record before it
 // held on two LibraryTests cases nobody mutated again, so the rows are carried forward until a later
 // record reproduces them. clearers: newest first, each earlier record whose head the range agent
@@ -724,7 +727,7 @@ const priorOf = (records, inv, rg) => {
   const held = latest && latest.head !== inv.head && latest.verdict === 'hold'
     ? { url: latest.url, rows: other.flatMap((r, i) => mutationTableOf(r.body).filter((x) => x.result === 'did-not-fail').map((x) => ({
       ...x, url: r.url,
-      later: other.slice(i + 1).flatMap((l) => mutationTableOf(l.body).filter((y) => y.result === 'reproduced' || y.result === 'removed').map((y) => y.test)),
+      later: other.slice(i + 1).flatMap((l) => mutationTableOf(l.body).filter((y) => y.result === 'reproduced' || (y.result === 'removed' && l.verdict === 'merge')).map((y) => y.test)),
     }))) }
     : null
   const changed = new Map()

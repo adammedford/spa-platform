@@ -1377,14 +1377,22 @@ try {
     await execute(env)
     const kinds = Object.fromEntries(env.mutations.map((m) => [m.test, /The review record \S+ held because/.test(m.prompt) ? 'held' : 'other']))
     if (kinds[LIB1] !== 'other' || kinds[LIB2] !== 'held') fail(`a held test a later record reproduced: kinds ${JSON.stringify(kinds)}, expected ${LIB2} held and ${LIB1} not`)
-    // A later record's removed row answers the held test as a reproduced one does (#334).
-    const REMOVED = { 287: { ...SHAPE[287], comments: [FIRST, record('https://github.com/o/r/pull/287#issuecomment-4', '2026-10-22T09:00:00Z', H2, 'hold', [
-      [LIB1, 'the same break', '0 of 0', 'removed: commit abc1234 deleted the unreachable branch'],
-    ])] } }
-    env = run({ prs: [287], maxMutationsPerPr: 9 }, REMOVED, { range })
+    // A later record's removed row answers the held test as a reproduced one does (#334), but only
+    // when that record merged (#884): the script holds nothing on a removed row and leaves the
+    // deletion's soundness to the verdict agent, so a removed row in a record that held may be the
+    // very hold on an unsound deletion, and must not clear the test by itself.
+    const REMOVED_ROW = [LIB1, 'the same break', '0 of 0', 'removed: commit abc1234 deleted the unreachable branch']
+    const kindsOf = (e) => Object.fromEntries(e.mutations.map((m) => [m.test, /The review record \S+ held because/.test(m.prompt) ? 'held' : 'other']))
+    const REMOVED_HELD = { 287: { ...SHAPE[287], comments: [FIRST, record('https://github.com/o/r/pull/287#issuecomment-4', '2026-10-22T09:00:00Z', H2, 'hold', [REMOVED_ROW])] } }
+    env = run({ prs: [287], maxMutationsPerPr: 9 }, REMOVED_HELD, { range })
     await execute(env)
-    const removedKinds = Object.fromEntries(env.mutations.map((m) => [m.test, /The review record \S+ held because/.test(m.prompt) ? 'held' : 'other']))
-    if (removedKinds[LIB1] !== 'other') fail(`a held test a later record found removed: kinds ${JSON.stringify(removedKinds)}, expected ${LIB1} answered`)
+    if (kindsOf(env)[LIB1] !== 'held') fail(`a held test a later holding record found removed: kinds ${JSON.stringify(kindsOf(env))}, expected ${LIB1} still held, since a hold on an unsound deletion must not clear it`)
+    const REMOVED_MERGED = { 287: { ...SHAPE[287], comments: [FIRST,
+      record('https://github.com/o/r/pull/287#issuecomment-4', '2026-10-22T09:00:00Z', H2, 'merge', [REMOVED_ROW]),
+      record('https://github.com/o/r/pull/287#issuecomment-5', '2026-10-22T10:00:00Z', sha('4'), 'hold', [])] } }
+    env = run({ prs: [287], maxMutationsPerPr: 9 }, REMOVED_MERGED, { range })
+    await execute(env)
+    if (kindsOf(env)[LIB1] !== 'other' || kindsOf(env)[LIB2] !== 'held') fail(`a held test a later merging record found removed: kinds ${JSON.stringify(kindsOf(env))}, expected ${LIB1} answered and ${LIB2} still held`)
     // A range that read no changed file at all clears nothing: an empty list is no evidence.
     env = run({ prs: [287], maxMutationsPerPr: 9 }, SHAPE, { range: { 287: { ...range[287], changedFiles: [], since: [{ head: H1, changedFiles: [], error: '' }] } } })
     result = await execute(env)
