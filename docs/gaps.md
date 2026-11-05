@@ -16,9 +16,12 @@ full: each of its areas has an entry, or names the entry that carries it, in GAP
 
 ### GAP-1. The task shares the load balancer's trusted subnets
 
-- **Missing.** The task sits in the load balancer's two subnets, so its own address is inside
-  `ForwardedHeaders:TrustedNetworks`.
-- **Risk.** A tunnel holder can forge forwarded headers (threat T6), by the path
+- **Missing.** In Phase 1's shape, the cell's default (`multi_task = false`), the task sits in the
+  load balancer's two subnets, so its own address is inside `ForwardedHeaders:TrustedNetworks`.
+  Under `multi_task = true` the tasks sit in the private subnets, which that setting does not name
+  (`infra/modules/cell/README.md` → "What the two-task cell adds"), so this gap is Phase 1's shape
+  alone.
+- **Risk.** In that shape, a tunnel holder can forge forwarded headers (threat T6), by the path
   `infra/modules/cell/README.md` → "One gap the shared subnets leave" sets out. Only operators hold
   that tunnel, and they can already run commands in the task (GAP-15).
 - **Found.** `.scratch/overnight/issues/03-1.2-cell-network.md`: question 5 kept the shared subnets
