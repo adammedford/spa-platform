@@ -30,8 +30,9 @@ never froze at, contradicting `contracts/pipeline.md` two directories away. A ce
 than the header -- `G1a; stage order changed at G1b` -- so the comparison is on the leading gate
 token, and a cell naming no gate at all -- `With the registry document` -- borrows the gate of the
 row it names, against which its own target's header is compared. A cell naming no row the index
-holds fails, since it is a claim nothing can compare; the one row whose cell names no single row
-by design goes in UNCOMPARED below, on PLANNED's terms. A row this rule cannot read fails as well,
+holds fails, since it is a claim nothing can compare; a row whose cell names no single gate or row
+by design -- the test doubles, and the two registers that never freeze -- goes in UNCOMPARED
+below, with its reason, on PLANNED's terms. A row this rule cannot read fails as well,
 and so does a target it cannot read a header from: one that does not exist, a markdown contract
 with no freeze bullet, a header naming no gate, a schema stating no freeze, JSON that does not
 parse, or a file that is none of those nor code. Only code, named by its suffix in CODE_SUFFIXES,
@@ -205,14 +206,15 @@ GATE = re.compile(r"\bG\d[a-z]?\b")
 # second hop rules out a cycle without walking one.
 RELATIONAL = re.compile(r"^\s*(?:with\s+(?:the\s+)?)?(?P<row>.*?)\s*\.?\s*$", re.IGNORECASE)
 
-# Rows whose relational cell names no single row, and so compared with nothing, keyed by the row's
-# Contract cell and its freeze cell as the index writes them. PLANNED's rule one level over: this
-# check fails once no row carries the pair, so a reworded cell or a renamed row is a new claim,
-# compared or reported, rather than one waved through on the old words' exemption. The row is in
-# the key because the reason is the row's and not the words': another row carrying the same cell
-# over a contract with a header would otherwise go uncompared on a reason that is false of it,
+# Rows whose freeze cell names no gate and no single row, and so compared with nothing, keyed by
+# the row's Contract cell and its freeze cell as the index writes them. PLANNED's rule one level
+# over: this check fails once no row carries the pair, so a reworded cell or a renamed row is a new
+# claim, compared or reported, rather than one waved through on the old words' exemption. The row
+# is in the key because the reason is the row's and not the words': another row carrying the same
+# cell over a contract with a header would otherwise go uncompared on a reason that is false of it,
 # which is the exception scoped to the identifier that CODING_STANDARDS.md's "A universal names its
-# exceptions by the writer" warns of.
+# exceptions by the writer" warns of. Each entry's value is that reason; the paragraphs below give
+# the longer ones.
 #
 # The Test doubles row stays exempt. Its cell defers to one interface per double, not to one row:
 # the interfaces sit in the Records and interfaces row at two gates -- G1a, and G1b for the
@@ -224,6 +226,12 @@ RELATIONAL = re.compile(r"^\s*(?:with\s+(?:the\s+)?)?(?P<row>.*?)\s*\.?\s*$", re
 # stage host, the captured log and the raw sender, which stand in for no interface and freeze when
 # they land (change request issue-145, "The charter, and the two edits it takes"); they are code
 # with no header too, and their own tests in Platform.Testing.Tests hold them.
+#
+# The Test id register and Gate register rows are exempt for a different reason: they never freeze.
+# Each cell says "Never" and that a row is added only by a decided change request (#322, #364), so
+# there is no gate to borrow and none for their targets, contracts/test-ids.md and
+# contracts/gates.md, to state: each says "This file never freezes" and carries no freeze bullet.
+# What holds a register is the decided request each new row cites, not a freeze.
 UNCOMPARED = {
     (
         "Test doubles, and the stage host",
