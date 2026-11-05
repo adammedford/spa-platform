@@ -621,6 +621,11 @@ def rules_broken(number: int, body: str | None = None, **changes) -> list[str]:
     return [failure.rule for failure in judged(number, body, **changes)[0]]
 
 
+def drafted(body: str, *labels: str, number: int = 970) -> dict:
+    """An issue as gh gives it, with the body and labels given and no sub-issue or blocker."""
+    return raw(number, Filed(labels=labels, sub_issues=0, blockers=(), body=body))
+
+
 def refuse_gh(numbers):
     raise AssertionError(f"a test asked GitHub for {sorted(numbers)}; give the case its states")
 
@@ -1346,13 +1351,85 @@ class CommandLine(unittest.TestCase):
         done = self.run_script("213", GH_GRAPHQL=str(graphql))
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         lines = done.stdout.strip().splitlines()
-        self.assertEqual(len(lines), 2, done.stdout)
+        # #213's `## How the work splits` is outside the ticket's set, a note of its own (#970).
+        self.assertEqual(len(lines), 3, done.stdout)
         self.assertTrue(lines[0].startswith("ticket-shape: note: stale-prose: "), lines[0])
         self.assertIn("#214", lines[0])
+        self.assertTrue(lines[1].startswith("ticket-shape: note: heading: `## How the work splits`"),
+                        lines[1])
         self.assertTrue(lines[-1].startswith("ticket-shape: pass: #213"), done.stdout)
         asked = self.log.read_text(encoding="utf-8").splitlines()
         self.assertEqual(len(asked), 2, asked)
         self.assertTrue(asked[1].startswith("api graphql "), asked)
+
+    def notes_of(self, body: str, *labels: str) -> tuple[subprocess.CompletedProcess, list[str]]:
+        """The run of an issue with the body and labels given, no blocker named, and its notes."""
+        done = self.run_script("-", stdin=json.dumps(drafted(body, *labels)))
+        return done, [line for line in done.stdout.splitlines()
+                      if line.startswith("ticket-shape: note: ")]
+
+    def test_a_heading_outside_the_set_and_an_owner_line_beside_touches_are_two_notes(self):
+        # #970: `## Done when` is on 26 bodies, and an Owner line beside a path-bearing Touches
+        # line on 665, though rule 5 derives the owner from the paths.
+        done, notes = self.notes_of(
+            "**Owner:** integrator\n**Touches:** `tools/check.sh`\n\n## What to build\n\nA check."
+            "\n\n## Done when\n\n- [ ] Its tests pass.\n", "ready-for-agent")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(notes, [
+            "ticket-shape: note: heading: `## Done when` is outside the ticket's set; the form "
+            "expected is `## Acceptance criteria`",
+            "ticket-shape: note: derived-owner: the `**Owner:**` line stands beside a Touches line "
+            "that names a path, and rule 5 derives the owner from those paths, so the line repeats "
+            "it; the form expected is the role the paths derive, which owner-line holds it to"],
+            done.stdout)
+        self.assertTrue(self.last_line(done).startswith("ticket-shape: pass: #970"), done.stdout)
+
+    def test_a_heading_with_no_counterpart_names_the_set(self):
+        done, notes = self.notes_of("**Touches:** `tools/check.sh`\n\n## Problem Statement\n\nWhy."
+                                    "\n\n## Acceptance criteria\n\n- [ ] Done.\n", "ready-for-agent")
+        self.assertEqual(notes, [
+            "ticket-shape: note: heading: `## Problem Statement` is outside the ticket's set; the "
+            "form expected is one of `## Parent`, `## What to build`, `## Acceptance criteria`, "
+            "`## Blocked by`"], done.stdout)
+
+    def test_a_change_requests_form_gets_no_note(self):
+        # The form docs/agents/tracker-policy.md's "Change requests" names: an Owner line, a
+        # Touches line, `## The gap` and `## The change`.
+        body = ("**Owner:** integrator\n**Touches:** `GLOSSARY.md`\n**Raised by:** #970\n\n"
+                "## The gap\n\nA term is missing.\n\n## The change\n\nAdd it.\n")
+        done, notes = self.notes_of(body, "change-request", "ready-for-human")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(notes, [], done.stdout)
+        # The same form on a ticket is outside the ticket's set, heading by heading.
+        done, notes = self.notes_of(body.replace("**Owner:** integrator\n", ""), "ready-for-agent")
+        self.assertEqual([note.split(";")[0] for note in notes], [
+            "ticket-shape: note: heading: `## The gap` is outside the ticket's set",
+            "ticket-shape: note: heading: `## The change` is outside the ticket's set"],
+            done.stdout)
+
+    def test_a_ticket_change_request_heading_on_a_change_request_is_a_note(self):
+        done, notes = self.notes_of("**Touches:** `GLOSSARY.md`\n\n## The gap\n\nA term.\n\n"
+                                    "## What to build\n\nIt.\n", "change-request")
+        self.assertEqual([note.split(";")[0] for note in notes], [
+            "ticket-shape: note: heading: `## What to build` is outside the change request's set"],
+            done.stdout)
+
+    def test_a_body_in_the_set_gets_none(self):
+        for body in (
+            # A path-bearing Touches line fails owner-line without its Owner line, so `none` here.
+            "## Parent\n\n#1\n\n**Owner:** integrator\n**Touches:** none\n\n## What to build\n\nIt.\n\n"
+            "## Acceptance criteria\n\n- [ ] Done.\n\n## Blocked by\n\n- #1\n",
+            # An Owner line where no path derives one is the owner, and no note.
+            "**Owner:** integrator\n**Touches:** none (a run ticket)\n\n## What to build\n\nIt.\n",
+            "**Owner:** integrator\n\n## What to build\n\nIt.\n",
+            # Not a `##` heading: a deeper one, and one inside a fenced block a body quotes.
+            "**Owner:** integrator\n**Touches:** none\n\n## What to build\n\n### Notes\n\n```markdown\n"
+            "## Answer\n```\n\n~~~\n## Review\n~~~\n",
+        ):
+            with self.subTest(body[:30]):
+                done, notes = self.notes_of(body, "ready-for-agent")
+                self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+                self.assertEqual(notes, [], done.stdout)
 
     def test_a_failed_state_lookup_exits_2(self):
         # The issue reads, the lookup does not: nothing is judged, so the label is left alone.
@@ -1703,6 +1780,13 @@ class Policy(unittest.TestCase):
         self.assertIn("`--not-duplicate-of N[,N…]`", text)
         self.assertIn("at least three content words", text)
         self.assertEqual(shape.SHARED_WORDS, 3)
+
+    def test_the_policy_names_the_ticket_headings_the_script_holds(self):
+        # #970: the item lists the set in its order; a heading added to one and not the other fails.
+        text = " ".join((ROOT / "docs" / "agents" / "tracker-policy.md").read_text(
+            encoding="utf-8").split())
+        listed = ", ".join(f"`{heading}`" for heading in shape.TICKET_HEADINGS)
+        self.assertIn(f"a `##` heading outside the ticket's set ({listed})", text)
 
 
 if __name__ == "__main__":

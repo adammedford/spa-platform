@@ -42,7 +42,15 @@ partial instead of never starting. This reads one issue and fails it, naming the
 - spec: under `ready-for-agent`, any sub-issue, since an issue with sub-issues is a spec and never a
   ticket.
 
-    python3 -I tools/ticket_shape.py <number>     read the issue through gh
+Two more are notes, failing nothing (#970), by form_notes(): `heading:` for a `##` heading outside
+the body's set, TICKET_HEADINGS for a ticket and REQUEST_HEADINGS for an issue labelled
+`change-request`, naming the heading of the set a drifted one stands for (`## Done when` is
+`## Acceptance criteria`) or else the set; and `derived-owner:` for an `**Owner:**` line beside a
+Touches line that names a path, since rule 5 derives the owner. Owner-line still holds that line to
+the derived role, and the collect step routes by it, so the note says what the line repeats and
+asks no one to drop it. A change request's form names both lines, so its Owner line is no note.
+
+    python3 -I tools/ticket_shape.py <number>    read the issue through gh
     python3 -I tools/ticket_shape.py -            read `gh issue view --json` output on stdin
 
 The JSON is `gh issue view <n> --json number,body,labels,subIssuesSummary,blockedBy`, the fields
@@ -394,6 +402,58 @@ def stale_prose(issue: Issue, states: typing.Mapping[int, str] | None = None) ->
             if n not in issue.blockers and states[n] in STALE]
 
 
+# The `##` headings a body uses (#970): a ticket's, and a change request's as "Change requests" in
+# docs/agents/tracker-policy.md names its form. The label tells the two apart. DRIFTED gives the
+# heading of the set a drifted one stands for, as the tracker's bodies wrote them on 2026-11-05.
+TICKET_HEADINGS = ("Parent", "What to build", "Acceptance criteria", "Blocked by")
+REQUEST_HEADINGS = ("The gap", "The change")
+CHANGE_REQUEST = "change-request"
+DRIFTED = {"Acceptance": "Acceptance criteria", "Done when": "Acceptance criteria",
+           "What": "What to build", "The gap": "What to build", "The change": "What to build"}
+HEADING = re.compile(r"^## (?P<text>[^#\n].*?)[ \t]*$")
+FENCE = re.compile(r"^[ \t]*(```|~~~)")
+
+
+def headings(body: str) -> list[str]:
+    """The text of each `##` heading of the body, in its order; a deeper heading, and a line inside
+    a fenced block the body quotes, is none."""
+    found: list[str] = []
+    fence = None
+    for line in body.splitlines():
+        opened = FENCE.match(line)
+        if opened:
+            fence = None if fence == opened.group(1) else fence or opened.group(1)
+            continue
+        heading = None if fence else HEADING.match(line)
+        if heading:
+            found.append(heading.group("text"))
+    return found
+
+
+def form_notes(issue: Issue, parsed: list[tuple[str, str]] | None = None) -> list[str]:
+    """A note for each `##` heading outside the body's set, naming the form expected, and for an
+    `**Owner:**` line beside a Touches line that names a path, since rule 5 derives the owner from
+    the paths (#970). A change request's form has both an Owner line and a Touches line, so its
+    Owner line is no note. Notes fail nothing."""
+    request = CHANGE_REQUEST in issue.labels
+    kind, allowed = ("change request", REQUEST_HEADINGS) if request else ("ticket", TICKET_HEADINGS)
+    notes = []
+    for text in headings(issue.body):
+        if text in allowed:
+            continue
+        expected = None if request else DRIFTED.get(text)
+        form = (f"`## {expected}`" if expected else
+                "one of " + ", ".join(f"`## {heading}`" for heading in allowed))
+        notes.append(f"heading: `## {text}` is outside the {kind}'s set; the form expected is "
+                     f"{form}")
+    read = read_touches(issue.body, parsed)
+    if not request and read and read[0] and collect().OWNER.search(issue.body):
+        notes.append("derived-owner: the `**Owner:**` line stands beside a Touches line that names "
+                     "a path, and rule 5 derives the owner from those paths, so the line repeats it; "
+                     "the form expected is the role the paths derive, which owner-line holds it to")
+    return notes
+
+
 def judge(issue: Issue, parsed: list[tuple[str, str]] | None = None,
           states: typing.Mapping[int, str] | None = None) -> list[Failure]:
     """Every rule the issue breaks, in the order the docstring lists them. states gives the kind
@@ -716,7 +776,8 @@ def main(argv: list[str]) -> int:
         issue = read(argv[0])
         states = states_of(issue)
         failures = judge(issue, states=states)
-        notes = stale_prose(issue, states)
+        notes = [f"stale-prose: {note}" for note in stale_prose(issue, states)]
+        notes += form_notes(issue)
     except (Exception, SystemExit) as error:
         # Unreadable is a read that failed; SystemExit is path-ownership.py's refusal of an
         # OWNERSHIP.md with no rules; anything else is the check broken. None of them judged the
@@ -725,7 +786,7 @@ def main(argv: list[str]) -> int:
         print(f"ticket-shape: fail: nothing judged: {type(error).__name__}: {error}")
         return 2
     for note in notes:
-        print(f"ticket-shape: note: stale-prose: {note}")
+        print(f"ticket-shape: note: {note}")
     for failure in failures:
         print(f"ticket-shape: {failure.rule}: {failure.detail}")
     if failures:

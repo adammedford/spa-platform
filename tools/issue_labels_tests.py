@@ -81,6 +81,16 @@ class Kind(unittest.TestCase):
         self.assertEqual(group(derived(title="Overnight workflow: launch by script path"), "kind"),
                          ["kind:ticket"])
 
+    def test_only_a_dated_title_is_a_report(self):
+        # #970: a ticket whose title merely begins "Overnight" is a ticket: #742 and #74 as filed.
+        self.assertEqual(group(derived(title="Overnight 2026-11-04"), "kind"), ["kind:report"])
+        for title in ("Overnight agents look in ~/.docker/bin before calling docker absent",
+                      "Overnight ticket 66 says its own work is still future",
+                      "Overnight 2026-11", "The Overnight 2026-11-04 record",
+                      "overnight 2026-11-04"):
+            with self.subTest(title):
+                self.assertEqual(group(derived(title=title), "kind"), ["kind:ticket"])
+
 
 class Area(unittest.TestCase):
     def test_the_longest_prefix_wins(self):
@@ -297,6 +307,24 @@ class CommandLine(unittest.TestCase):
             issue(body, have=("ready-for-agent", "area:process", "kind:ticket"))))
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertIn("issue-labels: #7: in sync", done.stdout)
+
+    def test_742_and_74_labelled_reports_are_relabelled_tickets(self):
+        # #970: two tickets whose titles merely begin "Overnight", as labelled reports. On the
+        # tracker on 2026-11-05 #742 already carried kind:ticket and #74 no kind label, so each is
+        # given here the kind:report the ticket reports, and the run names the relabel it would make.
+        self.world({**self.current, "issues": [
+            issue(touching(".claude/workflows/overnight.js"), number=742,
+                  title="Overnight agents look in ~/.docker/bin before calling docker absent",
+                  have=("ready-for-agent", "kind:report", "area:process")),
+            issue("", number=74, title="Overnight ticket 66 says its own work is still future",
+                  have=("ready-for-agent", "kind:report"))]})
+        for number in ("742", "74"):
+            with self.subTest(number):
+                done = self.run_script("check", number)
+                self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+                self.assertIn(f"issue-labels: #{number}: add kind:ticket; remove kind:report",
+                              done.stdout)
+        self.assertEqual(self.writes(), [])
 
     def test_apply_writes_by_name_through_the_rest_routes(self):
         self.world({**self.current, "issues": [
