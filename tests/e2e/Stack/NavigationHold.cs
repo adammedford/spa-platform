@@ -99,6 +99,10 @@ public static class NavigationHold
         string url = page.Url;
         try
         {
+            // innerText is the rendered text, so a script's source and a hidden element are not in it
+            // (https://playwright.dev/dotnet/docs/api/class-locator#locator-inner-text,
+            // https://html.spec.whatwg.org/multipage/dom.html#the-innertext-idl-attribute); Redacted.Text
+            // still takes out what the page renders.
             string text = await page.Locator("body").InnerTextAsync(new() { Timeout = (float)TextWait.TotalMilliseconds });
             IReadOnlyList<BrowserContextCookiesResult> cookies = await page.Context.CookiesAsync();
             return new PageShown(Redacted.Url(url), Redacted.Text(text, [.. Redacted.ParameterValues(url), .. cookies.Select(cookie => cookie.Value)]));

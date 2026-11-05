@@ -50,7 +50,7 @@ public sealed class NavigationHoldTests
             NavigationHold.HoldAsync(profile.Page, app.Url("/signin-oidc").ToString(), () => profile.GotoAsync(app.Url($"/healthz?state={State}").ToString()), TimeSpan.FromSeconds(2)));
         Assert.Contains("/signin-oidc", missed.Message, StringComparison.Ordinal);
 
-        // Unwrapped by Redacted.PlaywrightAsync, the hold's own record of the page has no query (#1003).
+        // Called directly, not through Redacted.PlaywrightAsync, the hold's own record of the page has no query (#1003).
         Assert.Equal(app.Url("/healthz").ToString(), missed.Page.Url);
         Assert.DoesNotContain(State, missed.Message, StringComparison.Ordinal);
 
