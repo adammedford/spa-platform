@@ -1728,6 +1728,21 @@ try {
     const cut = await execute(newRepo(), { date: DATE }, { issue: issueWith([big(1, 0), longHeading]) })
     if (cutAt(cut) !== '0,1') fail(`a heading cut before its second comma: the batch reads ${cutAt(cut)}, expected 0,1: a comment the readers would read is never dropped unread`)
     if (!cut.result.apply.answers[9] && !cut.result.refusals.length) fail('a heading cut before its second comma: its question was neither read nor refused')
+    // Nor can one cut at its second comma or at the space after it (#832): the head's trimmed line
+    // then ends in that comma, so HEADING, which needs ", " after the second field, fails on it, though
+    // the whole line matches. 130 blanks and "## Questions: #345, " are 150 characters; the second
+    // field's length puts the cut at character 200.
+    const commaCut = (n, field) => comment(n, ' '.repeat(130) + `## Questions: ${cite(345)}, ` + field + ', Cut ticket\n\n**Q9.** Cut?\nRecommended: Yes.\n' + PRE + '\n', '2026-10-21T09:46:00Z')
+    for (const [why, c, tail] of [
+      ['at its second comma', commaCut(46, 'g'.repeat(49)), 'g,'],
+      ['at the space after its second comma', commaCut(47, 'g'.repeat(48)), 'g, '],
+    ]) {
+      const head = c.body.slice(0, 200)
+      if (head.includes('\n') || !head.endsWith(tail) || c.body.length <= 200) fail(`a heading cut ${why}: the fixture's head ends ${JSON.stringify(head.slice(-6))}, not ${JSON.stringify(tail)}`)
+      const r = await execute(newRepo(), { date: DATE }, { issue: issueWith([big(1, 0), c]) })
+      if (cutAt(r) !== '0,1') fail(`a heading cut ${why}: the batch reads ${cutAt(r)}, expected 0,1: a comment the readers would read is never dropped unread`)
+      if (!r.result.apply.answers[9] && !r.result.refusals.length) fail(`a heading cut ${why}: its question was neither read nor refused`)
+    }
     // A note of the same length, whose head is no heading's start, is still left out.
     const longNote = comment(45, ' '.repeat(130) + 'A review note of some length, ' + 'n'.repeat(80) + '\nAnd more.\n', '2026-10-21T09:50:00Z')
     const noted = await execute(newRepo(), { date: DATE }, { issue: issueWith([big(1, 0), longNote]) })
