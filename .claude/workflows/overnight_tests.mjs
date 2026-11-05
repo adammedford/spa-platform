@@ -2176,6 +2176,71 @@ const forkOf = (prompt) => (/Otherwise fork from [^:]+: forkSha = (\S+?)\. Take 
   }
 }
 
+// 40. A pre-accepted question is one table row, and the full form is kept for what needs a human (#965). On 2026-10-22
+//     263 of 284 questions, and on 2026-10-27 204 of 232, were written in full with the line "Answer: yes, pre-accepted
+//     under the standing answer granted <date>" under each. Two short runs on one ticket for a grill render the grill's
+//     and the report's prompts with the standing answer granted and not. Granted, the grill's "## Questions for Adam"
+//     and the report's step 1b ask for the questions it covers in one table under "### Pre-accepted", its four columns
+//     the number, the ticket-local number in parentheses, the question in one sentence and the recommendation in one
+//     sentence, and for the full form only for the kinds it leaves out; not granted, both prompts carry the sentences
+//     they carried before and nothing of the table.
+{
+  const GRILLED = { ...synthetic(4101, 'issue-4101', 'ready-for-human', [], 2), owner: 'integrator' }
+  const render = async (standingAnswer) => {
+    const prompts = {}
+    globalThis.args = { ...fixture.args, skills: OTHER_SKILLS, only: null, skip: [], standingAnswer }
+    globalThis.log = () => {}
+    globalThis.agent = async (prompt, opts) => {
+      const [kind] = opts.label.split(':')
+      prompts[kind] = prompt
+      if (kind === 'collect') return { outcome: 'ok', reason: 'companion', tickets: [{ ...GRILLED }], landed: [], base: 'a'.repeat(40), shell: '3.2', shellCommand: '/bin/bash' }
+      if (kind === 'grill') return { questions: grillQuestions(2), changeRequests: [], adrCandidates: [], draftDecision: '', decided: '', summary: 's' }
+      if (kind === 'closing') return { ok: true, headSha: CLOSING_TIP, lastLine: 'check: pass: companion.', notes: '' }
+      if (kind === 'report') return { questions: 2, mainCheckoutClean: true, leftovers: '', issue: 0, url: '' }
+      throw new Error(`unexpected agent label ${opts.label} in the pre-accepted rows run`)
+    }
+    const src = fs.readFileSync(scriptPath, 'utf8').replace(/^export const meta/m, 'const meta')
+    try { await new Function('return (async () => {' + src + '\n})()')() } catch (e) { fail(`#965: the run with standingAnswer ${standingAnswer} threw: ${e && e.message ? e.message : e}`) }
+    return prompts
+  }
+  const D = fixture.args.date
+  const granted = await render(true)
+  const none = await render(false)
+  const TABLE = [
+    'under the heading "### Pre-accepted"',
+    `the line "Answer for every row: yes, pre-accepted under the standing answer granted ${D}" between the heading and the table`,
+    'the columns "| Q | Ticket | Question | Recommended |"',
+  ]
+  const GRILL_TABLE = [...TABLE,
+    `one row each: its number as "**Q<n>.**", then "(#${GRILLED.issue} Q<n>)" with the same number, the question in one sentence, and the recommendation in one sentence`,
+    'The full form only for the questions the standing answer does not cover, first',
+    'it covers every question but one kind (#965): a human-owned decision the plan cannot settle',
+    'A change request is the other kind it leaves out, and it is never a question here',
+    'One it does not cover keeps the line "Answer: open"',
+  ]
+  const REPORT_TABLE = [...TABLE,
+    'one row each, as in "| **Q96.** | (#244 Q10) | <the question in one sentence> | <the recommendation in one sentence> |"',
+    'the questions whose "Answer:" line is open (a status note\'s question, a partial\'s choice for Adam, a grill question its comment gives in full with "Answer: open") come first, in the full form above',
+  ]
+  // What the two prompts said before #965, which an ungranted run must still say word for word.
+  const OLD_GRILL = [
+    'NO STANDING ANSWER was granted for this run. Under each question write the line "Answer: open". To reach the next round, assume your recommendation provisionally and say so; nothing is decided until Adam answers.',
+    '- "## Questions for Adam": numbered, each worded so "yes" accepts your recommendation, each with the recommendation, a one-line why, and its "Answer:" line as the standing-answer rule above dictates.\n',
+  ]
+  const OLD_REPORT = 'and "Answer: open", numbered as a status note\'s question is (#632). A steering change is a change request now'
+  const NONE_OF = ['Pre-accepted', '| Q | Ticket |', 'Answer for every row', 'one table row']
+  if (!granted.grill || !none.grill || !granted.report || !none.report) fail(`#965: a run rendered no ${!granted.grill || !none.grill ? 'grill' : 'report'} prompt, so the checks below read nothing`)
+  else {
+    for (const w of GRILL_TABLE) if (!granted.grill.includes(w)) fail(`#965: the grill prompt, standing answer granted, lacks: ${w}`)
+    for (const w of REPORT_TABLE) if (!granted.report.includes(w)) fail(`#965: the report prompt, standing answer granted, lacks: ${w}`)
+    if (!granted.grill.includes('"## Questions for Adam": numbered')) fail('#965: the granted grill prompt lost its numbered questions')
+    for (const w of OLD_GRILL) if (!none.grill.includes(w)) fail(`#965: the grill prompt, no standing answer, no longer says: ${w.slice(0, 100)}`)
+    if (!none.report.includes(OLD_REPORT)) fail('#965: the report prompt, no standing answer, no longer runs from the partial\'s choice straight to the steering change as before')
+    for (const [name, p] of [['grill', none.grill], ['report', none.report]]) for (const w of NONE_OF) if (p.includes(w)) fail(`#965: the ${name} prompt with no standing answer names ${JSON.stringify(w)}`)
+    if (granted.grill.includes('Under each question write the line "Answer: yes, pre-accepted')) fail('#965: the granted grill prompt still writes the pre-accepted line under each question')
+  }
+}
+
 if (failures.length) {
   console.log(`overnight_tests: FAILED, ${failures.length} check(s), on ${path.basename(scriptPath)}:`)
   failures.forEach((f) => console.log(`  - ${f}`))

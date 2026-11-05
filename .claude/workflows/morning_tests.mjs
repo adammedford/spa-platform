@@ -1959,6 +1959,101 @@ try {
     if (JSON.stringify(sent(now)) !== JSON.stringify(sent(old))) fail(`both numbers: the classifier was sent ${JSON.stringify(sent(now))} from the new form, ${JSON.stringify(sent(old))} from the old`)
   }
 
+  // 21a. A pre-accepted question is one table row (#965). The overnight report puts the questions the standing answer
+  //      covers in one table under "### Pre-accepted", one row each, and keeps the full form for the rest, above it.
+  //      From a comment holding two full-form questions and a four-row table the reader yields six questions numbered
+  //      Q1 to Q6, each row's recommendation its recommendation and the standing answer's yes its answer, so Apply
+  //      sorts and sends the classifier exactly what it does for the same four written in the full form; the draft
+  //      Confirm command covers all six on "Confirm Q1 to Q6."; and a row the reader cannot number refuses the
+  //      comment, as a comment with no readable question does. The row, its heading and its answer line are built from
+  //      the example overnight.js's report prompt gives, read from that file (CODING_STANDARDS.md, "A guard reads the
+  //      thing it guards").
+  checks++
+  {
+    const overnightSrc = fs.readFileSync(path.join(here, 'overnight.js'), 'utf8')
+    const rowEx = /one row each, as in "(\| \*\*Q\d+\.\*\* \|[^"]+\|)"/.exec(overnightSrc)
+    const lineEx = /^const PRE_LINE = '([^']+)' \+ DATE$/m.exec(overnightSrc)
+    const headEx = /^const PRE_HEADING = '([^']+)'$/m.exec(overnightSrc)
+    if (!rowEx || !lineEx || !headEx) fail(`pre-accepted rows: overnight.js's report prompt gives no ${!rowEx ? 'row example' : !lineEx ? 'answer line for the rows' : '"### Pre-accepted" heading'} to build the rows from`)
+    const HEAD_LINE = headEx ? headEx[1] : '### Pre-accepted'
+    const ANSWER_LINE = `${lineEx ? lineEx[1] : 'Answer for every row: yes, pre-accepted under the standing answer granted '}${DATE}`
+    // The example's digits become the night-wide number, the issue and the ticket-local number, and its two
+    // placeholder cells this fixture's question and recommendation.
+    const row = (q, local, question, rec) => {
+      if (!rowEx) return `| **Q${q}.** | (${cite(330)} Q${local}) | ${question} | ${rec} |`
+      const nums = [q, 330, local]
+      let k = 0
+      const cells = rowEx[1].replace(/\d+/g, () => String(nums[k++])).split(' | ')
+      cells[cells.length - 2] = question
+      cells[cells.length - 1] = `${rec} |`
+      return cells.join(' | ')
+    }
+    const FULL = `**Q1.** (${cite(330)} Q1) Keep port 5690 for the mock API, which contracts/ leaves open?\nRecommended: Yes, 5690.\nWhy: the plan names no port.\nAnswer: open\n\n**Q2.** (${cite(330)} Q2) Name the parameter store as the rotated keys' home?\nRecommended: Yes, the parameter store.\nWhy: the plan names it.\nAnswer: open\n`
+    const FOUR = [[3, 3, 'Add the term Morning branch?', 'Yes, as worded in the record.'], [4, 4, 'Rewrite the landing sentence?', 'Yes.'], [5, 5, 'Split the guide section?', 'No split; one section.'], [6, 6, 'Hold the box until G2?', 'Yes, held.']]
+    const TABLE = `${HEAD_LINE}\n\n${ANSWER_LINE}\n\n| Q | Ticket | Question | Recommended |\n| --- | --- | --- | --- |\n${FOUR.map((r) => row(...r)).join('\n')}\n`
+    const ticket = (n, qs) => comment(n, `## Questions: ${cite(330)}, issue-330, Rows\n\n${qs}`, '2026-10-21T06:00:00Z')
+    const ROWS = ticket(70, `${FULL}\n${TABLE}`)
+    const ALL_FULL = ticket(70, `${FULL}\n${FOUR.map(([q, l, t, r]) => `**Q${q}.** (${cite(330)} Q${l}) ${t}\nRecommended: ${r}\n${PRE}\n`).join('\n')}`)
+    const confirm = comment(71, 'Confirm Q1 to Q6.\n', '2026-10-21T08:00:00Z')
+    const rows = await execute(newRepo(), { date: DATE }, { issue: issueWith([ROWS, confirm]) })
+    const full = await execute(newRepo(), { date: DATE }, { issue: issueWith([ALL_FULL, confirm]) })
+    const sent = (r) => (jsonAfter(r.prompt('classify'), 'QUESTIONS') || []).map((q) => ({ q: q.q, issue: q.issue, text: q.text, recommendation: q.recommendation, answer: q.answer }))
+    if (rows.result.refusals.length || full.result.refusals.length) fail(`pre-accepted rows: refusals rows ${JSON.stringify(rows.result.refusals)}, full form ${JSON.stringify(full.result.refusals)}`)
+    const answers = (rows.result.apply || {}).answers || {}
+    if (Object.keys(answers).join() !== '1,2,3,4,5,6') fail(`pre-accepted rows: the comment yielded questions ${Object.keys(answers)}, expected 1 to 6`)
+    for (const [q, , , rec] of FOUR) {
+      const s = sent(rows).find((x) => x.q === q)
+      if (!s || s.recommendation !== rec || (answers[q] || {}).verdict !== 'yes' || !(answers[q] || {}).confirmed) fail(`pre-accepted rows: Q${q} reached Apply as ${JSON.stringify({ sent: s, answer: answers[q] })}, not confirmed yes with the recommendation ${JSON.stringify(rec)}`)
+    }
+    if (!sent(full).length) fail('pre-accepted rows: the full form sent the classifier nothing, so the comparison read nothing')
+    if (JSON.stringify(rows.result.apply.answers) !== JSON.stringify(full.result.apply.answers)) fail(`pre-accepted rows: Apply sorted the rows ${JSON.stringify(rows.result.apply.answers)}, the full form ${JSON.stringify(full.result.apply.answers)}`)
+    if (JSON.stringify(sent(rows)) !== JSON.stringify(sent(full))) fail(`pre-accepted rows: the classifier was sent ${JSON.stringify(sent(rows))} from the rows, ${JSON.stringify(sent(full))} from the full form`)
+    // Without a Confirm (dry), a row's yes goes on to the would-do list as a full-form yes does.
+    const dry = await execute(newRepo(), { date: DATE }, { issue: issueWith([ROWS]) })
+    const dryFull = await execute(newRepo(), { date: DATE }, { issue: issueWith([ALL_FULL]) })
+    if (JSON.stringify((dry.result.apply || {}).answers) !== JSON.stringify((dryFull.result.apply || {}).answers) || JSON.stringify((dry.result.apply || {}).open) !== '[1,2]') fail(`pre-accepted rows, no Confirm: rows ${JSON.stringify(dry.result.apply)}, full form ${JSON.stringify(dryFull.result.apply)}`)
+
+    // The draft Confirm command over that comment covers all six.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'confirm-draft-rows-'))
+    made.push(dir)
+    const COMMENTS = path.join(dir, 'comments.json')
+    fs.writeFileSync(COMMENTS, JSON.stringify({ comments: [ROWS].map((c) => ({ author: { login: c.author }, body: c.body, createdAt: c.createdAt, url: c.url })) }))
+    const DRAFT = path.join(dir, 'draft.md')
+    fs.writeFileSync(DRAFT, 'Confirm Q1 to Q6.\n')
+    const cli = spawnSync(process.execPath, [path.join(here, 'confirm_draft.mjs'), DRAFT, COMMENTS, '--json'], { encoding: 'utf8' })
+    let cj = null
+    try { cj = JSON.parse(cli.stdout) } catch { /* reported below */ }
+    if (!cj || cj.total !== 6 || JSON.stringify(cj.coveredList) !== '[1,2,3,4,5,6]' || cj.confirmed !== 6 || cj.applied !== 4 || JSON.stringify((cj.open || []).map((o) => o.q)) !== '[1,2]') fail(`pre-accepted rows: confirm_draft.mjs on "Confirm Q1 to Q6." gave ${cli.stdout}${cli.stderr}`)
+
+    // A row the reader cannot number is a refusal naming the comment, and none of that comment is read; the other
+    // comments still are.
+    const UNNUMBERED = ticket(72, `${FULL}\n${TABLE.replace(row(5, 5, 'Split the guide section?', 'No split; one section.'), `| Q-five | (${cite(330)} Q5) | Split the guide section? | No split; one section. |`)}`)
+    if (!UNNUMBERED.body.includes('| Q-five |') || UNNUMBERED.body.includes('**Q5.**')) fail('pre-accepted rows: the unnumbered fixture changed no row, so the refusal check below read nothing')
+    const other = comment(73, `## Questions: ${cite(331)}, issue-331, Other\n\n**Q7.** Keep it?\nRecommended: Yes.\n${PRE}\n`, '2026-10-21T06:00:01Z')
+    const bad = await execute(newRepo(), { date: DATE }, { issue: issueWith([UNNUMBERED, other, comment(74, 'Confirm Q1 to Q7.\n', '2026-10-21T08:00:00Z')]) })
+    const refusal = bad.result.refusals.find((x) => x.includes(`#330`) && /cannot number/.test(x))
+    if (!refusal || !refusal.includes('| Q-five |')) fail(`pre-accepted rows: an unnumbered row was not refused by its comment and row: ${JSON.stringify(bad.result.refusals)}`)
+    const badQs = Object.keys(((bad.result.apply || {}).answers) || {})
+    if (badQs.join() !== '7') fail(`pre-accepted rows: with #330's comment refused, the morning read questions ${badQs}, expected only #331's Q7`)
+    // A first cell of "Q5" with no full stop is none of the three forms the reader names, so it is refused too.
+    const BARE = ticket(78, `${FULL}\n${TABLE.replace(row(5, 5, 'Split the guide section?', 'No split; one section.'), `| Q5 | (${cite(330)} Q5) | Split the guide section? | No split; one section. |`)}`)
+    if (!BARE.body.includes('| Q5 |')) fail('pre-accepted rows: the bare-number fixture changed no row, so the refusal check below read nothing')
+    const bare = await execute(newRepo(), { date: DATE }, { issue: issueWith([BARE]) })
+    if (!bare.result.refusals.some((x) => x.includes('#330') && /cannot number/.test(x) && x.includes('| Q5 |'))) fail(`pre-accepted rows: a row numbered "Q5" with no full stop was not refused: ${JSON.stringify(bare.result.refusals)}`)
+    // The heading and the rows are taken out before the full form is read: a full-form question with no Recommended:
+    // line just above the table does not carry the table in its text, which is what an applier is handed once an
+    // override answers it.
+    const BARE_Q = ticket(76, `**Q1.** (${cite(330)} Q1) Keep port 5690?\nAnswer: open\n\n${TABLE}`)
+    const over = await execute(newRepo(), { date: DATE }, { issue: issueWith([BARE_Q, comment(77, 'Confirm Q1, Q3 to Q6.\n\nQ1: yes, keep 5690\n', '2026-10-21T08:00:00Z')]) })
+    const overRead = Object.keys(((over.result.apply || {}).answers) || {}).join()
+    const q1Sent = (jsonAfter(over.prompt('classify'), 'QUESTIONS') || []).find((q) => q.q === 1)
+    if (overRead !== '1,3,4,5,6' || !q1Sent || q1Sent.text.includes('|') || q1Sent.text.includes('Pre-accepted') || q1Sent.text.includes('Answer for every row')) fail(`pre-accepted rows: a full-form question with no Recommended: line above the table: questions ${overRead}, its text ${JSON.stringify(q1Sent && q1Sent.text)}`)
+    // A table of options inside a full-form question, outside "### Pre-accepted", is the question's text, not rows.
+    const OPTIONS = ticket(75, `**Q1.** Which store?\n\n| Option | Cost |\n| --- | --- |\n| A | low |\n\nRecommended: A.\n${PRE}\n`)
+    const opt = await execute(newRepo(), { date: DATE }, { issue: issueWith([OPTIONS]) })
+    if (opt.result.refusals.length || Object.keys(((opt.result.apply || {}).answers) || {}).join() !== '1') fail(`pre-accepted rows: an options table outside "### Pre-accepted" was read as rows: ${JSON.stringify(opt.result.refusals)}`)
+  }
+
   // 22. A draft Confirm is sorted the way the apply step would sort it, before it is posted (#302).
   //     Launched with confirmFile on an issue with no Confirm comment, the morning takes the file's
   //     text as the Confirm, sorts the issue's questions through the apply step's own code, prints the
