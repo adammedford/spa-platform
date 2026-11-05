@@ -334,7 +334,9 @@ public sealed class TestIdentityProvider : IAsyncDisposable
             if (query["code_challenge_method"] != "S256" || Empty(query["code_challenge"])) return Refuse("pkce_required");
 
             // The request is well formed and its redirect_uri registered, so from here every answer goes back
-            // to the client: a code, or, for a silent request with no session, login_required.
+            // to the client: a code, or, for a silent request with no session, login_required. OpenID Connect
+            // Core 1.0 section 3.1.2.6 defines login_required as prompt=none's answer when no one is signed in,
+            // returned to the redirect_uri with the request's state as RFC 6749 section 4.1.2.1 has it.
             IResult Back(string name, string value)
             {
                 var back = new Dictionary<string, string?> { [name] = value };

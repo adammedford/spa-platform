@@ -47,6 +47,23 @@ public sealed class TestIdpProviderSessionTests
     }
 
     [Fact]
+    public async Task The_session_cookie_carries_an_opaque_id_and_never_the_subject()
+    {
+        // Mutation: writing the subject as the cookie's value (Append(SessionCookieName, subject, ...) in
+        // StartSession) turns this red. The subject is a canary no random id can spell by chance.
+        const string canary = "subject-canary-0997";
+        await using var harness = await IdpHarness.StartAsync();
+        harness.Idp.Faults.ModelProviderSession = true;
+
+        using var interactive = await harness.AuthorizeAsync(IdpHarness.AuthorizeQuery(Pkce.Challenge(Pkce.NewVerifier()), loginHint: canary));
+
+        var cookie = Assert.Single(interactive.Headers.GetValues("Set-Cookie"),
+            c => c.StartsWith(TestIdentityProvider.SessionCookieName + "=", StringComparison.Ordinal));
+        Assert.DoesNotContain(canary, cookie, StringComparison.Ordinal);
+        Assert.Equal(canary, harness.Idp.Authorizations[^1].Subject);
+    }
+
+    [Fact]
     public async Task With_the_switch_off_prompt_none_is_answered_as_a_request_without_it()
     {
         // Mutation: reading prompt=none whatever the switch says (dropping the ModelProviderSession guard)
