@@ -46,10 +46,14 @@ TG_ARN = f"arn:aws:elasticloadbalancing:{REGION}:{ACCOUNT}:targetgroup/spa-poc/0
 ALB = f"internal-spa-poc-1234567890.{REGION}.elb.amazonaws.com"
 STATE_CANARY = "STATECANARY0123456789"
 COOKIE_CANARY = "COOKIECANARY9876543210"
+# The session token the CLI hands session-manager-plugin, in the session it answers an exec or a
+# port forward with. Nothing the script reads carries it, so it reaching an output means the script
+# surfaced the session's own answer.
+TOKEN_CANARY = "TOKENCANARY13579bdf"
 # The repository canary is the URI without its account label, so it fails on its own once the
 # account has been redacted out of a URI that was not.
 REPOSITORY_TAIL = IMAGE.split("@")[0].split(".", 1)[1]
-SECRETS = (ACCOUNT, STATE_CANARY, COOKIE_CANARY, REPOSITORY_TAIL, "arn:aws")
+SECRETS = (ACCOUNT, STATE_CANARY, COOKIE_CANARY, TOKEN_CANARY, REPOSITORY_TAIL, "arn:aws")
 APP_HOST = "app1.spa-poc.test:8443"
 BASE_S = 1792557666           # 2026-10-21T04:41:06Z, startup_tests.py's worked instant
 
@@ -362,12 +366,12 @@ def answer_aws(case: pathlib.Path, argv: list) -> int:
         kind = document["plans"][task["plan"]]["exec"]
         if kind == "no-session":
             return fail("TargetNotConnectedException")
-        session = {"sessionId": "ecs-execute-command-0abc", "streamUrl": "wss://example", "tokenValue": "TOKENCANARY"}
+        session = {"sessionId": "ecs-execute-command-0abc", "streamUrl": "wss://example", "tokenValue": TOKEN_CANARY}
         os.execvp("session-manager-plugin", ["session-manager-plugin", json.dumps(session), REGION, "StartSession", "",
                                              json.dumps({"kind": "exec", "task": task["n"]}), "https://ecs"])
     elif shape == "ssm start-session" and options.get("document-name") == "AWS-StartPortForwardingSessionToRemoteHost":
         parameters = json.loads(options["parameters"])
-        session = {"SessionId": "operator-0abc", "StreamUrl": "wss://example", "TokenValue": "TOKENCANARY"}
+        session = {"SessionId": "operator-0abc", "StreamUrl": "wss://example", "TokenValue": TOKEN_CANARY}
         os.execvp("session-manager-plugin", ["session-manager-plugin", json.dumps(session), REGION, "StartSession", "",
                                              json.dumps({"kind": "forward", "Target": options["target"], "Parameters": parameters}),
                                              "https://ssm"])
