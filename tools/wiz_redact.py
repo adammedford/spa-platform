@@ -11,8 +11,10 @@ tools/wiz_redact_tests.py holds each rule to a case. It applies ten rules, in th
 1. A twelve-digit number, or one written 1234-5678-9012, becomes `<account>`. With
    --keep-last-four it becomes `<account-9012>`, for a ticket whose grill asks for the last four
    digits, as #125 does. Without the option no twelve-digit number survives on its own; a run of
-   twelve digits touching a hexadecimal letter (a-f, either case) is part of a hash, a `sha256:`
-   image digest or a file's SHA-256, and is kept, so a post carries the hash whole (#1004).
+   twelve digits inside a longer hexadecimal word, one whose letters and digits are all 0-9 and
+   a-f (either case), is part of a hash, a `sha256:` image digest or a file's SHA-256, and is kept,
+   so a post carries the hash whole (#1004). A run beside any other word (`web123456789012`) is
+   still an account.
 2. An ARN, `arn:aws:<service>:<region>:<account>:<resource>`, becomes its resource field, the part
    after the account: `arn:aws:iam::<account>:role/x` becomes `role/x`.
 3. The value after `code=`, `state=`, `client_id=`, `client_secret=`, `code_verifier=`,
@@ -85,11 +87,13 @@ P04_CASE = re.compile(
     re.MULTILINE,
 )
 
-# The plain form goes wherever no hexadecimal digit touches it, a hyphen included, because a CDK
-# bootstrap bucket (cdk-hnb659fds-assets-123456789012-us-east-1) carries the account between
-# hyphens; a hexadecimal letter beside the run makes it part of a hash, which is kept (#1004). Only
-# the console's dashed form needs the hyphen guard, so 1234-5678-9012-3456 is not read as an account.
-ACCOUNT = re.compile(r"(?<![0-9A-Fa-f])(\d{12})(?![0-9A-Fa-f])|(?<![\d-])(\d{4}-\d{4}-\d{4})(?![\d-])")
+# The plain form goes wherever no digit touches it, a hyphen included, because a CDK bootstrap
+# bucket (cdk-hnb659fds-assets-123456789012-us-east-1) carries the account between hyphens; account()
+# keeps a run whose whole word is a longer hexadecimal one, a hash (#1004). Only the console's dashed
+# form needs the hyphen guard, so 1234-5678-9012-3456 is not read as an account.
+ACCOUNT = re.compile(r"(?<!\d)(\d{12})(?!\d)|(?<![\d-])(\d{4}-\d{4}-\d{4})(?![\d-])")
+WORD_CHARACTER = re.compile(r"[0-9A-Za-z]")
+HEXADECIMAL_WORD = re.compile(r"[0-9A-Fa-f]{13,}")
 
 # arn:<partition>:<service>:<region>:<account>:<resource>. The resource runs to whitespace, a quote,
 # a comma or a closing bracket, so an ARN inside JSON or a sentence keeps what follows it.
@@ -146,13 +150,26 @@ USER_POOL_ID = re.compile(r"(?<![A-Za-z0-9])[a-z]{2}(?:-[a-z]+)+-\d_(?=[a-z]*[0-
 
 # The session manager plugin's session id, with or without a colon after the key, or as a JSON
 # member; the id runs to whitespace, a quote or a comma, less a closing full stop.
+# The key starts a word, so a cookie named JSESSIONID keeps rule 5's `=<elided>`.
 SSM_SESSION_ID = re.compile(
-    r"(SessionId\b\"?[ \t]*:?[ \t]*\"?)[^\s\"',;]*[^\s\"',;.]", re.IGNORECASE
+    r"((?<![A-Za-z0-9_])SessionId\b\"?[ \t]*:?[ \t]*\"?)[^\s\"',;]*[^\s\"',;.]", re.IGNORECASE
 )
+
+
+def in_a_hash(match: re.Match) -> bool:
+    """Whether the twelve-digit run at match lies inside a longer, wholly hexadecimal word."""
+    text, start, end = match.string, match.start(), match.end()
+    while start > 0 and WORD_CHARACTER.match(text, start - 1):
+        start -= 1
+    while end < len(text) and WORD_CHARACTER.match(text, end):
+        end += 1
+    return HEXADECIMAL_WORD.fullmatch(text, start, end) is not None
 
 
 def account(keep_last_four: bool) -> typing.Callable[[re.Match], str]:
     def replace(match: re.Match) -> str:
+        if match.group(1) and in_a_hash(match):
+            return match.group(0)
         if keep_last_four:
             return f"<account-{match.group(0)[-4:]}>"
         return "<account>"
@@ -241,7 +258,6 @@ def json_members(text: str, member: re.Pattern) -> str:
 
 
 def redact(text: str, keep_last_four: bool = False) -> str:
-    text = SSM_SESSION_ID.sub(lambda m: f"{m.group(1)}<elided>", text)
     text = ACCOUNT.sub(account(keep_last_four), text)
     text = ARN.sub(lambda m: m.group(1), text)
     text = QUERY_KEY.sub(lambda m: f"{m.group(1)}=<elided>", text)
@@ -256,6 +272,7 @@ def redact(text: str, keep_last_four: bool = False) -> str:
     text = HCL_CLIENT_ID.sub(r"\1<elided>\2", text)
     text = HCL_ID_IN_CLIENT_SHAPE.sub(r"\1<elided>\2", text)
     text = USER_POOL_ID.sub("<user-pool>", text)
+    text = SSM_SESSION_ID.sub(lambda m: f"{m.group(1)}<elided>", text)
     return text
 
 

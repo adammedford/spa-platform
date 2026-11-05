@@ -369,6 +369,14 @@ class RuleOneLeavesHashesWhole(InBothModes):
             "account <account>, <account>.dkr.ecr.us-east-2.amazonaws.com, -<account>-\n",
         )
 
+    def test_a_run_beside_a_word_that_is_not_hexadecimal_is_still_masked(self) -> None:
+        # A hexadecimal letter beside the run is not enough: the whole word must be hexadecimal and
+        # longer than the run, so a name ending in "web" or "lab" does not carry an account out.
+        self.assertRedactsInBothModes(
+            "web123456789012 lab123456789012x 123456789012fez\n",
+            "web<account> lab<account>x <account>fez\n",
+        )
+
 
 class RuleNineUserPoolIds(InBothModes):
     def test_a_user_pool_id_is_masked(self) -> None:
@@ -408,6 +416,13 @@ class RuleTenSsmSessionIds(InBothModes):
         self.assertRedactsInBothModes(
             '{"SessionId": "adam-0a1b2c3d4e5f67890", "Status": "Connected"} SessionIds: 2\n',
             '{"SessionId": "<elided>", "Status": "Connected"} SessionIds: 2\n',
+        )
+
+    def test_a_cookie_whose_name_ends_in_sessionid_keeps_rule_fives_shape(self) -> None:
+        # The key must start a word: rule 5 elides the cookie's value and keeps its name and `=`.
+        self.assertRedactsInBothModes(
+            "Cookie: JSESSIONID=abc123; theme=dark\n",
+            "Cookie: JSESSIONID=<elided>; theme=<elided>\n",
         )
 
 
