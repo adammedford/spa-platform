@@ -678,6 +678,89 @@ class SubjectForOpenBoxTests(unittest.TestCase):
         self.assertEqual(f"landing-subjects: subject: Merge task issue-{NO_SUCH_ISSUE}", last_line(done))
 
 
+STRICT = ("--base", "base", "--fail-unchecked")
+
+
+def unchecked_fail(count: int) -> str:
+    merges = "merge" if count == 1 else "merges"
+    return (f"landing-subjects: fail: {count} full-landing {merges} went unchecked, and --fail-unchecked holds "
+            "what it could not read; sign gh in or reach GitHub, then run it again.")
+
+
+class FailUncheckedTests(unittest.TestCase):
+    """#894: tools/check.sh --full passes --fail-unchecked, so an unreadable issue, an unreadable
+    listing or a missing gh fails the full check, which a lane and the overnight integrate gate run,
+    while the hook, which does not pass it, still lets an offline push through (UncheckedTests)."""
+
+    def test_an_unreachable_github_fails(self):
+        case = Case(self)
+        case.issue(62, ISSUE_62)
+        sha = case.commit("Merge task 6.7: operating notes", "Ticket: #62")
+        done = case.run(*STRICT, GH_FAIL="1")
+        self.assertEqual(1, done.returncode, done.stdout + done.stderr)
+        self.assertIn(f'landing-subjects: unchecked: {sha} "Merge task 6.7: operating notes": #62 could not '
+                      'be read: error connecting to api.github.com', done.stdout.splitlines())
+        self.assertEqual(unchecked_fail(1), last_line(done))
+
+    def test_an_issue_github_has_not_got_fails(self):
+        case = Case(self)
+        case.commit("Merge task issue-999: no such issue", f"Ticket: #{NO_SUCH_ISSUE}")
+        done = case.run(*STRICT)
+        self.assertEqual(1, done.returncode, done.stdout + done.stderr)
+        self.assertEqual(unchecked_fail(1), last_line(done))
+
+    def test_no_gh_fails(self):
+        case = Case(self, gh=False)
+        case.commit("Merge task 6.7: operating notes", "Ticket: #62")
+        done = case.run(*STRICT)
+        self.assertEqual(1, done.returncode, done.stdout + done.stderr)
+        self.assertIn("#62 could not be read: gh is not on PATH", done.stdout)
+        self.assertEqual(unchecked_fail(1), last_line(done))
+
+    def test_an_unreadable_listing_fails(self):
+        case = Case(self)
+        case.issue(344, CARRIER_P2_1)
+        case.commit("Merge task P2-1: the session store", "Ticket: #344")
+        done = case.run(*STRICT, GH_LIST_FAIL="1")
+        self.assertEqual(1, done.returncode, done.stdout)
+        self.assertIn("the open part tickets of P2-1 could not be listed", done.stdout)
+        self.assertEqual(unchecked_fail(1), last_line(done))
+
+    def test_every_unchecked_merge_is_counted(self):
+        case = Case(self)
+        case.commit("Merge task 6.7: operating notes", "Ticket: #62")
+        case.commit("Merge task issue-999: no such issue", f"Ticket: #{NO_SUCH_ISSUE}")
+        done = case.run(*STRICT, GH_FAIL="1")
+        self.assertEqual(1, done.returncode, done.stdout)
+        self.assertEqual(unchecked_fail(2), last_line(done))
+
+    def test_a_held_merge_is_still_named_as_held(self):
+        case = Case(self)
+        case.issue(309, "- [ ] Open.\n")
+        case.commit("Merge task issue-999: unreadable", f"Ticket: #{NO_SUCH_ISSUE}")
+        case.commit("Merge task issue-309: held", "Ticket: #309")
+        done = case.run(*STRICT)
+        self.assertEqual(1, done.returncode, done.stdout)
+        self.assertIn("open box", last_line(done))
+
+    def test_a_range_it_could_read_passes_as_without_it(self):
+        case = Case(self)
+        case.issue(296, FINISHED)
+        case.commit("Merge task issue-296: finished", "Ticket: #296")
+        case.commit("Merge task 6.8: from before the move", "no ticket line")
+        strict, plain = case.run(*STRICT), case.run()
+        self.assertEqual(0, strict.returncode, strict.stdout)
+        self.assertEqual(plain.stdout, strict.stdout)
+        self.assertEqual("landing-subjects: pass: 2 full-landing merges from base to HEAD: 1 clear, 0 unchecked, "
+                         "1 with no Ticket line.", last_line(strict))
+
+    def test_it_is_no_option_of_subject_for(self):
+        case = Case(self)
+        done = case.run("--subject-for", "issue-296", "--ticket", "296", "--fail-unchecked")
+        self.assertEqual(2, done.returncode, done.stdout + done.stderr)
+        self.assertIn("--fail-unchecked", done.stderr)
+
+
 class BrokenTests(unittest.TestCase):
     def test_a_base_that_is_no_commit_judges_nothing_and_exits_2(self):
         case = Case(self)

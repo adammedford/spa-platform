@@ -53,16 +53,21 @@ read, its boxes are reported unchecked and the answer is the one its rows alone 
 When gh is missing, not signed in, cannot reach GitHub or has no issue under the number, the
 commit is reported unchecked with gh's own reason and nothing fails, as the steering check's issue
 rule does offline (.github/steering.py): an offline push is not held up on it, and --subject-for
-answers as the lane's completeness alone would. A git that cannot read the range judges nothing and
-fails (CODING_STANDARDS.md, "A check fails closed").
+answers as the lane's completeness alone would. --fail-unchecked, which tools/check.sh --full passes
+and the pre-push hook does not, makes an unchecked commit fail the range check instead (#894): the
+full check is what a lane and the overnight integrate gate run, and there a pass over a ticket it
+could not read would let 2026-10-22's open-box "Merge task" through whenever gh is signed out or
+GitHub is down, where a red gate only waits for GitHub. A git that cannot read the range judges
+nothing and fails (CODING_STANDARDS.md, "A check fails closed").
 
 Each finding is a line `landing-subjects: held: ...`, `landing-subjects: unchecked: ...` or
 `landing-subjects: note: ...`, and the last line is the verdict: `landing-subjects: pass: ...` with
-exit 0, `landing-subjects: fail: ...` with exit 1 when a merge was held, and exit 2 when nothing was
-judged. --subject-for's last line is `landing-subjects: subject: <head>`, with exit 0, or exit 2
-when it could not read the history. tools/check.sh runs the range check over the range it already
-judges, so the pre-push hook and the overnight integrate gate, which runs the full check, refuse the
-subject before it is written into history to stay.
+exit 0, `landing-subjects: fail: ...` with exit 1 when a merge was held or, under --fail-unchecked,
+went unchecked, and exit 2 when nothing was judged. --subject-for's last line is
+`landing-subjects: subject: <head>`, with exit 0, or exit 2 when it could not read the history.
+tools/check.sh runs the range check over the range it already judges, so the pre-push hook and the
+overnight integrate gate, which runs the full check, refuse the subject before it is written into
+history to stay.
 """
 from __future__ import annotations
 
@@ -251,7 +256,7 @@ def plural(count: int, one: str, many: str) -> str:
     return f"{count} {one if count == 1 else many}"
 
 
-def judge(base: str) -> int:
+def judge(base: str, fail_unchecked: bool = False) -> int:
     landings = [(sha, subject, message) for sha, subject, message in commits(base)
                 if FULL_LANDING.match(subject)]
     if not landings:
@@ -321,6 +326,11 @@ def judge(base: str) -> int:
             say(f"fail: {held} full-landing {merges} held: {on_box} on an open box, {on_part} on an open part "
                 f'ticket; land {it} as "Merge part of task" with its Outstanding lines.')
         return 1
+    if fail_unchecked and unchecked:
+        merges = "merge" if unchecked == 1 else "merges"
+        say(f"fail: {unchecked} full-landing {merges} went unchecked, and --fail-unchecked holds what it could "
+            "not read; sign gh in or reach GitHub, then run it again.")
+        return 1
     say(f"pass: {plural(len(landings), 'full-landing merge', 'full-landing merges')} from {base} to HEAD: {clear} clear, "
         f"{unchecked} unchecked, {unticketed} with no Ticket line.")
     return 0
@@ -381,13 +391,17 @@ def main(argv: list[str] | None = None) -> int:
     asked.add_argument("--base", help="judge the commits from this ref to HEAD")
     asked.add_argument("--subject-for", metavar="ID", help="the id a complete lane landed: a plan row or issue-<n>")
     parser.add_argument("--ticket", type=int, help="with --subject-for: the lane's issue number")
+    parser.add_argument("--fail-unchecked", action="store_true",
+                        help="with --base: fail a merge whose ticket or part tickets could not be read")
     arguments = parser.parse_args(argv)
     if arguments.subject_for is not None and arguments.ticket is None:
         parser.error("--subject-for needs --ticket")
+    if arguments.subject_for is not None and arguments.fail_unchecked:
+        parser.error("--fail-unchecked is an option of --base, not of --subject-for")
     try:
         if arguments.subject_for is not None:
             return subject_for(arguments.subject_for, arguments.ticket)
-        return judge(arguments.base)
+        return judge(arguments.base, arguments.fail_unchecked)
     except Broken as error:
         say(f"fail: nothing judged: {error}.")
         return 2
