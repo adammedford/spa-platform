@@ -300,7 +300,25 @@ class ReportTickets(unittest.TestCase):
 
     def test_a_body_with_neither_shape_reads_no_tickets(self) -> None:
         tickets = self.read("Standing answer: granted.\n\n## Decisions taken overnight\n\nNone.\n")
-        self.assertEqual(tickets, {"shape": "none", "rows": [], "claimed": [], "steps": []})
+        self.assertEqual(tickets, {"shape": "none", "rows": [], "claimed": [], "steps": [], "unread": []})
+
+    def test_a_table_row_it_cannot_read_is_named_unread_and_lost_from_no_list(self) -> None:
+        # A claimed row with two unescaped | in its title (nine cells, the fourth reading "failed ..."), one
+        # with a cell missing (six) and one whose outcome is no outcome word: each would shift or drop the
+        # row, and the claimed branch with it, from the morning's hand-over, so each comes back unread
+        # (CODING_STANDARDS.md, "A check fails closed"), and the readable table rows still come back.
+        body = TABLE_REPORT.replace(
+            "| #975 | Edit a ticket |",
+            "| #976 | Retry | when | failed builds | integrator | claimed | task/issue-976 | 9999999 | lands after |\n"
+            "| #977 | A missing cell | integrator | claimed | task/issue-977 | lands after |\n"
+            "| #978 | No outcome word | integrator | landed | task/issue-978 | 7777777 | none |\n"
+            "| #975 | Edit a ticket |")
+        tickets = self.read(body)
+        self.assertEqual([r["issue"] for r in tickets["rows"]], [971, 972, 973, 800, 975])
+        self.assertEqual([line.split(" | ")[0] for line in tickets["unread"]], ["| #976", "| #977", "| #978"])
+        self.assertEqual(tickets["claimed"],
+                         ["#800 task/issue-800-elsewhere at 2468ace: lands after this pull request; none conflict"])
+        self.assertEqual(self.read(TABLE_REPORT)["unread"], [])
 
 
 class Findings(unittest.TestCase):

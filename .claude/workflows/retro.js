@@ -209,6 +209,8 @@ const TICKETS = {
     rows: { type: 'array', items: { type: 'object', properties: { issue: { type: 'integer' }, title: { type: 'string' }, lane: { type: 'string' }, outcome: { type: 'string' }, detail: { type: 'string' }, branch: { type: 'string' }, head: { type: 'string' }, step: { type: 'string' } }, required: ['issue', 'title', 'lane', 'outcome', 'detail', 'branch', 'head', 'step'] } },
     claimed: { type: 'array', items: { type: 'string' } },
     steps: { type: 'array', items: { type: 'string' } },
+    // The table rows the reader could not read; optional, since an index written before it has none.
+    unread: { type: 'array', items: { type: 'string' } },
   },
   required: ['shape', 'rows', 'claimed', 'steps'],
 }

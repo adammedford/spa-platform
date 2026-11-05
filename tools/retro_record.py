@@ -51,7 +51,9 @@ Morning step, one row per ticket the run touched. An outcome cell is one of inte
 failed, grilled or carried, optionally followed by a detail in parentheses, as in `integrated
 (partial)` or `carried (foreground)`; a cell reading `none` (or `-`) is empty, backticks are dropped
 and `\\|` is a pipe inside a cell. Its claimed branches are its claimed rows, as `#<n> <branch> at
-<head>: <step>`, and its steps each row's non-empty step, as `#<n>: <step>`. The sections shape, the
+<head>: <step>`, and its steps each row's non-empty step, as `#<n>: <step>`. A data row it cannot read,
+one without seven cells, a `#<n>` ticket cell and one of those outcomes, is in no list but `unread`,
+as its cells rejoined, so its reader reports it rather than losing it. The sections shape, the
 nights before, has no `## Tickets`: its rows are the `## Integrated` table's (Task, Issue, Merge),
 outcome integrated and head the merge, then the `## Foreground` list's tickets, outcome carried,
 detail foreground; its claimed branches are the `## Claimed branches to merge` list items and its
@@ -232,15 +234,19 @@ def items(lines: list) -> list:
 
 
 def report_tickets(lines: list) -> dict:
-    rows, claimed, steps = [], [], []
+    rows, claimed, steps, unread = [], [], [], []
     if any(l.startswith("## ") and l[3:].strip() == "Tickets" for l in lines):
         for row in table(section(lines, "Tickets")):
-            if len(row) < 7 or not ISSUE_CELL.match(row[0]):
+            outcome = OUTCOME.match(plain(row[3])) if len(row) == 7 else None
+            # A row the reader cannot read is named, never dropped (CODING_STANDARDS.md, "A check fails
+            # closed"): a missing cell or an unescaped | in a cell shifts every column after it, so a
+            # claimed row would vanish from the morning's hand-over with nothing saying so.
+            if not (outcome and ISSUE_CELL.match(row[0])):
+                unread.append("| " + " | ".join(row) + " |")
                 continue
-            outcome = OUTCOME.match(plain(row[3]))
             entry = {"issue": int(ISSUE_CELL.match(row[0]).group(1)), "title": row[1], "lane": plain(row[2]),
-                     "outcome": outcome.group(1).lower() if outcome else plain(row[3]),
-                     "detail": (outcome.group(2) or "").strip() if outcome else "",
+                     "outcome": outcome.group(1).lower(),
+                     "detail": (outcome.group(2) or "").strip(),
                      "branch": plain(row[4]), "head": plain(row[5]), "step": plain(row[6])}
             rows.append(entry)
             n = entry["issue"]
@@ -249,13 +255,13 @@ def report_tickets(lines: list) -> dict:
                                f": {entry['step'] or 'no step'}")
             if entry["step"]:
                 steps.append(f"#{n}: {entry['step']}")
-        return {"shape": "table", "rows": rows, "claimed": claimed, "steps": steps}
+        return {"shape": "table", "rows": rows, "claimed": claimed, "steps": steps, "unread": unread}
     integrated = section(lines, "Integrated")
     foreground = section(lines, "Foreground")
     claimed_lines = section(lines, "Claimed branches to merge")
     morning = section(lines, "Morning steps")
     if not (integrated or foreground or claimed_lines or morning):
-        return {"shape": "none", "rows": [], "claimed": [], "steps": []}
+        return {"shape": "none", "rows": [], "claimed": [], "steps": [], "unread": []}
     for row in table(integrated):
         issue = next((ISSUE_CELL.match(c) for c in row[:2] if ISSUE_CELL.match(c)), None)
         if issue:
@@ -267,7 +273,7 @@ def report_tickets(lines: list) -> dict:
         if issue:
             rows.append({"issue": int(issue.group(1)), "title": item[issue.end():].strip(), "lane": "",
                          "outcome": "carried", "detail": "foreground", "branch": "", "head": "", "step": ""})
-    return {"shape": "sections", "rows": rows, "claimed": items(claimed_lines), "steps": items(morning)}
+    return {"shape": "sections", "rows": rows, "claimed": items(claimed_lines), "steps": items(morning), "unread": []}
 
 
 def parse_report(path: str, title: str | None) -> dict | None:

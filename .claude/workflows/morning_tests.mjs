@@ -2994,6 +2994,8 @@ try {
       const vp = r.prompt('verify')
       if (!vp.includes(`python3 -I ${r.result.runLog.split('/.scratch/')[0]}/tools/retro_record.py report `) || !vp.includes(`--title "Overnight ${DATE}"`)) fail('#971: the Verify prompt does not read the report\'s tickets with tools/retro_record.py report --title')
       if (!vp.includes('claimed is its tickets.claimed and steps its tickets.steps')) fail('#971: the Verify prompt does not take claimed and steps from the reader')
+      // A row the reader could not read is in neither list, so the prompt makes it a finding (CODING_STANDARDS.md, "A check fails closed").
+      if (!vp.includes('Each line of its tickets.unread is a table row the reader could not read') || !vp.includes('add it to findings as "report row not read: <the line>"')) fail('#971: the Verify prompt drops the rows the reader could not read instead of naming them in findings')
       // The house rules let an agent write only the OUTPUT FILE and PHASE FILE lines' paths, so the saved body is one.
       const saved = (/> (\S+\/report-body\.md)`/.exec(vp) || [])[1]
       if (!saved || !new RegExp(`^OUTPUT FILE: ${saved.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'm').test(vp)) fail(`#971: the Verify prompt saves the report body to ${saved || 'no file'}, which no OUTPUT FILE line names, so its house rules forbid the write`)
