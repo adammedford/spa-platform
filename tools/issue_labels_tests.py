@@ -367,6 +367,9 @@ class CommandLine(unittest.TestCase):
         self.assertEqual(self.writes(), [])
 
     def test_a_short_full_listing_does_not_delete_a_label_the_filtered_one_finds(self):
+        # The case that holds in_use()'s filtered listing (#828): the full listings come back empty,
+        # so only the filtered read finds either label. Deleting that read, or dropping its "issue"
+        # or its "pr" kind, deletes duplicate or question and turns this case red.
         defined = [{"name": name, **wanted} for name, wanted in TABLE.labels.items()]
         self.world({"issues": [issue(have=("duplicate",))],
                     "prs": [{"number": 3, "labels": [{"name": "question"}]}],
