@@ -225,16 +225,27 @@ class ATornDownCellPasses(Verify):
 
     def test_a_retried_tag_query_counts_each_dropped_record_once(self):
         # #473: a security group EC2 lets go of on the third describe keeps the tag query retrying,
-        # and the summary is that last poll's, not the sum of all three.
+        # and the summary is that last poll's, not the sum of all three. The world holds a record for
+        # each of read_tag_index's six counts, and the whole line is asserted, so a count that one
+        # poll does not reset shows as three times its number (#929).
         world = torn_down_world()
         world["tagged"][4]["describe_knows"] = 2
-        world["tagged"] += [tagged(TABLE_ARN, "dynamodb:table", describe_knows=0),
+        # The task definition ECS has removed is the one deleted ECS record; the cluster and the
+        # service stay INACTIVE.
+        world["task_definitions"] = {}
+        world["tagged"] += [tagged(NAT_ARN, "ec2:natgateway", state="deleted"),
+                            tagged(TABLE_ARN, "dynamodb:table", describe_knows=0),
                             tagged(POOL_ARN, "cognito-idp:userpool", describe_knows=0)]
         case, result = self.verify(world)
         self.assertEqual(0, result.status, result.output)
         self.assertEqual(3, len(self.index_queries(case)))
-        self.assertIn("1 DynamoDB tables DynamoDB does not know", result.stdout)
-        self.assertIn("1 Cognito user pools Cognito does not know", result.stdout)
+        # Counted by hand from the world: the cluster, the service, the task definition, the security
+        # group and its four rules, the NAT gateway, the table and the pool.
+        self.assertIn(f"verify-teardown: the tag query in {REGION}: 11 listed, none standing: "
+                      "2 ECS records INACTIVE, 1 ECS records deleted, 5 EC2 ids describe does not know, "
+                      "1 NAT gateways or VPC endpoints EC2 says deleted or does not know, "
+                      "1 DynamoDB tables DynamoDB does not know, 1 Cognito user pools Cognito does not know\n",
+                      result.stdout)
 
     def test_the_tagging_index_s_own_lag_is_retried(self):
         world = torn_down_world()
