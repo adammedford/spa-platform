@@ -185,7 +185,6 @@ public sealed partial class SittingBrowserTests
     public async Task What_it_prints_holds_no_cookie_value_no_url_with_a_query_and_no_csrf_token()
     {
         await using Running sitting = await Running.StartAsync();
-        HarnessApp app = sitting.Engine.Stack.App("app1");
         await sitting.SendAsync("login", "main", "--app", "app1");
         await sitting.SendAsync("reload", "main");
         await sitting.SendAsync("marker", "main");
@@ -195,8 +194,13 @@ public sealed partial class SittingBrowserTests
 
         Profile profile = sitting.Engine.ProfileNamed("main")!;
         IReadOnlyList<BrowserContextCookiesResult> cookies = await profile.Context.CookiesAsync();
-        FetchResult session = await profile.FetchAsync(app.Url("/bff/session").ToString());
-        string csrf = JsonDocument.Parse(session.Body).RootElement.GetProperty("csrfToken").GetString()!;
+
+        // The tokens the browser itself received, the session command's fetch among them: /bff/session
+        // mints a fresh request token on every call (PlatformAntiforgery's GetAndStoreTokens), so a
+        // fetch of the test's own would hold a token no line could have carried (#1033's review).
+        string[] csrfTokens = [.. (await sitting.Engine.Stack.ExchangesAsync())
+            .Where(exchange => exchange.Url.AbsolutePath == "/bff/session" && exchange.Status == 200)
+            .Select(exchange => JsonDocument.Parse(exchange.BodyText).RootElement.GetProperty("csrfToken").GetString()!)];
         await sitting.SendAsync("stop");
         await sitting.Run.WaitAsync(StopBound, Ct);
 
@@ -207,8 +211,12 @@ public sealed partial class SittingBrowserTests
             Assert.DoesNotContain(value, text, StringComparison.Ordinal);
         }
 
-        Assert.True(csrf.Length >= 16);
-        Assert.DoesNotContain(csrf, text, StringComparison.Ordinal);
+        Assert.NotEmpty(csrfTokens);
+        foreach (string csrf in csrfTokens)
+        {
+            Assert.True(csrf.Length >= 16);
+            Assert.DoesNotContain(csrf, text, StringComparison.Ordinal);
+        }
         Assert.DoesNotMatch(UrlWithQuery(), text);
     }
 

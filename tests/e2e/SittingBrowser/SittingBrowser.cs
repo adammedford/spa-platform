@@ -415,6 +415,10 @@ public sealed partial class SittingBrowser(IBrowserStack stack, string bundle, C
         }
         catch (PlaywrightException failed) when (failed.Message.Contains("net::ERR_", StringComparison.Ordinal))
         {
+            // Chromium names a navigation that failed before a response by its net error, net::ERR_<NAME>
+            // (https://source.chromium.org/chromium/chromium/src/+/main:net/base/net_error_list.h), and
+            // Playwright's goto and reload throw on such a navigation with that name in the message
+            // (https://playwright.dev/dotnet/docs/api/class-page#page-goto).
             await EmitAsync(open, write, Observations.TunnelDown(DateTimeOffset.UtcNow, open.Name, app.AppId), Observations.TunnelDownToken);
             return 0;
         }
