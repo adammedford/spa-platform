@@ -1476,6 +1476,9 @@ verified lists each question of the unit whose work is now in place, made by you
 // applied and the changed paragraphs as a unified diff, whose context stops at a blank line, so a
 // paragraph left alone is never quoted. The program runs as the applier writes it from the prompt,
 // byte for byte, and morning_tests.mjs runs the copy the prompt carries on a fixture rewrite.
+// GitHub's edit history covers issue bodies and keeps the original and the latest 99 edits of each
+// (https://docs.github.com/en/communities/moderating-comments-and-conversations/tracking-changes-in-a-comment,
+// "Edit limits"); a writer with write access can delete a revision's content.
 const EDIT_HISTORY = 'The previous body verbatim is this issue\'s edit history, which GitHub keeps for every edit of a body.'
 const BODY_DIFF = String.raw`import difflib, sys
 def lines(name):

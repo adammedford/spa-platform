@@ -618,6 +618,7 @@ const rewriteRecordChecks = (ep) => {
   const record = (/^REWRITE RECORD: .*$/m.exec(ep) || [''])[0]
   const shape = /Post a comment whose lines are, in order: "(## Body rewritten [^"]*)"; "(Applied: Q<n> of #\d+\.)" naming every question number applied[^;]*; "([^"]+)"; "~~~diff"; the diff's output, every line; "~~~"/.exec(record)
   if (!shape) { fail(`#968: the rewrite record does not give the comment's lines in order: ${record.slice(0, 300)}`); return }
+  if (!record.includes('The comment carries no copy of the old body.')) fail(`#968: the rewrite record no longer says the comment carries no copy of the old body: ${record.slice(0, 300)}`)
   const [, heading, appliedLine, history] = shape
   if (heading !== `## Body rewritten ${DATE}`) fail(`#968: the rewrite comment is headed ${JSON.stringify(heading)}, expected "## Body rewritten ${DATE}"`)
   if (appliedLine !== `Applied: Q<n> of #${ISSUE}.`) fail(`#968: the rewrite comment's question line is ${JSON.stringify(appliedLine)}`)
@@ -1120,7 +1121,7 @@ try {
     if (!/`[^`]*tools\/ticket_shape\.py[^`]*`/.test(fp)) fail('#320: the applier that files a follow-up is not told to check its shape with tools/ticket_shape.py')
     const create = (/`cd [^`]*gh issue create[^`]*FOLLOW-UP[^`]*`|`cd [^`]*gh issue create --title "<its title>"[^`]*`/.exec(fp) || [''])[0]
     if (!create || /--parent/.test(create)) fail(`#320: the follow-up is filed ${create ? 'as a sub-issue' : 'by no gh issue create'}: ${create}`)
-    // Q91's shape: #62's boxes removed, its old body saved first.
+    // Q91's shape: #62's boxes removed, the changed paragraphs posted as a diff first (#968).
     const e2 = units.flatMap((u) => u.edits || []).filter((e) => e.q === 2)
     if (e2.length !== 1 || e2[0].target !== 62 || e2[0].removeBoxes.join('|') !== `${BOX2}|${BOX3}`) fail(`#320 Q91 shape: the edit sent is ${JSON.stringify(e2)}`)
     if (!new RegExp(`^edited #62: removed 2 box\\(es\\); the diff is at \\S+ \\(Q2\\)$`, 'm').test(done)) fail(`#320 Q91 shape: the hand-over does not name #62's edit and its rewrite comment:\n${done}`)
