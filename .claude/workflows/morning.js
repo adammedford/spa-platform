@@ -434,9 +434,13 @@ const judgeLookup = (listing, open = false) => {
 const replayedAny = (counts) => Object.values(counts || {}).some((c) => c && (c.applied || c.failed))
 // Where Replay stopped, or "" when no line failed (#319). A stop is a failed line: stoppedAt above zero
 // names it, and a failed count with stoppedAt 0 is still one, whose number the agent did not give, so
-// it is refused rather than read as no stop (CODING_STANDARDS.md -> "A check fails closed").
+// it is refused rather than read as no stop (CODING_STANDARDS.md -> "A check fails closed"). A
+// pending file Replay read and left unrenamed is one too (#895): the prompt renames the file only once
+// every line is applied, so with no line failed the replay stopped at a line it did not name, and its
+// reason is that stop's, never a note. Read after blankField, so a pending of '""' names no file.
 const replayStop = (r) => (r.stoppedAt > 0 ? `line ${r.stoppedAt}`
-  : Object.values(r.counts || {}).some((c) => c && c.failed > 0) ? 'a line it did not number' : '')
+  : Object.values(r.counts || {}).some((c) => c && c.failed > 0) ? 'a line it did not number'
+    : r.pending && !r.renamed ? 'a line it did not name (no line failed, but the pending file was left unrenamed)' : '')
 // A Replay string field holding only a pair of quotes, or only whitespace, is empty (#299). On
 // 2026-10-22 no pending-writes file existed and the Replay agent returned pending, renamed and reason
 // as the two-character string "", which the run read as a stop and refused beside the real one.
@@ -1270,7 +1274,7 @@ const replayPrompt = () => `Replay: find the night's Overnight issue, then repla
 ${HOUSE(paths(A.date || '<date>').mdir)}
 
 ${LOOKUP(`The date${A.date ? ` is ${A.date}` : ' is the one in that title'}; call it <date> below.`)}
-2. The pending-writes file, checked before any replay step (#319): run \`test -e ${LOG}/pending-<date>.jsonl && echo pending; test -e ${LOG}/pending-<date>.replayed.jsonl && echo replayed\` and nothing else first. If neither exists, there is nothing to replay: pending and renamed are "", every count is zero, creates is [], stoppedAt is 0 and reason is "", and skip to step 3 at once, reading no other file and running no other command for this step. If only the replayed file exists, an earlier morning replayed it: replay nothing and skip to step 3. Otherwise the pending file holds JSON lines {"issue", "action": "comment"|"edit"|"close"|"create", "body"}, a create line carrying "title", "label" and "blocking" too, and "searched" when a lane queued it since #678: apply its lines in file order, skipping each line already listed in the progress file ${LOG}/pending-<date>.progress (one line number per applied line), and append each line's number to the progress file the moment it is applied (a create line's once its last step is done, as below):
+2. The pending-writes file, checked before any replay step (#319): run \`test -e ${LOG}/pending-<date>.jsonl && echo pending; test -e ${LOG}/pending-<date>.replayed.jsonl && echo replayed\` and nothing else first. If neither exists, there is nothing to replay: pending and renamed are "", every count is zero, creates is [], stoppedAt is 0 and reason is "", and skip to step 3 at once, reading no other file and running no other command for this step. If only the replayed file exists, an earlier morning replayed it: replay nothing, and return pending and renamed as "" (this morning read no pending file and renamed none, and a pending path with no renamed one is read as a replay that stopped, #895), every count zero, creates [], stoppedAt 0 and reason "", then skip to step 3. Otherwise the pending file holds JSON lines {"issue", "action": "comment"|"edit"|"close"|"create", "body"}, a create line carrying "title", "label" and "blocking" too, and "searched" when a lane queued it since #678: apply its lines in file order, skipping each line already listed in the progress file ${LOG}/pending-<date>.progress (one line number per applied line), and append each line's number to the progress file the moment it is applied (a create line's once its last step is done, as below):
    - a comment: write its body to ${LOG}/morning-<date>/replay-<line>.md and post it, \`cd ${REPO} && gh issue comment <issue> --body-file ${LOG}/morning-<date>/replay-<line>.md\`;
    - an edit that changes labels or assignees: \`cd ${REPO} && gh issue edit <issue> <its flags>\`;
    - an edit that replaces a body (--body-file): only if the issue's body is still the one the lane read, which the lane's saved body file in ${LOG}/ shows (\`cd ${REPO} && gh issue view <issue> --json body --jq .body\`, compared byte for byte); otherwise skip it and count it skipped, because a stale body would clobber a newer spec;
@@ -1652,8 +1656,8 @@ const handoverText = (s) => {
   list('Open questions', s.apply.open.length ? [s.apply.open.map((q) => 'Q' + q).join(', ')] : [])
   list('Answered no, untouched', s.apply.no.length ? [s.apply.no.map((q) => 'Q' + q).join(', ')] : [])
   const c = s.replay.counts || {}
-  // A stop is a failed line (#319): only a failed line (replayStop) says "stopped"; a reason the agent
-  // gave with no line failed is kept as its note, never read as a stop.
+  // A stop is a failed line (#319), or a pending file left unrenamed (#895): only a stop (replayStop)
+  // says "stopped"; a reason the agent gave with neither is kept as its note, never read as a stop.
   const stopped = replayStop(s.replay)
   const none = !stopped && !s.replay.renamed && VERBS.every((a) => !((c[a] || {}).applied || (c[a] || {}).skipped || (c[a] || {}).failed))
   list('Replay', [VERBS.map((a) => `${a} ${(c[a] || {}).applied || 0} applied, ${(c[a] || {}).skipped || 0} skipped, ${(c[a] || {}).failed || 0} failed`).join('; ') + (s.replay.renamed ? `; renamed to ${s.replay.renamed}` : '') + (stopped ? `; stopped at ${stopped}: ${s.replay.reason || 'no reason given'}` : '') + (!stopped && s.replay.reason ? `; the agent noted: ${s.replay.reason}` : '') + (none ? '; nothing was replayed' : ''), ...createLines(s.replay)])
@@ -2041,9 +2045,10 @@ const SUBJECT = subjectFor(DATE)
 // replaying the stop.
 const { reuse, reused } = reuser(rep.phaseFiles)
 const refusals = []
-// A stop is a failed line, so the refusal keys on a failed line (replayStop), never on reason alone
-// (#319): on 2026-10-22 a reason of "" with stoppedAt 0 was refused as "Replay stopped at line 0". A
-// stop with no reason is still a stop (CODING_STANDARDS.md -> "A check fails closed").
+// A stop is a failed line, or a pending file left unrenamed (#895), so the refusal keys on those
+// (replayStop), never on reason alone (#319): on 2026-10-22 a reason of "" with stoppedAt 0 was
+// refused as "Replay stopped at line 0". A stop with no reason is still a stop (CODING_STANDARDS.md
+// -> "A check fails closed").
 if (replayStop(rep)) refusals.push(`Replay stopped at ${replayStop(rep)} of ${rep.pending || P.pending}: ${rep.reason || 'no reason given'}`)
 refusals.push(...judgeCreates(rep))
 log(`morning ${DATE} (#${ISSUE}): run log ${P.mdir}`)
