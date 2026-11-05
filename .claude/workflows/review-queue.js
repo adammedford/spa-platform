@@ -160,11 +160,12 @@ export const meta = {
 // ticket no commit with fewer than two parents names fails the pull request at stage closes, before
 // any range or axis agent runs, with each #n named and land.sh's remedy (name it in the commit that
 // did its work; a ticket the branch only advances takes Ticket: #n in place of Closes #n), and the
-// owner/repo#n form fails it there too, naming the form and asking for Closes #n. A missing parent
-// count counts as a merge, so the check fails closed. Nothing is posted, and once the head or
-// description is fixed the review runs again on the final head. land.sh stays the gate, since a
-// description can change after a review. The copy of land.sh's rule is held to it by a shared table
-// of rows both test companions run (#745), described where the rule is written below.
+// owner/repo#n form or a GitHub issue URL (#806) fails it there too, naming the form and asking for
+// Closes #n. A missing parent count counts as a merge, so the check fails closed. Nothing is
+// posted, and once the head or description is fixed the review runs again on the final head.
+// land.sh stays the gate, since a description can change after a review. The copy of land.sh's rule
+// is held to it by a shared table of rows both test companions run (#745), described where the rule
+// is written below.
 //
 // Posting (#85). The post agent re-reads the head first; a head that moved is still posted, because
 // the record names the head the inventory read, and the return flags it (per pull request and in
@@ -1072,7 +1073,7 @@ const laterDateFindings = (inv) => {
 // letter, digit or underscore before it, then an optional colon, any whitespace, # and every digit
 // after it, anywhere in a line and as often as it occurs, each line read on its own. Whitespace is
 // POSIX's space class in the C locale, the set land.sh's [[:space:]] reads. A keyword before
-// owner/repo#n, GitHub's form for another repository's ticket, refuses the description whatever
+// owner/repo#n or a GitHub issue URL (#806) refuses the description whatever
 // else it holds, naming the form, as land.sh refuses it before it reads a commit; on the first line
 // holding one, the last on that line, which is the match land.sh's greedy prefix finds. Otherwise
 // each ticket is named unless #n, or issue-n with no letter, digit or underscore before it, appears
@@ -1082,7 +1083,7 @@ const laterDateFindings = (inv) => {
 // names them.
 const CLOSING_KEYWORD = '(?<![A-Za-z0-9_])(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?):?[ \\t\\n\\v\\f\\r]*'
 const CLOSING_REFERENCE = new RegExp(CLOSING_KEYWORD + '#(\\d+)', 'gi')
-const OTHER_REPOSITORY = new RegExp(CLOSING_KEYWORD + '([^ \\t\\n\\v\\f\\r#/]+/[^ \\t\\n\\v\\f\\r#/]+#\\d+)', 'gi')
+const OTHER_REPOSITORY = new RegExp(CLOSING_KEYWORD + '([^ \\t\\n\\v\\f\\r#/]+/[^ \\t\\n\\v\\f\\r#/]+#\\d+|https?://(?:www[.])?github[.]com/[^ /#\\t\\n\\v\\f\\r]+/[^ /#\\t\\n\\v\\f\\r]+/issues/\\d+)', 'gi')
 const closingReferences = (inv) => {
   const lines = String(inv.description || '').split('\n')
   for (const line of lines) {
@@ -1195,8 +1196,8 @@ const reviewOne = async (n, res, at) => {
   // A closing reference land.sh would refuse stops the pull request before any other agent runs (#688).
   const { otherRepository, unnamed } = closingReferences(inv)
   if (otherRepository) {
-    log(`#${n}: the description closes ${otherRepository}, the owner/repo#n form; stopped before the review`)
-    return failed(res, `closes: the description closes ${otherRepository}, the owner/repo#n form, which tools/land.sh cannot read against the commits and refuses. Write Closes #n for a ticket of this repository; a ticket of another repository is not closed from here`)
+    log(`#${n}: the description closes ${otherRepository}, the owner/repo#n form or a GitHub issue URL; stopped before the review`)
+    return failed(res, `closes: the description closes ${otherRepository}, the owner/repo#n form or a GitHub issue URL, which tools/land.sh cannot read against the commits and refuses. Write Closes #n for a ticket of this repository; a ticket of another repository is not closed from here`)
   }
   if (unnamed.length) {
     const list = unnamed.map((t) => '#' + t).join(', ')

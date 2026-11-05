@@ -1712,7 +1712,8 @@ try {
   // land.sh against every row, and this runs the script end to end on every row, one pull request
   // each with its commits as one-parent commits. A row naming tickets stops its pull request at stage
   // closes naming exactly those, in order, with no other agent run; a row of the owner/repo#n form
-  // stops it naming that form and asking for Closes #n; a row naming none is reviewed to its verdict.
+  // or a GitHub issue URL (#806) stops it naming that form and asking for Closes #n; a row naming
+  // none is reviewed to its verdict.
   checks++
   {
     const table = path.join(here, 'fixtures', 'closing-references.json')
