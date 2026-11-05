@@ -434,9 +434,13 @@ const judgeLookup = (listing, open = false) => {
 const replayedAny = (counts) => Object.values(counts || {}).some((c) => c && (c.applied || c.failed))
 // Where Replay stopped, or "" when no line failed (#319). A stop is a failed line: stoppedAt above zero
 // names it, and a failed count with stoppedAt 0 is still one, whose number the agent did not give, so
-// it is refused rather than read as no stop (CODING_STANDARDS.md -> "A check fails closed").
+// it is refused rather than read as no stop (CODING_STANDARDS.md -> "A check fails closed"). A
+// pending file Replay read and left unrenamed is one too (#895): the prompt renames the file only once
+// every line is applied, so with no line failed the replay stopped at a line it did not name, and its
+// reason is that stop's, never a note. Read after blankField, so a pending of '""' names no file.
 const replayStop = (r) => (r.stoppedAt > 0 ? `line ${r.stoppedAt}`
-  : Object.values(r.counts || {}).some((c) => c && c.failed > 0) ? 'a line it did not number' : '')
+  : Object.values(r.counts || {}).some((c) => c && c.failed > 0) ? 'a line it did not number'
+    : r.pending && !r.renamed ? 'a line it did not name (no line failed, but the pending file was left unrenamed)' : '')
 // A Replay string field holding only a pair of quotes, or only whitespace, is empty (#299). On
 // 2026-10-22 no pending-writes file existed and the Replay agent returned pending, renamed and reason
 // as the two-character string "", which the run read as a stop and refused beside the real one.
@@ -1652,8 +1656,8 @@ const handoverText = (s) => {
   list('Open questions', s.apply.open.length ? [s.apply.open.map((q) => 'Q' + q).join(', ')] : [])
   list('Answered no, untouched', s.apply.no.length ? [s.apply.no.map((q) => 'Q' + q).join(', ')] : [])
   const c = s.replay.counts || {}
-  // A stop is a failed line (#319): only a failed line (replayStop) says "stopped"; a reason the agent
-  // gave with no line failed is kept as its note, never read as a stop.
+  // A stop is a failed line (#319), or a pending file left unrenamed (#895): only a stop (replayStop)
+  // says "stopped"; a reason the agent gave with neither is kept as its note, never read as a stop.
   const stopped = replayStop(s.replay)
   const none = !stopped && !s.replay.renamed && VERBS.every((a) => !((c[a] || {}).applied || (c[a] || {}).skipped || (c[a] || {}).failed))
   list('Replay', [VERBS.map((a) => `${a} ${(c[a] || {}).applied || 0} applied, ${(c[a] || {}).skipped || 0} skipped, ${(c[a] || {}).failed || 0} failed`).join('; ') + (s.replay.renamed ? `; renamed to ${s.replay.renamed}` : '') + (stopped ? `; stopped at ${stopped}: ${s.replay.reason || 'no reason given'}` : '') + (!stopped && s.replay.reason ? `; the agent noted: ${s.replay.reason}` : '') + (none ? '; nothing was replayed' : ''), ...createLines(s.replay)])
@@ -2041,9 +2045,10 @@ const SUBJECT = subjectFor(DATE)
 // replaying the stop.
 const { reuse, reused } = reuser(rep.phaseFiles)
 const refusals = []
-// A stop is a failed line, so the refusal keys on a failed line (replayStop), never on reason alone
-// (#319): on 2026-10-22 a reason of "" with stoppedAt 0 was refused as "Replay stopped at line 0". A
-// stop with no reason is still a stop (CODING_STANDARDS.md -> "A check fails closed").
+// A stop is a failed line, or a pending file left unrenamed (#895), so the refusal keys on those
+// (replayStop), never on reason alone (#319): on 2026-10-22 a reason of "" with stoppedAt 0 was
+// refused as "Replay stopped at line 0". A stop with no reason is still a stop (CODING_STANDARDS.md
+// -> "A check fails closed").
 if (replayStop(rep)) refusals.push(`Replay stopped at ${replayStop(rep)} of ${rep.pending || P.pending}: ${rep.reason || 'no reason given'}`)
 refusals.push(...judgeCreates(rep))
 log(`morning ${DATE} (#${ISSUE}): run log ${P.mdir}`)

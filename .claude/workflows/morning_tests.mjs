@@ -1646,6 +1646,24 @@ try {
     const want = `Replay stopped at line 3 of ${PENDING}: HTTP 502: Bad Gateway (https://api.github.com/graphql)`
     if (!real.result.refusals.includes(want)) fail(`a real stop: refusals ${JSON.stringify(real.result.refusals)}, expected ${JSON.stringify(want)}`)
     if (!/; stopped at line 3: HTTP 502/.test(replayLine(real.result.handover.text)) || /nothing was replayed/.test(real.result.handover.text)) fail(`a real stop: the hand-over's Replay line is ${JSON.stringify(replayLine(real.result.handover.text))}`)
+    // A pending file Replay read and left unrenamed is a replay that did not finish (#895): the prompt
+    // renames it only when every line is applied, so with no line failed it stopped at a line it did
+    // not name. Its reason is refused as that stop, never kept as a note; one with no reason is still
+    // a stop (CODING_STANDARDS.md -> "A check fails closed"). A renamed file is a finished replay, and
+    // its reason stays the agent's note.
+    const UNNAMED = 'a line it did not name (no line failed, but the pending file was left unrenamed)'
+    for (const [label, reason, said] of [
+      ['an unrenamed file with a reason', 'gh: error connecting to api.github.com', 'gh: error connecting to api.github.com'],
+      ['an unrenamed file with no reason', '', 'no reason given'],
+    ]) {
+      const left = await execute(newRepo(), { date: DATE }, { replay: { ...OCT22, counts: { comment: { applied: 1, skipped: 0, failed: 0 }, edit: ZERO, close: ZERO, create: ZERO }, pending: PENDING, renamed: '', reason } })
+      const wantLeft = `Replay stopped at ${UNNAMED} of ${PENDING}: ${said}`
+      if (!left.result.refusals.includes(wantLeft)) fail(`${label}: refusals ${JSON.stringify(left.result.refusals)}, expected ${JSON.stringify(wantLeft)}`)
+      if (!replayLine(left.result.handover.text).includes(`; stopped at ${UNNAMED}: ${said}`) || /the agent noted/.test(left.result.handover.text)) fail(`${label}: the hand-over's Replay line is ${JSON.stringify(replayLine(left.result.handover.text))}`)
+    }
+    const finished = await execute(newRepo(), { date: DATE }, { replay: { ...OCT22, counts: { comment: { applied: 1, skipped: 0, failed: 0 }, edit: ZERO, close: ZERO, create: ZERO }, pending: PENDING, renamed: PENDING.replace(/\.jsonl$/, '.replayed.jsonl'), reason: 'one comment already posted' } })
+    if (finished.result.refusals.length) fail(`a renamed file with a reason: refused ${JSON.stringify(finished.result.refusals)}, expected none`)
+    if (!/; the agent noted: one comment already posted/.test(replayLine(finished.result.handover.text)) || /stopped/i.test(finished.result.handover.text)) fail(`a renamed file with a reason: the hand-over's Replay line is ${JSON.stringify(replayLine(finished.result.handover.text))}`)
   }
 
   // 19a. Replay carries no comment (#319): its issue read asks for no body or comments, and its
