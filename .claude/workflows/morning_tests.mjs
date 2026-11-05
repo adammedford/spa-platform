@@ -35,12 +35,19 @@ const shapeOf = (body, label) => {
   return { status: r.status, last: lines[lines.length - 1] || '', failures: lines.filter((l) => /^ticket-shape: (?!note:|pass:|fail:)/.test(l)), notes: lines.filter((l) => l.startsWith('ticket-shape: note: ')) }
 }
 // The ticket template's headings (#973), as the ticket names the set, and what a filed body breaks of
-// it: each `##` heading outside the set, and each heading note tools/ticket_shape.py prints on it.
+// it: each `##` heading outside the set, and each heading note tools/ticket_shape.py prints on it. A
+// run of the check that judged nothing (exit 2, or no exit) is itself an entry, so an unreadable body
+// or a broken check reads as off the template rather than as a body with no notes (CODING_STANDARDS.md
+// -> "A check fails closed").
 const TICKET_SET = ['Parent', 'What to build', 'Acceptance criteria', 'Blocked by']
-const offTemplate = (body, label) => [
-  ...String(body).split('\n').filter((l) => /^## /.test(l) && !TICKET_SET.includes(l.slice(3).trim())).map((l) => `writes "${l}"`),
-  ...shapeOf(body, label).notes.filter((l) => /^ticket-shape: note: heading:/.test(l)),
-]
+const offTemplate = (body, label) => {
+  const shape = shapeOf(body, label)
+  return [
+    ...String(body).split('\n').filter((l) => /^## /.test(l) && !TICKET_SET.includes(l.slice(3).trim())).map((l) => `writes "${l}"`),
+    ...(shape.status === 0 || shape.status === 1 ? [] : [`tools/ticket_shape.py judged nothing: exit ${shape.status}, ${shape.last}`]),
+    ...shape.notes.filter((l) => /^ticket-shape: note: heading:/.test(l)),
+  ]
+}
 const DATE = '2026-10-21'
 const MORNING_REL = `.scratch/overnight/log/morning-${DATE}`
 const WT = '/tmp/morning-tests-wt/overnight-2026-10-21'
