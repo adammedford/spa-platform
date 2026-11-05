@@ -128,7 +128,7 @@ function run(scriptArgs, served, behave = {}) {
   const projected = (e) => {
     if (!ids.has(e)) { ids.set(e, ids.size + 1); byId.set(ids.get(e), e) }
     const { body, ...rest } = e
-    return { ...rest, id: ids.get(e), length: Array.from(body || '').length, record: RECORD_TEXT.test(body || '') }
+    return { ...rest, id: ids.get(e), length: Array.from((body || '').replace(/[ \t\r\n]+$/, '')).length, record: RECORD_TEXT.test(body || '') }
   }
   globalThis.agent = async (prompt, opts) => {
     flight.now++
@@ -184,7 +184,8 @@ function run(scriptArgs, served, behave = {}) {
       // run whose inventory was replayed from before the post.
       const comments = gh && gh.serveStore !== false ? [...inv.comments, ...gh.store.filter((c) => c.n === Number(n)).map((c) => c.entry)] : inv.comments
       // Each entry as the inventory's jq projection prints it (#1018): no body, its length in code
-      // points, as jq's length counts a string, and whether the record's text is anywhere in it.
+      // points, as jq's length counts a string, once its trailing whitespace is removed (#1030), and
+      // whether the record's text is anywhere in it.
       return { ...inv, comments: comments.map(projected), reviews: (inv.reviews || []).map(projected) }
     }
     if (kind === 'range') {
@@ -1971,7 +1972,7 @@ try {
       for (const w of [`gh api repos/{owner}/{repo}/issues/comments/${id}`, `OUTPUT FILE: ${env.repo}/.scratch/review-queue/log/2026-10-21/pr-796/body-${id}.json`]) if (!p.includes(w)) fail(`#796's shape: the body prompt ${b} lacks ${JSON.stringify(w)}`)
     }
     const inv = env.prompts['inventory:796'] || ''
-    if (/Copy bodies byte for byte/.test(inv) || !inv.includes('length: (.body // "" | length)') || !inv.includes('test("Reviewed [0-9a-f]{40} against [0-9a-f]{40}: (merge|hold)")')) fail('#796\'s shape: the inventory prompt still asks for the bodies, or not for each entry\'s length and record flag through jq')
+    if (/Copy bodies byte for byte/.test(inv) || !inv.includes('length: (.body // "" | sub("[ \\t\\r\\n]+$"; "") | length)') || !inv.includes('test("Reviewed [0-9a-f]{40} against [0-9a-f]{40}: (merge|hold)")')) fail('#796\'s shape: the inventory prompt still asks for the bodies, or not for each entry\'s length and record flag through jq')
   }
 
   // A body that comes back other than whole fails the review at the inventory (#1018), with a stage
@@ -1984,8 +1985,8 @@ try {
     const target = RECORDS796[3].html_url
     const cases = {
       'a stand-in': (b) => `[Stand-in: the body of ${target}, 20.6 KB, is in inventory.json]\n\nReviewed ${OLD796[3]} against ${F796}: hold`,
-      'one character short': (b) => b.slice(0, -1),
-      'one character long': (b) => b + ' ',
+      'one character short': (b) => b.replace(/[^ \t\r\n]([ \t\r\n]*)$/, '$1'),
+      'one character long': (b) => b.replace(/[ \t\r\n]*$/, (w) => 'x' + w),
       'nothing returned': 'null',
       'gh unreachable': { error: 'gh could not reach api.github.com' },
       'whole beside an error': { error: 'gh served the comment twice, and the copies differ', whole: true },
@@ -1998,6 +1999,31 @@ try {
       const after = env.calls.filter((c) => !c.startsWith('inventory:') && c !== 'launch')
       if (after.length || env.posted.length) fail(`a body ${what}: ${after.join(', ') || 'nothing'} ran after the inventory and ${env.posted.length} comment(s) were posted, expected none`)
       if (r.recordUrl || r.verdict) fail(`a body ${what}: verdict ${JSON.stringify(r.verdict)} with record ${JSON.stringify(r.recordUrl)}, expected none`)
+    }
+  }
+
+  // A body whose return differs from it only in whitespace at its end is whole (#1030): on 2026-11-05
+  // one of #796's body agents returned a record without its final newline, which its file kept, and
+  // the review failed at the inventory. No parser reads that whitespace, so a body returned without
+  // its final newline, or with one added, is read, and its record, follow-up rows and held mutation
+  // rows reach the parsers as from the whole body. The target here ends in a newline, as the live
+  // records on #796 do.
+  checks++
+  {
+    const RECORDS_NL = RECORDS796.map((r, i) => (i === 3 ? { ...r, body: r.body + '\n' } : r))
+    const SERVED_NL = { 796: { ...SERVED796[796], comments: [HUMAN796, ...RECORDS_NL] } }
+    const target = RECORDS_NL[3].html_url
+    const cases = {
+      'without its final newline': (b) => b.replace(/\n$/, ''),
+      'with a newline added': (b) => b + '\n',
+    }
+    for (const [what, b] of Object.entries(cases)) {
+      if (b(RECORDS_NL[3].body) === RECORDS_NL[3].body) fail(`a body ${what}: the fixture body is unchanged by the case, so it tests nothing`)
+      env = run({ prs: [796], maxMutationsPerPr: 20 }, SERVED_NL, { followUps: { 796: CARRIED796 }, bodies: { [target]: b } })
+      result = await execute(env)
+      const r = resultOf(796, result)
+      if (r.outcome !== 'recorded') fail(`a body returned ${what}: outcome ${r.outcome} at ${JSON.stringify(r.stage)}, expected recorded`)
+      if ((r.earlierRecords || []).length !== RECORDS796.length) fail(`a body returned ${what}: ${(r.earlierRecords || []).length} earlier record(s) read, expected ${RECORDS796.length}`)
     }
   }
 
