@@ -32,8 +32,9 @@ the locals in infra/modules/cell/ecs.tf.
 
 **Canaries.** The account id is in every ARN the doubles hand out (task, task definition, target
 group, the stop reason's target group) and in the gateway image's repository URI; the 302 carries a
-`state` and a cookie. No output may hold any of them, nor the repository URI with its account
-label redacted, nor "arn:aws".
+`state` and a cookie; the session the CLI hands session-manager-plugin for an exec or a port
+forward carries a session token. No output may hold any of them, nor the repository URI with its
+account label redacted, nor "arn:aws".
 
 Run: python3 -I tools/bench/fargate_tests.py
 """
