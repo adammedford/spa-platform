@@ -109,8 +109,8 @@ public static class NavigationHold
             await session.SendAsync("Fetch.disable");
             await session.DetachAsync();
 
-            // An action left running when the handler failed ends once the request is released; its
-            // own failure is beside the point the hold already reported.
+            // An action left running when the handler failed is not awaited: whatever it meets later is
+            // observed here and dropped, because the hold has already reported the handler's failure.
             _ = acting.ContinueWith(static ended => ended.Exception, CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted, TaskScheduler.Default);
         }
     }
