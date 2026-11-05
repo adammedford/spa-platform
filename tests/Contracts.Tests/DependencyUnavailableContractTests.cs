@@ -48,11 +48,12 @@ public sealed class DependencyUnavailableContractTests
     }
 
     [Fact]
-    public void The_store_outage_is_an_errors_row_and_not_yet_a_table_row()
+    public void The_store_outage_is_an_errors_row()
     {
-        // The draft's item 2 lands the code's registration in Errors; its table row waits for
-        // workstream 2's proving test. Mutation: drop the Errors row, or give it another status, and
-        // this fails; the table's own absence of the code is The_table_lands_no_row_the_decision_left_out.
+        // The accepted draft (#543) registers the code in Errors and lists the store outage's table
+        // row among what it does not land, since the table holds only rows a landed test proves.
+        // Mutation: drop the Errors row, or give it another status, and this fails; the table's own
+        // absence of the code is The_table_lands_no_row_the_decision_left_out.
         string errors = Section(ContractFiles.ReadText("http-contract.md"), ErrorsHeading);
 
         Assert.Contains(
