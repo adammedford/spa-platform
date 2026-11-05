@@ -861,7 +861,8 @@ try {
 
   // A Node companion prints no test names, only its checks' fail() messages (#905): on #798 a stated
   // row 'overnight_tests.mjs check 39', red only on check 39's own messages, read did-not-fail, and
-  // the verdict's acceptance could not answer it. A row of any kind on an .mjs project is a caught row:
+  // the verdict's acceptance could not answer it. A row on a Node companion, identified by its .mjs
+  // project or by the .mjs file its cell names, is a caught row unless it names the whole file:
   // accepted, it reproduces and merges; not accepted, it reads did-not-fail and holds. A stated row on
   // another project, red only on other tests, still reads did-not-fail whatever the verdict accepts,
   // and the verdict prompt says how to judge the messages: the rule for a row red on another check's
@@ -1883,7 +1884,8 @@ try {
   // land.sh against every row, and this runs the script end to end on every row, one pull request
   // each with its commits as one-parent commits. A row naming tickets stops its pull request at stage
   // closes naming exactly those, in order, with no other agent run; a row of the owner/repo#n form
-  // stops it naming that form and asking for Closes #n; a row naming none is reviewed to its verdict.
+  // or a GitHub issue URL (#806) stops it naming that form and asking for Closes #n; a row naming
+  // none is reviewed to its verdict.
   checks++
   {
     const table = path.join(here, 'fixtures', 'closing-references.json')

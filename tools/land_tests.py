@@ -1654,9 +1654,9 @@ class ClosesTests(LandTestCase):
                                  case.origin_refs())
 
     def assertRowAnswered(self, row: dict, locale: str = "C"):
-        """One row of the shared table (#745): its commits on the branch, oldest first, its
-        description on the pull request, and land.sh's answer the row's, with land.sh run under
-        LC_ALL=`locale`."""
+        """One row of the shared table (#745, #806), a local reference, a qualified one or a GitHub
+        issue URL: its commits on the branch, oldest first, its description on the pull request,
+        and land.sh's answer the row's, with land.sh run under LC_ALL=`locale`."""
         case = MergingCase(self, commits=tuple(row["commits"]), description=row["description"])
         result = case.run(PR, *case.with_body, "--subject", self.SUBJECT,
                           env=case.env(LC_ALL=locale))
