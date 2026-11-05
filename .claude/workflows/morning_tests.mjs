@@ -1664,6 +1664,14 @@ try {
     const finished = await execute(newRepo(), { date: DATE }, { replay: { ...OCT22, counts: { comment: { applied: 1, skipped: 0, failed: 0 }, edit: ZERO, close: ZERO, create: ZERO }, pending: PENDING, renamed: PENDING.replace(/\.jsonl$/, '.replayed.jsonl'), reason: 'one comment already posted' } })
     if (finished.result.refusals.length) fail(`a renamed file with a reason: refused ${JSON.stringify(finished.result.refusals)}, expected none`)
     if (!/; the agent noted: one comment already posted/.test(replayLine(finished.result.handover.text)) || /stopped/i.test(finished.result.handover.text)) fail(`a renamed file with a reason: the hand-over's Replay line is ${JSON.stringify(replayLine(finished.result.handover.text))}`)
+    // A relaunch after a finished replay finds only the replayed file. The stub cannot show what a real
+    // agent returns there, so the prompt itself must pin pending and renamed to "" on that branch: an
+    // agent that echoed the pending path it probed, with nothing renamed this morning, would be read
+    // as the unrenamed stop above.
+    const rp = finished.prompt('replay')
+    const onlyReplayed = /If only the replayed file exists[^.]*?: ([^]*?)Otherwise/.exec(rp)
+    if (!onlyReplayed) fail('the Replay prompt has no branch for a morning that finds only the replayed file')
+    else if (!/pending and renamed as ""/.test(onlyReplayed[1])) fail(`the Replay prompt's replayed-only branch does not return pending and renamed as "": ${JSON.stringify(onlyReplayed[1])}`)
   }
 
   // 19a. Replay carries no comment (#319): its issue read asks for no body or comments, and its
