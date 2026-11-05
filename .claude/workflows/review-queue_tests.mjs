@@ -484,23 +484,32 @@ try {
 
   // 13. The hold rules. A did-not-fail row holds, a stated mutation that does not reproduce holds, and
   //     a stated mutation that reproduces with its counts merges, its row saying the counts matched.
+  //     Removed is for a held mutation only: reported on a stated, nominated or candidate one, the row
+  //     is could-not-run and its why says so, which holds the stated and nominated kinds and only
+  //     reports the candidate (#885).
   checks++
   const HOLDS = { 205: pr(205, ['tests/h.cs'], { candidates: [cand('Weak')] }), 206: pr(206, ['tests/i.cs'], { statedMutations: [stated('Said', 4, 153)] }) }
+  const NOMINATED = { nominations: { 205: [{ test: 'Weak', project: 'tests/Platform.Registry.Tests', why: 'asserts a constant' }] } }
   const cases = [
     [205, { Weak: row('did-not-fail') }, 'hold', 'a did-not-fail row'],
     [206, { Said: row('did-not-fail', 0, 153) }, 'hold', 'a stated mutation that did not reproduce'],
     [206, { Said: row('could-not-run', 0, 0) }, 'hold', 'a stated mutation that could not run'],
     [206, { Said: row('reproduced', 4, 153) }, 'merge', 'a stated mutation reproduced with its counts'],
     [206, { Said: { result: 'went-red-ish', failed: 4, total: 153 } }, 'hold', 'a result that is none of the three', 'could-not-run'],
-    [206, { Said: row('removed', 0, 0) }, 'hold', 'removed on a stated mutation, which only a held mutation may report', 'could-not-run'],
+    [206, { Said: row('removed', 0, 0) }, 'hold', 'removed on a stated mutation, which only a held mutation may report', 'could-not-run', {}, 'stated'],
+    [205, { Weak: row('removed', 0, 0) }, 'hold', 'removed on a nominated mutation, which only a held mutation may report', 'could-not-run', NOMINATED, 'nominated'],
+    [205, { Weak: row('removed', 0, 0) }, 'merge', 'removed on a candidate mutation, which only a held mutation may report', 'could-not-run', {}, 'candidate'],
   ]
-  for (const [n, mutate, want, what, rowWant] of cases) {
-    env = run({ prs: [n] }, HOLDS, { mutate })
+  for (const [n, mutate, want, what, rowWant, extra = {}, kindWant] of cases) {
+    env = run({ prs: [n] }, HOLDS, { ...extra, mutate })
     result = await execute(env)
     const r = resultOf(n, result)
     if (r.verdict !== want) fail(`PR ${n} with ${what}: verdict ${r.verdict}, expected ${want}`)
-    const got = ((r.mutations || [])[0] || {}).result
+    const first = (r.mutations || [])[0] || {}
+    const got = first.result
     if (got !== (rowWant || Object.values(mutate)[0].result)) fail(`PR ${n} with ${what}: the row's result is ${got}, expected ${rowWant || Object.values(mutate)[0].result}`)
+    if (kindWant && first.kind !== kindWant) fail(`PR ${n} with ${what}: the row's kind is ${first.kind}, expected ${kindWant}`)
+    if (kindWant && !/^removed is only for a held mutation/.test(first.why || '')) fail(`PR ${n} with ${what}: the row's why ${JSON.stringify(first.why)} does not say removed is only for a held mutation`)
     const body = commentOf(env, n)
     if (body.split('\n').pop() !== `Reviewed ${HOLDS[n].head} against ${FORK}: ${want}`) fail(`PR ${n} with ${what}: the record does not say ${want}`)
     const rows = tableOf(body)
