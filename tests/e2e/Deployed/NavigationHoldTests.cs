@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using Gateway.E2ETests.Stack;
 using Gateway.TestHarness;
@@ -58,6 +59,157 @@ public sealed class NavigationHoldTests
         IResponse? passed = await profile.GotoAsync(app.Url("/signin-oidc").ToString());
         Assert.NotNull(passed);
         Assert.Contains(stack.LoadBalancer.Exchanges, exchange => exchange.Url.AbsolutePath == "/signin-oidc");
+    }
+
+    // ---- a callback that follows the provider's form, and a handler that fails (#1029) ----
+
+    /// <summary>
+    /// A provider's login form, as Cognito's managed login is one: a user name, a password and a submit
+    /// button, posted to the provider's own <c>/login</c>.
+    /// </summary>
+    private const string LoginForm = """
+        <!doctype html><title>Signin</title>
+        <form method="post" action="/login">
+          <input name="username"><input name="password" type="password"><button type="submit">Sign in</button>
+        </form>
+        """;
+
+    [Fact]
+    public async Task A_callback_reached_by_the_redirect_that_answers_the_providers_login_form_is_held_within_the_wait()
+    {
+        await using LocalStack stack = await LocalStack.StartAsync();
+        await using Profile profile = await stack.OpenAsync();
+        HarnessApp app = stack.App("app1");
+        string callback = app.Url("/signin-oidc").ToString();
+
+        // A real callback, its code unspent and its login-state cookies in the browser, which the load
+        // balancer stops: the provider's form below answers with a redirect to it, as Cognito's does.
+        Uri issued = await profile.StopAtCallbackAsync(app);
+
+        // The form is on another site, as the provider is, and its submission is a top-level POST there
+        // that a redirect answers: the shape the deployed rows 5 and 7 meet, which /bff/login's chain of
+        // GET redirects is not.
+        Uri login = new(ForeignSites.Elsewhere, "/login");
+        stack.LoadBalancer.ServeForeignForm(login, LoginForm, issued);
+        Stopwatch watch = Stopwatch.StartNew();
+        Uri held = await NavigationHold.HoldAsync(profile.Page, callback, async () =>
+        {
+            await profile.GotoAsync(login.ToString());
+            await profile.Page.Locator("input[name='username']").FillAsync("alice");
+            await profile.Page.Locator("input[name='password']").FillAsync("not-a-password");
+            await profile.Page.Locator("button[type='submit']").ClickAsync();
+        }, HeldWait);
+        watch.Stop();
+
+        // Compared without printing either URL: both carry the code and the state (Redacted).
+        Assert.True(held.AbsoluteUri == issued.AbsoluteUri, $"the hold reported {Redacted.Url(held)}, not the callback the form's answer named");
+        Assert.True(watch.Elapsed < HeldWait, $"the hold took {watch.Elapsed}");
+        Assert.Equal([login.AbsolutePath], stack.LoadBalancer.Submitted.Select(url => url.AbsolutePath));
+        Assert.Equal(NavigationHold.HeldTitle, await profile.Page.TitleAsync());
+        Assert.DoesNotContain(stack.LoadBalancer.Exchanges, exchange => exchange.Url.AbsolutePath == "/signin-oidc");
+
+        // Released, the same callback is a login: the hold spent nothing the form's redirect carried.
+        await profile.GotoAsync(held.ToString());
+        await profile.WaitSignedInAsync(app);
+    }
+
+    /// <summary>
+    /// What the handler met is the hold's failure, whatever its kind: a <see cref="TimeoutException"/>
+    /// it met is not the hold's wait running out.
+    /// </summary>
+    [Theory]
+    [InlineData(nameof(InvalidOperationException))]
+    [InlineData(nameof(TimeoutException))]
+    public async Task A_handler_that_fails_ends_the_hold_at_once_naming_what_it_met_and_printing_no_code_or_state(string kind)
+    {
+        await using LocalStack stack = await LocalStack.StartAsync();
+        await using Profile profile = await stack.OpenAsync();
+        HarnessApp app = stack.App("app1");
+        string callback = app.Url("/signin-oidc").ToString();
+
+        Stopwatch watch = Stopwatch.StartNew();
+        HoldFailedException failed = await Assert.ThrowsAsync<HoldFailedException>(() =>
+            NavigationHold.HoldAsync(profile.Page, callback, () => profile.GotoAsync(app.Url("/bff/login").ToString()), NavigationHold.DefaultWait, FailingAnswer(callback, kind)));
+        watch.Stop();
+
+        Assert.True(watch.Elapsed < AtOnce, $"the hold ended after {watch.Elapsed}, not at once: its wait was {NavigationHold.DefaultWait}");
+        Assert.Equal(kind, failed.Failure);
+        Assert.Contains($"its handler met {kind}: the answer failed at {callback}", failed.Message, StringComparison.Ordinal);
+        Assert.False(failed.Message.Contains(Code, StringComparison.Ordinal), "the failure's message holds the code canary");
+        Assert.False(failed.Message.Contains(State, StringComparison.Ordinal), "the failure's message holds the state canary");
+    }
+
+    [Fact]
+    public async Task A_failed_handler_is_written_into_the_rows_evidence_with_what_it_met_and_what_the_page_showed()
+    {
+        await using LocalStack stack = await LocalStack.StartAsync();
+        await using Profile profile = await stack.OpenAsync();
+        HarnessApp app = stack.App("app1");
+        string callback = app.Url("/signin-oidc").ToString();
+        await profile.OnOriginOfAsync(app);
+
+        string directory = Directory.CreateTempSubdirectory("spa-e2e-hold-").FullName;
+        try
+        {
+            ContinuityRun run = await RunInAsync(directory);
+            Stopwatch watch = Stopwatch.StartNew();
+
+            // As rows 5 and 7 reach the hold, inside Redacted.PlaywrightAsync (Profile.StopAtCallbackAsync).
+            await Assert.ThrowsAsync<HoldFailedException>(() => run.TwoTaskRowAsync("row5", new Step("control", ClientTrace.Fresh().TraceId, DateTimeOffset.UtcNow, 200), null,
+                async (n, _) =>
+                {
+                    await Redacted.PlaywrightAsync(() => NavigationHold.HoldAsync(profile.Page, callback,
+                        () => profile.GotoAsync(app.Url("/bff/login").ToString()), NavigationHold.DefaultWait, FailingAnswer(callback)));
+                    return new Attempt(n, []);
+                },
+                (_, _) => RowResult.Passed("never judged", []),
+                Ct));
+            watch.Stop();
+
+            string file = await File.ReadAllTextAsync(Path.Combine(directory, "row5.json"), Ct);
+            RowEvidence written = JsonSerializer.Deserialize<RowEvidence>(file)!;
+            Assert.True(watch.Elapsed < AtOnce, $"the row stopped after {watch.Elapsed}");
+            Assert.Equal(Verdict.NotProved, written.Verdict);
+            Assert.Equal($"the driver stopped with {nameof(HoldFailedException)}: the hold's handler met {nameof(InvalidOperationException)}", written.Reason);
+            Assert.Equal(app.Url("/healthz").ToString(), written.Page?.Url);
+            foreach ((string name, string value) in new[] { ("code", Code), ("state", State) })
+            {
+                Assert.False(file.Contains(value, StringComparison.Ordinal), $"the evidence file holds the {name} canary");
+            }
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    /// <summary>How long a hold that met a provider's form may take: the form, its redirect and the answer, on loopback.</summary>
+    private static readonly TimeSpan HeldWait = TimeSpan.FromSeconds(20);
+
+    /// <summary>Well inside <see cref="NavigationHold.DefaultWait"/>, with room for the page's text (<see cref="NavigationHold.TextWait"/>).</summary>
+    private static readonly TimeSpan AtOnce = TimeSpan.FromSeconds(20);
+
+    /// <summary>
+    /// An answer that throws what the hold's handler once let escape, none of the three kinds it caught:
+    /// an <see cref="InvalidOperationException"/> unless <paramref name="kind"/> names a
+    /// <see cref="TimeoutException"/>. Its message names a callback with a code and a state, as a
+    /// protocol failure's might.
+    /// </summary>
+    private static Func<ICDPSession, JsonElement, Task> FailingAnswer(string callback, string kind = nameof(InvalidOperationException))
+    {
+        string message = $"the answer failed at {callback}?code={Code}&state={State}";
+        return (_, _) => throw (kind == nameof(TimeoutException) ? new TimeoutException(message) : new InvalidOperationException(message));
+    }
+
+    private static async Task<ContinuityRun> RunInAsync(string directory)
+    {
+        RecordedRunner runner = RecordedRunner.WithExits(command => command switch
+        {
+            { Program: "git", Arguments: [.., "check-ignore", "-q", "--", _] } => new CommandResult(0, ""),
+            _ => throw new InvalidOperationException($"unexpected {command.Program}"),
+        });
+        return new ContinuityRun(new ContinuityEvidence(directory, runner), new ContinuityLog(
+            Cell.Parse(await File.ReadAllTextAsync(Path.Combine(FixtureFiles.RepositoryRoot, "contracts", "infra-outputs.example.json"), Ct)), runner));
     }
 
     // ---- what a timed-out hold leaves in a continuity row's evidence file (#1003) ----

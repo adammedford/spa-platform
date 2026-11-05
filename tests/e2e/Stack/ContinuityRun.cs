@@ -68,7 +68,7 @@ public sealed class ContinuityRun(ContinuityEvidence evidence, ContinuityLog log
         {
             if (stopped is not OperationCanceledException)
             {
-                result = RowResult.NotProved($"the driver stopped with {stopped.GetType().Name}", result.Observations);
+                result = RowResult.NotProved(StoppedWith(stopped), result.Observations);
             }
 
             await WriteBesideAsync(stopped, () => evidence.WriteAsync(row, result, attempts, wall.Elapsed, CancellationToken.None, ShownBy(stopped)));
@@ -102,7 +102,7 @@ public sealed class ContinuityRun(ContinuityEvidence evidence, ContinuityLog log
         {
             if (stopped is not OperationCanceledException)
             {
-                result = RowResult.NotProved($"the driver stopped with {stopped.GetType().Name}", []);
+                result = RowResult.NotProved(StoppedWith(stopped), []);
             }
 
             await WriteBesideAsync(stopped, () => evidence.WriteAsync(row, result, recorded is null ? [] : [recorded], wall.Elapsed, CancellationToken.None, ShownBy(stopped)));
@@ -113,8 +113,24 @@ public sealed class ContinuityRun(ContinuityEvidence evidence, ContinuityLog log
         return result;
     }
 
-    /// <summary>What the page showed, when the driver stopped at a login hold that timed out (rows 5 and 7, #1003).</summary>
-    private static PageShown? ShownBy(Exception stopped) => (stopped as HoldTimeoutException)?.Page;
+    /// <summary>
+    /// What the page showed, when the driver stopped at a login hold that timed out (rows 5 and 7, #1003)
+    /// or whose handler failed (#1029).
+    /// </summary>
+    private static PageShown? ShownBy(Exception stopped) => stopped switch
+    {
+        HoldTimeoutException timedOut => timedOut.Page,
+        HoldFailedException failed => failed.Page,
+        _ => null,
+    };
+
+    /// <summary>
+    /// A stopped row's reason: the failure's kind, and for a hold whose handler failed, the kind of what
+    /// the handler met (#1029), which the hold's own kind would otherwise hide.
+    /// </summary>
+    private static string StoppedWith(Exception stopped) => stopped is HoldFailedException failed
+        ? $"the driver stopped with {nameof(HoldFailedException)}: the hold's handler met {failed.Failure}"
+        : $"the driver stopped with {stopped.GetType().Name}";
 
     /// <summary>
     /// The evidence write after the row has already failed: a write that fails too is reported beside the

@@ -41,6 +41,8 @@ public sealed class TlsLoadBalancer : IAsyncDisposable
     private volatile Func<Uri, bool>? hold;
     private readonly List<Uri> held = [];
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> foreign = new(StringComparer.OrdinalIgnoreCase);
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, Uri> formAnswers = new(StringComparer.OrdinalIgnoreCase);
+    private readonly List<Uri> submitted = [];
 
     private TlsLoadBalancer(WebApplication app, HttpMessageInvoker transport)
     {
@@ -96,6 +98,20 @@ public sealed class TlsLoadBalancer : IAsyncDisposable
             ?? $"{request.PathBase}{request.Path}{request.QueryString}";
         Uri url = new($"https://{request.Host}{target}");
         using HttpRequestMessage message = new(new HttpMethod(request.Method), url);
+
+        if (HttpMethods.IsPost(request.Method) && formAnswers.TryGetValue(url.Authority, out Uri? after))
+        {
+            lock (submitted)
+            {
+                submitted.Add(url);
+            }
+
+            // The provider's answer to its login form: a redirect, as Cognito's managed login answers a
+            // signed-in form with one to the callback (#1029).
+            context.Response.StatusCode = StatusCodes.Status302Found;
+            context.Response.Headers.Location = after.ToString();
+            return;
+        }
 
         if (foreign.TryGetValue(url.Authority, out string? page))
         {
@@ -185,6 +201,30 @@ public sealed class TlsLoadBalancer : IAsyncDisposable
     /// answer behind the browser's.
     /// </summary>
     public void ServeForeign(Uri origin, string html) => foreign[origin.Authority] = html;
+
+    /// <summary>
+    /// Serves <paramref name="html"/> for <paramref name="origin"/> as <see cref="ServeForeign"/> does,
+    /// and answers a form posted to it with a redirect to <paramref name="after"/>: a provider's login
+    /// form, whose submission sends the browser on (#1029). The test provider approves every
+    /// authorization at once and shows no form of its own (fixtures/TestIdp).
+    /// </summary>
+    public void ServeForeignForm(Uri origin, string html, Uri after)
+    {
+        formAnswers[origin.Authority] = after;
+        ServeForeign(origin, html);
+    }
+
+    /// <summary>The URLs a form was posted to on a <see cref="ServeForeignForm"/> origin, oldest first.</summary>
+    public IReadOnlyList<Uri> Submitted
+    {
+        get
+        {
+            lock (submitted)
+            {
+                return [.. submitted];
+            }
+        }
+    }
 
     /// <summary>Passes every request to the gateway again.</summary>
     public void Release() => hold = null;
