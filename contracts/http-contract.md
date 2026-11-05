@@ -110,6 +110,7 @@ with a redirect. Kestrel refuses oversized headers itself, with 431 and no body.
 | 500 | `shell_unavailable` | The app's release has no readable index.html |
 | 502 | `upstream_unavailable` | The upstream could not be reached |
 | 503 | `idp_unavailable` | The identity provider could not be reached to refresh the token; the session is kept |
+| 503 | `store_unavailable` | The object store could not be read to serve an asset or the shell, for a reason other than a refusal; the live snapshot is unaffected |
 | 503 | `session_store_unavailable` | A session store operation failed or ran out `StoreDeadline`, or a refresh ended at the store's bound (2 × TTL, the `continuity` spec's D2); not the session remove `POST /bff/logout` makes, which answers the usual logout (F11); no cookie is cleared and the session, if it exists, is kept |
 | 504 | `upstream_timeout` | The upstream exceeded the entry's timeout |
 
@@ -121,3 +122,20 @@ because the browser arrived by navigation and a person reads it (task 3.5, N-05,
 The `code` says little on purpose. Which rule fired is in the log line and in
 `security.rejections`, under the rule ids in `contracts/request-gate.md`. Both the method
 allowlist and the request gate write `gate.method` for their 405 rejections.
+
+## When a dependency is unavailable
+
+What the gateway answers, logs and keeps when a dependency it reads cannot be read, so a supporter
+reads one table. "Snapshot" is the live registry snapshot (`GLOSSARY.md` → Last known good). A row
+is here once a landed test proves its behaviour (change request #543). Cases whose answer is
+contracted elsewhere are not repeated: the codes in Errors above, `idp_unavailable` among them; an
+upstream that cannot be reached, stays silent past its timeout or answers `5xx`, in
+`contracts/upstream-contract.md`; and a registry document that cannot be read, is missing or is
+invalid on a poll, which leaves the live snapshot serving (ADR-0002). A case named in none of these
+has no answer the contract promises yet.
+
+| Dependency, case | Answer | Logged | Snapshot |
+| --- | --- | --- | --- |
+| The object store refuses a read for an asset (S3 `AccessDenied`, how every missing key arrives under the deployed role) | `404` `not_found` with `Cache-Control: private, no-store`, no rule id; for the shell, `500` `shell_unavailable` with the same header | The request line's `read_refused`, `asset` or `shell` (`contracts/telemetry.md`), never the key; for the shell, one Error naming the app, the release and that the store refused | Stays |
+| Parameter Store cannot be read at a cold start, for the secret of every app in the document (when only some cannot, those apps are left out and the rest go live: `contracts/README.md`, `clientSecretRef`) | `/readyz` stays `503`; every app path is `404` `not_found`, since before a snapshot every host is unknown | One Warning per app whose secret cannot be read, naming the app and the reference, never the value; one Error per poll that the revision is not applied | There is none, and each poll reads the document again |
+| The in-memory session store is at `Session:MaxSessions` | The login succeeds; the session nearest its expiry, an expired one first, is ended, and that session's next request is `401` `unauthenticated` | Nothing at the eviction | Stays |

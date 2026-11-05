@@ -5,7 +5,8 @@
 //
 // Runs review-queue.js end to end with agent, parallel, log and phase stubbed, and with gh stubbed
 // where the script reaches it: through the inventory agent, which serves canned pull requests as gh
-// would list them, and the post agent, which records the comment it was asked to post instead of
+// would list them, each comment and review without its body, the body agents, which serve each body
+// whole or as a check says (#1018), and the post agent, which records the comment it was asked to post instead of
 // posting it. A check that needs more of GitHub gives the run ghStub(): a store of posted comments
 // that outlives one run, a head that moves before posting, and a GitHub that cannot be reached at
 // posting time (#85). A stubbed range agent reports the delta range a check gives it. A stubbed mutation agent reports, per test, the result a check tells it to, or dies by
@@ -26,6 +27,8 @@ const scriptPath = process.argv[2] || path.join(here, 'review-queue.js')
 const top = path.resolve(here, '..', '..')
 
 const sha = (c) => c.repeat(40)
+// The inventory's jq test for a body that may carry a record, as the script's RECORD_TEST spells it.
+const RECORD_TEXT = /Reviewed [0-9a-f]{40} against [0-9a-f]{40}: (merge|hold)/
 const FORK = sha('b')
 // What the launch agent reports by default (#687): repo's script is origin/main's, on a clean main.
 const LAUNCH_OK = { baseTip: sha('c'), differs: false, branch: 'main', behind: 0, trackedChanges: false, scriptEdited: false, error: '' }
@@ -118,6 +121,15 @@ function run(scriptArgs, served, behave = {}) {
   // events: every agent's start and end, in order, as `start <label>` and `end <label>`.
   const flight = { now: 0, max: 0 }
   const events = []
+  // The comments and reviews the inventories served, by the id each is given (#1018): an entry keeps
+  // the one id across the run, as a GitHub comment does.
+  const ids = new Map()
+  const byId = new Map()
+  const projected = (e) => {
+    if (!ids.has(e)) { ids.set(e, ids.size + 1); byId.set(ids.get(e), e) }
+    const { body, ...rest } = e
+    return { ...rest, id: ids.get(e), length: Array.from(body || '').length, record: RECORD_TEXT.test(body || '') }
+  }
   globalThis.agent = async (prompt, opts) => {
     flight.now++
     flight.max = Math.max(flight.max, flight.now)
@@ -152,12 +164,28 @@ function run(scriptArgs, served, behave = {}) {
       // gh pr list as the queue agent reports it: behave.queue, or no open pull request.
       return behave.queue === 'null' ? null : (behave.queue || { baseTip: sha('c'), prs: [], error: '' })
     }
+    if (kind === 'inventory' && opts.label.split(':')[2] === 'body') {
+      // A body agent (#1018): the one comment or review its label names by id, its body as gh serves
+      // it, or what behave.bodies says of its URL: 'null' or 'throw' for an agent that dies, a
+      // function of the body for the body it returns instead, or { error } for a gh it cannot reach,
+      // with the whole body beside it when whole is true.
+      const e = byId.get(Number(opts.label.split(':')[3]))
+      if (!e) throw new Error(`a body agent for an id the inventory never gave: ${opts.label}`)
+      const b = (behave.bodies || {})[e.html_url]
+      if (b === 'throw') throw new Error(`the body agent for ${e.html_url} died`)
+      if (b === 'null') return null
+      if (b && b.error) return { body: b.whole ? e.body : '', error: b.error }
+      return { body: typeof b === 'function' ? b(e.body) : e.body, error: '' }
+    }
     if (kind === 'inventory') {
       const inv = served[n]
       const gh = behave.gh
       // The store is read when the inventory runs, as gh would serve it; serveStore false is a resumed
       // run whose inventory was replayed from before the post.
-      return gh && gh.serveStore !== false ? { ...inv, comments: [...inv.comments, ...gh.store.filter((c) => c.n === Number(n)).map((c) => c.entry)] } : inv
+      const comments = gh && gh.serveStore !== false ? [...inv.comments, ...gh.store.filter((c) => c.n === Number(n)).map((c) => c.entry)] : inv.comments
+      // Each entry as the inventory's jq projection prints it (#1018): no body, its length in code
+      // points, as jq's length counts a string, and whether the record's text is anywhere in it.
+      return { ...inv, comments: comments.map(projected), reviews: (inv.reviews || []).map(projected) }
     }
     if (kind === 'range') {
       const r = (behave.range || {})[n]
@@ -726,13 +754,17 @@ try {
   // the verdict's acceptance could not answer it. A row of any kind on an .mjs project is a caught row:
   // accepted, it reproduces and merges; not accepted, it reads did-not-fail and holds. A stated row on
   // another project, red only on other tests, still reads did-not-fail whatever the verdict accepts,
-  // and the verdict prompt says how to judge the messages.
+  // and the verdict prompt says how to judge the messages: the rule for a row red on another check's
+  // message is scoped to a row on an .mjs file, as the classifier reads it (#938), and keeps a held
+  // or candidate row's #684/#689 catch (#936). Each such row's line names the cell to accept: on #960
+  // a stated row read as 'Caught by <its own messages>, not by <it>' was taken for no caught row.
   checks++
   {
     const MJS = '.claude/workflows/overnight_tests.mjs'
     const MSGS = ["#631: the review:issue-144 prompt's decisions step does not read the Answer's \"Decided by implementer\" list", "#631: the review:1.6b prompt's decisions step does not read the Answer's \"Decided by implementer\" list"]
     for (const [label, shape, test, nominations] of [
       ['stated', { statedMutations: [stated('overnight_tests.mjs check 39', 2, -1, MJS)] }, 'overnight_tests.mjs check 39'],
+      ['stated on the directory', { statedMutations: [stated('overnight_tests.mjs check 39', 2, -1, '.claude/workflows')] }, 'overnight_tests.mjs check 39'],
       ['nominated', {}, 'overnight_tests.mjs', { 212: [{ test: 'overnight_tests.mjs check 39', project: MJS, why: 'check 39 may not read the Answer' }] }],
       ['candidate', { candidates: [{ test: 'overnight_tests.mjs check 39 (#631)', project: MJS, file: MJS, guards: 'the decisions step', breaks: '.claude/workflows/overnight.js' }] }, 'overnight_tests.mjs check 39 (#631)'],
     ]) {
@@ -744,6 +776,8 @@ try {
         const c = resultOf(212, result)
         const m = (c.mutations || []).find((x) => x.test === test) || {}
         if (m.result !== want || c.verdict !== verdict) fail(`PR 212 with the ${label} row ${JSON.stringify(test)} on ${MJS} red only on its checks' messages, ${accept ? 'accepted' : 'not accepted'}: row ${JSON.stringify({ test: m.test, result: m.result })}, verdict ${c.verdict}, expected ${want} and ${verdict}`)
+        const line = `a caught row, which holds unless you put ${JSON.stringify(test)} in caughtAccepted`
+        if (!(env.prompts['verdict:212'] || '').includes(line)) fail(`PR 212: the verdict prompt's line for the ${label} row ${JSON.stringify(test)} on ${MJS} does not name the cell to accept: it lacks ${JSON.stringify(line)}`)
       }
     }
     const OTHER = { 212: pr(212, ['tests/i.cs'], { statedMutations: [stated('Said', 1, -1)] }) }
@@ -754,7 +788,7 @@ try {
       const m = (c.mutations || []).find((x) => x.test === 'Said') || {}
       if (m.result !== 'did-not-fail' || c.verdict !== 'hold') fail(`PR 212 with the stated row Said on a .NET project red only on Other.Test, accepted: row ${m.result}, verdict ${c.verdict}, expected did-not-fail and hold`)
     }
-    for (const phrase of ["when every message the row went red on is one of those checks' own fail() messages", 'A row that went red on any message of another check is not answered by it, whatever its kind: leave it out of caughtAccepted']) {
+    for (const phrase of ["when every message the row went red on is one of those checks' own fail() messages", "A caught row of any kind on a Node companion, a row whose project is an .mjs file or whose file or test cell's leading path is one, whatever project the inventory gives it (#938), is read another way", 'On a Node companion, a stated or nominated row that went red on any message of another check is not answered by it: leave it out of caughtAccepted', "A held or candidate row there keeps its catch (#684, #689): one that went red on another check's message is answered only when you verify that the check whose fail() printed it guards the break (for a held row, the break the held record named) and, for a candidate, unlike a row red only on its own checks' messages, that its named check went red on its own fail() messages as well or why it could not go red on that break"]) {
       if (!(env.prompts['verdict:212'] || '').includes(phrase)) fail(`PR 212: the verdict prompt does not say how to judge a Node companion row by its checks' fail() messages: it lacks ${JSON.stringify(phrase)}`)
     }
     // Red on another check's message as well as its own, a stated .mjs row the verdict does not accept
@@ -1883,6 +1917,87 @@ try {
       // bare search for it would pass with the step's fetch gone (#687, Q7: an unfetched tip proves nothing).
       for (const want of [`1. \`git -C ${env.repo} fetch origin --tags\`, then baseTip = \`git -C ${env.repo} rev-parse origin/main\``,`git -C ${env.repo} diff --quiet origin/main -- .claude/workflows/review-queue.js`, `git -C ${env.repo} symbolic-ref --short -q HEAD`, `git -C ${env.repo} rev-list --count HEAD..origin/main`, `git -C ${env.repo} status --porcelain --untracked-files=no`, `git -C ${env.repo} diff --quiet HEAD -- .claude/workflows/review-queue.js`, `OUTPUT FILE: ${env.repo}/.scratch/review-queue/log/2026-10-21/launch.json`, 'House rules (']) if (!p.includes(want)) fail(`the launch prompt lacks ${JSON.stringify(want)}`)
       if (/merge --ff-only|git -C \S+ (checkout|switch|reset|pull)\b/.test(p)) fail('the launch prompt moves the checkout')
+    }
+  }
+
+  // #796's history (#1018): six record comments of 11 to 21 KB, which the inventory agent would not
+  // copy into one return. On 2026-11-04 it returned stand-ins for bodies 2 to 6 and the review failed
+  // at inventory, twice. The inventory now reports each entry's length and whether it carries a record,
+  // and each record-bearing body comes back from an agent of its own. Each body here runs about 20 KB,
+  // ends in an astral character as a posted comment does, and holds a record of an earlier head, two
+  // follow-up rows and two did-not-fail mutation rows; the latest record holds. Every record, row and
+  // held test must reach the parsers, through one body agent per record and none for the human's
+  // comment or the approval beside them.
+  const H796 = sha('7')
+  const F796 = sha('8')
+  const U796 = (i) => `https://github.com/adammedford/spa-platform/pull/796#issuecomment-66${i}`
+  const OLD796 = ['1', '2', '3', '4', '5', 'e'].map((c) => sha(c))
+  const body796 = (i) => [
+    `## Review of ${OLD796[i]}`, '',
+    ...Array.from({ length: 160 }, (_, k) => `Finding ${i}.${k}: the axis read the diff and the guide, and what it found stands as written in this paragraph of the record.`), '',
+    '## Follow-ups', '', '| Finding | Axis | Where | First carried by |', '| --- | --- | --- | --- |',
+    `| Follow-up ${i}a carried by record ${i} | Standards | src/a${i}.cs | this record |`,
+    `| Follow-up ${i}b carried by record ${i} | Spec | docs/b${i}.md | this record |`, '',
+    '## Mutations', '', '| Test | What was broken | Failed of total | Result | Log file |', '| --- | --- | --- | --- | --- |',
+    `| Held${i}a | broke what Held${i}a guards | 0 of 10 | did-not-fail | /log/mutation-${i}a.txt |`,
+    `| Held${i}b | broke what Held${i}b guards | 0 of 10 | did-not-fail | /log/mutation-${i}b.txt |`, '',
+    `Reviewed ${OLD796[i]} against ${F796}: hold`, '', '\u{1F916} Generated with [Claude Code](https://claude.com/claude-code)',
+  ].join('\n')
+  const RECORDS796 = Array.from({ length: 6 }, (_, i) => ({ author_association: 'OWNER', created_at: `2026-11-04T1${i}:00:00Z`, html_url: U796(i), body: body796(i) }))
+  const HUMAN796 = { author_association: 'OWNER', created_at: '2026-11-04T09:00:00Z', html_url: U796('h'), body: 'Rebased onto main; please review again.' }
+  const APPROVAL796 = { state: 'APPROVED', author_association: 'OWNER', submitted_at: '2026-11-04T09:30:00Z', html_url: 'https://github.com/adammedford/spa-platform/pull/796#pullrequestreview-1', body: `Reviewed ${OLD796[0]} against ${F796}: merge` }
+  const SERVED796 = { 796: pr(796, ['.claude/workflows/review-queue.js'], { head: H796, forkPoint: F796, commits: [H796], comments: [HUMAN796, ...RECORDS796], reviews: [APPROVAL796] }) }
+  const CARRIED796 = RECORDS796.flatMap((_, i) => ['a', 'b'].map((x) => ({ axis: x === 'a' ? 'Standards' : 'Spec', title: `Follow-up ${i}${x} carried by record ${i}`, where: x === 'a' ? `src/a${i}.cs` : `docs/b${i}.md`, ticket: '', firstCarried: '' })))
+  const HELD796 = RECORDS796.flatMap((_, i) => [`Held${i}a`, `Held${i}b`])
+  checks++
+  {
+    const sizes = RECORDS796.map((r) => Buffer.byteLength(r.body))
+    if (sizes.some((b) => b < 19000 || b > 22000)) fail(`#796's shape: the record bodies run ${sizes.join(', ')} bytes, expected about 20 KB each`)
+    env = run({ prs: [796], maxMutationsPerPr: 20 }, SERVED796, { followUps: { 796: CARRIED796 } })
+    result = await execute(env)
+    const r = resultOf(796, result)
+    if (r.outcome !== 'recorded') fail(`#796's shape: outcome ${r.outcome} at ${JSON.stringify(r.stage)}, expected recorded`)
+    const bodies = env.calls.filter((c) => /^inventory:796:body:/.test(c))
+    if (bodies.length !== 6) fail(`#796's shape: ${bodies.length} body agent(s) ran (${bodies.join(', ')}), expected one per record comment, 6, and none for the human's comment or the approval`)
+    if (JSON.stringify(r.earlierRecords) !== JSON.stringify(RECORDS796.map((x) => x.html_url))) fail(`#796's shape: recordsOf read ${JSON.stringify(r.earlierRecords)}, expected the six records ${JSON.stringify(RECORDS796.map((x) => x.html_url))}`)
+    const want = CARRIED796.map((f, k) => ({ axis: f.axis, title: f.title, where: f.where, firstCarried: RECORDS796[Math.floor(k / 2)].html_url }))
+    if (JSON.stringify(r.followUps) !== JSON.stringify(want)) fail(`#796's shape: followUpsOf gave ${JSON.stringify(r.followUps.map((f) => f.firstCarried))}, expected each of the twelve rows first carried by its own record`)
+    const mutated = env.mutations.filter((m) => m.n === 796).map((m) => m.test)
+    const missing = HELD796.filter((t) => !mutated.includes(t))
+    if (missing.length) fail(`#796's shape: mutationTableOf lost the held row(s) ${missing.join(', ')}; mutated ${JSON.stringify(mutated)}`)
+    for (const b of bodies) {
+      const p = env.prompts[b] || ''
+      const id = b.split(':')[3]
+      for (const w of [`gh api repos/{owner}/{repo}/issues/comments/${id}`, `OUTPUT FILE: ${env.repo}/.scratch/review-queue/log/2026-10-21/pr-796/body-${id}.json`]) if (!p.includes(w)) fail(`#796's shape: the body prompt ${b} lacks ${JSON.stringify(w)}`)
+    }
+    const inv = env.prompts['inventory:796'] || ''
+    if (/Copy bodies byte for byte/.test(inv) || !inv.includes('length: (.body // "" | length)') || !inv.includes('test("Reviewed [0-9a-f]{40} against [0-9a-f]{40}: (merge|hold)")')) fail('#796\'s shape: the inventory prompt still asks for the bodies, or not for each entry\'s length and record flag through jq')
+  }
+
+  // A body that comes back other than whole fails the review at the inventory (#1018), with a stage
+  // naming its URL, and never reads as a record with fewer rows: a stand-in that keeps the record line
+  // but drops the tables, as #796's inventory wrote them, a body one character long or short, an
+  // agent that returns nothing, one that cannot reach gh, and one that says its whole copy is in
+  // doubt. Nothing runs after the inventory, so no record is posted.
+  checks++
+  {
+    const target = RECORDS796[3].html_url
+    const cases = {
+      'a stand-in': (b) => `[Stand-in: the body of ${target}, 20.6 KB, is in inventory.json]\n\nReviewed ${OLD796[3]} against ${F796}: hold`,
+      'one character short': (b) => b.slice(0, -1),
+      'one character long': (b) => b + ' ',
+      'nothing returned': 'null',
+      'gh unreachable': { error: 'gh could not reach api.github.com' },
+      'whole beside an error': { error: 'gh served the comment twice, and the copies differ', whole: true },
+    }
+    for (const [what, b] of Object.entries(cases)) {
+      env = run({ prs: [796], maxMutationsPerPr: 20 }, SERVED796, { followUps: { 796: CARRIED796 }, bodies: { [target]: b } })
+      result = await execute(env)
+      const r = resultOf(796, result)
+      if (r.outcome !== 'failed' || !String(r.stage).startsWith('inventory: ') || !String(r.stage).includes(target)) fail(`a body ${what}: outcome ${r.outcome} at ${JSON.stringify(r.stage)}, expected failed at the inventory naming ${target}`)
+      const after = env.calls.filter((c) => !c.startsWith('inventory:') && c !== 'launch')
+      if (after.length || env.posted.length) fail(`a body ${what}: ${after.join(', ') || 'nothing'} ran after the inventory and ${env.posted.length} comment(s) were posted, expected none`)
+      if (r.recordUrl || r.verdict) fail(`a body ${what}: verdict ${JSON.stringify(r.verdict)} with record ${JSON.stringify(r.recordUrl)}, expected none`)
     }
   }
 

@@ -153,7 +153,7 @@ const FOREGROUND_T = { ...synthetic(908, 'issue-908', 'foreground', [], 1), titl
 tickets.push(FOREGROUND_T); byId[FOREGROUND_T.id] = FOREGROUND_T
 // Every ticket above names a Touches path of its own (#665), so none waits to start behind another and the checks
 // above keep their meaning: a ticket with no readable path would wait on every ticket ahead of it in its lane. Checks
-// 42 to 45 run ticket sets of their own whose paths overlap.
+// 43 to 46 run ticket sets of their own whose paths overlap.
 for (const t of tickets) if (!('touches' in t)) t.touches = [`files/${t.id}.txt`]
 const UNREACHED = ['tests/Spactl.Tests', 'tests/e2e']
 const OLD = 'b'.repeat(40), RED = 'c'.repeat(40)
@@ -1720,7 +1720,26 @@ const LIMIT_HALTED = 'usage limit; resume after 10pm (America/Chicago)'
   for (const c of housed) if (!c.prompt.includes(RULE)) fail(`#742: the ${c.label} prompt's house rules do not send docker to ~/.docker/bin before calling it absent`)
 }
 
-// 41. Every implement forks from the run branch's last verified tip, or the run base before any gate has passed (#665;
+// 41. Gap decisions are read from the Answer (#631): the implement prompt records a gap decision only in the Answer's
+//     "Decided by implementer" list, and a "## Decisions taken" comment only for a human-owned one. So every review
+//     prompt's decisions step reads that list and finds no fault in the missing comment, and the report takes a gap
+//     decision's alternatives from the Answer, which is among the comments it reads past the results JSON.
+{
+  const REVIEW = 'Then read the "## Decisions taken" comment, if any, and the Answer\'s "Decided by implementer" list, where a gap decision is recorded (no gap decision gets a "## Decisions taken" comment, so its absence is no finding).'
+  const REPORT = '(a "Human-owned:" one from the issue\'s "## Decisions taken" comment, a gap decision from the "Decided by implementer" list in its "## Answer" comment)'
+  const READS = 'the "## Decisions taken" alternatives, the "Decided by implementer" list in an "## Answer" comment'
+  const reviews = allPrompts.filter((x) => x.label.startsWith('review:'))
+  if (!reviews.length) fail('#631: no review prompt was captured, so the gap-decision check read nothing')
+  for (const c of reviews) if (!c.prompt.includes(REVIEW)) fail(`#631: the ${c.label} prompt's decisions step does not read the Answer's "Decided by implementer" list`)
+  if (!reportPrompt) fail('#631: no report prompt was rendered, so the gap-decision check read nothing')
+  else {
+    const item = (/^   - Decisions taken overnight:.*$/m.exec(reportPrompt) || [''])[0]
+    if (!item.includes(REPORT)) fail('#631: the report\'s "Decisions taken overnight" item does not take a gap decision\'s alternatives from the Answer\'s "Decided by implementer" list')
+    if (!reportPrompt.includes(READS)) fail('#631: the report does not read the Answer\'s "Decided by implementer" list among the comments the results JSON lacks')
+  }
+}
+
+// 42. Every implement forks from the run branch's last verified tip, or the run base before any gate has passed (#665;
 //     #659 Q2): never the branch's tip as read, which may be a merge still under its gate, which a red gate resets
 //     away. The main run's mocked integrates are in progress between their start and end, and only an integrate that
 //     answered green has a verified head, so each implement prompt's fork is the last green head before it started.
@@ -1748,10 +1767,10 @@ const forkOf = (prompt) => (/Otherwise fork from [^:]+: forkSha = (\S+?)\. Take 
   if (!beforeGreen) fail('#665: no implement started before any gate passed, so the run-base fallback check read nothing')
 }
 
-// 42. Path waits (#665; #659 Q1, Q4 to Q10): a run of its own, on tickets whose Touches paths overlap. A ticket waits
+// 43. Path waits (#665; #659 Q1, Q4 to Q10): a run of its own, on tickets whose Touches paths overlap. A ticket waits
 //     to start its implement until every earlier ticket by n, in any lane, whose paths are equal to or a directory
 //     holding its own has settled with any outcome; a textual prefix alone is no overlap; a ticket with no readable
-//     path waits on every ticket ahead of it in its lane, saying why (here the lane's order is n's; check 43 has
+//     path waits on every ticket ahead of it in its lane, saying why (here the lane's order is n's; check 44 has
 //     one where it is not); a wait that would close a cycle with a blocked-by edge
 //     is dropped; each wait is logged in the confirmed form and reported with its paths and elapsed minutes; and a
 //     conflict before any gate has passed back-merges the run base.
@@ -1924,7 +1943,7 @@ const forkOf = (prompt) => (/Otherwise fork from [^:]+: forkSha = (\S+?)\. Take 
   }
 }
 
-// 43. A ticket with no readable Touches path waits on the tickets ahead of it in its lane's run order, downstream first
+// 44. A ticket with no readable Touches path waits on the tickets ahead of it in its lane's run order, downstream first
 //     and then by n, not on every lower-n ticket of its lane (#706 Q1 (b)). One lane, the integrator's: P (n 1) has
 //     a path and nothing downstream; M (n 2) has no readable path and D downstream, so the lane takes M first; X (n 4)
 //     has no path and nothing downstream, so it comes after P by n; Q (n 5) has a path and comes last. D sits in another
@@ -2001,7 +2020,7 @@ const forkOf = (prompt) => (/Otherwise fork from [^:]+: forkSha = (\S+?)\. Take 
   }
 }
 
-// 44. A path wait starts only once the ticket's blocked-by edges have settled (#665; #659 Q10, Q11). The lane is not
+// 45. A path wait starts only once the ticket's blocked-by edges have settled (#665; #659 Q10, Q11). The lane is not
 //     free to take a ticket that a blocker still holds, so a wait clocked then would hold time the blocker cost, not
 //     the path. Three lanes: B (n 1) is quick; P (n 2) is slow and touches w/a.txt; W (n 3) needs B and touches
 //     w/a.txt, so it path-waits on P, the earlier ticket by n. W sits alone in its lane, so it is its lane's first
@@ -2065,7 +2084,7 @@ const forkOf = (prompt) => (/Otherwise fork from [^:]+: forkSha = (\S+?)\. Take 
   }
 }
 
-// 45. The cycle guard on a path wait that points forwards in n (#916; #706 Q1 (b)). A ticket with no readable Touches
+// 46. The cycle guard on a path wait that points forwards in n (#916; #706 Q1 (b)). A ticket with no readable Touches
 //     path is ahead by its lane's run order, so its waits may point forwards in n, and the guard must follow them, and
 //     path waits as well as blocked-by edges, whichever way the closing wait points. Two runs, each with one cycle the
 //     guard must break, or the run stalls. Run A, one lane: X (n 1) and Y (n 3) touch w/x.txt; A (n 2) has no
@@ -2074,7 +2093,7 @@ const forkOf = (prompt) => (/Otherwise fork from [^:]+: forkSha = (\S+?)\. Take 
 //     dropped. Run B: P (n 3) has a path and M (n 4) none in one lane, M ahead with two downstream to P's one; M needs
 //     A (n 2), A path-waits on B (n 1) by x/a.txt, and B needs P. P's wait on M, forwards in n, would close the cycle
 //     M, A, B, P, through a path wait, and is dropped. Each run asserts the dropped wait and that every ticket
-//     integrates; that the other waits hold their tickets is checks 42 and 43's to prove.
+//     integrates; that the other waits hold their tickets is checks 43 and 44's to prove.
 {
   const run = async (set, label) => {
     const ev = [], logged = []

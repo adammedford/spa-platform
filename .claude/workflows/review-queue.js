@@ -3,7 +3,7 @@ export const meta = {
   description: 'Review every open pull request into main, or a named list, on the Standards and Spec axes, and post one comment per pull request ending in its review record',
   whenToUse: 'An integrator session, in the foreground, wants the open pull requests into main, or the ones it names, to carry a review record before tools/land.sh merges them; launched by scriptPath .claude/workflows/review-queue.js with args { repo, date, wt } and an optional prs list (the header comment has the full launch)',
   phases: [
-    { title: 'Inventory', detail: 'with no list, one queue agent lists the open pull requests into main; then one agent per pull request reads head, fork point, files, owner set, CI, citations and the records already posted; it judges nothing. When the latest record names another head, one range agent says whether it is an ancestor and what the commits since it touch, or, for a rebuilt head, which new commits have the tree of an old one' },
+    { title: 'Inventory', detail: 'with no list, one queue agent lists the open pull requests into main; then one agent per pull request reads head, fork point, files, owner set, CI, citations and the comments and reviews already posted, and one agent per comment or review that carries a record line returns its body; they judge nothing. When the latest record names another head, one range agent says whether it is an ancestor and what the commits since it touch, or, for a rebuilt head, which new commits have the tree of an old one' },
     { title: 'Review', detail: 'two fresh agents per pull request, Standards and Spec, read the branch through origin and rebuild nothing' },
     { title: 'Mutate', detail: 'one agent per mutation, up to the cap, breaks what a test guards in a throwaway worktree, runs that test\'s project, and removes the worktree' },
     { title: 'Verdict', detail: 'one agent per pull request re-takes the severity of every finding the axes report and says merge or hold, held to the mutation rows; one comment is posted, its last line the record' },
@@ -50,11 +50,13 @@ export const meta = {
 // The agent budget (#86). Every agent runs through one set of maxParallel slots, so the pull
 // requests' pipelines (inventory, axes, mutations, verdict, post) overlap and one pull request's
 // mutations start while another is still under review. A run starts one launch agent (#687), then at
-// most one queue agent (none with a list), then per pull request one inventory, one range agent when
-// an earlier head carries a record, two axes, up to maxMutationsPerPr mutations, one verdict and one
-// post: 6 + the cap each, 9 with the defaults, beside the run's launch and queue agents. The return's
-// agents is the count that ran, beside the date, the base tip the run saw and the log directory. A
-// wide queue is kept under a session's guideline by naming pull requests or lowering the cap.
+// most one queue agent (none with a list), then per pull request one inventory, one body agent per
+// comment or review that carries a record line (#1018), one range agent when an earlier head carries
+// a record, two axes, up to maxMutationsPerPr mutations, one verdict and one post: 6 + the cap + the
+// records each, 9 + the records with the defaults, beside the run's launch and queue agents. The
+// return's agents is the count that ran, beside the date, the base tip the run saw and the log
+// directory. A wide queue is kept under a session's guideline by naming pull requests or lowering the
+// cap.
 //
 // A delta review (#85): when the latest record names an ancestor of the head, the axes review the
 // commits since that head with the whole diff for context, each merge in the range audited on its
@@ -87,10 +89,13 @@ export const meta = {
 // a row pinned to a test that could never guard its break is answered by the test that does (#684,
 // #689). A stated or nominated mutation keeps its own test: the author named it, or the Standards
 // axis suspects it cannot fail, and a catch elsewhere confirms that, so the row is did-not-fail;
-// except on a Node companion, an .mjs project, which prints no test names, where a row of any kind
-// is a caught row the verdict answers by its checks' fail() messages (#905). A
-// later review reads a caught cell as the named test alone, so a catcher, whose own break nobody
-// mutated, is neither answered nor cleared by it (#693). A held test the cap cuts is still
+// except on a Node companion, which prints no test names: a row whose project is an .mjs file, or
+// whose file or test cell's leading path is one, whatever project the inventory gives it (#938).
+// There a row of any kind is a caught row the verdict answers by its checks' fail() messages (#905),
+// and a held or candidate row red on another check's message keeps its catch when the check that
+// printed it guards the break and, for a candidate, its named check went red too or could not
+// (#936). A later review reads a caught cell as the named test alone, so a catcher, whose own break
+// nobody mutated, is neither answered nor cleared by it (#693). A held test the cap cuts is still
 // unanswered, so it holds the verdict as well as being named in the cap's line. The candidates a
 // `Review: ...` commit touches come next among the candidates. A candidate an earlier record
 // reproduced is not mutated again while neither its test file nor the source it breaks has changed
@@ -221,6 +226,9 @@ const PY_SPACE = '[\\t\\n\\v\\f\\r\\x1c-\\x1f \\x85\\xa0\\u1680\\u2000-\\u200a\\
 const PY_STRIP = new RegExp(`^${PY_SPACE}+|${PY_SPACE}+$`, 'g')
 const RECORD = /^Reviewed ([0-9a-f]{40}) against ([0-9a-f]{40}): (merge|hold)$/
 const REPOSITORY_ACCOUNTS = ['OWNER', 'MEMBER', 'COLLABORATOR']
+// The inventory's jq test for a body that may carry a record (#1018): the record's text anywhere in
+// the body, which every record line holds, so it flags each record and some bodies that hold none.
+const RECORD_TEST = 'Reviewed [0-9a-f]{40} against [0-9a-f]{40}: (merge|hold)'
 const recordLine = (head, base, verdict) => {
   const line = `Reviewed ${head} against ${base}: ${verdict}`
   if (!RECORD.test(line)) throw new Error(`refusing to write a record not in the form: ${line}`)
@@ -343,13 +351,23 @@ const HOUSE = `House rules (a review run; you write nothing under review):
 const AXIS_GUIDE = `Read docs/agents/review.md (at origin/main) before anything else: it is the review guide, with the sources each axis holds the diff to and the bar for a finding. CODING_STANDARDS.md is the standard. Read both yourself; this prompt does not transcribe them.`
 
 // ---------------------------------------------------------------- schemas
+// A comment or review as the inventory reports it: everything but its body, which is its length in
+// code points and whether it carries a record line (#1018). On #796 six record comments of 11 to 21 KB
+// outgrew what one agent would copy into one return, and it returned stand-ins for bodies 2 to 6, so
+// each record-bearing body comes back from an agent of its own (BODY below).
 const ENTRY = {
   type: 'object',
   properties: {
-    body: { type: 'string' }, author_association: { type: 'string' }, html_url: { type: 'string' },
+    id: { type: 'integer' }, author_association: { type: 'string' }, html_url: { type: 'string' },
     created_at: { type: 'string' }, submitted_at: { type: 'string' }, state: { type: 'string' },
+    length: { type: 'integer' }, record: { type: 'boolean' },
   },
-  required: ['body', 'author_association', 'html_url'],
+  required: ['id', 'author_association', 'html_url', 'length', 'record'],
+}
+const BODY = {
+  type: 'object',
+  properties: { body: { type: 'string' }, error: { type: 'string' } },
+  required: ['body', 'error'],
 }
 // A candidate invariant test: an xUnit fact or theory, a Terraform test file or a Python test
 // companion the diff adds or changes. project is what runs it alone: the .NET test project, the
@@ -457,8 +475,11 @@ const VERDICT = {
     outstanding: { type: 'array', items: { type: 'string' } },
     summary: { type: 'string' },
     // The held and candidate tests whose caught row (#684, #689) the verdict accepts: a test the row
-    // names guards the break and, for a candidate, the named test could not go red on it. On an .mjs
-    // project, a row of any kind whose every message is a named check's own fail() message (#905).
+    // names guards the break and, for a candidate, the named test could not go red on it. On a Node
+    // companion, a row whose project is an .mjs file or whose file or test cell's leading path is
+    // one (#938): a row of any kind whose every message is a named check's own fail() message (#905),
+    // and a held or candidate row whose other messages' check guards the break and, for a candidate,
+    // whose named check went red on its own messages too or could not go red on the break (#936).
     caughtAccepted: { type: 'array', items: { type: 'string' } },
     // A delta review after a hold: each finding of the held record, whether that record held on it or
     // carried it as a follow-up, and whether the range answers it.
@@ -557,8 +578,19 @@ OUTPUT FILE: ${DIR(n)}/inventory.json
 6a. statedHeads: one entry per sha the body gives as this pull request's head, the head it says it describes ("head \`76704c5\`"): sha exactly as written, full or abbreviated, and quote, the sentence that gives it. Leave out the fork point, the base, a listed commit, and a sha the body names as an earlier head or as history ("the earlier head \`ed8d063\`"). [] when the body gives none. Do not compare it with the head: the script does.
 6c. description: the body exactly as gh serves it, byte for byte ("" when it is empty). commitMessages: one entry per commit of commits, in that order: sha, and message = \`git -C ${REPO} log -1 --format=%B <sha>\`, copied byte for byte, and parents = the number of shas \`git -C ${REPO} log -1 --format=%P <sha>\` prints (2 or more for a merge). Do not look for dates or Closes lines in them: the script does.
 6b. candidates: every candidate invariant test the diff adds or changes: each xUnit fact or theory (test = its class and method name, project = its test project's directory), each Terraform test file (project = its directory), each Python test companion (test and project = its path, and nothing added to the test). file: the repository path of the file the test is written in. guards: one sentence on what it guards. breaks: the source file it would take to break that, never the test itself.
-7. comments: \`cd ${REPO} && gh api --paginate --slurp repos/{owner}/{repo}/issues/${n}/comments\`, flattened, each entry's body, author_association, html_url and created_at exactly as served. reviews: the same for \`repos/{owner}/{repo}/pulls/${n}/reviews\`, with body, state, author_association, html_url and submitted_at. Copy bodies byte for byte: the script reads review records from them.
+7. comments: one entry per line \`cd ${REPO} && gh api --paginate repos/{owner}/{repo}/issues/${n}/comments --jq '.[] | {id, author_association, html_url, created_at, length: (.body // "" | length), record: ((.body // "") | test("${RECORD_TEST}"))}'\` prints, its fields exactly as printed. reviews: the same for \`cd ${REPO} && gh api --paginate repos/{owner}/{repo}/pulls/${n}/reviews --jq '.[] | {id, state, author_association, html_url, submitted_at, length: (.body // "" | length), record: ((.body // "") | test("${RECORD_TEST}"))}'\`. Return no body: the script has each one that carries a record read by an agent of its own.
 8. Write the whole result as JSON to the OUTPUT FILE, then return it. error is "" when nothing stopped you.`
+
+// One record-bearing comment's or review's body, read whole by an agent of its own (#1018).
+const bodyPrompt = (n, e, review) => `Read one ${review ? 'review' : 'comment'} on pull request #${n} and return its body whole. Read and report; judge nothing.
+
+${HOUSE}
+
+OUTPUT FILE: ${DIR(n)}/body-${e.id}.json
+
+1. \`cd ${REPO} && gh api ${review ? `repos/{owner}/{repo}/pulls/${n}/reviews/${e.id}` : `repos/{owner}/{repo}/issues/comments/${e.id}`}\`, the ${review ? 'review' : 'comment'} at ${e.html_url}.
+2. body: the JSON's body field, its decoded value byte for byte, not --jq's printed form, which adds a newline. It runs ${e.length} characters; copy every one, and never a summary, an elision or a stand-in: the script counts them and fails the review on a body that is short or long. If gh cannot be reached, body is "" and error says why.
+3. Write the whole result as JSON to the OUTPUT FILE, then return it. error is "" when nothing stopped you.`
 
 const rangePrompt = (n, inv, from, oldFork, sinceHeads = []) => `Read the range for a delta review of pull request #${n}: the commits since ${from}, the head its latest review record names. Read and report; judge nothing.
 
@@ -643,10 +675,10 @@ ${AXIS_GUIDE} Its "The bar for a finding" and "Landing or holding" decide.
 Read ${DIR(n)}/inventory.json, ${DIR(n)}/standards.json and ${DIR(n)}/spec.json.
 Take every finding's severity for yourself: a sub-agent's "looks wrong" is sometimes the contract's own design. You may run one further targeted check in a throwaway worktree, never the solution. Mark each finding verified or suspected and say how it was checked. Carry the author's claims with whether each was verified and how.
 ${stale.length ? `The script compared every head the description states with the head the inventory read, and searched the description and the commit messages for a date later than the run's (${DATE}); each of these is a verified Spec finding the comment already carries, so weigh it in verdict and outstanding and do not list it again in findings:\n${stale.map((f) => `- ${f.title}. ${f.checked}`).join('\n')}\n` : ''}The mutation rows, each output file under ${DIR(n)}/ (first line the head, last line the result):
-${mut.rows.length ? mut.rows.map((r) => `- ${r.test} (${r.kind}): ${r.result}, ${r.failed} of ${r.total} failed.${r.caughtBy.length ? ` Caught by ${r.caughtBy.join(', ')}, not by ${r.test}.` : ''} ${r.why}`).join('\n') : '- None ran.'}${mut.rows.some((r) => r.kind === 'held') ? '\nA held row is a test an earlier record held on as did-not-fail and no later record reproduced, mutated again with the break that record named.' : ''}${mut.cut.length ? `\nThe cap (${MUTATION_CAP}) left unmutated: ${mut.cut.join(', ')}.` : ''}${mut.cleared.length ? `\nNot mutated, cleared by an earlier record that reproduced it, its test file and the source it breaks unchanged since that record's head: ${clearedText(mut.cleared)}.` : ''}
+${mut.rows.length ? mut.rows.map((r) => `- ${r.test} (${r.kind}): ${r.result}, ${r.failed} of ${r.total} failed.${r.caughtBy.length ? (r.checksOnly ? ` On a Node companion, red on the fail() messages ${r.caughtBy.join(', ')}: a caught row, which holds unless you put ${JSON.stringify(r.test)} in caughtAccepted.` : ` Caught by ${r.caughtBy.join(', ')}, not by ${r.test}.`) : ''} ${r.why}`).join('\n') : '- None ran.'}${mut.rows.some((r) => r.kind === 'held') ? '\nA held row is a test an earlier record held on as did-not-fail and no later record reproduced, mutated again with the break that record named.' : ''}${mut.cut.length ? `\nThe cap (${MUTATION_CAP}) left unmutated: ${mut.cut.join(', ')}.` : ''}${mut.cleared.length ? `\nNot mutated, cleared by an earlier record that reproduced it, its test file and the source it breaks unchanged since that record's head: ${clearedText(mut.cleared)}.` : ''}
 ${mut.holds.length ? `The rows already hold the verdict: ${mut.holds.join('; ')}. Say so in summary.` : ''}
 ${d ? deltaBrief(d) + (d.verdict === 'hold' ? ' Put each of the held record\'s findings in earlierFindings: held true when that record held on it, false when it carried it as a follow-up that did not hold; answered true when the range answers it, false when it does not, and how. An unanswered finding the record held on holds, and so does an empty list; an unanswered follow-up does not, and goes in followUps.' : ' earlierFindings is [].') : 'earlierFindings is [].'}
-verdict is hold when a verified finding shows the change does not do what it says, or a test that proves it cannot fail: a did-not-fail row, or a stated or held mutation that did not reproduce. A could-not-run on a stated, held or nominated mutation holds too; one on a candidate nobody suspected is reported and does not. A removed row is a held break whose target the range deleted, so it holds nothing by itself, but it answers the held test only if the deletion is sound: read the commit its why names, and it answers when the removed code could never run (say why) or the same check is still enforced elsewhere (say where), each as a verified finding; otherwise, or if you cannot show either, the held test is unanswered and the verdict is hold. A caught row is a held or candidate break the project caught through other tests while the named test stayed green (#684, #689). It answers the named test only when you verify, as a verified finding, that a test it names guards the break: for a held row, the break the held record named. For a candidate, you must also verify, as a verified finding, why the named test could not go red on that break: either the break lies outside what the named test guards, or the case the break reaches skips where the review runs. Then put the named test in caughtAccepted. A candidate that guards the break and stayed green proves nothing: leave it out. A caught row of any kind whose project is a Node companion (an .mjs file) is read another way, since such a companion prints no test names, only its checks' fail() messages (#905): read the named checks' source at the head, and when every message the row went red on is one of those checks' own fail() messages, say so as a verified finding and put the named test in caughtAccepted; the check for a candidate's green named test does not apply. A row that went red on any message of another check is not answered by it, whatever its kind: leave it out of caughtAccepted, and the verdict is hold. In every other case leave it out too, and the named test is unanswered and the verdict is hold. Otherwise merge. outstanding lists what stays for the merge body's Outstanding: line.
+verdict is hold when a verified finding shows the change does not do what it says, or a test that proves it cannot fail: a did-not-fail row, or a stated or held mutation that did not reproduce. A could-not-run on a stated, held or nominated mutation holds too; one on a candidate nobody suspected is reported and does not. A removed row is a held break whose target the range deleted, so it holds nothing by itself, but it answers the held test only if the deletion is sound: read the commit its why names, and it answers when the removed code could never run (say why) or the same check is still enforced elsewhere (say where), each as a verified finding; otherwise, or if you cannot show either, the held test is unanswered and the verdict is hold. A caught row is a held or candidate break the project caught through other tests while the named test stayed green (#684, #689). It answers the named test only when you verify, as a verified finding, that a test it names guards the break: for a held row, the break the held record named. For a candidate, you must also verify, as a verified finding, why the named test could not go red on that break: either the break lies outside what the named test guards, or the case the break reaches skips where the review runs. Then put the named test in caughtAccepted. A candidate that guards the break and stayed green proves nothing: leave it out. A caught row of any kind on a Node companion, a row whose project is an .mjs file or whose file or test cell's leading path is one, whatever project the inventory gives it (#938), is read another way, since such a companion prints no test names, only its checks' fail() messages (#905): read the named checks' source at the head, and when every message the row went red on is one of those checks' own fail() messages, say so as a verified finding and put the named test in caughtAccepted; the check for a candidate's green named test does not apply. On a Node companion, a stated or nominated row that went red on any message of another check is not answered by it: leave it out of caughtAccepted, and the verdict is hold. A held or candidate row there keeps its catch (#684, #689): one that went red on another check's message is answered only when you verify that the check whose fail() printed it guards the break (for a held row, the break the held record named) and, for a candidate, unlike a row red only on its own checks' messages, that its named check went red on its own fail() messages as well or why it could not go red on that break; then put the named test in caughtAccepted. In every other case leave the named test out of caughtAccepted, and the named test is unanswered and the verdict is hold. Otherwise merge. outstanding lists what stays for the merge body's Outstanding: line.
 followUps: every finding this review carries rather than holds on, whatever the verdict: a finding left standing for after the merge, and each outstanding entry that is a defect still to fix. Each: axis, title (one line; when an earlier record's "## Follow-ups" table lists the finding, its Finding cell verbatim), where, ticket and firstCarried. ticket is the open issue that owns the fix, as "#<n>", checked with \`cd ${REPO} && gh issue view <n> --json state,title\` (it must be OPEN and its title or body must be about this fix; an issue the finding merely mentions does not own it), or "" when there is no open ticket for it, which you search for with \`cd ${REPO} && gh issue list --state open --search "<key words> in:title,body" --json number,title\`. firstCarried is the earliest of the records on this pull request that carried the same finding, by its URL: ${(() => { const urls = recordsIn(inv).map((r) => r.url).filter(Boolean); return urls.length ? `read ${urls.join(', ')} (oldest first)` : 'there is none, so it is ""' })()}; "" when none did. The script keeps those with ticket "" as the comment's follow-ups, which the morning run files while this pull request is still open; one still unfiled when it merges is named by tools/land.sh and filed by hand (#514, #573).
 ${heldChangeRoute(n, inv)}
 Write the result as JSON to the OUTPUT FILE, then return it.`
@@ -863,6 +895,9 @@ const mutationRow = (n, m, i, got) => {
   // -1 is a count the body does not give (STATED): compare only the counts the author stated.
   if (m.kind === 'stated' && row.result === 'reproduced' && m.failed >= 0) row.countsMatched = row.failed === m.failed && (m.total < 0 || row.total === m.total)
   row.caughtBy = caughtElsewhere && (checksOnly || m.kind === 'held' || m.kind === 'candidate') ? row.failingNames : []
+  // The verdict prompt names such a row's acceptance by its cell: on #960 a stated row read as
+  // 'Caught by <its own messages>, not by <it>' was taken for no caught row, and held unaccepted.
+  row.checksOnly = checksOnly
   return row
 }
 // What in the rows holds the verdict, each named. A held test the cap cut was never mutated, so the
@@ -1106,10 +1141,39 @@ const review = async (n) => {
     return failed(res, why)
   }
 }
+// The bodies recordsIn reads (#1018): each comment, and each COMMENTED review, by an account the
+// repository let in whose inventory entry says it carries a record line, read by an agent of its own
+// and written into its entry. An entry the inventory flags as carrying none keeps no body, and
+// recordsIn passes over it as before. A body is taken only whole: one whose code points are fewer or
+// more than the inventory counted, or whose agent returned nothing or an error, is the reason
+// returned, naming its URL, so the review fails at the inventory and never reads a record with fewer
+// rows. null when every body came back whole.
+const codePoints = (s) => Array.from(s).length
+const readBodies = async (n, inv) => {
+  const wanted = [
+    ...(inv.comments || []).map((e) => ({ e, review: false })),
+    ...(inv.reviews || []).filter((r) => r && r.state === 'COMMENTED').map((e) => ({ e, review: true })),
+  ].filter(({ e }) => e && e.record === true && REPOSITORY_ACCOUNTS.includes(e.author_association))
+  for (const { e } of wanted) {
+    if (!Number.isInteger(e.id) || e.id <= 0 || !Number.isInteger(e.length) || e.length < 0) return `${e.html_url} has no id or length to read its body by`
+  }
+  const got = await parallel(wanted.map(({ e, review }) => () => run(bodyPrompt(n, e, review), { label: `inventory:${n}:body:${e.id}`, phase: 'Inventory', schema: BODY })))
+  for (const [i, { e }] of wanted.entries()) {
+    const b = got[i]
+    if (!b || typeof b.body !== 'string') return `the body agent for ${e.html_url} returned nothing`
+    if (b.error) return `the body of ${e.html_url} could not be read: ${b.error}`
+    const length = codePoints(b.body)
+    if (length !== e.length) return `the body of ${e.html_url} came back ${length < e.length ? 'abridged' : 'altered'}: ${length} of the ${e.length} characters the inventory counted, so its record, follow-ups and mutation rows are not read from it`
+  }
+  for (const [i, { e }] of wanted.entries()) e.body = got[i].body
+  return null
+}
 const reviewOne = async (n, res, at) => {
   const inv = await run(inventoryPrompt(n), { label: `inventory:${n}`, phase: 'Inventory', schema: INVENTORY })
   if (!inv || inv.error) return failed(res, 'inventory' + (inv ? ': ' + inv.error : ': the inventory agent returned nothing'))
   if (!/^[0-9a-f]{40}$/.test(inv.head) || !/^[0-9a-f]{40}$/.test(inv.forkPoint)) return failed(res, 'inventory: head or fork point is not a full sha')
+  const unread = await readBodies(n, inv)
+  if (unread) return failed(res, `inventory: ${unread}`)
   res.head = inv.head
   res.base = inv.forkPoint
   res.baseTip = /^[0-9a-f]{40}$/.test(inv.baseTip || '') ? inv.baseTip : ''

@@ -91,21 +91,23 @@ public sealed class ArchitectureTests
         // The live assertion above passes over a tree with no literal whether or not the scan read a
         // file, the hazard A04_is_read_from_package_references_that_were_actually_parsed answers. So the
         // same rule runs here over the one project that must hold the literals: the thirteen declarations
-        // in RuleIds (auth.store since #343's item 2), the thirteen code declarations in Problems (#158;
-        // shell_unavailable since #427, session_store_unavailable since #343's item 2),
+        // in RuleIds (auth.store since #343's item 2), the fourteen code declarations in Problems (#158;
+        // shell_unavailable since #427, session_store_unavailable since #343's item 2, the thirteenth,
+        // and store_unavailable since #543, the fourteenth by landing, declared after idp_unavailable),
         // and the one quoted id in IRequestTelemetryFeature's doc comment, which proves the scan reads
         // comments too. No doc comment in Platform.Abstractions quotes a code: Problems names each in
         // its declaration only. The count moves with its subject: a quoted id or code added to or
         // removed from Platform.Abstractions moves it.
-        // Mutation (#726): drop SessionStoreUnavailable from Problems and AuthStore from RuleIds, as
-        // before #343's item 2, and the count reads 25, Problems.cs 12 and RuleIds.cs 12.
+        // Mutation (#739): remove only the StoreUnavailable entry from Problems.Rows, keeping the
+        // constant, and store_unavailable leaves the ids the scan looks for: the count reads 27 and
+        // Problems.cs 13.
         string[] hits = [.. RuleIdLiterals.Violations([DirectoryOf(ReferenceRules.Abstractions)], RuleIdLiterals.Ids)];
 
-        Assert.Equal(27, hits.Length);
+        Assert.Equal(28, hits.Length);
         Assert.Equal(
             [
                 ("Platform.Abstractions/IRequestTelemetryFeature.cs", 1),
-                ("Platform.Abstractions/Problems.cs", 13),
+                ("Platform.Abstractions/Problems.cs", 14),
                 ("Platform.Abstractions/RuleIds.cs", 13),
             ],
             hits

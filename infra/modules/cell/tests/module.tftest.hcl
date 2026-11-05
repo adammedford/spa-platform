@@ -239,8 +239,8 @@ variables {
 # 1.9): how many of each type the plan holds, and that this module is the root's whole plan.
 #
 # It holds one part of "no NAT gateway, no bastion, no database" (plan row 1.2, test P-01)
-# statically rather than only against a deployed account: no instance or bastion type can be
-# declared. The two gated exceptions, the session table and the two-task cell's NAT gateway, are
+# statically rather than only against a deployed account: no instance, bastion or database type can
+# be declared. The two gated exceptions, the session table and the two-task cell's NAT gateway, are
 # named below with the input that creates each, so this set cannot tell a gated one from an ungated
 # one; the platform root's tripwire holds both to their gates, at no instance on the default inputs.
 run "the_module_declares_only_the_cell_s_intended_resource_types" {
