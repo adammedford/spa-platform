@@ -825,6 +825,29 @@ try {
       const told = (env.mutations.find((x) => x.test === whole) || { prompt: '' }).prompt.includes(BREAK)
       if (told === answered) fail(`PR 211 with the held cell ${JSON.stringify(cell)}, a later record reproducing ${JSON.stringify(later)} and the whole-file candidate ${JSON.stringify(whole)}: the candidate ${told ? 'is' : 'is not'} mutated as held, expected ${answered ? 'it answered and not held again' : 'it still held'}`)
     }
+    // A Node companion is the whole file whatever project the inventory gives it (#938), so a
+    // '<file> (companion)' cell is held on an .mjs candidate with a directory project as on one whose
+    // project is its file (#941): on #939 wholeFor still asked project === file, so such a held row
+    // had no file and its red run on the companion's own messages read as caught elsewhere. A later
+    // record reproducing that spelling answers it there too.
+    const MJS = '.claude/workflows/overnight_tests.mjs'
+    const MSGS = ['#706 Q1 (b): issue-2002 started at 1445, not before issue-2001 at 1363: the lane did not take its downstream-first ticket first']
+    const mjs = (test) => ({ test, project: '.claude/workflows', file: MJS, guards: 'the lane order', breaks: '.claude/workflows/overnight.js' })
+    for (const [cell, whole] of [
+      ['overnight_tests.mjs (companion)', MJS],
+      [`${MJS} (companion)`, 'overnight_tests.mjs'],
+    ]) {
+      env = run({ prs: [211] }, { 211: pr(211, [MJS, '.claude/workflows/overnight.js'], { head: H2, commits: [H2], comments: [heldRecord(cell)], candidates: [mjs(whole)] }) },
+        { range, earlier: { 211: [{ finding: 'the companion did not fail with the author check dropped', held: true, answered: true, how: 'its own run went red' }] }, mutate: { [cell]: { ...row('reproduced', 1, 1), failingNames: MSGS }, [whole]: { ...row('reproduced', 1, 1), failingNames: MSGS } } })
+      result = await execute(env)
+      const c = resultOf(211, result)
+      const m = (c.mutations || []).find((x) => x.kind === 'held') || {}
+      if (m.test !== whole || m.result !== 'reproduced' || (m.caughtBy || []).length || c.verdict !== 'merge') fail(`PR 211 with the held cell ${JSON.stringify(cell)} and the .mjs candidate ${JSON.stringify(whole)} on project .claude/workflows red on its own messages: held row ${JSON.stringify({ test: m.test, result: m.result, caughtBy: m.caughtBy })}, verdict ${c.verdict}, expected ${whole} reproduced with no caught cell and merge`)
+      env = run({ prs: [211] }, { 211: pr(211, [MJS, '.claude/workflows/overnight.js'], { head: H2, commits: [H2], comments: [heldRecord(cell), laterRecord(cell)], candidates: [mjs(whole)] }) },
+        { range, mutate: { [whole]: { ...row('reproduced', 1, 1), failingNames: MSGS } } })
+      await execute(env)
+      if ((env.mutations.find((x) => x.test === whole) || { prompt: '' }).prompt.includes(BREAK)) fail(`PR 211 with the held cell ${JSON.stringify(cell)}, a later record reproducing it and the .mjs candidate ${JSON.stringify(whole)} on project .claude/workflows: the candidate is mutated as held, expected it answered and not held again`)
+    }
   }
 
   // A Node companion prints no test names, only its checks' fail() messages (#905): on #798 a stated

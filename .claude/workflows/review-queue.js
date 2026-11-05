@@ -812,14 +812,15 @@ const mutationList = (inv, standards, d, prior = { held: null, clearers: [] }) =
   // A held cell in the spelling the inventory gave a whole companion before #794, '<file>
   // (companion)', is held on the whole-file candidate whose path or basename is <file> (#801): on
   // #791 that cell named no candidate's test, now the bare path, so its row had no file and its red
-  // run read as caught elsewhere. Only that spelling, and only a candidate whose project is its file:
-  // a cell that scopes one check is matched by the test it names, as before. A later record's
-  // reproduced cell in that spelling answers the same candidate (#901): on #802 the later cell
-  // 'x_tests.py (companion)' did not name the candidate 'tools/x_tests.py', so the answered row was
-  // mutated again.
+  // run read as caught elsewhere. Only that spelling, and only a candidate whose project is its file,
+  // or whose file is an .mjs companion, which runs as its file whatever project the inventory gives
+  // it, as mutationRow reads it (#938, #941): a cell that scopes one check is matched by the test it
+  // names, as before. A later record's reproduced cell in that spelling answers the same candidate
+  // (#901): on #802 the later cell 'x_tests.py (companion)' did not name the candidate
+  // 'tools/x_tests.py', so the answered row was mutated again.
   const wholeFor = (cell) => {
     const [, f] = /^(\S+) \(companion\)$/.exec((cell || '').trim()) || []
-    return f ? candidates.filter((c) => c.file && c.project === c.file && [c.file, c.file.split('/').pop()].includes(c.test) && [c.file, c.file.split('/').pop()].includes(f)) : []
+    return f ? candidates.filter((c) => c.file && (c.project === c.file || /\.mjs$/.test(c.file)) && [c.file, c.file.split('/').pop()].includes(c.test) && [c.file, c.file.split('/').pop()].includes(f)) : []
   }
   const held = prior.held ? [...prior.held.rows].reverse().flatMap((h) => {
     const base = { mutation: h.broken, quote: h.broken, failed: -1, total: -1, kind: 'held', heldBy: h.url, cell: h.test }
