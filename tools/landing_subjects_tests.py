@@ -15,6 +15,8 @@ case proves the same thing after #62 changes.
 """
 from __future__ import annotations
 
+import contextlib
+import io
 import os
 import pathlib
 import shutil
@@ -785,6 +787,49 @@ class BrokenTests(unittest.TestCase):
         done = subprocess.run([sys.executable, "-I", str(SCRIPT)], cwd=case.repo, env=case.env,
                               capture_output=True, text=True)
         self.assertEqual(2, done.returncode)
+
+
+class GitTimeoutTests(unittest.TestCase):
+    # f7d81a7 bounded git's listing of the range by TIMEOUT, as gh's read is bounded, and no case
+    # held it (#896). A case cannot wait out 60 seconds, so these load the script in-process, lower
+    # its TIMEOUT, and put on PATH a git that never answers in time: it sleeps for SLEEP seconds, far
+    # past the lowered TIMEOUT, so a listing with no bound, or with a bound that is not TIMEOUT,
+    # waits it out and reads git's empty answer as a range with nothing to judge.
+    TIMEOUT = 0.5
+    SLEEP = 10
+
+    def setUp(self):
+        scratch = tempfile.TemporaryDirectory()
+        self.addCleanup(scratch.cleanup)
+        bin_dir = pathlib.Path(scratch.name).resolve()
+        sleep = shutil.which("sleep")
+        self.assertIsNotNone(sleep, "sleep is required to run this companion")
+        fake = bin_dir / "git"
+        # exec, so the process the timeout kills is the sleep itself, and no child holds the pipe open.
+        fake.write_text(f"#!/bin/bash\nexec {sleep} {self.SLEEP}\n")
+        fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
+        self.landing = load("landing_subjects")
+        self.landing.TIMEOUT = self.TIMEOUT
+        path = os.environ.get("PATH")
+        os.environ["PATH"] = str(bin_dir)
+        self.addCleanup(lambda: os.environ.__setitem__("PATH", path) if path is not None
+                        else os.environ.pop("PATH", None))
+
+    def test_a_listing_of_the_range_that_does_not_answer_judges_nothing_and_exits_2(self):
+        printed = io.StringIO()
+        with contextlib.redirect_stdout(printed):
+            code = self.landing.main(["--base", "base"])
+        lines = printed.getvalue().splitlines()
+        self.assertEqual(2, code, printed.getvalue())
+        self.assertTrue(lines and lines[-1].startswith(
+            "landing-subjects: fail: nothing judged: git log could not run: "), printed.getvalue())
+        self.assertIn(f"timed out after {self.TIMEOUT} seconds", lines[-1])
+
+    def test_a_listing_of_the_history_that_does_not_answer_is_broken(self):
+        with self.assertRaises(self.landing.Broken) as raised:
+            self.landing.history("HEAD")
+        self.assertTrue(str(raised.exception).startswith("git log could not run: "), str(raised.exception))
+        self.assertIn(f"timed out after {self.TIMEOUT} seconds", str(raised.exception))
 
 
 def load(name: str):
