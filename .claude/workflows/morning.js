@@ -605,6 +605,10 @@ const placeOf = (rules, where) => {
 }
 
 // ---------------------------------------------------------------- follow-ups, their bodies
+// The finding is the ticket's title, and the body does not repeat it (#972): the Raised-by line
+// filedAs reads, the Owner line ticket_shape's owner-line wants (#479), the Touches line or why it
+// has none, the row's Fails on sentence and one box. The record the Raised-by line links holds the
+// rest of the row (its axis, place and first record).
 const followUpBody = (pr, record, f, place) => [
   `**Raised by:** #${pr}, from its review record ${record}`,
   `**Owner:** ${place.owner}`,
@@ -612,13 +616,13 @@ const followUpBody = (pr, record, f, place) => [
   '',
   '## What to build',
   '',
-  `The review of #${pr} carried this finding rather than holding on it (${f.axis || 'no'} axis), first carried by ${f.firstCarried || record}: ${f.title}, at ${f.where || 'no place named'}. The record lists it under "## Follow-ups", which names no open ticket for it; this issue is that ticket.`,
-  '',
   // The input or state on which it gives the wrong result (#966); a four-column row names none.
   ...(f.failsOn ? [`Fails on: ${f.failsOn}`, ''] : []),
+  'The record lists it under Follow-ups; this issue is that ticket.',
+  '',
   '## Acceptance criteria',
   '',
-  `- [ ] ${f.title}: fixed, or declined with the reason in this issue's Answer.`,
+  "- [ ] Fixed, or declined with the reason in this issue's Answer.",
 ].join('\n')
 // The rows to file and those already filed, from what the reader returned: per open pull request, the
 // latest record's table, each row checked against the issues already filed, and its owner, Touches
@@ -1786,8 +1790,10 @@ const handoverText = (s) => {
   if (!m) list('main', [v && v.mainMoved ? 'origin/main has moved past the base; nothing was merged in or rebased' : 'origin/main has not moved past the base'])
   if (v && v.findings && v.findings.length) list('Findings', v.findings)
   const fu = s.followUps || { filed: [], already: [], refused: [], forHuman: [] }
-  list('Follow-ups filed', fu.filed.map((f) => `#${f.number} from #${f.pr}: ${f.title} (${f.url})`), 'none')
-  if ((fu.forHuman || []).length) list('Follow-ups filed ready-for-human', fu.forHuman.map((f) => `#${f.number} from #${f.pr}: ${f.title}: ${f.why}`))
+  // By number and title only (#972): GitHub links the number, and the ticket's body holds the rest,
+  // a ready-for-human one's why on its "Filed ready-for-human" line.
+  list('Follow-ups filed', fu.filed.map((f) => `#${f.number} from #${f.pr}: ${f.title}`), 'none')
+  if ((fu.forHuman || []).length) list('Follow-ups filed ready-for-human', fu.forHuman.map((f) => `#${f.number} from #${f.pr}: ${f.title}`))
   if ((fu.refused || []).length) list('Follow-ups not filed: tools/ticket_shape.py failed them', fu.refused.map((f) => `from #${f.pr}: ${f.title}: ${f.why}`))
   if (fu.already.length) list('Follow-ups already filed', fu.already.map((f) => `#${f.number} from #${f.pr}: ${f.title}`))
   // Last, so its line is the comment's last window line, the one the next morning reads (#514).
@@ -2257,7 +2263,8 @@ if (!fr) {
       followUps.filed.push(...fd.filed)
       followUps.already.push(...fd.skipped)
       followUps.refused.push(...fd.refused)
-      // Filed ready-for-human, each with why, so the hand-over names what a person must place (#479).
+      // Filed ready-for-human, each with why (#479): the hand-over lists them under a heading of their
+      // own, and the return keeps the why the ticket's body carries.
       for (const f of fd.filed) {
         const sent = toFile.find((t) => t.pr === f.pr && sameFinding(t.title, f.title))
         if (sent && sent.label === 'ready-for-human') followUps.forHuman.push({ ...f, why: sent.why })
