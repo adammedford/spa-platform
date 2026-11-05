@@ -329,8 +329,8 @@ const APPLIED = {
     commits: MADE({ sha: { type: 'string' }, subject: { type: 'string' } }),
     issues: MADE({ number: { type: 'integer' }, url: { type: 'string' }, title: { type: 'string' } }),
     candidates: MADE({ url: { type: 'string' } }),
-    rewrites: { type: 'array', items: { type: 'object', properties: { issue: { type: 'integer' }, preserved: { type: 'string' } }, required: ['issue', 'preserved'] } },
-    edits: MADE({ issue: { type: 'integer' }, preserved: { type: 'string' }, removed: { type: 'array', items: { type: 'string' } } }),
+    rewrites: { type: 'array', items: { type: 'object', properties: { issue: { type: 'integer' }, comment: { type: 'string' } }, required: ['issue', 'comment'] } },
+    edits: MADE({ issue: { type: 'integer' }, comment: { type: 'string' }, removed: { type: 'array', items: { type: 'string' } } }),
     edges: MADE({ issue: { type: 'integer' }, blockedBy: { type: 'array', items: { type: 'integer' } } }),
     skipped: { type: 'array', items: { type: 'object', properties: { q: { type: 'integer' }, why: { type: 'string' } }, required: ['q', 'why'] } },
     pushed: { type: 'object', properties: { branch: { type: 'string' }, tip: { type: 'string' }, ok: { type: 'boolean' }, reason: { type: 'string' } }, required: ['branch', 'tip', 'ok', 'reason'] },
@@ -1470,6 +1470,52 @@ summary says in one line what applying it changes. rewrites lists each ticket wh
 const afterApplyRules = (issue) => `This is the after pass (#635), run once the landing merged. First \`git -C ${REPO} fetch origin\`, so origin/main is fresh. A commit an earlier pass made may have landed already: look for one whose body cites #${issue} and the question on origin/main too, \`git -C ${REPO} log origin/main --format=%B\`, and when one does, that commit is the question's, made already. Before you skip anything as already done, check that its effect is still in place: the commit on origin/main or on the morning branch, the filed issue still there (\`cd ${REPO} && gh issue view <n> --json number,state\`), the comment still among its ticket's comments, the box still gone, the edge still among the blockers. An effect no longer in place is made again, never skipped.
 verified lists each question of the unit whose work is now in place, made by you or found still in place, as {q, effect, held, onMain}: effect is the commit's full sha, or the URL of the issue filed, the comment posted or the ticket edited; held is the number of the issue that now holds the question's remaining work, the workstream ticket or the follow-up filed for it, and 0 when none does (a commit answer's own ticket never holds it); onMain, for a commit, is whether \`git -C ${REPO} merge-base --is-ancestor <sha> origin/main\` exits 0, and false for anything else. A commit you made on the morning branch now is not on origin/main. A question whose work is not in place is not listed.
 `
+// The record a body rewrite posts (#968). GitHub keeps every edit of an issue body in the issue's edit
+// history, so the verbatim old body exists without a copy: 142 "## Body before <date>" comments held
+// 461 KB, the median one 80% identical to the body that replaced it. The comment names the questions
+// applied and the changed paragraphs as a unified diff, whose context stops at a blank line, so a
+// paragraph left alone is never quoted. The program runs as the applier writes it from the prompt,
+// byte for byte, and morning_tests.mjs runs the copy the prompt carries on a fixture rewrite.
+const EDIT_HISTORY = 'The previous body verbatim is this issue\'s edit history, which GitHub keeps for every edit of a body.'
+const BODY_DIFF = String.raw`import difflib, sys
+def lines(name):
+    text = open(name, encoding="utf-8").read()
+    return (text[:-1] if text.endswith("\n") else text).split("\n")
+old, new = lines(sys.argv[1]), lines(sys.argv[2])
+ops = difflib.SequenceMatcher(None, old, new, autojunk=False).get_opcodes()
+hunks = []
+for k, (tag, i1, i2, j1, j2) in enumerate(ops):
+    if tag == "equal":
+        continue
+    back = 0
+    if k > 0:
+        while back < i1 - ops[k - 1][1] and old[i1 - 1 - back].strip():
+            back += 1
+    ahead = 0
+    if k + 1 < len(ops):
+        while ahead < ops[k + 1][2] - i2 and old[i2 + ahead].strip():
+            ahead += 1
+    if hunks and i1 - back <= hunks[-1][1]:
+        hunks[-1][1], hunks[-1][3] = i2 + ahead, j2 + ahead
+    else:
+        hunks.append([i1 - back, i2 + ahead, j1 - back, j2 + ahead])
+print("--- before")
+print("+++ after")
+for a1, a2, b1, b2 in hunks:
+    print("@@ -%d,%d +%d,%d @@" % (a1 + 1 if a2 > a1 else a1, a2 - a1, b1 + 1 if b2 > b1 else b1, b2 - b1))
+    for tag, i1, i2, j1, j2 in ops:
+        if tag == "equal":
+            for i in range(max(i1, a1), min(i2, a2)):
+                print(" " + old[i])
+        elif a1 <= i1 and i2 <= a2:
+            for line in old[i1:i2]:
+                print("-" + line)
+            for line in new[j1:j2]:
+                print("+" + line)
+`
+const rewriteRecord = (date, issue, mdir) => `REWRITE RECORD: a ticket's body is changed in four steps (#968). 1. Save its current body, \`cd ${REPO} && gh issue view <n> --json body --jq .body > <a file under ${mdir}/>\`, and write the new body to another file under ${mdir}/. 2. Diff the two, \`python3 -I ${mdir}/body-diff.py <the current body's file> <the new body's file>\`: body-diff.py is the program between the lines "BEGIN body-diff.py" and "END body-diff.py" below, written to that path byte for byte when it is not there, and its output is the changed paragraphs as a unified diff, old lines and new. 3. Post a comment whose lines are, in order: "## Body rewritten ${date}"; "Applied: Q<n> of #${issue}." naming every question number applied, as "Applied: Q<n>, Q<m> of #${issue}."; "${EDIT_HISTORY}"; "~~~diff"; the diff's output, every line; "~~~" (\`cd ${REPO} && gh issue comment <n> --body-file <its file>\`). The comment carries no copy of the old body. 4. Edit the body, \`cd ${REPO} && gh issue edit <n> --body-file <the new body's file>\`.
+BEGIN body-diff.py
+${BODY_DIFF}END body-diff.py`
 const applyPrompt = (date, issue, unit, phaseKey, after = false) => {
   const p = paths(date)
   const commits = unit.kind === 'commit'
@@ -1481,19 +1527,20 @@ PHASE FILE: ${p.mdir}/${after ? 'after' : 'apply'}/${unit.key}.json INPUTS: ${ph
 Write {"inputs": "${phaseKey}", "result": <your return value>} to the PHASE FILE as JSON before you return.
 UNIT: ${JSON.stringify(unit)}
 
-Skip what an earlier morning already did, and list it in skipped with why: a commit on ${p.morningBranch} whose body cites #${issue} and the question (\`git -C ${REPO} log origin/main..${p.morningBranch} --format=%B\`), an issue whose body cites them (\`cd ${REPO} && gh issue list --state all --search "#${issue} Q<n> in:body" --json number,url,title\`), a candidate or a preserved body already among the ticket's comments, a box already gone from its target's body, an edge already among its target's blockers.
+Skip what an earlier morning already did, and list it in skipped with why: a commit on ${p.morningBranch} whose body cites #${issue} and the question (\`git -C ${REPO} log origin/main..${p.morningBranch} --format=%B\`), an issue whose body cites them (\`cd ${REPO} && gh issue list --state all --search "#${issue} Q<n> in:body" --json number,url,title\`), a candidate, or a "## Body rewritten" comment naming the question (an earlier morning's "## Body before" one), already among the ticket's comments, a box already gone from its target's body, an edge already among its target's blockers.
 ${commits ? `Integrator edits, one commit each, on ${p.morningBranch} in the morning worktree ${p.morningWt}, forked from origin/main: reuse it when it exists, else \`git -C ${REPO} fetch origin && git -C ${REPO} worktree add -b ${p.morningBranch} ${p.morningWt} origin/main\` (when the branch exists without the worktree, \`git -C ${REPO} worktree add ${p.morningWt} ${p.morningBranch}\`). Each commit's subject says what changed; its body cites the Overnight issue as #${issue}, the question as Q<n> and its answer line verbatim; its last paragraph carries the attribution line and, on a line of its own, "Authority: <the question's authority URL>", because every such edit is to a steering document (docs/agents/landing-work.md). Commit with \`git -C ${p.morningWt} commit -F <a message file under ${p.mdir}/>\`. When the branch has commits, push it with the hook running, as the house rules say: \`git -C ${p.morningWt} push -u origin ${p.morningBranch}\`. A hook failure leaves it local: pushed.ok false and reason the hook's last lines.
 ` : `You make no commit. pushed is {branch: "", tip: "", ok: true, reason: "no commits"}.
 `}Workstream tickets: file each as \`cd ${REPO} && gh issue create --title "<what to build>" --label needs-triage --parent ${PARENT_ISSUE} --body-file <a file under ${p.mdir}/>\` (#78 grill Q9: the night's Route phase writes the brief), its body opening with the owner line (**Owner:** and the OWNERSHIP.md role) and the plan row where there is one, citing #${issue} and Q<n>, and add the blocked-by edges the recommendation names with \`cd ${REPO} && gh issue edit <new> --add-blocked-by <n>\`.
 Decisions to record: draft each ADR candidate as a comment on its ticket, \`cd ${REPO} && gh issue comment <ticket> --body-file <a file under ${p.mdir}/>\`: the decision, the rejected alternatives, and any sentence that contradicts an existing ADR flagged as docs/agents/domain.md asks. Never an ADR file.
-Rewrites (a ticket with "rewrite": true): first preserve the current body verbatim in a comment headed "## Body before ${date}" (\`cd ${REPO} && gh issue comment <ticket> --body-file <file>\`), then rewrite it as current decision, what to build and acceptance, naming every confirmed question number, \`cd ${REPO} && gh issue edit <ticket> --body-file <file>\`. A spec's body is never rewritten (#78 grill Q13): list that one in skipped.
+Rewrites (a ticket with "rewrite": true): rewrite its body as current decision, what to build and acceptance, naming every confirmed question number, by the REWRITE RECORD's four steps below. List each in rewrites {issue: the ticket, comment: the "## Body rewritten ${date}" comment's URL}. A spec's body is never rewritten (#78 grill Q13): list that one in skipped.
 FOLLOW-UP TICKETS: the unit's followUps, each with its q, title, blockedBy, file and body, written by the script (#320). For each, in order:
 1. Write its body to its file, exactly, but for an Owner line reading <role>: replace <role> with the one OWNERSHIP.md role its Touches paths derive (the last matching line wins, as git's rule). Paths that derive more than one role are filed by nobody: list it in skipped with the roles.
 2. Check its shape as the overnight run checks a new ticket, under the label and blockers it will be filed with: \`cd ${REPO} && python3 -I -c 'import json,sys; print(json.dumps({"number": 0, "body": open(sys.argv[1]).read(), "labels": [{"name": sys.argv[2]}], "subIssuesSummary": {"total": 0}, "blockedBy": {"nodes": [{"number": int(n), "state": "OPEN"} for n in sys.argv[3:]]}}))' <its file> needs-triage <each blockedBy number> | python3 -I tools/ticket_shape.py -\` (bare numbers; with none, nothing after the label).
 3. Only when that exits 0, its last line starting "ticket-shape: pass:", file it: \`cd ${REPO} && gh issue create --title "<its title>" --label needs-triage --body-file <its file>\`, adding --blocked-by <n> for each blockedBy number. It is neither a sub-issue nor a blocker of the ticket that raised it (docs/agents/tracker-policy.md): no --parent. On exit 1 file nothing and list it in skipped with each "ticket-shape: <rule>:" line; on any other exit file nothing and say in skipped that the check did not judge it, quoting its last line. Never reword a body to get past the check: a failure is reported, not repaired. List each one filed in issues with its number, url, title and questions [its q].
-Ticket edits: the unit's edits, each {q, target, removeBoxes} (#320). Read the target, \`cd ${REPO} && gh issue view <target> --json body,subIssuesSummary\`. A spec, an issue with sub-issues, is never edited (#78 grill Q13): list it in skipped. Each line of removeBoxes must be a whole line of the body, byte for byte; when one is not, edit nothing for that q and list it in skipped with the line not found. Otherwise, as a rewrite does, first preserve the current body verbatim in a comment headed "## Body before ${date}" whose next line names Q<n> of #${issue} (\`cd ${REPO} && gh issue comment <target> --body-file <file>\`), then write the body with exactly those lines removed and no other byte changed, \`cd ${REPO} && gh issue edit <target> --body-file <file>\`. List each in edits {issue: the target, preserved: that comment's URL, removed: the lines removed, questions: [its q]}. The unit's edits run in order, each reading the body the last one left.
+Ticket edits: the unit's edits, each {q, target, removeBoxes} (#320). Read the target, \`cd ${REPO} && gh issue view <target> --json body,subIssuesSummary\`. A spec, an issue with sub-issues, is never edited (#78 grill Q13): list it in skipped. Each line of removeBoxes must be a whole line of the body, byte for byte; when one is not, edit nothing for that q and list it in skipped with the line not found. Otherwise, as a rewrite does, change it by the REWRITE RECORD's four steps below, its new body the current one with exactly those lines removed and no other byte changed, and its comment's question line naming Q<n> of #${issue}. List each in edits {issue: the target, comment: the "## Body rewritten ${date}" comment's URL, removed: the lines removed, questions: [its q]}. The unit's edits run in order, each reading the body the last one left.
 Ticket edges: the unit's edges, each {q, target, addBlockedBy}. Read the target's blockers, \`cd ${REPO} && gh issue view <target> --json blockedBy\`, and add each one missing, \`cd ${REPO} && gh issue edit <target> --add-blocked-by <n>\`, one call per number. List each in edges {issue: the target, blockedBy: the numbers it now carries from addBlockedBy, questions: [its q]}.
-${after ? afterApplyRules(issue) : ''}A no-repo-change question needs nothing. If GitHub cannot be reached, stop writing, set unreachable true and return what was made. refused is "" unless you refused the whole unit, with why.`
+${after ? afterApplyRules(issue) : ''}A no-repo-change question needs nothing. If GitHub cannot be reached, stop writing, set unreachable true and return what was made. refused is "" unless you refused the whole unit, with why.
+${rewriteRecord(date, issue, p.mdir)}`
 }
 
 // The line split the jq programs below cut a body at: PY_LINE_BREAK's set, as a jq string.
@@ -1938,7 +1985,7 @@ const applyAnswers = async ({ date, issue, gate, refusals, reuse, after = false 
       for (const t of byTicket) {
         for (const q of t.questions) if (q.kind !== 'no-repo-change') apply.wouldDo.push(`Q${q.q} (#${t.issue}): ${q.kind}: ${q.summary}`)
         for (const f of t.followUps) apply.wouldDo.push(`Q${f.q} (#${t.issue}): file the follow-up "${f.title}"`)
-        if (t.rewrite) apply.wouldDo.push(`#${t.issue}: rewrite its body, the old one preserved in a dated comment`)
+        if (t.rewrite) apply.wouldDo.push(`#${t.issue}: rewrite its body, the changed paragraphs posted as a diff in a dated comment`)
       }
     } else {
       const units = unitsFor(byTicket)
@@ -1969,8 +2016,8 @@ const applyAnswers = async ({ date, issue, gate, refusals, reuse, after = false 
         for (const i of r.issues) apply.done.push(`filed #${i.number} ${i.title} (${i.questions.map((q) => 'Q' + q).join(', ')}): ${i.url}`)
         for (const i of r.issues) apply.filed.push({ number: i.number, title: i.title, url: i.url, body: bodies.get(i.title) || '' })
         for (const c of r.candidates) apply.done.push(`ADR candidate (${c.questions.map((q) => 'Q' + q).join(', ')}): ${c.url}`)
-        for (const w of r.rewrites) apply.done.push(`rewrote #${w.issue}; the old body is at ${w.preserved}`)
-        for (const e of r.edits) apply.done.push(`edited #${e.issue}: removed ${e.removed.length} box(es); the old body is at ${e.preserved} (${e.questions.map((q) => 'Q' + q).join(', ')})`)
+        for (const w of r.rewrites) apply.done.push(`rewrote #${w.issue}; the diff is at ${w.comment}`)
+        for (const e of r.edits) apply.done.push(`edited #${e.issue}: removed ${e.removed.length} box(es); the diff is at ${e.comment} (${e.questions.map((q) => 'Q' + q).join(', ')})`)
         for (const e of r.edges) apply.done.push(`blocked #${e.issue} by ${e.blockedBy.map((n) => '#' + n).join(', ')} (${e.questions.map((q) => 'Q' + q).join(', ')})`)
         for (const s of r.skipped) apply.done.push(`skipped Q${s.q}: ${s.why}`)
         if (r.refused) refusals.push(`applier ${r.unit} refused: ${r.refused}`)
