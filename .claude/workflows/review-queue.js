@@ -813,7 +813,10 @@ const mutationList = (inv, standards, d, prior = { held: null, clearers: [] }) =
   // (companion)', is held on the whole-file candidate whose path or basename is <file> (#801): on
   // #791 that cell named no candidate's test, now the bare path, so its row had no file and its red
   // run read as caught elsewhere. Only that spelling, and only a candidate whose project is its file:
-  // a cell that scopes one check is matched by the test it names, as before.
+  // a cell that scopes one check is matched by the test it names, as before. A later record's
+  // reproduced cell in that spelling answers the same candidate (#901): on #802 the later cell
+  // 'x_tests.py (companion)' did not name the candidate 'tools/x_tests.py', so the answered row was
+  // mutated again.
   const wholeFor = (cell) => {
     const [, f] = /^(\S+) \(companion\)$/.exec((cell || '').trim()) || []
     return f ? candidates.filter((c) => c.file && c.project === c.file && [c.file, c.file.split('/').pop()].includes(c.test) && [c.file, c.file.split('/').pop()].includes(f)) : []
@@ -823,7 +826,8 @@ const mutationList = (inv, standards, d, prior = { held: null, clearers: [] }) =
     const byName = candidates.filter((c) => names(h.test, c.test))
     const named = byName.length ? byName : wholeFor(h.test)
     const answered = (test) => h.later.some((t) => t === test || names(t, test))
-    return named.length ? named.filter((c) => !answered(c.test)).map((c) => ({ ...c, ...base }))
+    const answeredOn = (c) => answered(c.test) || h.later.some((t) => wholeFor(t).includes(c))
+    return named.length ? named.filter((c) => !answeredOn(c)).map((c) => ({ ...c, ...base }))
       : answered(h.test) ? [] : [{ test: h.test, project: '', file: '', guards: '', breaks: '', ...base }]
   }) : []
   const reviewed = new Set((inv.reviewCommits || []).filter((c) => c && /^Review:/.test(c.subject || '')).flatMap((c) => c.files || []))
