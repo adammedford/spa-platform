@@ -532,9 +532,12 @@ class ListingCompletenessTests(unittest.TestCase):
         case.listing(pages)
         return case
 
-    def assert_unjudgeable(self, done):
+    def assert_unjudgeable(self, done, why=None):
+        """Exit 2 with no pass or subject; with `why`, the reason the guard that refused it gives."""
         self.assertEqual(2, done.returncode, done.stdout + done.stderr)
         self.assertIn("landing-subjects: fail:", done.stdout)
+        if why is not None:
+            self.assertIn(f"listed completely: {why}", done.stdout)
         self.assertNotIn("landing-subjects: pass:", done.stdout)
         self.assertNotIn("landing-subjects: subject:", done.stdout)
 
@@ -601,19 +604,29 @@ class ListingCompletenessTests(unittest.TestCase):
         self.assert_unjudgeable(self.case(pages).run())
 
     def test_malformed_receipts_cannot_clear_the_row(self):
-        for shape, pages in (
-            ("no pages", []),
-            ("no connection", [{"data": {"repository": None}}]),
-            ("a boolean count", [listing_page([], False, cursor=None)]),
-            ("a nonboolean next-page flag", [listing_page([], 0, more=0, cursor=None)]),
-            ("a missing body", [listing_page([{"number": 344}], 1)]),
-            ("a null body", [listing_page([{"number": 344, "body": None}], 1)]),
-            ("a boolean number", [listing_page([{"number": True, "body": ""}], 1)]),
+        # Each shape names the reason its own guard gives, so a deleted guard whose shape another
+        # path still refuses fails here too (the review of #1038: with the null-body clause gone,
+        # declared(None) raised a TypeError and the bare exit 2 still passed). A shape that only
+        # Python's own lookup refuses names no reason.
+        no_shape = "an issue has no readable number or body"
+        for shape, pages, why in (
+            ("no pages", [], "no paginated listing receipt"),
+            ("no connection", [{"data": {"repository": None}}], None),
+            ("a boolean count", [listing_page([], False, cursor=None)],
+             "totalCount is not a nonnegative integer"),
+            ("a nonboolean next-page flag", [listing_page([], 0, more=0, cursor=None)],
+             "nodes or pageInfo has an unreadable shape"),
+            ("a missing body", [listing_page([{"number": 344}], 1)], None),
+            ("a null body", [listing_page([{"number": 344, "body": None}], 1)], no_shape),
+            ("a boolean number", [listing_page([{"number": True, "body": ""}], 1)], no_shape),
             ("an empty cursor on a nonempty page", [listing_page(
-                [{"number": 344, "body": CARRIER_P2_1}], 1, cursor="")]),
+                [{"number": 344, "body": CARRIER_P2_1}], 1, cursor="")],
+             "a page has an absent or repeated endCursor"),
+            ("an empty page with a cursor", [listing_page([], 0)],
+             "an empty page does not describe an empty listing"),
         ):
             with self.subTest(shape=shape):
-                self.assert_unjudgeable(self.case(pages).run())
+                self.assert_unjudgeable(self.case(pages).run(), why)
 
     def test_a_complete_empty_listing_is_valid(self):
         case = Case(self)

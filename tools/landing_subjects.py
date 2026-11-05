@@ -101,7 +101,8 @@ PART_OF = re.compile(r"(?m)^\*\*Plan row:\*\*[ \t]*none[ \t]*\([ \t]*part of[ \t
 
 # gh fills {owner}/{repo} from the current remote and signs in from its keyring or GH_TOKEN.
 # --paginate follows endCursor until hasNextPage is false; --slurp preserves every page's receipt,
-# so a short listing is not mistaken for all open issues (#871).
+# so a short listing is not mistaken for all open issues (#871). The paging and the placeholders are
+# gh's (https://cli.github.com/manual/gh_api).
 GH_ISSUE_BODY = ("gh", "issue", "view", "{number}", "--json", "body", "--jq", ".body")
 GH_OPEN_ISSUES = (
     "gh", "api", "graphql", "--paginate", "--slurp", "-F", "owner={owner}", "-F", "name={repo}",
