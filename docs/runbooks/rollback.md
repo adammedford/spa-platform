@@ -49,9 +49,13 @@ It refuses, with exit 1:
 Then it does what `deploy.sh` does after its push: it applies the platform root with those digests
 and the `/readyz` health check, records them in `images.auto.tfvars`, rewrites
 `infra/envs/poc/outputs.json`, waits for a stable service and asserts the running digest and the
-target's health ([deploy.md](deploy.md), steps 3 to 5).
+targets' health as `deploy.sh`'s step 5 does, tolerating the previous task's draining target
+([deploy.md](deploy.md), steps 3 to 5). It stops there: the readiness wait that ends `deploy.sh`'s
+step 5, reading each task's revision through a tunnel of its own, is not part of a rollback, so
+`rollback.sh` opens no tunnel, needs no Session Manager plugin and needs no tunnel running.
 
-Afterwards, start `tools/scripts/tunnel.sh` again (its hop was the replaced task), then:
+Afterwards, check it yourself: start `tools/scripts/tunnel.sh` again (its hop was the replaced
+task), then:
 
 ```bash
 tools/scripts/verify-tunnel.sh /healthz
