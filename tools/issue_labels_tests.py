@@ -409,7 +409,35 @@ class CommandLine(unittest.TestCase):
         last = self.last_line(done)
         self.assertTrue(last.startswith("issue-labels: fail: write failed: #12: "), last)
         self.assertIn("1 issue(s) written before it", last)
+        self.assertIn("nothing written on #12", last)
         self.assertNotIn("nothing judged", last)
+
+    def test_a_write_that_fails_after_a_post_for_the_same_issue_says_what_it_made(self):
+        # The case #831 asks for: the POST that adds #11's labels succeeds and the DELETE that
+        # follows fails, so #11 is partly written. It is not one of the issues written before it,
+        # and the line names what the POST made, which the next apply then finds already there.
+        self.world({**self.current, "issues": [
+            issue(touching("infra/main.tf"), have=("area:product",), number=11)]})
+        done = self.run_script("apply", "--all", GH_FAIL_WRITES_AFTER="1")
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertEqual([call[2] for call in self.writes()], ["POST", "DELETE"])
+        last = self.last_line(done)
+        self.assertTrue(last.startswith("issue-labels: fail: write failed: #11: "), last)
+        self.assertIn("0 issue(s) written before it", last)
+        self.assertIn("on #11, added area:deployment, kind:ticket, vendor:aws before the failure", last)
+        self.assertNotIn("nothing written on #11", last)
+
+    def test_a_delete_that_fails_after_a_delete_for_the_same_issue_says_what_it_removed(self):
+        # Two stale labels and nothing to add: the first DELETE lands and the second fails.
+        self.world({**self.current, "issues": [issue(touching("tools/land.sh"), number=11, have=(
+            "kind:ticket", "area:process", "area:product", "vendor:aws"))]})
+        done = self.run_script("apply", "--all", GH_FAIL_WRITES_AFTER="1")
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertEqual([call[2] for call in self.writes()], ["DELETE", "DELETE"])
+        last = self.last_line(done)
+        self.assertTrue(last.startswith("issue-labels: fail: write failed: #11: "), last)
+        self.assertIn("0 issue(s) written before it; on #11, removed area:product before the failure",
+                      last)
 
     def test_a_label_write_that_fails_says_what_was_made(self):
         # The case that holds run_labels()'s write-failed verdict (#829): the count alone is also in a
