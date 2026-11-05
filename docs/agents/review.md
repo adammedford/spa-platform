@@ -144,6 +144,12 @@ gh pr comment <n> --body-file - <<'EOF'
 ## Standards
 ...
 ## Spec
+| Box | Verdict | Evidence |
+| --- | --- | --- |
+...
+## Mutations
+| Broken | Failed of total | Result | Log |
+| --- | --- | --- | --- |
 ...
 
 Reviewed <40-hex head> against <40-hex base>: merge
