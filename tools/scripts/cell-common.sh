@@ -534,10 +534,9 @@ wait_and_assert() {
 # a Session Manager port forward, and the wait opens a tunnel of its own: tools/scripts/tunnel.sh,
 # started in the background on a free local port the system picks from its ephemeral range, which
 # 8443 lies below, and never one a socket holds, so an operator's tunnel is left alone. It runs after
-# wait_and_assert,
-# when every running task is the applied deployment's, so its hop is a task of that deployment. The
-# origin is https://app1.$SPA_CERT_DOMAIN:<that port>, the first app's host on the loopback address
-# by the hosts-file line certs.sh names, and the gateway answers /readyz on any host
+# wait_and_assert, when every running task is the applied deployment's, so its hop is a task of that
+# deployment. The origin is https://app1.$SPA_CERT_DOMAIN:<that port>, the first app's host on the
+# loopback address by the hosts-file line certs.sh names, and the gateway answers /readyz on any host
 # (contracts/pipeline.md, UsePlatformHealth). The wait closes it when the wait ends, pass or fail,
 # and cell_cleanup closes it on an exit or an interrupt before then. Until #1008 the wait read through
 # an operator's tunnel, which had to be started by hand, through a task of the new deployment,
