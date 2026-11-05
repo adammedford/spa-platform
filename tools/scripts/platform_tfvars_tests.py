@@ -176,6 +176,9 @@ class AFailedOrMalformedLookupLeavesTheFileAsItWas(Tfvars):
             "another repository": operator_file().replace(OLD_IMAGE, other),
             # A tag is no digest.
             "a tag": operator_file().replace(OLD_IMAGE, SAMPLE_REFERENCE),
+            # A short or upper-case digest is no full one: --sample-digest would refuse it with exit 2.
+            "a short pin": operator_file().replace(OLD_IMAGE, f"{SAMPLE}@sha256:517607ae"),
+            "an upper-case pin": operator_file().replace(OLD_IMAGE, f"{SAMPLE}@sha256:" + "A" * 64),
             # Two pins: which one Terraform keeps is not this script's to guess.
             "set twice": operator_file() + f'gateway_image = "{SAMPLE}@{GIVEN}"\n',
         }
