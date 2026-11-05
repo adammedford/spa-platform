@@ -190,6 +190,75 @@ public sealed class ContinuityRunTests : IDisposable
         Assert.Equal(["-C", directory, "check-ignore", "-q", "--", Path.Combine(directory, "row3.json")], check.Arguments);
     }
 
+    // ---- a stopped driver and its evidence (#870; CODING_STANDARDS.md, #212's clean-up, f234abc) ----
+
+    /// <summary>
+    /// A runner whose <c>git check-ignore</c> answers ignored for the first <paramref name="ignoredReads"/>
+    /// reads and not ignored after, so the evidence write's own read is refused.
+    /// </summary>
+    private static RecordedRunner RefusedAfter(int ignoredReads)
+    {
+        int reads = 0;
+        return RecordedRunner.WithExits(command => command switch
+        {
+            { Program: "git", Arguments: [.., "check-ignore", "-q", "--", _] } => new CommandResult(reads++ < ignoredReads ? 0 : 1, ""),
+            _ => throw new InvalidOperationException($"unexpected {command.Program} {string.Join(' ', command.Arguments)}"),
+        });
+    }
+
+    private sealed class DriverBroke() : Exception("the driver broke");
+
+    [Fact]
+    public async Task A_two_task_rows_failed_evidence_write_is_reported_beside_the_drivers_failure()
+    {
+        // The budget's read is answered ignored; the write's read is refused.
+        AggregateException both = await Assert.ThrowsAsync<AggregateException>(() => Run(RefusedAfter(1)).TwoTaskRowAsync("row3", Sent("control"), null,
+            (_, _) => throw new DriverBroke(), (_, _) => RowResult.Passed("", []), Ct));
+
+        Assert.Collection(both.InnerExceptions,
+            first => Assert.IsType<DriverBroke>(first),
+            second => Assert.Contains("not ignored by git", Assert.IsType<InvalidOperationException>(second).Message, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task A_once_rows_failed_evidence_write_is_reported_beside_the_drivers_failure()
+    {
+        AggregateException both = await Assert.ThrowsAsync<AggregateException>(() => Run(RefusedAfter(0)).OnceAsync<int>("row6", Sent("control"),
+            _ => throw new DriverBroke(), _ => [], (_, _) => RowResult.Passed("", []), Ct));
+
+        Assert.Collection(both.InnerExceptions,
+            first => Assert.IsType<DriverBroke>(first),
+            second => Assert.Contains("not ignored by git", Assert.IsType<InvalidOperationException>(second).Message, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task A_stopped_driver_still_writes_its_evidence_and_throws_its_own_failure()
+    {
+        await Assert.ThrowsAsync<DriverBroke>(() => Run(Runner(true, () => [])).TwoTaskRowAsync("row3", Sent("control"), null,
+            (_, _) => throw new DriverBroke(), (_, _) => RowResult.Passed("", []), Ct));
+        await Assert.ThrowsAsync<DriverBroke>(() => Run(Runner(true, () => [])).OnceAsync<int>("row6", Sent("control"),
+            _ => throw new DriverBroke(), _ => [], (_, _) => RowResult.Passed("", []), Ct));
+
+        foreach (string row in new[] { "row3", "row6" })
+        {
+            RowEvidence written = JsonSerializer.Deserialize<RowEvidence>(await File.ReadAllTextAsync(Path.Combine(directory, row + ".json"), Ct))!;
+            Assert.Equal(Verdict.NotProved, written.Verdict);
+            Assert.Equal("the driver stopped with DriverBroke", written.Reason);
+        }
+    }
+
+    [Fact]
+    public async Task A_cancelled_row_still_writes_its_evidence_without_calling_it_a_stopped_driver()
+    {
+        await Assert.ThrowsAsync<OperationCanceledException>(() => Run(Runner(true, () => [])).TwoTaskRowAsync("row3", Sent("control"), null,
+            (_, _) => throw new OperationCanceledException(), (_, _) => RowResult.Passed("", []), Ct));
+        await Assert.ThrowsAsync<OperationCanceledException>(() => Run(Runner(true, () => [])).OnceAsync<int>("row6", Sent("control"),
+            _ => throw new OperationCanceledException(), _ => [], (_, _) => RowResult.Passed("", []), Ct));
+
+        Assert.Equal("no attempt was made", JsonSerializer.Deserialize<RowEvidence>(await File.ReadAllTextAsync(Path.Combine(directory, "row3.json"), Ct))!.Reason);
+        Assert.Equal("the row did not finish", JsonSerializer.Deserialize<RowEvidence>(await File.ReadAllTextAsync(Path.Combine(directory, "row6.json"), Ct))!.Reason);
+    }
+
     [Fact]
     public async Task No_cookie_or_ticket_reaches_a_step_a_verdict_or_an_evidence_file()
     {
