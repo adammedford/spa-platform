@@ -100,9 +100,10 @@ task and an x64 workstation (#781). The cost is a commit for every runtime patch
 digest with `docker buildx imagetools inspect mcr.microsoft.com/dotnet/aspnet:10.0-noble-chiseled-extra`
 and move the digest in the Dockerfile; the pins sweep lists both digests as its `base-images` family
 (`tools/pins_inventory.py`). `deploy.sh` still pushes, applies and asserts the built image's own digest.
-The mock API's and the startup floor's Dockerfiles still name floating tags, which the inventory reports
-as `unpinned-base-image` findings until their owners pin them; for those, a build without `--pull`
-reuses the base Docker last pulled until `docker pull` refreshes it. `tools/image-check.sh`'s runtime line
+The mock API's Dockerfile is also pinned by digest (#782). The startup floor's Dockerfile still
+names floating tags, which the inventory reports as `unpinned-base-image` findings until its owner
+pins them; for that image, a build without `--pull` reuses the base Docker last pulled until
+`docker pull` refreshes it. `tools/image-check.sh`'s runtime line
 shows which runtime the gateway image got.
 
 **The workstation's test hosts still run 10.0.12.** Updating the SDK to 10.0.402 or later
