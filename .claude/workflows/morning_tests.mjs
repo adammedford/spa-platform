@@ -1753,7 +1753,7 @@ try {
     // still matches HEADING_CUT, whose [^,]* runs across lines, so only the newline clause leaves it out.
     const twoFields = comment(48, '## Questions: #346, issue-346\n\n' + 'n'.repeat(250) + '\n', '2026-10-21T09:55:00Z')
     const twoHead = twoFields.body.slice(0, 200)
-    if (!twoHead.includes('\n') || twoHead.slice(twoHead.indexOf('\n')).includes(',')) fail(`a whole first line: the fixture's head ${JSON.stringify(twoHead.slice(0, 40))} has no newline, or a comma after it`)
+    if (twoFields.body.length <= 200 || !twoHead.includes('\n') || twoHead.slice(twoHead.indexOf('\n')).includes(',')) fail(`a whole first line: the fixture's head ${JSON.stringify(twoHead.slice(0, 40))} is short of 200 characters, has no newline, or has a comma after it`)
     const whole = await execute(newRepo(), { date: DATE }, { issue: issueWith([big(1, 0), twoFields]) })
     if (cutAt(whole) !== '0') fail(`a whole first line that is no heading: the batch reads ${cutAt(whole)}, expected 0: a head whose first line is whole is judged by HEADING, not by the cut-heading rule`)
     // A reader that changes a body (2026-11-02: a dropped **Q46.** marker, twice) is caught against the
