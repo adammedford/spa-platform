@@ -216,9 +216,12 @@ internal sealed class DynamoDbSessionTable
 /// <see cref="DynamoDbSessionTable.StoreDeadline"/> ran out (D4). It names the operation and nothing
 /// else: no key, no <c>pk</c>, no record (N-16). Logout's remove in <see cref="SessionEnd"/> catches it
 /// and reports the removal not confirmed, and the logout clears the cookies (the F11 exception, #386).
-/// Everywhere else the writer that meets it ends the request under <c>auth.store</c>, 503
-/// <c>session_store_unavailable</c>, with one Error line naming <see cref="Operation"/> and no cookie
-/// set or cleared (F17 on #332; <see cref="StoreFailure"/>, #727).
+/// The purge by app, <see cref="DynamoDbSessionStore.RemoveAppAsync"/>, runs on no request: it is
+/// waited for on the registry poller's thread, and <see cref="OptionsInvalidator"/> catches it there
+/// and logs PurgeFailed, which stops no other app's purge (#912). Everywhere else the writer that
+/// meets it ends the request under <c>auth.store</c>, 503 <c>session_store_unavailable</c>, with one
+/// Error line naming <see cref="Operation"/> and no cookie set or cleared (F17 on #332;
+/// <see cref="StoreFailure"/>, #727).
 /// </summary>
 internal sealed class SessionStoreUnavailableException(string operation, TimeSpan deadline, Exception? inner)
     : Exception(
