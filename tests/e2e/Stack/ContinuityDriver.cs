@@ -10,7 +10,9 @@ namespace Gateway.E2ETests.Stack;
 /// The driver of the deployed continuity rows (#358 Q136): it sends the requests and pulls the levers,
 /// on the two-task cell and nowhere else. Every request carries a fresh sampled <c>traceparent</c>
 /// (Q137): the raw client's per request (<see cref="TracedClient"/>), Chromium's per step through the
-/// context's extra HTTP headers. What it records is <see cref="Step"/>s, which the observer
+/// context's extra HTTP headers. The raw client's requests carry the fetch metadata a same-origin
+/// <c>fetch</c> from the app's page sends (<see cref="TracedClient.FetchMetadata"/>), so they pass the
+/// request gate (#1001). What it records is <see cref="Step"/>s, which the observer
 /// (<see cref="ContinuityObserver"/>) places and judges; it holds the session's cookies only in
 /// <see cref="SessionCookies"/>, which prints as nothing.
 /// </summary>
@@ -23,12 +25,24 @@ public sealed class ContinuityDriver : IAsyncDisposable
     {
         this.stack = stack;
         Ecs = new ContinuityEcs(stack.Cell, runner);
-        raw = new TracedClient((request, _) => stack.SendRawAsync(request));
+        raw = RawOf(stack);
         string directory = Environment.GetEnvironmentVariable(ContinuityEvidence.Variable) is { Length: > 0 } named
             ? named
             : throw new InvalidOperationException($"{ContinuityEvidence.Variable} names no directory: a continuity row writes its evidence there, under .scratch/sitting/log/<UTC date>/.");
         Run = new ContinuityRun(new ContinuityEvidence(directory, runner), new ContinuityLog(stack.Cell, runner));
     }
+
+    /// <summary>The session read the raw client sends in rows 3, 4 and 9.</summary>
+    public const string SessionPath = "/bff/session";
+
+    /// <summary>The orders API call the raw client sends in rows 6 and 8.</summary>
+    public const string ApiPath = "/api/orders/whoami";
+
+    /// <summary>
+    /// The raw client the rows send through, over a stack's load balancer: the cell's tunnel here, and
+    /// the local stand-in in <c>ContinuityGateTests</c>, which proves its calls pass the request gate (#1001).
+    /// </summary>
+    public static TracedClient RawOf(IBrowserStack stack) => new((request, _) => stack.SendRawAsync(request));
 
     public ContinuityEcs Ecs { get; }
 
@@ -143,7 +157,10 @@ public sealed class ContinuityDriver : IAsyncDisposable
     }
 
     /// <summary>Row 9's logout through the shell's own form, stopped at the provider's login.</summary>
-    public Task<Step> LogoutAsync(Profile profile, HarnessApp app) =>
+    public Task<Step> LogoutAsync(Profile profile, HarnessApp app) => LogoutAsync(stack, profile, app);
+
+    /// <summary>The same logout on any stack, for the local proof that row 9's replay passes the gate (#1001).</summary>
+    public static Task<Step> LogoutAsync(IBrowserStack stack, Profile profile, HarnessApp app) =>
         BrowserStepAsync(profile, app, "logout", "/bff/logout", "bff", 302,
             () => stack.StopAtProviderLoginAsync(profile, () => profile.Page.ClickAsync("form[action='/bff/logout'] button")));
 
@@ -215,7 +232,7 @@ public sealed class ContinuityDriver : IAsyncDisposable
         Stopwatch running = Stopwatch.StartNew();
         while (running.Elapsed < ContinuityBounds.Row6SessionCalls)
         {
-            calls.Add(await SendAsync($"session-{session}-call-{calls.Count + 1}", HttpMethod.Get, "/api/orders/whoami", cookies, null, ct));
+            calls.Add(await SendAsync($"session-{session}-call-{calls.Count + 1}", HttpMethod.Get, ApiPath, cookies, null, ct));
             await Task.Delay(TimeSpan.FromSeconds(1), ct);
         }
 
