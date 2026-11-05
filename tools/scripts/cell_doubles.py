@@ -13,7 +13,17 @@ it, and what they read back afterwards. The companions prove those in D-3's shap
 
 **A constructed environment, inheriting nothing.** PATH is the case's bin directory alone: a
 one-line exec of each real tool the scripts use (python3 among them, for cell_documents.py), and
-doubles for aws, terraform, docker and dotnet. No case can reach AWS, Docker or NuGet.
+doubles for aws, terraform, docker, dotnet and session-manager-plugin. No case can reach AWS, Docker
+or NuGet.
+
+**A session that really listens (#1008).** deploy.sh's readiness wait opens a tunnel of its own
+through tools/scripts/tunnel.sh. The aws double answers its `ssm start-session` as the CLI does: it
+starts session-manager-plugin, a child process, and waits on it. The plugin double binds the
+session's local port on 127.0.0.1 and records each connection it accepts, and spactl's wait double
+reads through that port, so a wait with no tunnel open answers nothing. Because the plugin is the
+CLI's child, a script that ended the CLI alone would leave the port held: a case sees the tunnel
+closed only when nothing listens on the port after the script has returned. Each plugin ends itself
+after PLUGIN_LIFETIME seconds, longer than any case's run, so a red case leaks no process past it.
 
 **One world.** The doubles share the case's world.json: the three roots' outputs, the bucket's
 object versions and its live registry, the image repositories, the task definitions, the service,
@@ -146,6 +156,12 @@ def task_ip(task: dict) -> str:
     alb.tf), so this is also the id of the task's target."""
     low = int(task["id"][-4:], 16)
     return f"10.0.{low >> 8}.{low & 0xff}"
+
+
+def runtime_id(task: dict) -> str:
+    """The gateway container's runtime id, which names it in a session's target, made from the task's
+    id as tunnel_tests.py makes it."""
+    return f"{task['id']}-2222222222"
 
 
 def default_world() -> dict:
@@ -419,9 +435,17 @@ def aws_answer(world: dict, words: list[str], options: dict, case: pathlib.Path,
         expected = (f"tasks[].[taskArn, lastStatus, taskDefinitionArn, "
                     f"containers[?name=='{GATEWAY}'] | [0].imageDigest, "
                     f"containers[?name=='{GATEWAY}'] | [0].networkInterfaces[0].privateIpv4Address]")
+        # tunnel.sh's read of the same tasks, for the session's hop: ECS Exec on, the gateway
+        # container's runtime id and its Exec agent running, on every task of this world.
+        session = (f"tasks[].[taskArn, lastStatus, enableExecuteCommand, "
+                   f"containers[?name=='{GATEWAY}'] | [0].runtimeId, "
+                   f"containers[?name=='{GATEWAY}'] | [0].managedAgents[?name=='ExecuteCommandAgent'] | [0].lastStatus]")
+        known = {f"arn:aws:ecs:{REGION}:{ACCOUNT}:task/{CLUSTER}/{task['id']}": task for task in world["tasks"]}
+        if query == session:
+            return [[arn, known[arn]["lastStatus"], True, runtime_id(known[arn]), "RUNNING"]
+                    for arn in options["tasks"] if arn in known]
         if query != expected:
             raise Unexpected(f"describe-tasks --query {query!r}")
-        known = {f"arn:aws:ecs:{REGION}:{ACCOUNT}:task/{CLUSTER}/{task['id']}": task for task in world["tasks"]}
         return [[arn, known[arn]["lastStatus"], td_arn(known[arn]["taskDefinition"]), known[arn]["gatewayDigest"],
                  task_ip(known[arn])]
                 for arn in options["tasks"] if arn in known]
@@ -645,8 +669,12 @@ def aws_double(argv: list[str], case: pathlib.Path) -> int:
                       options=options)
         if options.get("region") != world["region"]:
             raise Unexpected(f"--region {options.get('region')!r}, not the case's {world['region']}")
-        if words != ["ecr", "get-login-password"] and options.get("output") != "text":
+        # get-login-password prints the password alone and start-session hands the terminal to the
+        # plugin: neither answers a document for --output to shape (cell-common.sh's header).
+        if words not in (["ecr", "get-login-password"], ["ssm", "start-session"]) and options.get("output") != "text":
             raise Unexpected("--output text is what the scripts read, whatever the profile says")
+        if words == ["ssm", "start-session"]:
+            return start_session(world, options, case, record)
         value = aws_answer(world, words, options, case, sys.stdout)
         if isinstance(value, Unexpected):
             raise value
@@ -671,6 +699,89 @@ def aws_double(argv: list[str], case: pathlib.Path) -> int:
     log(case, record)
     save_world(case, world)
     return status
+
+
+PORT_FORWARD = "AWS-StartPortForwardingSessionToRemoteHost"
+# How long a plugin double listens before it ends itself: past Case.run's 120-second timeout, so a
+# script that never closed its tunnel is seen with the port still held, and no plugin outlives that.
+PLUGIN_LIFETIME = 150
+
+
+def start_session(world: dict, options: dict, case: pathlib.Path, record: dict) -> int:
+    """`aws ssm start-session` for tunnel.sh's port forward: a target that is a running task's gateway
+    container, the load balancer from the outputs document on 443, and a local port. As the CLI does,
+    it starts session-manager-plugin and waits on it, and its status is the plugin's
+    (https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html).
+    The call is recorded before it waits, since it ends by a signal, and it never writes the world:
+    other doubles change it while the session runs. "session_refused" answers AccessDeniedException,
+    which StartSession answers a caller without ssm:StartSession; "session_silent" starts a session
+    whose port never opens."""
+    if world["faults"].get("session_refused"):
+        raise ServiceError("AccessDeniedException", "StartSession")
+    if set(options) != {"region", "target", "document-name", "parameters"} or options["document-name"] != PORT_FORWARD:
+        raise Unexpected(f"start-session {options}")
+    targets = {f"ecs:{CLUSTER}_{task['id']}_{runtime_id(task)}": task for task in world["tasks"]}
+    if options["target"] not in targets:
+        raise Unexpected(f"start-session --target {options['target']}: no running task's gateway container")
+    parameters = json.loads(options["parameters"])
+    alb = world["roots"]["platform"]["alb_dns_name"]
+    if (set(parameters) != {"host", "portNumber", "localPortNumber"} or parameters["host"] != [alb]
+            or parameters["portNumber"] != ["443"] or not re.fullmatch(r"[1-9][0-9]*", parameters["localPortNumber"][0])):
+        raise Unexpected(f"start-session --parameters {options['parameters']}")
+    import subprocess
+    import time
+    port = parameters["localPortNumber"][0]
+    if world["faults"].get("session_silent"):
+        # A session that starts and never opens its port: the CLI waits on a plugin that never
+        # listens, until a signal ends it.
+        record.update(outcome="session", task=targets[options["target"]]["id"], port=int(port), plugin=None)
+        log(case, record)
+        time.sleep(PLUGIN_LIFETIME)
+        return 0
+    plugin = subprocess.Popen(["session-manager-plugin", "--listen", port])
+    record.update(outcome="session", task=targets[options["target"]]["id"], port=int(port), plugin=plugin.pid)
+    log(case, record)
+    sys.stdout.write("\nStarting session with SessionId: operator-0123456789abcdef0\n")
+    sys.stdout.flush()
+    return plugin.wait()
+
+
+def plugin_double(argv: list[str], case: pathlib.Path) -> int:
+    """session-manager-plugin as the aws double starts it, `--listen <port>`: it binds 127.0.0.1 on that
+    port, records that it listens and each connection it accepts, with the first line the peer sent,
+    and ends itself after PLUGIN_LIFETIME seconds. A port it cannot bind ends it with status 1, as the
+    real plugin's bind failure ends the session."""
+    import socket
+    import time
+    if argv[:1] != ["--listen"] or len(argv) != 2:
+        sys.stderr.write(f"session-manager-plugin double: unexpected call: {argv}\n")
+        return 97
+    port = int(argv[1])
+    server = socket.socket()
+    try:
+        server.bind(("127.0.0.1", port))
+    except OSError as error:
+        log(case, {"tool": "session-manager-plugin", "argv": argv, "event": "bind failed", "port": port, "error": str(error)})
+        return 1
+    server.listen(8)
+    log(case, {"tool": "session-manager-plugin", "argv": argv, "event": "listening", "port": port, "pid": os.getpid()})
+    sys.stdout.write(f"Port {port} opened for sessionId operator-0123456789abcdef0.\nWaiting for connections...\n")
+    sys.stdout.flush()
+    deadline = time.monotonic() + PLUGIN_LIFETIME
+    while (left := deadline - time.monotonic()) > 0:
+        server.settimeout(left)
+        try:
+            connection, _ = server.accept()
+        except socket.timeout:
+            break
+        with connection:
+            connection.settimeout(2)
+            try:
+                received = connection.recv(256).decode(errors="replace").split("\n")[0]
+            except OSError:
+                received = ""
+        log(case, {"tool": "session-manager-plugin", "argv": argv, "event": "connection", "port": port, "received": received})
+    return 0
 
 
 def save_world(case: pathlib.Path, world: dict):
@@ -986,6 +1097,30 @@ def docker_double(argv: list[str], case: pathlib.Path) -> int:
     return status
 
 
+CASE_DIR: pathlib.Path | None = None
+
+
+def case_dir() -> pathlib.Path:
+    assert CASE_DIR is not None, "a double runs with its case directory"
+    return CASE_DIR
+
+
+def reached(origin: str) -> bool:
+    """Whether something accepts a connection on the origin's port on 127.0.0.1, telling it what is
+    reading, as a read through the tunnel would reach the plugin's listener first."""
+    import socket
+    match = re.fullmatch(r"(https?)://[^/:]+(?::([0-9]+))?", origin)
+    if match is None:
+        return False
+    port = int(match[2] or (443 if match[1] == "https" else 80))
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=2) as connection:
+            connection.sendall(b"spactl wait\n")
+        return True
+    except OSError:
+        return False
+
+
 def spactl_wait(world: dict, args: list[str], stdout, stderr) -> int:
     """`spactl wait --url <origin> --revision <N> --instances <id,...>` (tools/spactl/Commands.cs,
     WaitAsync), with each running task answering /readyz through the load balancer. Every task serves
@@ -993,7 +1128,9 @@ def spactl_wait(world: dict, args: list[str], stdout, stderr) -> int:
     "unsampled": n means the load balancer never hands a read to the last n. It answers as spactl
     does: 0 and a Ready line when every listed id answered at N or later, else 1 and the timeout that
     names each id behind or never answered (InstanceWait.Behind). A listed id that is no task's, an
-    empty element or a missing option is not a call the scripts make."""
+    empty element or a missing option is not a call the scripts make. Every read goes through the
+    origin's port (reached): when nothing listens there, no listed id answers. "hang" leaves it
+    reading until a signal ends it, after it writes `waiting` in the case directory."""
     options = {}
     for index in range(1, len(args), 2):
         if not args[index].startswith("--") or index + 1 >= len(args) or args[index] in options:
@@ -1010,6 +1147,19 @@ def spactl_wait(world: dict, args: list[str], stdout, stderr) -> int:
     live = (world["registry"] or {}).get("revision", 0)
     behind = tasks[len(tasks) - world["faults"].get("behind", 0):]
     unsampled = tasks[len(tasks) - world["faults"].get("unsampled", 0):]
+    # The origin's host resolves to the loopback address, by the hosts-file line certs.sh names, so
+    # every read goes to the origin's port on 127.0.0.1: through a tunnel when one listens there, and
+    # to nothing when none does, when no task answers at all.
+    if not reached(options["--url"]):
+        unsampled = tasks
+    if world["faults"].get("hang"):
+        # Ctrl-C reaches the whole foreground group in a terminal (deploy_tests.py, an interrupt during
+        # the wait), so spactl receives it too, and this double ends on it.
+        import signal
+        import time
+        signal.signal(signal.SIGINT, signal.SIG_DFL)
+        (case_dir() / "waiting").write_text("")
+        time.sleep(PLUGIN_LIFETIME)
     revision = int(options["--revision"])
     readyz = options["--url"] + "/readyz"
     answered = {ident: (None if ident in unsampled else live - 1 if ident in behind else live) for ident in listed}
@@ -1087,10 +1237,12 @@ def spactl_double(argv: list[str], case: pathlib.Path) -> int:
     return status
 
 
-DOUBLES = {"aws": aws_double, "terraform": terraform_double, "docker": docker_double, "dotnet": spactl_double}
+DOUBLES = {"aws": aws_double, "terraform": terraform_double, "docker": docker_double, "dotnet": spactl_double,
+           "session-manager-plugin": plugin_double}
 
 if __name__ == "__main__" and sys.argv[1:2] == ["--double"]:
-    sys.exit(DOUBLES[sys.argv[2]](sys.argv[4:], pathlib.Path(sys.argv[3])))
+    CASE_DIR = pathlib.Path(sys.argv[3])
+    sys.exit(DOUBLES[sys.argv[2]](sys.argv[4:], CASE_DIR))
 
 import importlib.util  # noqa: E402
 import shlex  # noqa: E402 -- below the doubles, which start once per call

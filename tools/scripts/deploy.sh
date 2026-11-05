@@ -8,7 +8,7 @@
 # digest and checks that the running task has it".
 #
 #   tools/scripts/deploy.sh
-#   tools/scripts/deploy.sh --url https://app1.spa-poc.test:9443    # the wait's origin, another port
+#   tools/scripts/deploy.sh --url https://app1.spa-poc.test:9443    # wait through this origin instead
 #
 # In order, and it stops at the first that fails:
 #   1. It reads the live registry from the bucket the gateway reads, and refuses when there is none
@@ -41,19 +41,21 @@
 #      Then it waits, through the gateway origin, until each running task has answered /readyz at
 #      the revision step 1 read or later (cell-common.sh's wait_for_revision; change request P2-5,
 #      decision 6, #309): one answer through the load balancer speaks for one task only, and a task
-#      the load balancer never picks fails the wait. The load balancer is internal, so the origin is
-#      the tunnel's, https://app1.$SPA_CERT_DOMAIN:$SPA_TUNNEL_PORT, by default
-#      https://app1.spa-poc.test:8443, unless --url names another. tools/scripts/tunnel.sh has to be
-#      running in another terminal by then, through a task of this deployment: the tunnel's hop is a
-#      gateway task, and a deployment replaces it.
+#      the load balancer never picks fails the wait. The load balancer is internal, so the wait opens a
+#      tunnel of its own, tools/scripts/tunnel.sh through a running task of this deployment, on a free
+#      ephemeral port the system picks (8443 lies below that range), and reads through
+#      https://app1.$SPA_CERT_DOMAIN:<that port>; it closes it when the wait ends, pass, fail or
+#      Ctrl-C (#1008). An operator's tunnel on 8443 is left alone, and none need be running. --url
+#      names an origin to wait through instead, and then no tunnel is opened.
 #
 # The cell's names come from infra/envs/poc/outputs.json, which seed.sh wrote, and never from
 # Terraform state (contracts/infra-outputs.schema.json).
 #
 # Run it as the operator's own session: the spa-platform profile, with tools/aws-project.env
 # sourced, after `terraform init -backend-config=backend.hcl` in each root. It needs the AWS CLI,
-# Terraform, python3, Docker with buildx (decision D-2 in docs/dependencies.md), and the .NET SDK for
-# spactl, or SPACTL naming a spactl to run instead (cell-common.sh).
+# Terraform, python3, Docker with buildx (decision D-2 in docs/dependencies.md), the .NET SDK for
+# spactl, or SPACTL naming a spactl to run instead (cell-common.sh), and the Session Manager plugin
+# for the wait's tunnel unless --url is given.
 #
 # It redacts two kinds of value, and Docker's and Terraform's output pass through the filter that
 # does it (cell-common.sh's redact_stream):
@@ -83,8 +85,9 @@ usage() {
   cat <<EOF
 
 Options
-  --url ORIGIN   The gateway origin step 5's wait reads /readyz through. Default: the tunnel's,
-                 https://app1.\$SPA_CERT_DOMAIN:\$SPA_TUNNEL_PORT, else https://app1.spa-poc.test:8443.
+  --url ORIGIN   A gateway origin this workstation already reaches, for step 5's wait to read
+                 /readyz through; the wait then opens no tunnel. Default: a tunnel of the wait's
+                 own, on a free local port, at https://app1.\$SPA_CERT_DOMAIN:<that port>.
   -h, --help     This text.
 EOF
 }
@@ -93,9 +96,8 @@ value_of() {
   [ "$2" -ge 2 ] || refuse "$1 needs a value. Try --help."
 }
 
-# tools/scripts/verify-tunnel.sh's names for the tunnel: the first app's host under the certificate's
-# domain, on the tunnel's local port.
-ORIGIN="https://app1.${SPA_CERT_DOMAIN:-spa-poc.test}:${SPA_TUNNEL_PORT:-8443}"
+# Empty: the wait opens its own tunnel (cell-common.sh, wait_for_revision).
+ORIGIN=""
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -113,13 +115,18 @@ trap cell_cleanup EXIT
 trap 'exit 130' INT TERM
 
 case "$ORIGIN" in
-  https://?* | http://?*) ;;
+  '' | https://?* | http://?*) ;;
   *) refuse "--url must be an http or https origin: got '${ORIGIN}'" ;;
 esac
 
 need_terraform
 need_spactl
 need_tool docker "brew install --cask docker-desktop (decision D-2, docs/dependencies.md)"
+# Before anything is built: the wait's tunnel is the last step, and tunnel.sh needs the plugin.
+# https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html
+if [ -z "$ORIGIN" ]; then
+  need_tool session-manager-plugin "brew install --cask session-manager-plugin"
+fi
 docker buildx version > /dev/null 2>&1 || refuse "docker buildx does not answer. Start Docker Desktop."
 cell_start
 
@@ -209,5 +216,5 @@ note "pushed the gateway as ${GATEWAY_IMAGE##*@} and the mock API as ${MOCK_API_
 
 apply_images "$GATEWAY_IMAGE" "$MOCK_API_IMAGE"
 wait_and_assert "$GATEWAY_IMAGE"
-wait_for_revision "$ORIGIN" "$REVISION"
+wait_for_revision "$REVISION" "$ORIGIN"
 note "pass: the gateway ${GATEWAY_IMAGE##*@} runs steady in ${CLUSTER}, and every running task reports revision ${REVISION} or later on ${READY_PATH}"
