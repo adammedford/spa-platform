@@ -110,7 +110,7 @@
 # subject as landed for good, said S7 owed nothing. It also fails a full landing that names a plan
 # row while an open issue, other than one on the merge's Ticket lines, declares itself part of that
 # row (#388, #457): "Merge task P2-2" landed so on 2026-10-24 with #338 and #342 open. Without gh, a
-# login or GitHub a ticket body it cannot read is reported unchecked and fails nothing, as the
+# login or GitHub, a ticket body it cannot read is reported unchecked and fails nothing, as the
 # steering check does offline, but a full landing that names a plan row needs the complete list of
 # open issues, so offline it fails (#871); only python3 is a tool it needs.
 #
