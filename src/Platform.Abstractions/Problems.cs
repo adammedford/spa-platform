@@ -75,6 +75,12 @@ public static class Problems
     public const string IdpUnavailable = "idp_unavailable";
 
     /// <summary>
+    /// 503. The object store could not be read to serve an asset or the shell, for a reason other than
+    /// a refusal; the live snapshot is unaffected.
+    /// </summary>
+    public const string StoreUnavailable = "store_unavailable";
+
+    /// <summary>
     /// 503. A session store operation failed or ran out <c>StoreDeadline</c>, or a refresh ended at the
     /// store's bound (2 × TTL, the spec's D2); not the session remove <c>POST /bff/logout</c> makes,
     /// which answers the usual logout (F11). No cookie is cleared and the session, if it exists, is
@@ -105,6 +111,7 @@ public static class Problems
         (StatusCodes.Status500InternalServerError, ShellUnavailable),
         (StatusCodes.Status502BadGateway, UpstreamUnavailable),
         (StatusCodes.Status503ServiceUnavailable, IdpUnavailable),
+        (StatusCodes.Status503ServiceUnavailable, StoreUnavailable),
         (StatusCodes.Status503ServiceUnavailable, SessionStoreUnavailable),
         (StatusCodes.Status504GatewayTimeout, UpstreamTimeout),
     ];
