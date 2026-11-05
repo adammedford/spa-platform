@@ -67,9 +67,10 @@ class DeployBuildsPushesAppliesAndAsserts(cell.CompanionTestCase):
             self.assertIn("--sbom=false", argv)
 
     def test_each_build_pulls_its_base_image_afresh(self):
-        # #288: without --pull, a workstation whose cache holds an older
-        # mcr.microsoft.com/dotnet/aspnet:10.0-noble builds on it, and could ship a runtime that
-        # predates the advisories the floating tag's current image fixes (#273).
+        # #288: both Dockerfiles pin their bases by digest (#781, #782), so this holds only for a
+        # FROM line that names a tag alone: without --pull, a workstation whose cache holds an older
+        # image of that tag builds on it, and could ship a runtime that predates the advisories the
+        # tag's current image fixes (#273).
         case, _ = self.deployed()
         builds = [call for call in case.calls("docker") if call["argv"][:2] == ["buildx", "build"]]
         self.assertEqual(2, len(builds))
