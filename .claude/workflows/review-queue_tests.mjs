@@ -805,6 +805,26 @@ try {
       const m = (c.mutations || []).find((x) => x.kind === 'held' && x.test === cell) || {}
       if (m.result !== 'did-not-fail' || c.verdict !== 'hold') fail(`PR 211 with the held cell ${JSON.stringify(cell)} and candidates ${JSON.stringify(cands.map((x) => [x.test, x.project]))} red only on another test: held row ${JSON.stringify({ test: m.test, result: m.result })}, verdict ${c.verdict}, expected the cell held as before, did-not-fail and hold`)
     }
+    // A later record that reproduced the held cell in a pre-#794 spelling answers it on the
+    // whole-file candidate that spelling stands for, whichever of the two spellings either record
+    // used (#901): on #802 the candidate keyed by the full path was not named by the later cell
+    // 'overnight_answers_tests.py (companion)', so the answered row was mutated again. A later
+    // record reproducing another file's companion answers nothing here.
+    const laterRecord = (cell) => ({ author_association: 'OWNER', created_at: '2026-11-03T09:00:00Z', html_url: 'https://github.com/o/r/pull/211#issuecomment-2',
+      body: `## Review\n\nHead ${sha('3')}.\n\n## Mutations\n\n| Test | What was broken | Failed of total | Result | Log file |\n| --- | --- | --- | --- | --- |\n| ${cell} | ${BREAK} | 1 of 18 | reproduced: it went red | /log/mutation.txt |\n\n## Outstanding\n\n- Nothing.\n\nReviewed ${sha('3')} against ${FORK}: hold` })
+    for (const [cell, later, whole, answered] of [
+      ['overnight_answers_tests.py (companion)', 'overnight_answers_tests.py (companion)', F, true],
+      ['overnight_answers_tests.py (companion)', `${F} (companion)`, F, true],
+      [`${F} (companion)`, 'overnight_answers_tests.py (companion)', F, true],
+      ['overnight_answers_tests.py (companion)', 'overnight_answers_tests.py (companion)', 'overnight_answers_tests.py', true],
+      ['overnight_answers_tests.py (companion)', 'other_tests.py (companion)', F, false],
+    ]) {
+      env = run({ prs: [211] }, { 211: pr(211, [F, 'tools/overnight_answers.py'], { head: H2, commits: [H2], comments: [heldRecord(cell), laterRecord(later)], candidates: [comp(whole)] }) },
+        { range, mutate: { [whole]: { ...row('reproduced', 1, 18), failingNames: RED } } })
+      await execute(env)
+      const told = (env.mutations.find((x) => x.test === whole) || { prompt: '' }).prompt.includes(BREAK)
+      if (told === answered) fail(`PR 211 with the held cell ${JSON.stringify(cell)}, a later record reproducing ${JSON.stringify(later)} and the whole-file candidate ${JSON.stringify(whole)}: the candidate ${told ? 'is' : 'is not'} mutated as held, expected ${answered ? 'it answered and not held again' : 'it still held'}`)
+    }
   }
 
   // A Node companion prints no test names, only its checks' fail() messages (#905): on #798 a stated
