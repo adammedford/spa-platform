@@ -1072,7 +1072,7 @@ const laterDateFindings = (inv) => {
 // letter, digit or underscore before it, then an optional colon, any whitespace, # and every digit
 // after it, anywhere in a line and as often as it occurs, each line read on its own. Whitespace is
 // POSIX's space class in the C locale, the set land.sh's [[:space:]] reads. A keyword before
-// owner/repo#n, GitHub's form for another repository's ticket, refuses the description whatever
+// owner/repo#n or a GitHub issue URL (#806) refuses the description whatever
 // else it holds, naming the form, as land.sh refuses it before it reads a commit; on the first line
 // holding one, the last on that line, which is the match land.sh's greedy prefix finds. Otherwise
 // each ticket is named unless #n, or issue-n with no letter, digit or underscore before it, appears
@@ -1082,7 +1082,7 @@ const laterDateFindings = (inv) => {
 // names them.
 const CLOSING_KEYWORD = '(?<![A-Za-z0-9_])(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?):?[ \\t\\n\\v\\f\\r]*'
 const CLOSING_REFERENCE = new RegExp(CLOSING_KEYWORD + '#(\\d+)', 'gi')
-const OTHER_REPOSITORY = new RegExp(CLOSING_KEYWORD + '([^ \\t\\n\\v\\f\\r#/]+/[^ \\t\\n\\v\\f\\r#/]+#\\d+)', 'gi')
+const OTHER_REPOSITORY = new RegExp(CLOSING_KEYWORD + '([^ \\t\\n\\v\\f\\r#/]+/[^ \\t\\n\\v\\f\\r#/]+#\\d+|https?://(?:www[.])?github[.]com/[^ /#\\t\\n\\v\\f\\r]+/[^ /#\\t\\n\\v\\f\\r]+/issues/\\d+)', 'gi')
 const closingReferences = (inv) => {
   const lines = String(inv.description || '').split('\n')
   for (const line of lines) {
@@ -1192,8 +1192,8 @@ const reviewOne = async (n, res, at) => {
   // A closing reference land.sh would refuse stops the pull request before any other agent runs (#688).
   const { otherRepository, unnamed } = closingReferences(inv)
   if (otherRepository) {
-    log(`#${n}: the description closes ${otherRepository}, the owner/repo#n form; stopped before the review`)
-    return failed(res, `closes: the description closes ${otherRepository}, the owner/repo#n form, which tools/land.sh cannot read against the commits and refuses. Write Closes #n for a ticket of this repository; a ticket of another repository is not closed from here`)
+    log(`#${n}: the description closes ${otherRepository}, the owner/repo#n form or a GitHub issue URL; stopped before the review`)
+    return failed(res, `closes: the description closes ${otherRepository}, the owner/repo#n form or a GitHub issue URL, which tools/land.sh cannot read against the commits and refuses. Write Closes #n for a ticket of this repository; a ticket of another repository is not closed from here`)
   }
   if (unnamed.length) {
     const list = unnamed.map((t) => '#' + t).join(', ')

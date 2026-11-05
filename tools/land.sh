@@ -258,6 +258,8 @@ full_sha='^[0123456789abcdef]{40}$'
 # take a read of this repository's name, so the form is refused before anything is read, failing
 # closed (CODING_STANDARDS.md -> "A check fails closed"): the refusal asks for `Closes #n`, the
 # form docs/agents/landing-work.md gives, and nothing here closes another repository's ticket.
+# GitHub issue URLs after the keyword are refused on the same basis (#806); a URL must not
+# bypass the check simply because the local #n reader does not recognize it.
 # bash's =~ finds one match, so a line is read from its right end, each match's prefix
 # becoming the next line to read, and the numbers are put back in the line's order. `#n` and
 # `issue-n` are matched in a message only where no digit follows, so #35 is not found inside #352
@@ -277,13 +279,14 @@ caller_lc_all="${LC_ALL-}"
 LC_ALL=C
 keyword='([Cc][Ll][Oo][Ss][Ee]([Ss]|[Dd])?|[Ff][Ii][Xx]([Ee][Ss]|[Ee][Dd])?|[Rr][Ee][Ss][Oo][Ll][Vv][Ee]([Ss]|[Dd])?)'
 # In each match, group 1 is what comes before the keyword, groups 2 to 5 the keyword and its
-# endings, and group 6 the ticket: `n` of `#n`, or the whole `owner/repo#n`.
+# endings, and group 6 the ticket: `n` of `#n`, the whole `owner/repo#n`, or a GitHub issue URL.
 closing="^(.*[^[:alnum:]_])?${keyword}:?[[:space:]]*#([0-9]+)([^0-9].*)?\$"
-other_repository="^(.*[^[:alnum:]_])?${keyword}:?[[:space:]]*([^[:space:]#/]+/[^[:space:]#/]+#[0-9]+)"
+issue_url='[Hh][Tt][Tt][Pp][Ss]?://([Ww][Ww][Ww][.])?[Gg][Ii][Tt][Hh][Uu][Bb][.][Cc][Oo][Mm]/[^[:space:]/#]+/[^[:space:]/#]+/[Ii][Ss][Ss][Uu][Ee][Ss]/[0-9]+'
+other_repository="^(.*[^[:alnum:]_])?${keyword}:?[[:space:]]*([^[:space:]#/]+/[^[:space:]#/]+#[0-9]+|${issue_url})"
 closes=""
 while IFS= read -r line; do
   if [[ $line =~ $other_repository ]]; then
-    die "the description of #$pr closes ${BASH_REMATCH[6]}, the owner/repo#n form, which this check cannot read against the commits here, so it does not merge. Write Closes #n for a ticket of this repository (docs/agents/landing-work.md -> Land it); a ticket of another repository is not closed from here."
+    die "the description of #$pr closes ${BASH_REMATCH[6]}, the owner/repo#n form or a GitHub issue URL, which this check cannot read against the commits here, so it does not merge. Write Closes #n for a ticket of this repository (docs/agents/landing-work.md -> Land it); a ticket of another repository is not closed from here."
   fi
   in_line=""
   while [[ $line =~ $closing ]]; do
