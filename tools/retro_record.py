@@ -44,6 +44,22 @@ beginning `# Questions` a questions file, and the date is the first YYYY-MM-DD i
 archive shape. The Issues shape is an `Overnight <date>` issue's body, whose date is its title's
 (`--title`). Both carry the same `## ` section headings, which come back in order.
 
+**A report's tickets** (#971) come back as `tickets`, read from either of two shapes, so the morning's
+Verify and hand-over and the retro read a night of either. The table shape, from 2026-11-05 on, opens
+with `## Tickets`: a table whose columns are Ticket (`#<n>`), Title, Lane, Outcome, Branch, Head and
+Morning step, one row per ticket the run touched. An outcome cell is one of integrated, claimed,
+failed, grilled or carried, optionally followed by a detail in parentheses, as in `integrated
+(partial)` or `carried (foreground)`; a cell reading `none` (or `-`) is empty, backticks are dropped
+and `\\|` is a pipe inside a cell. Its claimed branches are its claimed rows, as `#<n> <branch> at
+<head>: <step>`, and its steps each row's non-empty step, as `#<n>: <step>`. A data row it cannot read,
+one without seven cells, a `#<n>` ticket cell and one of those outcomes, is in no list but `unread`,
+as its cells rejoined, so its reader reports it rather than losing it. The sections shape, the
+nights before, has no `## Tickets`: its rows are the `## Integrated` table's (Task, Issue, Merge),
+outcome integrated and head the merge, then the `## Foreground` list's tickets, outcome carried,
+detail foreground; its claimed branches are the `## Claimed branches to merge` list items and its
+steps the `## Morning steps` list items, each verbatim without its marker. A body with neither reads
+shape `none` and nothing else.
+
 **A finding** is #77's schema: type, title, noun, evidence[], cost {red, attempts, nights, lanes},
 fix {kind, owner, summary, diff} and confidence. Findings **merge** on their noun, stripped and
 compared exactly ("grep the noun", docs/agents/review.md): red, attempts and lanes are summed, because
@@ -106,6 +122,15 @@ PLAN_LINE = re.compile(r"(?m)^\*\*Plan row:\*\*[ \t]*\S")
 WHAT = re.compile(r"(?m)^(\*\*What to build:\*\*|## What to build\s*$)")
 ACCEPTANCE = re.compile(r"(?m)^## Acceptance[^\n]*$")
 OPEN_BOX = re.compile(r"(?m)^\s*- \[ \]")
+
+# A report's tickets (#971): the table's cells and the sections' list items.
+CELL_SPLIT = re.compile(r"(?<!\\)\|")
+RULE_CELL = re.compile(r"^:?-{3,}:?$")
+ISSUE_CELL = re.compile(r"^#(\d+)$")
+LEADING_ISSUE = re.compile(r"^#(\d+)\b")
+OUTCOME = re.compile(r"^(integrated|claimed|failed|grilled|carried)\b\s*(?:\(([^)]*)\))?", re.IGNORECASE)
+EMPTY_CELLS = ("", "none", "-", "—")
+ITEM = re.compile(r"^\s*(?:[-*]|\d+[.)])\s+(.*\S)\s*$")
 
 
 def utc(seconds: float) -> str:
@@ -175,22 +200,101 @@ def parse_dir(directory: str) -> dict:
             "rounds": paired}
 
 
+def section(lines: list, heading: str) -> list:
+    """The lines under `## <heading>`, up to the next `## ` heading; [] when there is none."""
+    for at, line in enumerate(lines):
+        if line.startswith("## ") and line[3:].strip() == heading:
+            rest = lines[at + 1:]
+            end = next((i for i, l in enumerate(rest) if l.startswith("## ")), len(rest))
+            return rest[:end]
+    return []
+
+
+def cells(line: str) -> list:
+    """A markdown table row's cells, split on unescaped pipes, `\\|` read as a pipe."""
+    inner = line.strip()
+    inner = inner[1:] if inner.startswith("|") else inner
+    inner = inner[:-1] if inner.endswith("|") and not inner.endswith("\\|") else inner
+    return [c.replace("\\|", "|").strip() for c in CELL_SPLIT.split(inner)]
+
+
+def table(lines: list) -> list:
+    """Each data row of the first table in lines, as its cells; the header and rule rows dropped."""
+    rows = [cells(l) for l in lines if l.strip().startswith("|")]
+    return [r for r in rows[1:] if not all(RULE_CELL.match(c) for c in r)]
+
+
+def plain(cell: str) -> str:
+    value = cell.replace("`", "").strip()
+    return "" if value.lower() in EMPTY_CELLS else value
+
+
+def items(lines: list) -> list:
+    return [m.group(1).strip() for m in (ITEM.match(l) for l in lines) if m]
+
+
+def report_tickets(lines: list) -> dict:
+    rows, claimed, steps, unread = [], [], [], []
+    if any(l.startswith("## ") and l[3:].strip() == "Tickets" for l in lines):
+        for row in table(section(lines, "Tickets")):
+            outcome = OUTCOME.match(plain(row[3])) if len(row) == 7 else None
+            # A row the reader cannot read is named, never dropped (CODING_STANDARDS.md, "A check fails
+            # closed"): a missing cell or an unescaped | in a cell shifts every column after it, so a
+            # claimed row would vanish from the morning's hand-over with nothing saying so.
+            if not (outcome and ISSUE_CELL.match(row[0])):
+                unread.append("| " + " | ".join(row) + " |")
+                continue
+            entry = {"issue": int(ISSUE_CELL.match(row[0]).group(1)), "title": row[1], "lane": plain(row[2]),
+                     "outcome": outcome.group(1).lower(),
+                     "detail": (outcome.group(2) or "").strip(),
+                     "branch": plain(row[4]), "head": plain(row[5]), "step": plain(row[6])}
+            rows.append(entry)
+            n = entry["issue"]
+            if entry["outcome"] == "claimed":
+                claimed.append(f"#{n} {entry['branch'] or 'no branch'} at {entry['head'] or 'no head'}"
+                               f": {entry['step'] or 'no step'}")
+            if entry["step"]:
+                steps.append(f"#{n}: {entry['step']}")
+        return {"shape": "table", "rows": rows, "claimed": claimed, "steps": steps, "unread": unread}
+    integrated = section(lines, "Integrated")
+    foreground = section(lines, "Foreground")
+    claimed_lines = section(lines, "Claimed branches to merge")
+    morning = section(lines, "Morning steps")
+    if not (integrated or foreground or claimed_lines or morning):
+        return {"shape": "none", "rows": [], "claimed": [], "steps": [], "unread": []}
+    for row in table(integrated):
+        issue = next((ISSUE_CELL.match(c) for c in row[:2] if ISSUE_CELL.match(c)), None)
+        if issue:
+            rows.append({"issue": int(issue.group(1)), "title": row[3] if len(row) > 3 else "", "lane": "",
+                         "outcome": "integrated", "detail": "", "branch": "",
+                         "head": plain(row[2]) if len(row) > 2 else "", "step": ""})
+    for item in items(foreground):
+        issue = LEADING_ISSUE.match(item)
+        if issue:
+            rows.append({"issue": int(issue.group(1)), "title": item[issue.end():].strip(), "lane": "",
+                         "outcome": "carried", "detail": "foreground", "branch": "", "head": "", "step": ""})
+    return {"shape": "sections", "rows": rows, "claimed": items(claimed_lines), "steps": items(morning), "unread": []}
+
+
 def parse_report(path: str, title: str | None) -> dict | None:
     with open(path, encoding="utf-8", errors="replace") as handle:
         text = handle.read()
     lines = text.splitlines()
     first = lines[0] if lines else ""
     sections = [line[3:].strip() for line in lines if line.startswith("## ")]
+    tickets = report_tickets(lines)
     if title is not None:
         m = DATE.search(title)
         if not m or not title.startswith("Overnight "):
             return None
-        return {"path": path, "shape": "issues", "kind": "report", "date": m.group(0), "sections": sections}
+        return {"path": path, "shape": "issues", "kind": "report", "date": m.group(0), "sections": sections,
+                "tickets": tickets}
     m = DATE.search(first)
     if not m or not first.startswith("# "):
         return None
     kind = "questions" if first.startswith("# Questions") else "report" if "report" in first.lower() else "other"
-    return {"path": path, "shape": "archive", "kind": kind, "date": m.group(0), "sections": sections}
+    return {"path": path, "shape": "archive", "kind": kind, "date": m.group(0), "sections": sections,
+            "tickets": tickets}
 
 
 def merge(findings: list) -> list:

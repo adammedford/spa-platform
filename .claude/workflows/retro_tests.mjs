@@ -520,6 +520,38 @@ try {
     if ((broken.result.refusals || []).filter((l) => l.includes(`${BROKEN}: unreadable:`)).length !== 1) fail(`the return does not carry the unreadable line once: ${JSON.stringify(broken.result.refusals)}`)
   }
 
+  // 21. The report's tickets (#971): the Gather prompt carries the reader's tickets in the index's report, and the
+  //     integration unit reads the report's parts by the shape the real reader gives: a body that opens with the
+  //     `## Tickets` table sends it to the rows that need it, each by number and outcome, and a body of the earlier
+  //     shape to its Failed, Partial and Needs-you sections. The two bodies' tickets differ, so a unit that kept one
+  //     shape's text, or a constant, fails one of them.
+  checks++
+  {
+    const ticketsOf = (body) => {
+      const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'retro-report-')), 'body.md')
+      made.push(path.dirname(file))
+      fs.writeFileSync(file, body)
+      return JSON.parse(execFileSync('python3', ['-I', READER, 'report', file, '--title', `Overnight ${DATE}`], { encoding: 'utf8' }))
+    }
+    const TABLE = `Standing answer: granted.\n\n## Tickets\n\n| Ticket | Title | Lane | Outcome | Branch | Head | Morning step |\n| --- | --- | --- | --- | --- | --- | --- |\n| #901 | Landed whole | ws1-infra | integrated | task/a | 1111111 | none |\n| #902 | Landed in part | ws3-identity | integrated (partial) | task/b | 2222222 | tick box 2 |\n| #903 | Went red | ws6-verification | failed | task/c | 3333333 | retry |\n| #904 | Waits on Adam | integrator | carried (needs you) | none | none | answer Q3 |\n\n## Exceptions\n\n#903: two count tests.\n`
+    const EARLIER = 'Standing answer: granted.\n\n## Integrated\n\n| Task | Issue | Merge | What landed |\n| --- | --- | --- | --- |\n| issue-901 | #901 | 1111111 | x |\n\n## Partial (Outstanding)\n\n- #902: box 2.\n\n## Failed\n\n- #903 red.\n\n## Needs you\n\n- #904.\n'
+    const unitFor = async (body) => {
+      const read = ticketsOf(body)
+      const index = { ...indexFor(THREE), night: { date: DATE, issue: 226, shape: 'issues', base: sha('b'), integrationBranch: `overnight/${DATE}` }, report: { source: `https://github.com/adammedford/spa-platform/issues/226`, date: read.date, kind: read.kind, sections: read.sections, tickets: read.tickets } }
+      const r = await execute(newRepo(), { date: DATE }, { index })
+      return { unit: (r.calls.find((c) => c.label === 'lane:integration') || {}).prompt || '', gather: (r.calls.find((c) => c.label === 'gather') || {}).prompt || '' }
+    }
+    const table = await unitFor(TABLE)
+    const ROWS = 'the report\'s ## Tickets rows that need more than integrated: #902 (integrated (partial)), #903 (failed), #904 (carried (needs you)), with their ## Exceptions paragraphs'
+    if (!table.unit.includes(ROWS)) fail(`#971: the table-shape integration unit does not read the rows that need it:\n${(/Read the serialized[^\n]*/.exec(table.unit) || [''])[0]}`)
+    if (table.unit.includes('#901 (')) fail('#971: the table-shape integration unit reads a row that landed whole')
+    const earlier = await unitFor(EARLIER)
+    if (!earlier.unit.includes('the report\'s Failed, Partial and Needs-you sections')) fail('#971: the earlier-shape integration unit does not read the Failed, Partial and Needs-you sections')
+    if (earlier.unit.includes('## Tickets rows')) fail('#971: the earlier-shape integration unit reads ## Tickets rows its report does not have')
+    if (!table.gather.includes('tickets is its tickets, verbatim')) fail('#971: the Gather prompt does not carry the reader\'s tickets into the index\'s report')
+    if (!table.gather.includes('report.tickets.rows')) fail('#971: the Gather prompt does not take the lanes from the report\'s ticket rows')
+  }
+
   if (env.thrown && env.thrown.length) fail(`a lane thunk threw: ${env.thrown[0]}`)
   // The edit rule (#109, Q164 of #286): every prompt that carries the house rules carries the amended
   // line verbatim, Edit and Write both, and no prompt still carries the Edit-only line it replaced.

@@ -254,6 +254,20 @@ const readRecord = (head, comments, reviews = []) => {
   return { verdict: 'none', head: '', url: '', reader: `exit ${r.status}: ${r.stderr.split('\n')[0]}` }
 }
 
+// The Verify agent's ticket read (#971), played with the real reader: the body saved to a file, then
+// `retro_record.py report <file> --title "Overnight <date>"`, whose tickets it returns.
+const REPORT_READER = path.join(top, 'tools', 'retro_record.py')
+const readTickets = (body, date) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'morning-report-'))
+  try {
+    const file = path.join(dir, 'report-body.md')
+    fs.writeFileSync(file, body)
+    const r = spawnSync('python3', ['-I', REPORT_READER, 'report', file, '--title', `Overnight ${date}`], { encoding: 'utf8' })
+    if (r.status !== 0) throw new Error(`retro_record.py report exited ${r.status}: ${r.stderr}`)
+    return JSON.parse(r.stdout).tickets
+  } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+}
+
 // The follow-ups reader's index of one comment or review (#514), as the prompt's jq prints it: its
 // record-like lines (a looser pattern than the record grammar, which the script applies), its size and
 // whether it holds the follow-ups table's header. SPLIT is the jq's line split, PY_LINE_BREAK's set.
@@ -336,6 +350,10 @@ function stub(env, scriptArgs, served) {
         out = { comments: at.map((i) => mangled(issue.comments[served.batchSwap ? (i + 1) % issue.comments.length : i])), error: '' }
       } else if (label === 'verify') {
         const v = served.verify || {}
+        // The report's tickets (#971), read as the prompt says, by the real tools/retro_record.py on the
+        // served issue's body, so a case that serves a body in either shape proves what Verify returns of it.
+        const issue = served.issue === undefined ? issueWith([...QUESTIONS, CONFIRM]) : served.issue
+        const tickets = readTickets(issue ? issue.body : '', DATE)
         const head = v.head || HEAD
         const record = served.agentRecord || readRecord(head, served.recordComments || RECORD_MERGE)
         out = {
@@ -354,7 +372,7 @@ function stub(env, scriptArgs, served) {
             { issue: 301, task: 'issue-301', outcome: 'partial', complete: false, mergeSha: sha('2'), outstanding: 'box 3' },
             { issue: 302, task: 'issue-302', outcome: 'failed', complete: false, mergeSha: '', outstanding: '' },
           ],
-          claimed: ['claim/ws2-hosting/2.9'],
+          claimed: tickets.claimed, steps: tickets.steps,
           record,
           // The landing's state (#661): an open pull request by default; served.verify.landing, the
           // fields of a merged one's report over it, as the merged-PR check returns them.
@@ -2950,6 +2968,38 @@ try {
     if (!/already merged/.test(header)) fail('#661 Q24: the Agent budget header does not give the merged path\'s budget')
     const core = merged.labels.filter((l) => !l.startsWith('comments-batch:'))
     if (core.length > 10 || merged.result.agents !== merged.labels.length) fail(`#661 Q24: a merged run took ${core.length} agents besides the body readers, and counts ${merged.result.agents} of ${merged.labels.length}: ${merged.labels.join(', ')}`)
+  }
+
+  // 15b. The report's tickets (#971): Verify reads the Overnight body with tools/retro_record.py report, and the
+  //      hand-over lists the claimed branches and the morning steps it gives, from a body that opens with the
+  //      `## Tickets` table and from one of the earlier shape (its Claimed branches to merge and Morning steps
+  //      sections, cut down from Overnight 2026-11-03's, #736). The two name different branches and steps, so a
+  //      hand-over that kept one shape's values, or a constant, fails one of them.
+  checks++
+  {
+    const TABLE_BODY = `${BODY}\n## Tickets\n\n| Ticket | Title | Lane | Outcome | Branch | Head | Morning step |\n| --- | --- | --- | --- | --- | --- | --- |\n| #300 | First ticket | integrator | integrated | task/issue-300-first | 1111111 | none |\n| #301 | Second ticket | integrator | integrated (partial) | task/issue-301-second | 2222222 | tick box 3 after the landing |\n| #810 | Worked elsewhere | ws2-hosting | claimed | task/issue-810-table-claim | 8108108 | lands after this pull request; none conflict |\n\n## Exceptions\n\nnone\n`
+    const EARLIER_BODY = `${BODY}\n## Integrated\n\n| Task | Issue | Merge | What landed |\n| --- | --- | --- | --- |\n| issue-300 | #300 | 1111111 | the first ticket |\n\n## Claimed branches to merge\n\n- #531 (\`task/issue-531-earlier-claim\` b9419dc): none conflict.\n\n## Morning steps\n\n1. Answer the questions with one Confirm comment on this issue.\n2. Close #305 once the landing is merged.\n`
+    for (const [shape, body, claimed, steps, absent] of [
+      ['table', TABLE_BODY, ['#810 task/issue-810-table-claim at 8108108: lands after this pull request; none conflict'], ['#301: tick box 3 after the landing', '#810: lands after this pull request; none conflict'], 'task/issue-531-earlier-claim'],
+      ['earlier', EARLIER_BODY, ['#531 (\'task/issue-531-earlier-claim\' b9419dc): none conflict.'], ['Answer the questions with one Confirm comment on this issue.', 'Close #305 once the landing is merged.'], 'task/issue-810-table-claim'],
+    ]) {
+      const r = await execute(newRepo(), { date: DATE }, { issue: issueWith([...QUESTIONS, CONFIRM], body) })
+      const t = r.result.handover.text
+      const under = (title) => (new RegExp(`### ${title}\\n\\n([\\s\\S]*?)(?:\\n\\n###|$)`).exec(t) || [])[1] || ''
+      const gotClaimed = under('Claimed branches needing their own pull requests')
+      const gotSteps = under('Morning steps the report gives')
+      for (const c of claimed) if (!gotClaimed.includes(`- ${c}`)) fail(`#971: the ${shape}-shape report's claimed branch ${JSON.stringify(c)} is not in the hand-over:\n${gotClaimed}`)
+      for (const s of steps) if (!gotSteps.includes(`- ${s}`)) fail(`#971: the ${shape}-shape report's morning step ${JSON.stringify(s)} is not in the hand-over:\n${gotSteps}`)
+      if (t.includes(absent)) fail(`#971: the ${shape}-shape hand-over names ${absent}, which only the other shape's report gives`)
+      const vp = r.prompt('verify')
+      if (!vp.includes(`python3 -I ${r.result.runLog.split('/.scratch/')[0]}/tools/retro_record.py report `) || !vp.includes(`--title "Overnight ${DATE}"`)) fail('#971: the Verify prompt does not read the report\'s tickets with tools/retro_record.py report --title')
+      if (!vp.includes('claimed is its tickets.claimed and steps its tickets.steps')) fail('#971: the Verify prompt does not take claimed and steps from the reader')
+      // A row the reader could not read is in neither list, so the prompt makes it a finding (CODING_STANDARDS.md, "A check fails closed").
+      if (!vp.includes('Each line of its tickets.unread is a table row the reader could not read') || !vp.includes('add it to findings as "report row not read: <the line>"')) fail('#971: the Verify prompt drops the rows the reader could not read instead of naming them in findings')
+      // The house rules let an agent write only the OUTPUT FILE and PHASE FILE lines' paths, so the saved body is one.
+      const saved = (/> (\S+\/report-body\.md)`/.exec(vp) || [])[1]
+      if (!saved || !new RegExp(`^OUTPUT FILE: ${saved.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'm').test(vp)) fail(`#971: the Verify prompt saves the report body to ${saved || 'no file'}, which no OUTPUT FILE line names, so its house rules forbid the write`)
+    }
   }
 
   // 16. Every agent call passes a schema and every stub's return satisfies it.
