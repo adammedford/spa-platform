@@ -72,7 +72,7 @@ public sealed class StoreFailureTests
             IdentityGateway.Answer callback = await gateway.SendAsync(
                 App1, authorized.Callback.PathAndQuery, new Dictionary<string, string>(authorized.LoginState));
 
-            AssertStoreUnavailable(callback, sessionCookieAllowed: false);
+            AssertStoreUnavailable(callback, otherCookiesAllowed: true);
             Assert.Equal("", callback.Location);
             AssertOneErrorLine(log, before, "create (PutItem)", authorized.LoginState.ToDictionary());
         }
@@ -163,9 +163,10 @@ public sealed class StoreFailureTests
     /// <summary>
     /// 503 with the problem body, the request's rule <c>auth.store</c>, and no session cookie set or
     /// cleared: no cookie at all, or on the callback, whose login-state cookies the handler has already
-    /// deleted, none by the session cookie's name.
+    /// deleted, none by the session cookie's name. <paramref name="otherCookiesAllowed"/> is that callback
+    /// case: true allows cookies by other names and still refuses the session cookie.
     /// </summary>
-    private static void AssertStoreUnavailable(IdentityGateway.Answer answer, bool sessionCookieAllowed = true)
+    private static void AssertStoreUnavailable(IdentityGateway.Answer answer, bool otherCookiesAllowed = false)
     {
         Assert.Equal((503, "auth.store"), (answer.Status, answer.Rule));
         // The token probe answers the source's outcome by its code alone, as text; every other writer
@@ -173,13 +174,13 @@ public sealed class StoreFailureTests
         Assert.Equal("session_store_unavailable", answer.Body.StartsWith('{')
             ? JsonDocument.Parse(answer.Body).RootElement.GetProperty("code").GetString()
             : answer.Body);
-        if (sessionCookieAllowed)
+        if (otherCookiesAllowed)
         {
-            Assert.Empty(answer.Cookies);
+            Assert.DoesNotContain(answer.Cookies, c => c.Name.Value == CookieOptionsSetup.CookieName);
         }
         else
         {
-            Assert.DoesNotContain(answer.Cookies, c => c.Name.Value == CookieOptionsSetup.CookieName);
+            Assert.Empty(answer.Cookies);
         }
     }
 
