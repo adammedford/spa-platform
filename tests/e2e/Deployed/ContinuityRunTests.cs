@@ -248,6 +248,44 @@ public sealed class ContinuityRunTests : IDisposable
     }
 
     [Fact]
+    public async Task A_driver_stopped_at_a_timed_out_hold_writes_what_the_page_showed_and_any_other_stop_writes_no_page()
+    {
+        PageShown page = new("https://spa-poc.auth.us-east-1.amazoncognito.com/login", "Sign in with your username and password");
+        HoldTimeoutException held = new("no request to https://app1.spa-poc.test:8443/signin-oidc came within 00:01:00", page);
+
+        await Assert.ThrowsAsync<HoldTimeoutException>(() => Run(Runner(true, () => [])).TwoTaskRowAsync("row5", Sent("control"), null,
+            (_, _) => throw held, (_, _) => RowResult.Passed("", []), Ct));
+        await Assert.ThrowsAsync<HoldTimeoutException>(() => Run(Runner(true, () => [])).OnceAsync<int>("row6", Sent("control"),
+            _ => throw held, _ => [], (_, _) => RowResult.Passed("", []), Ct));
+        await Assert.ThrowsAsync<DriverBroke>(() => Run(Runner(true, () => [])).TwoTaskRowAsync("row7", Sent("control"), null,
+            (_, _) => throw new DriverBroke(), (_, _) => RowResult.Passed("", []), Ct));
+
+        foreach (string row in new[] { "row5", "row6" })
+        {
+            RowEvidence written = JsonSerializer.Deserialize<RowEvidence>(await File.ReadAllTextAsync(Path.Combine(directory, row + ".json"), Ct))!;
+            Assert.Equal(page, written.Page);
+            Assert.Equal("the driver stopped with HoldTimeoutException", written.Reason);
+        }
+
+        Assert.Null(JsonSerializer.Deserialize<RowEvidence>(await File.ReadAllTextAsync(Path.Combine(directory, "row7.json"), Ct))!.Page);
+    }
+
+    [Fact]
+    public async Task A_rerun_that_does_not_stop_at_a_hold_writes_no_page_over_the_earlier_runs()
+    {
+        RowEvidence earlier = new("row5", 1, 60, Verdict.NotProved, "the driver stopped with HoldTimeoutException", [], [],
+            new PageShown("https://spa-poc.auth.us-east-1.amazoncognito.com/login", "Sign in"));
+        await File.WriteAllTextAsync(Path.Combine(directory, "row5.json"), JsonSerializer.Serialize(earlier), Ct);
+
+        await Assert.ThrowsAsync<DriverBroke>(() => Run(Runner(true, () => [])).TwoTaskRowAsync("row5", Sent("control"), null,
+            (_, _) => throw new DriverBroke(), (_, _) => RowResult.Passed("", []), Ct));
+
+        RowEvidence written = JsonSerializer.Deserialize<RowEvidence>(await File.ReadAllTextAsync(Path.Combine(directory, "row5.json"), Ct))!;
+        Assert.Null(written.Page);
+        Assert.Equal(1, written.Attempts);
+    }
+
+    [Fact]
     public async Task A_cancelled_row_still_writes_its_evidence_without_calling_it_a_stopped_driver()
     {
         await Assert.ThrowsAsync<OperationCanceledException>(() => Run(Runner(true, () => [])).TwoTaskRowAsync("row3", Sent("control"), null,

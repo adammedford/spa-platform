@@ -73,7 +73,8 @@ public static class NavigationHold
             }
             catch (TimeoutException)
             {
-                throw new TimeoutException($"no request to {prefix} came within {wait ?? DefaultWait}; the page is at {Redacted.Url(page.Url)}.");
+                PageShown shown = await ShownAsync(page);
+                throw new HoldTimeoutException($"no request to {prefix} came within {wait ?? DefaultWait}; the page is at {shown.Url}.", shown);
             }
         }
         finally
@@ -83,7 +84,53 @@ public static class NavigationHold
         }
     }
 
+    /// <summary>How long a timed-out hold waits for the page's text before it records that it could not read it.</summary>
+    public static readonly TimeSpan TextWait = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// What the page showed when a hold timed out (#1003): its URL with no query and its visible text,
+    /// both through <see cref="Redacted"/>, with the values of the page's own query and fragment and of
+    /// the context's cookies taken out of the text as well. A page mid-navigation, or one with no body,
+    /// may not give its text within <see cref="TextWait"/>; the record then says so, and the hold still
+    /// fails with its own timeout.
+    /// </summary>
+    internal static async Task<PageShown> ShownAsync(IPage page)
+    {
+        string url = page.Url;
+        try
+        {
+            // innerText is the rendered text, so a script's source and a hidden element are not in it
+            // (https://playwright.dev/dotnet/docs/api/class-locator#locator-inner-text,
+            // https://html.spec.whatwg.org/multipage/dom.html#the-innertext-idl-attribute); Redacted.Text
+            // still takes out what the page renders.
+            string text = await page.Locator("body").InnerTextAsync(new() { Timeout = (float)TextWait.TotalMilliseconds });
+            IReadOnlyList<BrowserContextCookiesResult> cookies = await page.Context.CookiesAsync();
+            return new PageShown(Redacted.Url(url), Redacted.Text(text, [.. Redacted.ParameterValues(url), .. cookies.Select(cookie => cookie.Value)]));
+        }
+        catch (Exception unread) when (unread is PlaywrightException or TimeoutException)
+        {
+            return new PageShown(Redacted.Url(url), $"(the page's text could not be read within {TextWait}: {unread.GetType().Name})");
+        }
+    }
+
     /// <summary>The protocol's pattern treats <c>*</c> and <c>?</c> as wildcards and <c>\</c> as their escape.</summary>
     private static string Escape(string literal) =>
         literal.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("*", "\\*", StringComparison.Ordinal).Replace("?", "\\?", StringComparison.Ordinal);
+}
+
+/// <summary>What a page showed, as an evidence file may hold it: <see cref="NavigationHold.ShownAsync"/> builds one.</summary>
+public sealed record PageShown(string Url, string Text);
+
+/// <summary>
+/// A hold whose request never came (<see cref="NavigationHold.HoldAsync"/>), carrying what the page
+/// showed at the time so a continuity row's evidence file can record it (#1003). It is a
+/// <see cref="TimeoutException"/>, as the hold's failure always was, and
+/// <see cref="Redacted.PlaywrightAsync(Func{Task})"/> rethrows it as one of its own kind.
+/// </summary>
+public sealed class HoldTimeoutException : TimeoutException
+{
+    public HoldTimeoutException(string message, PageShown page)
+        : base(message) => Page = page;
+
+    public PageShown Page { get; }
 }
