@@ -1723,19 +1723,33 @@ const LIMIT_HALTED = 'usage limit; resume after 10pm (America/Chicago)'
 // 41. Gap decisions are read from the Answer (#631): the implement prompt records a gap decision only in the Answer's
 //     "Decided by implementer" list, and a "## Decisions taken" comment only for a human-owned one. So every review
 //     prompt's decisions step reads that list and finds no fault in the missing comment, and the report takes a gap
-//     decision's alternatives from the Answer, which is among the comments it reads past the results JSON.
+//     decision's alternatives from the Answer, which is among the comments it reads past the results JSON. The list's
+//     label is read from each implement prompt, never copied here, so a label renamed there alone fails this check
+//     (#914; CODING_STANDARDS.md "A guard reads the thing it guards").
 {
-  const REVIEW = 'Then read the "## Decisions taken" comment, if any, and the Answer\'s "Decided by implementer" list, where a gap decision is recorded (no gap decision gets a "## Decisions taken" comment, so its absence is no finding).'
-  const REPORT = '(a "Human-owned:" one from the issue\'s "## Decisions taken" comment, a gap decision from the "Decided by implementer" list in its "## Answer" comment)'
-  const READS = 'the "## Decisions taken" alternatives, the "Decided by implementer" list in an "## Answer" comment'
-  const reviews = allPrompts.filter((x) => x.label.startsWith('review:'))
-  if (!reviews.length) fail('#631: no review prompt was captured, so the gap-decision check read nothing')
-  for (const c of reviews) if (!c.prompt.includes(REVIEW)) fail(`#631: the ${c.label} prompt's decisions step does not read the Answer's "Decided by implementer" list`)
-  if (!reportPrompt) fail('#631: no report prompt was rendered, so the gap-decision check read nothing')
-  else {
-    const item = (/^   - Decisions taken overnight:.*$/m.exec(reportPrompt) || [''])[0]
-    if (!item.includes(REPORT)) fail('#631: the report\'s "Decisions taken overnight" item does not take a gap decision\'s alternatives from the Answer\'s "Decided by implementer" list')
-    if (!reportPrompt.includes(READS)) fail('#631: the report does not read the Answer\'s "Decided by implementer" list among the comments the results JSON lacks')
+  const impls = allPrompts.filter((x) => x.label.startsWith('implement:'))
+  if (!impls.length) fail('#914: no implement prompt was rendered, so the gap-decision label was read from nothing')
+  const labels = new Set()
+  for (const c of impls) {
+    const m = /^Gap decisions that are not human-owned you may take; list each in delegatedDecisions and in the Answer as "([^"]+)"\.$/m.exec(c.prompt)
+    if (!m) fail(`#914: the ${c.label} prompt does not name the Answer's list a gap decision goes in`)
+    else labels.add(m[1])
+  }
+  if (labels.size > 1) fail(`#914: the implement prompts name ${labels.size} labels for the Answer's gap-decision list: ${[...labels].join(', ')}`)
+  const LABEL = labels.size === 1 ? [...labels][0] : ''
+  if (LABEL) {
+    const REVIEW = `Then read the "## Decisions taken" comment, if any, and the Answer's "${LABEL}" list, where a gap decision is recorded (no gap decision gets a "## Decisions taken" comment, so its absence is no finding).`
+    const REPORT = `(a "Human-owned:" one from the issue's "## Decisions taken" comment, a gap decision from the "${LABEL}" list in its "## Answer" comment)`
+    const READS = `the "## Decisions taken" alternatives, the "${LABEL}" list in an "## Answer" comment`
+    const reviews = allPrompts.filter((x) => x.label.startsWith('review:'))
+    if (!reviews.length) fail('#631: no review prompt was captured, so the gap-decision check read nothing')
+    for (const c of reviews) if (!c.prompt.includes(REVIEW)) fail(`#631: the ${c.label} prompt's decisions step does not read the Answer's "${LABEL}" list`)
+    if (!reportPrompt) fail('#631: no report prompt was rendered, so the gap-decision check read nothing')
+    else {
+      const item = (/^   - Decisions taken overnight:.*$/m.exec(reportPrompt) || [''])[0]
+      if (!item.includes(REPORT)) fail(`#631: the report's "Decisions taken overnight" item does not take a gap decision's alternatives from the Answer's "${LABEL}" list`)
+      if (!reportPrompt.includes(READS)) fail(`#631: the report does not read the Answer's "${LABEL}" list among the comments the results JSON lacks`)
+    }
   }
 }
 
