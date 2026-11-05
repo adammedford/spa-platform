@@ -63,10 +63,11 @@ nothing and fails (CODING_STANDARDS.md, "A check fails closed").
 Each finding is a line `landing-subjects: held: ...`, `landing-subjects: unchecked: ...` or
 `landing-subjects: note: ...`, and the last line is the verdict: `landing-subjects: pass: ...` with
 exit 0, `landing-subjects: fail: ...` with exit 1 when a merge was held or, under --fail-unchecked,
-went unchecked, and exit 2 when nothing was judged. --subject-for's last line is `landing-subjects: subject: <head>`, with exit 0, or exit 2
-when it could not read the history. tools/check.sh runs the range check over the range it already
-judges, so the pre-push hook and the overnight integrate gate, which runs the full check, refuse the
-subject before it is written into history to stay.
+went unchecked, and exit 2 when nothing was judged. --subject-for's last line is
+`landing-subjects: subject: <head>`, with exit 0, or exit 2 when it could not read the history.
+tools/check.sh runs the range check over the range it already judges, so the pre-push hook and the
+overnight integrate gate, which runs the full check, refuse the subject before it is written into
+history to stay.
 """
 from __future__ import annotations
 

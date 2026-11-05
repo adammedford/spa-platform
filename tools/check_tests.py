@@ -1289,7 +1289,7 @@ class CompanionTests(CheckTestCase):
         result = self.full(case)
         self.assertEqual(0, result.status, result.stderr)
         self.assertEqual(FULL_PYTHON_CHECKS + [companion(".github/gizmo_tests.py"),
-                                          companion("tools/thing_tests.py")], case.calls())
+                                               companion("tools/thing_tests.py")], case.calls())
         self.assertEqual(f"check: pass: {FULL_RAN}, the test companions .github/gizmo_tests.py, "
                          "tools/thing_tests.py.", result.last_line(result.stdout))
 
