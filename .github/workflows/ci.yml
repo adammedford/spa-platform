@@ -439,6 +439,14 @@ jobs:
         # each line as it arrives and passes AccessDenied through (#468).
         run: python3 -I tools/wiz_redact_tests.py
 
+      - name: The wiz skill's prelude names the record after the pinned date, refuses without one, and is copied nowhere
+        # Every Bash call of a sitting sources tools/wiz_prelude.sh (#1010). Its companion starts the real
+        # file under /bin/bash in a throwaway repository: a date pinned the day before names the record
+        # and the bundle, not today's; no pin, or one that is not a date, exits non-zero naming Stage 0
+        # before the rest of the call runs; --pin writes today's UTC date; and the wiz skill's text
+        # holds no copy of the prelude's commands.
+        run: python3 -I tools/wiz_prelude_tests.py
+
       - name: The derived issue labels follow the table, write by name, and delete a label only when nothing carries it
         # tools/issue_labels.py (#680) works out each issue's kind:, area: and vendor: labels and
         # retires the unused default labels, the one write it cannot take back. Its companion runs the
