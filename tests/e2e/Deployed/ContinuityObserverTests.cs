@@ -87,6 +87,9 @@ public sealed class ContinuityObserverTests
 
     private static readonly (string, string)[] SessionPair = [("session-1", "session-2")];
 
+    /// <summary>The status a planted challenge answers: contracts/http-contract.md's Errors row unauthenticated, never a literal (#863).</summary>
+    private static readonly int Unauthenticated = Contract.Error("unauthenticated").Status;
+
     // ---- the control (Q143) ----
 
     [Fact]
@@ -216,7 +219,7 @@ public sealed class ContinuityObserverTests
     [Fact]
     public async Task A_challenge_on_any_attempt_fails_the_row()
     {
-        Attempt attempt = new(1, [Sent("session-1", 0), Sent("session-2", 1, status: 401)]);
+        Attempt attempt = new(1, [Sent("session-1", 0), Sent("session-2", 1, status: Unauthenticated)]);
         GatewayCapture capture = await new CloudWatch()
             .Request(TaskA, attempt.Steps[0]).Request(TaskB, attempt.Steps[1])
             .CaptureAsync(Deadline);
@@ -275,8 +278,6 @@ public sealed class ContinuityObserverTests
 
     private static readonly (string, string)[] LogoutPair = [("logout", "replay")];
 
-    private static readonly int Unauthenticated = Contract.Error("unauthenticated").Status;
-
     private static Attempt Row9Attempt(int seconds, int controlStatus = 200, int? replayStatus = null) => new(1,
     [
         Sent("control", seconds, controlStatus, expect: null),
@@ -296,11 +297,12 @@ public sealed class ContinuityObserverTests
     }
 
     [Theory]
-    [InlineData(false, 200)]
-    [InlineData(true, 401)]
-    [InlineData(true, 0)]
-    public async Task Row9s_pre_logout_replay_without_its_200_control_proves_nothing(bool controlSent, int controlStatus)
+    [InlineData(false, null, 200)]
+    [InlineData(true, "unauthenticated", null)]
+    [InlineData(true, null, 0)] // Not an Errors row: 0 plants a control that failed to connect.
+    public async Task Row9s_pre_logout_replay_without_its_200_control_proves_nothing(bool controlSent, string? refusal, int? other)
     {
+        int controlStatus = refusal is null ? other!.Value : Contract.Error(refusal).Status;
         Attempt full = Row9Attempt(0, controlStatus);
         Attempt attempt = controlSent
             ? controlStatus == 0 ? full with { Steps = [Step.Failed("control", ClientTrace.Fresh(), T0, new IOException()), .. full.Steps.Skip(1)] } : full
@@ -354,7 +356,7 @@ public sealed class ContinuityObserverTests
         // The stopped task draining is not a replacement.
         Assert.Equal(Verdict.NotProved, ContinuityObserver.Replacement(TaskA, TaskB, [attempt], capture).Verdict);
 
-        Attempt challenged = new(1, [attempt.Steps[0], attempt.Steps[1] with { Status = 401 }]);
+        Attempt challenged = new(1, [attempt.Steps[0], attempt.Steps[1] with { Status = Unauthenticated }]);
         Assert.Equal(Verdict.Failed, ContinuityObserver.Replacement(TaskA, TaskB, [challenged], capture).Verdict);
     }
 
