@@ -297,9 +297,9 @@ jobs:
         # that names the pull request or a ticket it closes (#531), and this is the code that reads
         # them. Its companion feeds it GitHub's shapes of the open issues and their comments built
         # to trip each rule -- a title merely containing Overnight, a pull request in the listing,
-        # a number inside a longer one or a decision URL, a question split across parts, a Confirm
-        # whose first sentence, override lines or author decide coverage -- and the land.sh
-        # companion below runs only one case of each.
+        # a number inside a longer one, an HTML entity or a link fragment, a question split across
+        # parts, a Confirm whose first sentence, override lines or author decide coverage -- and
+        # the land.sh companion below runs only one case of each.
         run: python3 -I tools/overnight_answers_tests.py
 
       - name: The retro's record reader reads each record line the way its rules say
