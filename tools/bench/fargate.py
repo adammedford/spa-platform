@@ -53,9 +53,13 @@ prints: nothing on the cell calls /healthz during the run. "ready" labels no dep
 AWS-StartPortForwardingSessionToRemoteHost session to albDnsName:443 through the task about to be
 replaced, which outlives the new target's first checks: that task is deregistered once the new
 target is healthy and stops after the 30 s drain and up to the 30 s stopTimeout, so the forward
-lasts about 30 to 60 s past target healthy, the default probe loop's own bound (--probe-attempts
-30 x --probe-interval 2.0 s). tools/scripts/tunnel.sh is not used, since its hop can be the task
-being measured. Once the new target is healthy it sends a
+lasts about 30 to 60 s past target healthy: 30 s when the gateway exits soon after SIGTERM, 60 s
+only when it takes the whole stopTimeout. The default probe loop (--probe-attempts 30 x
+--probe-interval 2.0 s) sleeps 60 s, the upper end only, and each round's probe and log read add
+to it, so a 302 that needs more than about 30 s of probing can find the forward gone and end the
+restart incomplete. #347 leaves the forward's continuity through a roll unproved.
+tools/scripts/tunnel.sh is not used, since its hop can be the task being measured. Once the new
+target is healthy it sends a
 cookieless navigation to app1's registry host through that forward, TLS verified against the
 authority certs.sh issued, until a 302 lands in the new task's stream. It reads the status line and
 nothing else: the 302 is the OpenID Connect challenge, whose Location holds state and whose
