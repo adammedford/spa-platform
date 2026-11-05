@@ -884,9 +884,10 @@ const mutationRow = (n, m, i, got) => {
   // A Node companion, identified by its project or by nodeFile above, prints no test names: a
   // check is a block of the file, and its failures are its fail() messages, which no cell such as
   // 'x_tests.mjs check 39' can match by name (#905). On #798 and #796 a stated row red only on its
-  // own checks' messages read did-not-fail, and no acceptance could answer it. So a row of any kind
-  // there is a caught row, which the verdict answers when it verifies the messages are the named
-  // checks' own, and holds otherwise.
+  // own checks' messages read did-not-fail, and no acceptance could answer it. So a row there is a
+  // caught row unless it names the whole file (wholeFile above, whose failures are all its own),
+  // which the verdict answers when it verifies the messages are the named checks' own, and holds
+  // otherwise.
   const checksOnly = (/\.mjs$/.test(m.project || '') || nodeFile) && !wholeFile
   if (caughtElsewhere && !checksOnly && (m.kind === 'stated' || m.kind === 'nominated')) {
     row.why = `the project went red only on ${row.failingNames.join(', ')}, and a ${m.kind} mutation keeps its own test: ${row.why}`
