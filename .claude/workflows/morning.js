@@ -1365,6 +1365,7 @@ ${HOUSE(p.mdir)}
 PHASE FILE: ${p.mdir}/verify.json INPUTS: ${phaseKey}
 OUTPUT FILE: ${p.mdir}/pr-body.md
 OUTPUT FILE: ${p.mdir}/merge-body.md
+OUTPUT FILE: ${p.mdir}/report-body.md
 Write {"inputs": "${phaseKey}", "result": <your return value>} to the PHASE FILE as JSON before you return, except on the merged outcome of step 0, which leaves the PHASE FILE as an earlier morning wrote it: it holds the head that morning verified, which step 0 and the after pass compare against.
 MERGE SUBJECT: ${JSON.stringify(subjectFor(date))}
 
