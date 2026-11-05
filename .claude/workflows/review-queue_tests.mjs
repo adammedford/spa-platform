@@ -903,6 +903,18 @@ try {
       const m = (c.mutations || []).find((x) => x.test === test && x.kind === 'stated') || {}
       if (m.result !== want || c.verdict !== verdict) fail(`PR 213 with the stated row ${JSON.stringify(test)} on project .claude/workflows red only on the companion's own messages, ${caught.length ? 'accepted' : 'not accepted'}: row ${JSON.stringify({ result: m.result })}, verdict ${c.verdict}, expected ${want} and ${verdict}`)
     }
+    // Known by its file alone (#940): a stated row whose cell leads with no .mjs path, on a directory
+    // project, takes its .mjs file from the same-test candidate, and that file makes it a caught row.
+    // Accepted, it merges; read by its cell and project alone it would be did-not-fail and hold.
+    {
+      const test = 'check 41 (the lane order)'
+      const SHAPE = { 213: pr(213, [MJS, '.claude/workflows/overnight.js'], { candidates: [{ ...cand, test, project: '.claude/workflows' }], statedMutations: [stated(test, 1, -1, '.claude/workflows')] }) }
+      env = run({ prs: [213] }, SHAPE, { mutate: { [test]: { ...row('reproduced', 1, 1), failingNames: MSGS } }, caught: { 213: [test] } })
+      result = await execute(env)
+      const c = resultOf(213, result)
+      const m = (c.mutations || []).find((x) => x.test === test && x.kind === 'stated') || {}
+      if (m.result !== 'reproduced' || c.verdict !== 'merge') fail(`PR 213 with the stated row ${JSON.stringify(test)} on project .claude/workflows, its file ${MJS} only from its candidate, red only on the companion's own messages, accepted: row ${JSON.stringify({ result: m.result })}, verdict ${c.verdict}, expected reproduced and merge`)
+    }
     const TF = 'infra/modules/cell/tests/module.tftest.hcl'
     const PY = 'tools/overnight_collect_tests.py'
     for (const [test, project, file, red] of [
