@@ -347,7 +347,7 @@ function stub(env, scriptArgs, served) {
         // first 200 characters of each body and no more (the prompt's jq is run on gh's shape in 19a).
         // served.commentsIssue: the number it reports reading, as a reader that read the wrong issue would.
         const issue = served.issue === undefined ? issueWith([...QUESTIONS, CONFIRM]) : served.issue
-        const indexed = (issue ? issue.comments : []).map((c) => ({ author: c.author, createdAt: c.createdAt, url: c.url, bytes: Buffer.byteLength(c.body), head: c.body.slice(0, 200) }))
+        const indexed = (issue ? issue.comments : []).map((c) => ({ author: c.author, createdAt: c.createdAt, url: c.url, bytes: Buffer.byteLength(c.body), tail: /\n*$/.exec(c.body)[0].length, head: c.body.slice(0, 200) }))
         out = { issue: { number: served.commentsIssue || (issue ? issue.number : 0), comments: indexed }, error: served.commentsError || '' }
       } else if (label.startsWith('comments-batch:')) {
         // A batch reader: the comments its prompt's jq names, verbatim. served.batchSwap: a reader
@@ -357,10 +357,12 @@ function stub(env, scriptArgs, served) {
         // served.mangle: 'first' drops the **Q<n>.** marker from every question body the batch reader
         // returns but not from a re-read (label ends -retry<n>); 'always' drops it from both. 'head' and
         // 'tail' change comment 1 on every read so that only one of the index's two fields differs: 'head'
-        // rewrites its first character (same bytes, another head), 'tail' drops its last, past the head.
+        // rewrites its first character (same bytes, another head), 'tail' drops its last non-newline
+        // character, past the head. 'newline' drops one trailing newline from every body, as the reader did on #1071 (#1084).
         const marker = (c) => (served.mangle === 'always' || (served.mangle === 'first' && !/-retry\d+$/.test(label))) ? { ...c, body: c.body.replace(/\*\*Q\d+\.\*\* /, '') } : c
         const mangled = (c) => c.url.endsWith('#issuecomment-1') && served.mangle === 'head' ? { ...c, body: '=' + c.body.slice(1) }
-          : c.url.endsWith('#issuecomment-1') && served.mangle === 'tail' ? { ...c, body: c.body.slice(0, -1) } : marker(c)
+          : c.url.endsWith('#issuecomment-1') && served.mangle === 'tail' ? { ...c, body: c.body.replace(/(.)(\n*)$/s, '$2') }
+          : served.mangle === 'newline' ? { ...c, body: c.body.replace(/\n$/, '') } : marker(c)
         out = { comments: at.map((i) => mangled(issue.comments[served.batchSwap ? (i + 1) % issue.comments.length : i])), error: '' }
       } else if (label === 'verify') {
         const v = served.verify || {}
@@ -1953,15 +1955,15 @@ try {
     else {
       const canary = 'x'.repeat(300) + 'BODY-CANARY-' + 'z'.repeat(5000)
       const fromGh = JSON.stringify({ number: ISSUE, comments: [
-        { author: { login: 'adammedford' }, createdAt: 'a', url: 'u1', body: 'Confirm Q1 to Q3.\n\n' + canary },
-        { author: { login: 'adammedford' }, createdAt: 'b', url: 'u2', body: '## Questions: #1, issue-1, T\r\n\n' + canary },
+        { author: { login: 'adammedford' }, createdAt: 'a', url: 'u1', body: 'Confirm Q1 to Q3.\n\n' + canary + '\n' },
+        { author: { login: 'adammedford' }, createdAt: 'b', url: 'u2', body: '## Questions: #1, issue-1, T\r\n\n' + canary + '\n\n' },
         { author: { login: 'adammedford' }, createdAt: 'c', url: 'u3', body: 'é'.repeat(300) + canary },
       ] })
       const r = spawnSync('jq', ['-c', jqOf[1]], { input: fromGh, encoding: 'utf8' })
       if (r.error || r.status !== 0) fail(`the comments index jq did not run (jq is needed for this check): ${r.error ? r.error.message : r.stderr}`)
       else {
         const out = JSON.parse(r.stdout)
-        const fields = ['author', 'bytes', 'createdAt', 'head', 'url']
+        const fields = ['author', 'bytes', 'createdAt', 'head', 'tail', 'url']
         if (out.number !== ISSUE || out.comments.length !== 3) fail(`the comments index jq returned ${r.stdout.slice(0, 200)}`)
         for (const c of out.comments) {
           if (Object.keys(c).sort().join() !== fields.join()) fail(`the comments index returns ${Object.keys(c).sort().join()}, not ${fields.join()}`)
@@ -1969,6 +1971,7 @@ try {
           if (typeof c.bytes !== 'number' || c.bytes < 5000) fail(`the comments index gives a size of ${c.bytes} for a body over 5000 bytes`)
         }
         if (out.comments[2].bytes !== Buffer.byteLength('é'.repeat(300) + canary)) fail(`the comments index counts ${out.comments[2].bytes} bytes, not the body's UTF-8 bytes`)
+        if (out.comments.map((c) => c.tail).join() !== '1,2,0') fail(`the comments index counts the trailing newlines of ${JSON.stringify(out.comments.map((c) => c.tail))}, not 1,2,0`)
         if (!out.comments[1].head.startsWith('## Questions: #1, issue-1, T\r')) fail('the comments index trims or rewrites the head the readers judge')
       }
     }
@@ -2054,6 +2057,11 @@ try {
     if (!head.result.refusals.some((x) => /#issuecomment-1 was not returned .*: its first characters differ from the index/.test(x))) fail(`a body with the same bytes and another head: not refused: ${JSON.stringify(head.result.refusals)}`)
     const tail = await execute(newRepo(), { date: DATE }, { mangle: 'tail' })
     if (!tail.result.refusals.some((x) => /#issuecomment-1 was not returned .*: \d+ bytes returned, \d+ in the index/.test(x))) fail(`a body with the same head and another length: not refused: ${JSON.stringify(tail.result.refusals)}`)
+    // A reader that drops one trailing newline (#1071, #1084): the index counts the newlines a body ends in
+    // and the script gives the body them back, with no re-read. A body that differs elsewhere is still refused.
+    const withNewlines = issueWith([...QUESTIONS, { ...CONFIRM, body: CONFIRM.body + '\n\n' }])
+    const lost = await execute(newRepo(), { date: DATE }, { issue: withNewlines, mangle: 'newline' })
+    if (lost.result.refusals.length || lost.labels.some((l) => /-retry\d+$/.test(l))) fail(`a reader that drops a trailing newline: refused or re-read: ${JSON.stringify(lost.result.refusals)} ${lost.labels.join(', ')}`)
     if (always.labels.includes('classify') || APPLIERS(always.labels).length) fail(`a body changed on every read: Apply ran: ${always.labels.join(', ')}`)
     if (/PHASE FILE|OUTPUT FILE/.test(cp)) fail('the comments reader writes a file, so a rerun could reuse stale comments')
     const stopped = await execute(newRepo(), { date: DATE }, { verify: { outcome: 'stop', step: 3, reason: 'dirty' } })

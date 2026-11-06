@@ -273,7 +273,7 @@ const REPLAY = {
   },
   required: ['listing', 'issue', 'phaseFiles', 'counts', 'creates', 'pending', 'renamed', 'stoppedAt', 'reason'],
 }
-const COMMENT_INDEXED = { type: 'object', properties: { author: { type: 'string' }, createdAt: { type: 'string' }, url: { type: 'string' }, bytes: { type: 'integer' }, head: { type: 'string' } }, required: ['author', 'createdAt', 'url', 'bytes', 'head'] }
+const COMMENT_INDEXED = { type: 'object', properties: { author: { type: 'string' }, createdAt: { type: 'string' }, url: { type: 'string' }, bytes: { type: 'integer' }, tail: { type: 'integer' }, head: { type: 'string' } }, required: ['author', 'createdAt', 'url', 'bytes', 'head'] }
 const COMMENTS_INDEX = {
   type: 'object',
   properties: {
@@ -1400,7 +1400,7 @@ const commentsPrompt = (issue) => `Comments: index the Overnight issue's comment
 ${COMMENTS_RULES}
 - Never quote a secret, token, cookie, code or state value in anything you return.
 
-1. \`cd ${REPO} && gh issue view ${issue} --json number,comments --jq '{number, comments: [.comments[] | {author: .author.login, createdAt, url, bytes: (.body|utf8bytelength), head: .body[0:${HEAD_CHARS}]}]}'\`. issue is its output as printed: its number, and every comment, in order, as {author, createdAt, url, bytes, head}. head is the first ${HEAD_CHARS} characters of the comment, whatever they are; return nothing more of any comment.
+1. \`cd ${REPO} && gh issue view ${issue} --json number,comments --jq '{number, comments: [.comments[] | {author: .author.login, createdAt, url, bytes: (.body|utf8bytelength), tail: (.body|capture("(?<t>\\n*)\\\\z").t|length), head: .body[0:${HEAD_CHARS}]}]}'\`. issue is its output as printed: its number, and every comment, in order, as {author, createdAt, url, bytes, tail, head}. head is the first ${HEAD_CHARS} characters of the comment, whatever they are; return nothing more of any comment.
 2. If GitHub cannot be reached or the read fails, error says why and comments is []. error is "" when nothing stopped you.
 Return issue and error.`
 const batchPrompt = (issue, at) => `Comments: return ${at.length === 1 ? 'one comment' : `${at.length} comments`} of the Overnight issue verbatim for Apply (#319). You read; the script reads the questions and the Confirm comments from them.
@@ -1439,6 +1439,11 @@ const undecidableHead = (head) => head.length >= HEAD_CHARS &&
 const READ_RETRIES = 2
 const RETRY_NOTE = `\n3. A previous read of this comment came back changed. Return its body exactly as gh printed it: every character, every \`**\` and \`Q<n>.\` marker, nothing summarised, reworded or cleaned up.`
 const utf8Bytes = (s) => { let n = 0; for (const ch of String(s)) { const cp = ch.codePointAt(0); n += cp < 0x80 ? 1 : cp < 0x800 ? 2 : cp < 0x10000 ? 3 : 4 } return n }
+// A reader drops a body's last newline (2026-11-05, #1071: 9867 bytes returned, 9868 in the index, on a
+// Confirm comment ending in two; #1084). Trailing newlines carry nothing, so the index records how many
+// the body ends in (tail) and the body is given exactly that many; every other byte is still held.
+const restoreTail = (c, ix) => c && ix && typeof ix.tail === 'number' && typeof c.body === 'string'
+  ? { ...c, body: c.body.replace(/\n+$/, '') + '\n'.repeat(ix.tail) } : c
 const bodyFault = (c, ix) => {
   if (!c || !ix) return 'the index has no such comment'
   const body = String(c.body || '')
@@ -1935,12 +1940,12 @@ const applyAnswers = async ({ date, issue, gate, refusals, reuse, after = false 
       // against the index, which the jq printed; a comment that differs is read again alone, and one that
       // still differs is named, never sorted.
       for (let j = 0; j < b.at.length; j++) {
-        let c = g.comments[j]
+        let c = restoreTail(g.comments[j], index[b.at[j]])
         let why = bodyFault(c, index[b.at[j]])
         for (let tries = 1; why && tries <= READ_RETRIES; tries++) {
           const r = await run(batchPrompt(issue, [b.at[j]]) + RETRY_NOTE, { label: `comments-batch:${k + 1}-retry${tries}`, phase: 'Apply', schema: COMMENTS_BATCH })
           const rc = r && !r.error && (r.comments || []).length === 1 && r.comments[0].url === b.urls[j] ? r.comments[0] : null
-          if (rc) { c = rc; why = bodyFault(rc, index[b.at[j]]) }
+          if (rc) { c = restoreTail(rc, index[b.at[j]]); why = bodyFault(c, index[b.at[j]]) }
         }
         if (why) bad.push(`${b.urls[j]} was not returned as the index shows it after ${READ_RETRIES} re-reads: ${why}`)
         else comments.push(c)
