@@ -144,6 +144,56 @@ class AFailedOrMalformedLookupLeavesTheFileAsItWas(Tfvars):
         self.assertUnchanged(case, before, result, 1)
         self.assertIn(f"the digest lookup of {SAMPLE_REFERENCE}", result.stderr)
 
+    # #1015: in sitting D the human had to find the digest the file already pinned to pass it back.
+    def assertPinnedAdvice(self, result: cell.Result, digest: str):
+        self.assertIn(f"tools/scripts/platform-tfvars.sh --sample-digest {digest}", result.stderr)
+        self.assertNotIn("Try again later, or pass --sample-digest.", result.stderr)
+
+    def assertPlainAdvice(self, result: cell.Result):
+        self.assertIn("Try again later, or pass --sample-digest.", result.stderr)
+        self.assertNotIn("platform-tfvars.sh --sample-digest", result.stderr)
+
+    def test_a_failed_lookup_names_the_digest_the_file_already_pins(self):
+        pinned = OLD_IMAGE.split("@", 1)[1]
+        for fault, digest in (("429", CURRENT), ("empty", ""), ("short", "sha256:517607ae")):
+            with self.subTest(fault=fault):
+                case = self.case(operator_file(), digest=digest)
+                if fault == "429":
+                    case.world["faults"]["imagetools"] = 429
+                    case.save()
+                before = self.tfvars(case)
+                result = case.run(SCRIPT)
+                self.assertUnchanged(case, before, result, 1)
+                self.assertIn(f"the digest lookup of {SAMPLE_REFERENCE}", result.stderr)
+                self.assertPinnedAdvice(result, pinned)
+
+    def test_a_failed_lookup_with_no_sample_pin_gives_the_plain_retry_advice(self):
+        other = "123456789012.dkr.ecr.us-east-2.amazonaws.com/gateway@sha256:" + "6" * 64
+        files = {
+            # The example's own commented line is no pin.
+            "the bare example": EXAMPLE.read_text(),
+            # A digest of another repository is not the sample image's to reuse.
+            "another repository": operator_file().replace(OLD_IMAGE, other),
+            # A tag is no digest.
+            "a tag": operator_file().replace(OLD_IMAGE, SAMPLE_REFERENCE),
+            # A short or upper-case digest is no full one: --sample-digest would refuse it with exit 2.
+            "a short pin": operator_file().replace(OLD_IMAGE, f"{SAMPLE}@sha256:517607ae"),
+            "an upper-case pin": operator_file().replace(OLD_IMAGE, f"{SAMPLE}@sha256:" + "A" * 64),
+            # Two pins: which one Terraform keeps is not this script's to guess.
+            "set twice": operator_file() + f'gateway_image = "{SAMPLE}@{GIVEN}"\n',
+        }
+        for name, content in files.items():
+            with self.subTest(file=name):
+                case = self.case(content)
+                case.world["faults"]["imagetools"] = 429
+                case.save()
+                before = self.tfvars(case)
+                result = case.run(SCRIPT)
+                self.assertEqual(1, result.status, result.output)
+                self.assertEqual(before, self.tfvars(case))
+                self.assertPlainAdvice(result)
+                self.assertNotIn("6" * 64, result.output)
+
     def test_an_empty_or_short_sample_digest_is_refused_before_any_lookup(self):
         for given in ("", "sha256:", "sha256:517607ae", "517607ae" * 8, "sha256:" + "A" * 64):
             with self.subTest(given=given):

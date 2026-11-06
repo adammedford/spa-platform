@@ -53,9 +53,13 @@ prints: nothing on the cell calls /healthz during the run. "ready" labels no dep
 AWS-StartPortForwardingSessionToRemoteHost session to albDnsName:443 through the task about to be
 replaced, which outlives the new target's first checks: that task is deregistered once the new
 target is healthy and stops after the 30 s drain and up to the 30 s stopTimeout, so the forward
-lasts about 30 to 60 s past target healthy, the default probe loop's own bound (--probe-attempts
-30 x --probe-interval 2.0 s). tools/scripts/tunnel.sh is not used, since its hop can be the task
-being measured. Once the new target is healthy it sends a
+lasts about 30 to 60 s past target healthy: 30 s when the gateway exits soon after SIGTERM, 60 s
+only when it takes the whole stopTimeout. The default probe loop (--probe-attempts 30 x
+--probe-interval 2.0 s) sleeps 60 s, the upper end only, and each round's probe and log read add
+to it, so a 302 that needs more than about 30 s of probing can find the forward gone and end the
+restart incomplete. #347 leaves the forward's continuity through a roll unproved.
+tools/scripts/tunnel.sh is not used, since its hop can be the task being measured. Once the new
+target is healthy it sends a
 cookieless navigation to app1's registry host through that forward, TLS verified against the
 authority certs.sh issued, until a 302 lands in the new task's stream. It reads the status line and
 nothing else: the 302 is the OpenID Connect challenge, whose Location holds state and whose
@@ -66,7 +70,12 @@ Set-Cookie holds the correlation cookie. The clock is that log line's duration_m
   2  a usage error, a refusal, a failed AWS call or any other failure before restart 1's
      update-service is sent (no Region, no outputs document for it, no credentials, a missing tool,
      the service not stable on gatewayImage); nothing is written
-  3  a breach: the scheduler stopped the new task for health, past the T0 + 60 s hard bound. No
+  3  a breach: the scheduler stopped the new task for failing the load balancer's health checks
+     (#286 Q148), the first such stop ending the run wherever it falls. ecs.tf's reading of the
+     target group's defaults (#171) puts that stop past the T0 + 60 s hard bound, three failures 30 s
+     apart; the script does not take that on trust but places the stop it saw against the bound on
+     T0's clock, the workstation's: from the describe-tasks before the one that saw it to that
+     one's answer. The report says past, before or across the bound, or that no T0 was seen. No
      further restart and nothing done to the service (the circuit breaker rolls back on its own);
      the files hold the restarts so far and the breach row
   4  incomplete: a deployment not stable within the waiter's bound, an expected log line absent
@@ -275,6 +284,29 @@ def check_count(t0: Optional[dict], healthy: Optional[dict], interval_s: float =
     if t0 is None or healthy is None:
         return None
     return 1 + max(0, round((_mid(healthy) - _mid(t0)) / (interval_s * 1e9)))
+
+
+def stop_after_t0(t0: Optional[dict], seen: dict, bound_s: float = HARD_BOUND_S) -> str:
+    """Where a stop the poll saw falls against T0 + bound_s, both on the workstation's clock (#919).
+    The stop is after the T0 window's earliest instant and the stop window's earliest, before both
+    windows' latest, so the low end pairs the stop's earliest with T0's latest and the high end the
+    reverse. A stop window with no describe before it is its one instant (unreachable with a T0:
+    a sample follows a describe). A T0 seen by the first sample has no earliest instant, so the
+    high end stays open and the stop is never placed before the bound on it (#919 review)."""
+    if t0 is None:
+        return f"with no T0 (no sample saw Elb.InitialHealthChecking), not placed against the T0 + {bound_s:g} s hard bound"
+    seen_after = seen["after_ns"] if seen["after_ns"] is not None else seen["at_ns"]
+    low = (seen_after - t0["at_ns"]) / 1e9
+    high = None if t0["after_ns"] is None else (seen["at_ns"] - t0["after_ns"]) / 1e9
+    if low > bound_s:
+        where = "past"
+    elif high is not None and high < bound_s:
+        where = "before"
+    else:
+        where = "across"
+    shown = "?" if high is None else f"{high:.0f}"
+    text = f"seen at T0 + {low:.0f}..{shown} s, {where} the T0 + {bound_s:g} s hard bound"
+    return text + (": the poll cannot place it" if where == "across" else "")
 
 
 def log_check(k: Optional[int], health_lines: int) -> str:
@@ -603,12 +635,17 @@ class Bench:
         samples: List[dict] = []
         record["samples"] = samples
         end = time.monotonic() + self.options.health_timeout
+        # When the last describe-tasks that still saw the task running was sent: a stop the next one
+        # sees came after it (#919).
+        running_since: Optional[int] = None
         while True:
+            asked = time.time_ns()
             current = self.describe_tasks([record["task_arn"]])
             task = current[0] if current else task
             self.task_times(task, record)
             if task.get("lastStatus") == "STOPPED" or task.get("desiredStatus") == "STOPPED":
-                self.stopped(task, record)
+                self.stopped(task, record, {"after_ns": running_since, "at_ns": time.time_ns()})
+            running_since = asked
             address = _ip(task)
             described = self.aws("elbv2", "describe-target-health", "--target-group-arn", self.target_group)
             at = time.time_ns()
@@ -625,15 +662,18 @@ class Bench:
         record["t0"], record["healthy"] = found["t0"], found["healthy"]
         record["k"] = check_count(found["t0"], found["healthy"])
 
-    def stopped(self, task: dict, record: dict) -> None:
+    def stopped(self, task: dict, record: dict, seen: dict) -> None:
         code = task.get("stopCode") or "unknown"
         reason = redact(task.get("stoppedReason") or "", self.account)
-        record["stop"] = {"code": code, "reason": reason}
         found = windows(record.get("samples", []))
         record["t0"] = found["t0"]
+        record["stop"] = {"code": code, "reason": reason, "seen": seen, "after_t0": stop_after_t0(found["t0"], seen)}
         record["lines"] = self.read_log(record["task_id"])
         record["marks"] = log_marks(record["lines"])
-        # A task the scheduler stops for failing its load balancer checks is the breach (#286 Q148).
+        # A task the scheduler stops for failing its load balancer checks is the breach (#286 Q148),
+        # wherever the stop falls against T0 + 60 s: the report places it (Endings: 3, #919). The task
+        # definition declares no container health check (ecs.tf), so "health check" in a scheduler
+        # stop's reason is the load balancer's.
         # https://docs.aws.amazon.com/AmazonECS/latest/developerguide/stopped-task-error-codes.html
         if code == "ServiceSchedulerInitiated" and "health check" in reason.lower():
             raise Breach(record)
@@ -821,7 +861,7 @@ def report(facts: dict, records: List[dict], ending: str, reason: str) -> str:
     if ending == "clean":
         lines.append(f"ending: {len(done)} clean restarts")
     elif ending == "breach":
-        lines.append(f"ending: BREACH of the T0 + {HARD_BOUND_S} s hard bound on restart {len(records)}: {reason}")
+        lines.append(f"ending: BREACH on restart {len(records)}: {reason}")
     else:
         lines.append(f"ending: INCOMPLETE after {len(done)} complete restart(s): {reason}")
     lines += ["", f"over {len(done)} complete restart(s), ms (k a count)"]
@@ -854,6 +894,8 @@ def report(facts: dict, records: List[dict], ending: str, reason: str) -> str:
             row += f"; ClockDrift bound {drift.get('ClockErrorBound')} ms, {drift.get('ClockSynchronizationStatus')}"
         if record.get("stop"):
             row += f"; stopped {record['stop']['code']}: {record['stop']['reason']}"
+            if record["stop"].get("after_t0"):
+                row += f"; {record['stop']['after_t0']}"
         lines.append(row)
     widest = {}
     for record in records:
@@ -977,7 +1019,8 @@ def main(argv: List[str]) -> int:
     except Breach as breach:
         row = breach.row
         ending, code = "breach", EXIT_BREACH
-        reason = f"task {row.get('task_id')} stopped by the scheduler ({row['stop']['code']})"
+        reason = (f"the scheduler stopped task {row.get('task_id')} for failing the load balancer's health checks "
+                  f"({row['stop']['code']}), {row['stop']['after_t0']}")
     except Incomplete as stop:
         ending, reason, code = "incomplete", str(stop), EXIT_INCOMPLETE
     except AwsError as error:

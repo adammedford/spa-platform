@@ -190,6 +190,113 @@ public sealed class ContinuityRunTests : IDisposable
         Assert.Equal(["-C", directory, "check-ignore", "-q", "--", Path.Combine(directory, "row3.json")], check.Arguments);
     }
 
+    // ---- a stopped driver and its evidence (#870; CODING_STANDARDS.md, #212's clean-up, f234abc) ----
+
+    /// <summary>
+    /// A runner whose <c>git check-ignore</c> answers ignored for the first <paramref name="ignoredReads"/>
+    /// reads and not ignored after, so the evidence write's own read is refused.
+    /// </summary>
+    private static RecordedRunner RefusedAfter(int ignoredReads)
+    {
+        int reads = 0;
+        return RecordedRunner.WithExits(command => command switch
+        {
+            { Program: "git", Arguments: [.., "check-ignore", "-q", "--", _] } => new CommandResult(reads++ < ignoredReads ? 0 : 1, ""),
+            _ => throw new InvalidOperationException($"unexpected {command.Program} {string.Join(' ', command.Arguments)}"),
+        });
+    }
+
+    private sealed class DriverBroke() : Exception("the driver broke");
+
+    [Fact]
+    public async Task A_two_task_rows_failed_evidence_write_is_reported_beside_the_drivers_failure()
+    {
+        // The budget's read is answered ignored; the write's read is refused.
+        AggregateException both = await Assert.ThrowsAsync<AggregateException>(() => Run(RefusedAfter(1)).TwoTaskRowAsync("row3", Sent("control"), null,
+            (_, _) => throw new DriverBroke(), (_, _) => RowResult.Passed("", []), Ct));
+
+        Assert.Collection(both.InnerExceptions,
+            first => Assert.IsType<DriverBroke>(first),
+            second => Assert.Contains("not ignored by git", Assert.IsType<InvalidOperationException>(second).Message, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task A_once_rows_failed_evidence_write_is_reported_beside_the_drivers_failure()
+    {
+        AggregateException both = await Assert.ThrowsAsync<AggregateException>(() => Run(RefusedAfter(0)).OnceAsync<int>("row6", Sent("control"),
+            _ => throw new DriverBroke(), _ => [], (_, _) => RowResult.Passed("", []), Ct));
+
+        Assert.Collection(both.InnerExceptions,
+            first => Assert.IsType<DriverBroke>(first),
+            second => Assert.Contains("not ignored by git", Assert.IsType<InvalidOperationException>(second).Message, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task A_stopped_driver_still_writes_its_evidence_and_throws_its_own_failure()
+    {
+        await Assert.ThrowsAsync<DriverBroke>(() => Run(Runner(true, () => [])).TwoTaskRowAsync("row3", Sent("control"), null,
+            (_, _) => throw new DriverBroke(), (_, _) => RowResult.Passed("", []), Ct));
+        await Assert.ThrowsAsync<DriverBroke>(() => Run(Runner(true, () => [])).OnceAsync<int>("row6", Sent("control"),
+            _ => throw new DriverBroke(), _ => [], (_, _) => RowResult.Passed("", []), Ct));
+
+        foreach (string row in new[] { "row3", "row6" })
+        {
+            RowEvidence written = JsonSerializer.Deserialize<RowEvidence>(await File.ReadAllTextAsync(Path.Combine(directory, row + ".json"), Ct))!;
+            Assert.Equal(Verdict.NotProved, written.Verdict);
+            Assert.Equal("the driver stopped with DriverBroke", written.Reason);
+        }
+    }
+
+    [Fact]
+    public async Task A_driver_stopped_at_a_timed_out_hold_writes_what_the_page_showed_and_any_other_stop_writes_no_page()
+    {
+        PageShown page = new("https://spa-poc.auth.us-east-1.amazoncognito.com/login", "Sign in with your username and password");
+        HoldTimeoutException held = new("no request to https://app1.spa-poc.test:8443/signin-oidc came within 00:01:00", page);
+
+        await Assert.ThrowsAsync<HoldTimeoutException>(() => Run(Runner(true, () => [])).TwoTaskRowAsync("row5", Sent("control"), null,
+            (_, _) => throw held, (_, _) => RowResult.Passed("", []), Ct));
+        await Assert.ThrowsAsync<HoldTimeoutException>(() => Run(Runner(true, () => [])).OnceAsync<int>("row6", Sent("control"),
+            _ => throw held, _ => [], (_, _) => RowResult.Passed("", []), Ct));
+        await Assert.ThrowsAsync<DriverBroke>(() => Run(Runner(true, () => [])).TwoTaskRowAsync("row7", Sent("control"), null,
+            (_, _) => throw new DriverBroke(), (_, _) => RowResult.Passed("", []), Ct));
+
+        foreach (string row in new[] { "row5", "row6" })
+        {
+            RowEvidence written = JsonSerializer.Deserialize<RowEvidence>(await File.ReadAllTextAsync(Path.Combine(directory, row + ".json"), Ct))!;
+            Assert.Equal(page, written.Page);
+            Assert.Equal("the driver stopped with HoldTimeoutException", written.Reason);
+        }
+
+        Assert.Null(JsonSerializer.Deserialize<RowEvidence>(await File.ReadAllTextAsync(Path.Combine(directory, "row7.json"), Ct))!.Page);
+    }
+
+    [Fact]
+    public async Task A_rerun_that_does_not_stop_at_a_hold_writes_no_page_over_the_earlier_runs()
+    {
+        RowEvidence earlier = new("row5", 1, 60, Verdict.NotProved, "the driver stopped with HoldTimeoutException", [], [],
+            new PageShown("https://spa-poc.auth.us-east-1.amazoncognito.com/login", "Sign in"));
+        await File.WriteAllTextAsync(Path.Combine(directory, "row5.json"), JsonSerializer.Serialize(earlier), Ct);
+
+        await Assert.ThrowsAsync<DriverBroke>(() => Run(Runner(true, () => [])).TwoTaskRowAsync("row5", Sent("control"), null,
+            (_, _) => throw new DriverBroke(), (_, _) => RowResult.Passed("", []), Ct));
+
+        RowEvidence written = JsonSerializer.Deserialize<RowEvidence>(await File.ReadAllTextAsync(Path.Combine(directory, "row5.json"), Ct))!;
+        Assert.Null(written.Page);
+        Assert.Equal(1, written.Attempts);
+    }
+
+    [Fact]
+    public async Task A_cancelled_row_still_writes_its_evidence_without_calling_it_a_stopped_driver()
+    {
+        await Assert.ThrowsAsync<OperationCanceledException>(() => Run(Runner(true, () => [])).TwoTaskRowAsync("row3", Sent("control"), null,
+            (_, _) => throw new OperationCanceledException(), (_, _) => RowResult.Passed("", []), Ct));
+        await Assert.ThrowsAsync<OperationCanceledException>(() => Run(Runner(true, () => [])).OnceAsync<int>("row6", Sent("control"),
+            _ => throw new OperationCanceledException(), _ => [], (_, _) => RowResult.Passed("", []), Ct));
+
+        Assert.Equal("no attempt was made", JsonSerializer.Deserialize<RowEvidence>(await File.ReadAllTextAsync(Path.Combine(directory, "row3.json"), Ct))!.Reason);
+        Assert.Equal("the row did not finish", JsonSerializer.Deserialize<RowEvidence>(await File.ReadAllTextAsync(Path.Combine(directory, "row6.json"), Ct))!.Reason);
+    }
+
     [Fact]
     public async Task No_cookie_or_ticket_reaches_a_step_a_verdict_or_an_evidence_file()
     {
@@ -231,6 +338,21 @@ public sealed class ContinuityRunTests : IDisposable
     public async Task Each_row_test_reports_skipped_naming_the_switch_on_the_local_stack_before_any_aws_call(string? stack)
     {
         ContinuityStack.Environment.Value = name => name == StackSwitch.Variable ? stack : null;
+
+        // The two ways the driver reaches AWS, watched: a stack start that is counted and succeeds, and a
+        // runner that records and answers anything, so a start or a call made ahead of the skip is caught
+        // by the counts below and not by whatever a real start would throw on this machine (#868).
+        int started = 0;
+        RecordedRunner runner = new((_, _) => "{}");
+        ContinuityStack.Deployed.Value = new DeployedPath(
+            () =>
+            {
+                started++;
+                // Never dereferenced under the skip: the row's driver is built only after it.
+                return Task.FromResult<DeployedStack>(null!);
+            },
+            runner);
+
         MethodInfo[] rows = [.. typeof(ContinuityTests).GetMethods().Where(method => method.GetCustomAttribute<FactAttribute>() is not null)];
         Assert.Equal(["Row3", "Row4", "Row5", "Row6", "Row7", "Row8", "Row9"], rows.Select(row => row.Name[..4]).Order(StringComparer.Ordinal));
 
@@ -249,6 +371,8 @@ public sealed class ContinuityRunTests : IDisposable
 
             Assert.Equal("SkipException", skipped?.GetType().Name);
             Assert.Contains(StackSwitch.Variable, skipped!.Message, StringComparison.Ordinal);
+            Assert.True(started == 0, $"{row.Name} started the deployed stack before its skip");
+            Assert.True(runner.Calls.Count == 0, $"{row.Name} ran {string.Join(", ", runner.Calls.Select(call => call.Program))} before its skip");
         }
     }
 

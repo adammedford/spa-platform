@@ -36,7 +36,9 @@ ADR-0020 records the decision and its reasons. What it adds to `docs/agents/issu
   #N" or "once #N lands" where #N is an open issue with no blocked-by edge. A #N that is a closed
   issue or a pull request is stale prose: the check prints it as a note and fails nothing. A
   "Blocked by" list that names the ticket itself ("and this ticket", or its own #N) describes
-  another ticket's wait and is not read.
+  another ticket's wait and is not read. It also prints as a note, failing nothing, a `##` heading
+  outside the ticket's set (`Parent`, `What to build`, `Acceptance criteria`, `Blocked by`) and an
+  `**Owner:**` line beside a Touches line that names a path, since rule 5 derives the owner.
   `.github/workflows/ticket-shape.yml` runs it when an issue carrying `ready-for-agent` is opened,
   edited or labelled, and on a failure swaps that label for `needs-triage` and comments the failing
   rule. The words are a list, and a list misfires. The escape is to reword the box, or to make it a
@@ -79,9 +81,11 @@ ADR-0020 records the decision and its reasons. What it adds to `docs/agents/issu
   wrote it, or confirmed a pre-accepted one on the run's `Overnight <date>` issue; a pre-accepted
   answer alone rewrites nothing. A ticket's body is rewritten by the morning run or by the session
   implementing it; a spec's body only by the session that grilled it. Whoever rewrites names every
-  question number applied, preserves the previous body verbatim in a comment headed with the date,
-  and ticks or unticks an acceptance box only for work done or undone. The overnight grill
-  comments; it never rewrites. A `Confirm` comment is the human's act: no agent session writes one.
+  question number applied and posts the changed paragraphs as a diff in a comment headed with the
+  date; the previous body verbatim is the issue's edit history, which GitHub keeps for every edit.
+  Whoever rewrites ticks or unticks an acceptance box only for work done or undone. The overnight
+  grill comments; it never rewrites. A `Confirm` comment is the human's act: no agent session
+  writes one.
 - **Current claims are the issue's fields; everything written is dated.** What an issue claims now
   is its state, labels, assignee, sub-issue and blocked-by relationships, corrected in place, and
   its body under the rule above; "Lifecycle: not labels" below says

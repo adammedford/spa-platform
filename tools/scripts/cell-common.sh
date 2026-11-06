@@ -64,8 +64,11 @@ fail() {
 }
 
 WORK=""
+# The readiness wait's tunnel closes here too, so an exit or an interrupt during the wait closes it
+# (close_wait_tunnel), and before the scratch directory its output lands in goes.
 cell_cleanup() {
   status=$?
+  close_wait_tunnel
   if [ -n "$WORK" ] && [ -d "$WORK" ]; then
     rm -rf "$WORK"
   fi
@@ -509,13 +512,14 @@ wait_and_assert() {
 
 # --- convergence -----------------------------------------------------------------------------------
 
-# Wait until every running task of $SERVICE in $CLUSTER has answered /readyz at revision $2 or later,
-# read through the gateway origin $1. Change request P2-5, decision 6 (#309): the load balancer hands
-# each read to the task it picks, so one answer at N says only that one task is at N.
+# Wait until every running task of $SERVICE in $CLUSTER has answered /readyz at revision $1 or later,
+# read through a tunnel the wait opens itself, or through the gateway origin $2 when the caller names
+# one. Change request P2-5, decision 6 (#309): the load balancer hands each read to the task it
+# picks, so one answer at N says only that one task is at N.
 #
 # The tasks are the service's RUNNING ones, each named by its task id, the last segment of its ARN
 # and never the ARN, which carries the account id and the Region (P2-5, decision 1). spactl wait
-# reads through the one origin until each id has answered at $2 or later, and times out naming each
+# reads through the one origin until each id has answered at $1 or later, and times out naming each
 # one still behind or never answered: a task the load balancer never picks fails the wait rather
 # than passing it. A task that starts during the wait is not listed and is not waited for; it reads
 # the registry when it starts.
@@ -526,10 +530,20 @@ wait_and_assert() {
 # deregistration delay in https://docs.aws.amazon.com/elasticloadbalancing/latest/application/load-balancer-target-groups.html#deregistration-delay).
 # The 2-second poll and the 5-minute deadline are spactl's own.
 #
-# deploy.sh is its first caller. The ALB is internal, so from a workstation the origin is the
-# tunnel's (tools/scripts/tunnel.sh), which the caller names.
+# deploy.sh is its first caller. The ALB is internal, so from a workstation /readyz is read through
+# a Session Manager port forward, and the wait opens a tunnel of its own: tools/scripts/tunnel.sh,
+# started in the background on a free local port the system picks from its ephemeral range, which
+# 8443 lies below, and never one a socket holds, so an operator's tunnel is left alone. It runs after
+# wait_and_assert, when every running task is the applied deployment's, so its hop is a task of that
+# deployment. The origin is https://app1.$SPA_CERT_DOMAIN:<that port>, the first app's host on the
+# loopback address by the hosts-file line certs.sh names, and the gateway answers /readyz on any host
+# (contracts/pipeline.md, UsePlatformHealth). The wait closes it when the wait ends, pass or fail,
+# and cell_cleanup closes it on an exit or an interrupt before then. Until #1008 the wait read through
+# an operator's tunnel, which had to be started by hand, through a task of the new deployment,
+# between the steady line and the end of the wait; sitting D missed that window, and deploy.sh exited
+# 1 after a healthy, steady deployment (#242).
 wait_for_revision() {
-  local origin="$1" revision="$2" arn ids="" status=0
+  local revision="$1" origin="${2:-}" arn ids="" status=0
   aws_read "the running tasks of ${SERVICE}" ecs list-tasks --cluster "$CLUSTER" --service-name "$SERVICE" \
     --desired-status RUNNING --query taskArns
   # Word splitting on purpose: --output text prints a list's strings tab-separated, a line for each
@@ -539,11 +553,92 @@ wait_for_revision() {
     ids="${ids:+${ids},}${arn##*/}"
   done
   [ -n "$ids" ] || fail "${SERVICE} has no running task to wait for."
+  if [ -z "$origin" ]; then
+    open_wait_tunnel
+    origin="https://app1.${SPA_CERT_DOMAIN:-spa-poc.test}:${WAIT_TUNNEL_PORT}"
+  fi
   note "waiting through ${origin} until each running task reports revision ${revision} or later: ${ids}"
   spactl wait --url "$origin" --revision "$revision" --instances "$ids" > "$OUT" 2> "$ERR" || status=$?
+  close_wait_tunnel
   redact_stream < "$OUT"
   if [ "$status" -ne 0 ]; then
     redact_stream < "$ERR" >&2
-    fail "not every running task of ${SERVICE} reports revision ${revision}. If nothing answered at ${origin}, the tunnel is not running or its task was replaced: restart tools/scripts/tunnel.sh."
+    fail "not every running task of ${SERVICE} reports revision ${revision} through ${origin}."
   fi
+}
+
+# --- the wait's own tunnel -------------------------------------------------------------------------
+
+# The tunnel's process: tunnel.sh, which becomes the CLI's `ssm start-session` by exec, and the
+# Session Manager plugin the CLI starts as its child. Empty while none is open.
+WAIT_TUNNEL_PID=""
+WAIT_TUNNEL_PORT=""
+# How long the tunnel has to start listening, in seconds of bash's own clock (SECONDS) rather than a
+# count of polls, so a case that stubs sleep does not run the bound out at once. SPA_WAIT_TUNNEL_SECONDS
+# sets another, which deploy_tests.py does to reach the bound in a case's time.
+WAIT_TUNNEL_SECONDS="${SPA_WAIT_TUNNEL_SECONDS:-60}"
+
+# A local port no socket holds now: bind's port 0 asks the system for an ephemeral one
+# (https://man7.org/linux/man-pages/man7/ip.7.html, ip_local_port_range; on macOS the range is
+# net.inet.ip.portrange.first to .last, 49152 to 65535 by default). The socket closes before
+# tunnel.sh binds it, and tunnel.sh refuses a port that something took in between.
+free_port() {
+  python3 -I -c 'import socket
+s = socket.socket()
+s.bind(("127.0.0.1", 0))
+print(s.getsockname()[1])'
+}
+
+# Starts tunnel.sh in the background and returns once its local port, WAIT_TUNNEL_PORT, accepts a
+# connection. A tunnel.sh that exits first (no task a session can reach, StartSession refused, the
+# port taken in between), or a port still closed after WAIT_TUNNEL_SECONDS, fails, each saying which,
+# with tunnel.sh's own lines, which name an AWS error by its code alone.
+#
+# `set -m` puts the background job in a process group of its own, whose id is its pid, so
+# close_wait_tunnel ends the CLI and the plugin together: the CLI's child would hold the port after
+# the CLI alone had gone. It is on only for that one command, and the group also keeps a Ctrl-C at
+# the terminal, which goes to the foreground group, from reaching the tunnel before cell_cleanup
+# closes it. https://www.gnu.org/software/bash/manual/html_node/Job-Control-Basics.html
+# Run by $BASH, the shell running this script, rather than by its shebang.
+open_wait_tunnel() {
+  local port deadline ended=0
+  port="$(free_port)" || fail "could not find a free local port for the wait's tunnel."
+  note "opening a tunnel of the wait's own on local port ${port} (tools/scripts/tunnel.sh); it closes when the wait ends"
+  WAIT_TUNNEL_PORT="$port"
+  set -m
+  "$BASH" "${SCRIPTS_DIR}/tunnel.sh" --local-port "$port" < /dev/null > "${WORK}/tunnel.out" 2> "${WORK}/tunnel.err" &
+  WAIT_TUNNEL_PID=$!
+  set +m
+  deadline=$((SECONDS + WAIT_TUNNEL_SECONDS))
+  # bash's /dev/tcp connects, as tunnel.sh's own check of the port does.
+  # https://www.gnu.org/software/bash/manual/html_node/Redirections.html
+  while ! (exec 3<> "/dev/tcp/127.0.0.1/${port}") 2> /dev/null; do
+    if ! kill -0 "$WAIT_TUNNEL_PID" 2> /dev/null; then
+      wait "$WAIT_TUNNEL_PID" 2> /dev/null || ended=$?
+      close_wait_tunnel
+      redact_stream < "${WORK}/tunnel.err" >&2
+      fail "the wait's tunnel ended before it opened: tools/scripts/tunnel.sh exited ${ended}, and its lines are above."
+    fi
+    if [ "$SECONDS" -ge "$deadline" ]; then
+      close_wait_tunnel
+      redact_stream < "${WORK}/tunnel.err" >&2
+      fail "the wait's tunnel did not open on local port ${port} within ${WAIT_TUNNEL_SECONDS} seconds; tools/scripts/tunnel.sh's lines are above."
+    fi
+    sleep 1
+  done
+}
+
+# Ends the tunnel's process group and reaps it; nothing when none is open. The signal is TERM, kill's
+# default, sent to the group, so the CLI and the plugin each receive it and the plugin is not left
+# holding the port as an orphan. Whether the real pair closes on it is sitting evidence, not a
+# companion's: the companion's plugin is a double (deploy_tests.py). The closing line is lost on a
+# Ctrl-C during spactl's read: bash runs the trap when the command it waited on returns, still inside
+# that call's redirection to $OUT (https://www.gnu.org/software/bash/manual/html_node/Signals.html).
+close_wait_tunnel() {
+  [ -n "$WAIT_TUNNEL_PID" ] || return 0
+  # The process alone when there is no such group, so the wait below never waits on a live one.
+  kill -TERM -- "-${WAIT_TUNNEL_PID}" 2> /dev/null || kill -TERM "$WAIT_TUNNEL_PID" 2> /dev/null || true
+  wait "$WAIT_TUNNEL_PID" 2> /dev/null || true
+  WAIT_TUNNEL_PID=""
+  note "closed the wait's tunnel on local port ${WAIT_TUNNEL_PORT}"
 }

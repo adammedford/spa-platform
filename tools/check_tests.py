@@ -167,6 +167,10 @@ PYTHON_CHECKS = [
     # The analysis guard (#606) reads the tree, not the diff, so it runs with or without a base.
     ["python3", "-I", "tools/analysis_guard.py"],
 ]
+# The full check fails a full-landing merge whose ticket it could not read, where the hook passes it
+# (#894), so it alone passes the flag.
+LANDING_SUBJECTS_FULL = LANDING_SUBJECTS + ["--fail-unchecked"]
+FULL_PYTHON_CHECKS = [LANDING_SUBJECTS_FULL if call == LANDING_SUBJECTS else call for call in PYTHON_CHECKS]
 BUILD = [["dotnet", "build", "--nologo", "--verbosity", "quiet"]]
 TESTS = [["dotnet", "test", "--solution", "SpaPlatform.slnx", "--no-build", "--ignore-exit-code", "8"]]
 SMOKE = [["smoke", "Debug", PORT]]
@@ -602,7 +606,7 @@ class FullModeTests(CheckTestCase):
         result = self.full(case)
         self.assertVerdict(result, 0, f"check: pass: {FULL_RAN}, the build, the tests, the smoke test, "
                                       "the gateway image.")
-        self.assertEqual(PYTHON_CHECKS + BUILD + TESTS + SMOKE + IMAGE, case.calls())
+        self.assertEqual(FULL_PYTHON_CHECKS + BUILD + TESTS + SMOKE + IMAGE, case.calls())
         # Shown, not hidden: a lane reads its failure from the log.
         self.assertIn("dotnet double ran: build --nologo --verbosity quiet", result.stdout)
         self.assertIn("check: Terraform and its tests skipped: nothing under infra/ or the floor changed.",
@@ -615,7 +619,7 @@ class FullModeTests(CheckTestCase):
         result = self.full(case)
         self.assertVerdict(result, 0, f"check: pass: {FULL_RAN}, the build, the tests, the smoke test, "
                                       "the gateway image.")
-        self.assertEqual(PYTHON_CHECKS + BUILD + TESTS + SMOKE + IMAGE, case.calls())
+        self.assertEqual(FULL_PYTHON_CHECKS + BUILD + TESTS + SMOKE + IMAGE, case.calls())
         self.assertIn("image double ran: ", result.stdout)
 
     def test_skip_tests_runs_all_but_the_suite_and_names_the_skip(self):
@@ -625,7 +629,7 @@ class FullModeTests(CheckTestCase):
         result = self.full(case, "--skip-tests")
         self.assertVerdict(result, 0, f"check: pass: {FULL_RAN}, the build, not the tests (--skip-tests), "
                                       "the smoke test, the gateway image.")
-        self.assertEqual(PYTHON_CHECKS + BUILD + SMOKE + IMAGE, case.calls())
+        self.assertEqual(FULL_PYTHON_CHECKS + BUILD + SMOKE + IMAGE, case.calls())
         self.assertIn("check: the tests skipped: --skip-tests says they were run another way (#375).",
                       result.stdout)
 
@@ -633,13 +637,13 @@ class FullModeTests(CheckTestCase):
         case = Case(self, change="src/App/App.cs", fails_on={"smoke": "Debug"})
         result = self.full(case, "--skip-tests")
         self.assertVerdict(result, 1, "check: fail: the smoke test failed.")
-        self.assertEqual(PYTHON_CHECKS + BUILD + SMOKE, case.calls())
+        self.assertEqual(FULL_PYTHON_CHECKS + BUILD + SMOKE, case.calls())
 
     def test_a_change_under_infra_runs_terraform_test_where_there_are_tests(self):
         case = Case(self, change="infra/roots/a/main.tf")
         result = self.full(case)
         self.assertVerdict(result, 0, f"check: pass: {FULL_RAN}, Terraform {FLOOR}, the Terraform tests.")
-        self.assertEqual(PYTHON_CHECKS + terraform_checks() + TERRAFORM_TESTS, case.calls())
+        self.assertEqual(FULL_PYTHON_CHECKS + terraform_checks() + TERRAFORM_TESTS, case.calls())
         self.assertIn("check: build, tests, smoke test and gateway image skipped: no .NET source changed.",
                       result.stdout)
 
@@ -647,7 +651,7 @@ class FullModeTests(CheckTestCase):
         case = Case(self, change="docs/notes.md")
         result = self.full(case)
         self.assertVerdict(result, 0, f"check: pass: {FULL_RAN}.")
-        self.assertEqual(PYTHON_CHECKS, case.calls())
+        self.assertEqual(FULL_PYTHON_CHECKS, case.calls())
 
     def test_a_base_the_caller_names(self):
         # An overnight lane judges its branch against its fork point, not main.
@@ -706,17 +710,17 @@ class FullModeTests(CheckTestCase):
     def test_failures_end_on_the_verdict_and_stop_there(self):
         cases = {
             "the build": ({"dotnet": "build"}, "src/App/App.cs", "check: fail: the solution does not build.",
-                          PYTHON_CHECKS + BUILD),
+                          FULL_PYTHON_CHECKS + BUILD),
             "the tests": ({"dotnet": "test"}, "src/App/App.cs", "check: fail: the tests failed.",
-                          PYTHON_CHECKS + BUILD + TESTS),
+                          FULL_PYTHON_CHECKS + BUILD + TESTS),
             "the smoke test": ({"smoke": "Debug"}, "src/App/App.cs", "check: fail: the smoke test failed.",
-                               PYTHON_CHECKS + BUILD + TESTS + SMOKE),
+                               FULL_PYTHON_CHECKS + BUILD + TESTS + SMOKE),
             "the gateway image": ({"image": "*"}, "src/App/App.cs",
                                   "check: fail: the gateway image failed to build or to start as its "
-                                  "runtime user.", PYTHON_CHECKS + BUILD + TESTS + SMOKE + IMAGE),
+                                  "runtime user.", FULL_PYTHON_CHECKS + BUILD + TESTS + SMOKE + IMAGE),
             "terraform test": ({"terraform": "test"}, "infra/roots/a/main.tf",
                                "check: fail: terraform test failed in infra/modules/m.",
-                               PYTHON_CHECKS + terraform_checks() + TERRAFORM_TESTS[:1]),
+                               FULL_PYTHON_CHECKS + terraform_checks() + TERRAFORM_TESTS[:1]),
             "A-05": ({"python3": ".github/path-ownership.py"}, "docs/notes.md",
                      "check: fail: check A-05 failed.", PYTHON_CHECKS[:1]),
         }
@@ -735,7 +739,7 @@ class FullModeTests(CheckTestCase):
         self.assertVerdict(result, 1, "check: fail: a tracked file only its owner can read is a file the "
                                       "gateway's container cannot read; run chmod go+r on it.")
         self.assertIn("src/App/App.cs", result.stderr.splitlines())
-        self.assertEqual(PYTHON_CHECKS, case.calls())
+        self.assertEqual(FULL_PYTHON_CHECKS, case.calls())
 
     def test_the_file_modes_fail_rather_than_pass_when_they_cannot_be_read(self):
         # Without xargs nothing is judged, and an empty list is what a clean tree gives: the check
@@ -808,7 +812,7 @@ class BothHalvesTests(CheckTestCase):
         result = case.run("--full", "--port", PORT)
         self.assertEqual(0, result.status, result.stderr)
         self.assertEqual(f"check: pass: {FULL_RAN}.", result.last_line(result.stdout))
-        self.assertEqual(PYTHON_CHECKS, case.calls())
+        self.assertEqual(FULL_PYTHON_CHECKS, case.calls())
 
     def test_the_full_check_runs_everything_on_an_empty_diff(self):
         case = Case(self)
@@ -818,7 +822,7 @@ class BothHalvesTests(CheckTestCase):
             f"check: pass: {FULL_RAN}, the build, the tests, the smoke test, the gateway image, Terraform {FLOOR}, "
             "the Terraform tests.",
             result.last_line(result.stdout))
-        self.assertEqual(PYTHON_CHECKS + BUILD + TESTS + SMOKE + IMAGE + terraform_checks() + TERRAFORM_TESTS,
+        self.assertEqual(FULL_PYTHON_CHECKS + BUILD + TESTS + SMOKE + IMAGE + terraform_checks() + TERRAFORM_TESTS,
                          case.calls())
         self.assertNotIn("skipped", result.stdout)
 
@@ -972,6 +976,9 @@ class PartRowMergeTests(CheckTestCase):
 
 LANDING_FAIL = ("a full-landing merge names a ticket with an open box or a plan row with an open part ticket, "
                 "or the full-landing merges were not judged.")
+LANDING_FAIL_FULL = ("a full-landing merge names a ticket with an open box or a plan row with an open part ticket, "
+                     "or its tickets could not be read, which the full check fails and the hook passes, or the "
+                     "full-landing merges were not judged.")
 
 
 class FullLandingMergeTests(CheckTestCase):
@@ -985,15 +992,26 @@ class FullLandingMergeTests(CheckTestCase):
                               capture_output=True, text=True, check=True).stdout.strip()
         result = case.run("--full", "--port", PORT, "--base", fork)
         self.assertEqual(0, result.status, result.stderr)
-        self.assertIn(["python3", "-I", "tools/landing_subjects.py", "--base", fork], case.calls())
+        self.assertIn(["python3", "-I", "tools/landing_subjects.py", "--base", fork, "--fail-unchecked"],
+                      case.calls())
+
+    def test_only_the_full_check_fails_a_ticket_it_could_not_read(self):
+        # #894: the hook lets an offline push through; the full check, which a lane and the
+        # overnight integrate gate run, holds what it could not read.
+        for mode, expected in (((), LANDING_SUBJECTS), (("--full", "--port", PORT), LANDING_SUBJECTS_FULL)):
+            with self.subTest(mode=mode or "the hook's"):
+                case = Case(self, change="docs/notes.md")
+                result = case.run(*mode)
+                self.assertEqual(0, result.status, result.stderr)
+                self.assertEqual([expected], [call for call in case.calls() if "tools/landing_subjects.py" in call])
 
     def test_a_held_merge_fails_the_full_check_before_the_roadmap(self):
         case = Case(self, change="docs/notes.md", fails_on={"python3": "tools/landing_subjects.py"})
         result = case.run("--full", "--port", PORT)
         self.assertEqual(1, result.status, result.stdout)
-        self.assertLines(["python3 double failed: -I tools/landing_subjects.py --base origin/main",
-                          f"check: fail: {LANDING_FAIL}"], result.stderr)
-        self.assertEqual(PYTHON_CHECKS[:3], case.calls())
+        self.assertLines(["python3 double failed: -I tools/landing_subjects.py --base origin/main --fail-unchecked",
+                          f"check: fail: {LANDING_FAIL_FULL}"], result.stderr)
+        self.assertEqual(FULL_PYTHON_CHECKS[:3], case.calls())
 
     def test_the_hook_holds_it_too(self):
         case = Case(self, change="docs/notes.md", fails_on={"python3": "tools/landing_subjects.py"})
@@ -1008,6 +1026,8 @@ class FullLandingMergeTests(CheckTestCase):
         self.assertIn("tools/landing_subjects.py", header)
         self.assertIn('"Merge task"', header)
         self.assertIn("open `- [ ]` box", header)
+        # #894: the header says the two modes part on a ticket the check could not read.
+        self.assertIn("--full passes it --fail-unchecked", header)
 
 
 class FloorTests(CheckTestCase):
@@ -1020,7 +1040,7 @@ class FloorTests(CheckTestCase):
         result = case.run("--full", "--port", PORT)
         self.assertEqual(0, result.status, result.stderr)
         self.assertEqual(
-            PYTHON_CHECKS + as_run_by("floor-terraform", terraform_checks() + TERRAFORM_TESTS),
+            FULL_PYTHON_CHECKS + as_run_by("floor-terraform", terraform_checks() + TERRAFORM_TESTS),
             case.calls())
         self.assertIn(at_the_floor("check", case.floor), result.stdout.splitlines())
         self.assertEqual(f"check: pass: {FULL_RAN}, Terraform {FLOOR}, the Terraform tests.",
@@ -1036,7 +1056,7 @@ class FloorTests(CheckTestCase):
                    "check: tools/preflight.sh says how to install the floor."]
         result = case.run("--full", "--port", PORT)
         self.assertEqual(0, result.status, result.stderr)
-        self.assertEqual(PYTHON_CHECKS + terraform_checks() + TERRAFORM_TESTS, case.calls())
+        self.assertEqual(FULL_PYTHON_CHECKS + terraform_checks() + TERRAFORM_TESTS, case.calls())
         self.assertLines(warning, result.stderr)
         self.assertEqual(f"check: pass: {FULL_RAN}, Terraform {LATER} instead of the floor {FLOOR}, "
                          "the Terraform tests.", result.last_line(result.stdout))
@@ -1065,7 +1085,7 @@ class FloorTests(CheckTestCase):
         case = Case(self, change="infra/roots/a/main.tf", path_terraform=LATER, floor_terraform="1.10.5")
         result = case.run("--full", "--port", PORT)
         self.assertEqual(0, result.status, result.stderr)
-        self.assertEqual(PYTHON_CHECKS + [["floor-terraform", "version"]] + terraform_checks() + TERRAFORM_TESTS,
+        self.assertEqual(FULL_PYTHON_CHECKS + [["floor-terraform", "version"]] + terraform_checks() + TERRAFORM_TESTS,
                          case.calls())
         self.assertIn(f"Terraform {LATER} instead of the floor {FLOOR}", result.last_line(result.stdout))
 
@@ -1095,7 +1115,7 @@ class FloorTests(CheckTestCase):
                     self.assertEqual(1, result.status)
                     self.assertIn(".terraform-version does not name one exact version, such as 1.11.0, so "
                                   "nothing says which Terraform CI runs.", result.stderr)
-                    self.assertEqual(PYTHON_CHECKS, case.calls())
+                    self.assertEqual(FULL_PYTHON_CHECKS if mode else PYTHON_CHECKS, case.calls())
 
 
 class FloorFileTests(CheckTestCase):
@@ -1230,7 +1250,7 @@ class CompanionTests(CheckTestCase):
         result = self.full(case)
         self.assertEqual(0, result.status, result.stderr)
         # Only the touched script's: every other companion here belongs to an untouched script.
-        self.assertEqual(PYTHON_CHECKS + [companion("tools/thing_tests.py")], case.calls())
+        self.assertEqual(FULL_PYTHON_CHECKS + [companion("tools/thing_tests.py")], case.calls())
         self.assertEqual(f"check: pass: {FULL_RAN}, the test companion tools/thing_tests.py.",
                          result.last_line(result.stdout))
 
@@ -1249,7 +1269,7 @@ class CompanionTests(CheckTestCase):
                 case = Case(self, extra=SCRIPTS, change=change)
                 result = self.full(case)
                 self.assertEqual(0, result.status, result.stderr)
-                self.assertEqual(PYTHON_CHECKS + [companion(expected)], case.calls())
+                self.assertEqual(FULL_PYTHON_CHECKS + [companion(expected)], case.calls())
                 self.assertEqual(f"check: pass: {FULL_RAN}, the test companion {expected}.",
                                  result.last_line(result.stdout))
 
@@ -1261,15 +1281,15 @@ class CompanionTests(CheckTestCase):
         self.assertEqual("check: fail: the test companion tools/other_tests.py failed.",
                          result.last_line(result.stderr))
         # Stopped at the first failure, in the companions' order.
-        self.assertEqual(PYTHON_CHECKS + [companion("tools/other_tests.py")], case.calls())
+        self.assertEqual(FULL_PYTHON_CHECKS + [companion("tools/other_tests.py")], case.calls())
 
     def test_several_touched_scripts_run_each_companion_once(self):
         case = Case(self, extra=SCRIPTS,
                     change=("tools/thing.sh", "tools/thing_tests.py", ".github/gizmo.py"))
         result = self.full(case)
         self.assertEqual(0, result.status, result.stderr)
-        self.assertEqual(PYTHON_CHECKS + [companion(".github/gizmo_tests.py"),
-                                          companion("tools/thing_tests.py")], case.calls())
+        self.assertEqual(FULL_PYTHON_CHECKS + [companion(".github/gizmo_tests.py"),
+                                               companion("tools/thing_tests.py")], case.calls())
         self.assertEqual(f"check: pass: {FULL_RAN}, the test companions .github/gizmo_tests.py, "
                          "tools/thing_tests.py.", result.last_line(result.stdout))
 
@@ -1377,7 +1397,7 @@ class LibraryTests(CheckTestCase):
         case = Case(self, extra=self.scripts(), change="tools/scripts/lib.sh")
         result = self.full(case)
         self.assertEqual(0, result.status, result.stderr)
-        self.assertEqual(PYTHON_CHECKS + [companion("tools/scripts/deep_tests.py")], case.calls())
+        self.assertEqual(FULL_PYTHON_CHECKS + [companion("tools/scripts/deep_tests.py")], case.calls())
         self.assertEqual(f"check: pass: {FULL_RAN}, the test companion tools/scripts/deep_tests.py.",
                          result.last_line(result.stdout))
 

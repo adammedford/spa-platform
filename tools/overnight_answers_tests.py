@@ -149,12 +149,21 @@ class MatchingTests(ReaderTestCase):
                          "close here?")
 
     def test_a_number_is_matched_whole_and_in_any_line_of_the_question(self):
-        # #5 is not in #50 nor in a decision URL's #issuecomment-5; it is found in a Recommended or
-        # Answer line, which are the question's too.
+        # #5 is not in #50 (a digit after it), nor in the entity &#5; (an `&` before it), nor in the
+        # fragment README.md#5 (a word character before it); each of Q1, Q2 and Q5 holds `#5` only
+        # in that one shape, so a matcher missing that half of the rule lists it (#902). The word
+        # characters are the lookbehind's four arms, a lower-case letter (Q5), an upper-case letter
+        # (Q6), a digit (Q7) and `_` (Q8), each in a question of its own, so dropping any one arm
+        # lists its question (#903). It is found in a Recommended or Answer line, which are the
+        # question's too.
         body = questions(question(1, "Is #50 the one?"),
-                         question(2, "See https://github.com/x/y/issues/4#issuecomment-5 for it."),
+                         question(2, "Is the entity &#5; a number?"),
                          question(3, "Which merge?", recommended=f"the one of #{PR}."),
-                         question(4, "And this?", answer=f"yes, at #{PR}'s merge"))
+                         question(4, "And this?", answer=f"yes, at #{PR}'s merge"),
+                         question(5, "See https://github.com/x/y/blob/main/README.md#5 for it."),
+                         question(6, "See the anchor README#5 for it."),
+                         question(7, "See the anchor v2#5 for it."),
+                         question(8, "See the anchor step_#5 for it."))
         self.assertLines(self.read([comment(body)]),
                          f"#{NIGHT} {TITLE} Q3 names #{PR}, no Confirm covers it: (#495 Q1) Which merge?",
                          f"#{NIGHT} {TITLE} Q4 names #{PR}, no Confirm covers it: (#495 Q1) And this?")

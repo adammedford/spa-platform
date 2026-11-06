@@ -10,7 +10,9 @@
 // and this command does not read the tracker to know which are filed. It prints the body the
 // morning would file for that row, byte for byte with no newline added, so `> body.md` gives the file `gh issue create
 // --body-file` takes; on stderr it names the row's title and the label the morning would file it
-// under, and why when that label is ready-for-human. It writes nothing and calls nothing.
+// under, and why when that label is ready-for-human. It writes nothing and calls nothing. A row of
+// the five-column table (#966) prints its Fails on sentence in the body, as a "Fails on:" line; a
+// row of a four-column record, from before #966, names none and prints no such line.
 //
 // It runs morning.js's own code: it reads the sections "follow-ups, read here", "follow-ups, owners
 // and places" and "follow-ups, their bodies" out of the morning.js beside it and calls followUpsOf,

@@ -64,16 +64,18 @@ public sealed class ContinuityRun(ContinuityEvidence evidence, ContinuityLog log
                 }
             }
         }
-        catch (Exception stopped) when (stopped is not OperationCanceledException)
+        catch (Exception stopped)
         {
-            result = RowResult.NotProved($"the driver stopped with {stopped.GetType().Name}", result.Observations);
+            if (stopped is not OperationCanceledException)
+            {
+                result = RowResult.NotProved(StoppedWith(stopped), result.Observations);
+            }
+
+            await WriteBesideAsync(stopped, () => evidence.WriteAsync(row, result, attempts, wall.Elapsed, CancellationToken.None, ShownBy(stopped)));
             throw;
         }
-        finally
-        {
-            await evidence.WriteAsync(row, result, attempts, wall.Elapsed, CancellationToken.None);
-        }
 
+        await evidence.WriteAsync(row, result, attempts, wall.Elapsed, CancellationToken.None);
         return result;
     }
 
@@ -96,17 +98,54 @@ public sealed class ContinuityRun(ContinuityEvidence evidence, ContinuityLog log
             GatewayCapture capture = await WaitAndReadAsync(control, recorded.Steps, ct);
             result = ContinuityObserver.Control(control, capture) ?? judge(driven, capture);
         }
-        catch (Exception stopped) when (stopped is not OperationCanceledException)
+        catch (Exception stopped)
         {
-            result = RowResult.NotProved($"the driver stopped with {stopped.GetType().Name}", []);
+            if (stopped is not OperationCanceledException)
+            {
+                result = RowResult.NotProved(StoppedWith(stopped), []);
+            }
+
+            await WriteBesideAsync(stopped, () => evidence.WriteAsync(row, result, recorded is null ? [] : [recorded], wall.Elapsed, CancellationToken.None, ShownBy(stopped)));
             throw;
         }
-        finally
-        {
-            await evidence.WriteAsync(row, result, recorded is null ? [] : [recorded], wall.Elapsed, CancellationToken.None);
-        }
 
+        await evidence.WriteAsync(row, result, recorded is null ? [] : [recorded], wall.Elapsed, CancellationToken.None);
         return result;
+    }
+
+    /// <summary>
+    /// What the page showed, when the driver stopped at a login hold that timed out (rows 5 and 7, #1003)
+    /// or whose handler failed (#1029).
+    /// </summary>
+    private static PageShown? ShownBy(Exception stopped) => stopped switch
+    {
+        HoldTimeoutException timedOut => timedOut.Page,
+        HoldFailedException failed => failed.Page,
+        _ => null,
+    };
+
+    /// <summary>
+    /// A stopped row's reason: the failure's kind, and for a hold whose handler failed, the kind of what
+    /// the handler met (#1029), which the hold's own kind would otherwise hide.
+    /// </summary>
+    private static string StoppedWith(Exception stopped) => stopped is HoldFailedException failed
+        ? $"the driver stopped with {nameof(HoldFailedException)}: the hold's handler met {failed.Failure}"
+        : $"the driver stopped with {stopped.GetType().Name}";
+
+    /// <summary>
+    /// The evidence write after the row has already failed: a write that fails too is reported beside the
+    /// row's own failure rather than in place of it, the shape #212's clean-up took (f234abc).
+    /// </summary>
+    private static async Task WriteBesideAsync(Exception failure, Func<Task> write)
+    {
+        try
+        {
+            await write();
+        }
+        catch (Exception failed)
+        {
+            throw new AggregateException(failure, failed);
+        }
     }
 
     private async Task<GatewayCapture> WaitAndReadAsync(Step control, IEnumerable<Step> steps, CancellationToken ct)
@@ -119,17 +158,33 @@ public sealed class ContinuityRun(ContinuityEvidence evidence, ContinuityLog log
 
 /// <summary>
 /// The raw client's requests as a continuity row sends them (Q137): each with a fresh sampled
-/// <c>traceparent</c>, the session's cookies when it has one, and nothing kept of the answer but its
-/// status. A connection error becomes missing coverage (<see cref="Step.Failed"/>).
+/// <c>traceparent</c>, the fetch metadata of <see cref="FetchMetadata"/>, the session's cookies when it
+/// has one, and nothing kept of the answer but its status. A connection error becomes missing coverage
+/// (<see cref="Step.Failed"/>).
 /// </summary>
 public sealed class TracedClient(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> send)
 {
+    /// <summary>
+    /// What a browser's same-origin <c>fetch</c> from the app's page sends, as the fixture shell's calls
+    /// do: the request gate refuses <c>/api</c> and <c>/bff</c> without <c>Sec-Fetch-Site: same-origin</c>
+    /// (contracts/request-gate.md, <c>gate.fetch-site</c>), and the raw HTTP client carries only the
+    /// headers given (<see cref="RawClient"/>). Without them every row call with a session was refused
+    /// on the cell (#348, #1001).
+    /// </summary>
+    public static readonly IReadOnlyList<(string Name, string Value)> FetchMetadata =
+        [("Sec-Fetch-Site", "same-origin"), ("Sec-Fetch-Mode", "cors"), ("Sec-Fetch-Dest", "empty")];
+
     public async Task<Step> SendAsync(string name, HttpMethod method, Uri url, SessionCookies? cookies, int? expect, CancellationToken ct, string? route = null)
     {
         ClientTrace trace = ClientTrace.Fresh();
         DateTimeOffset at = DateTimeOffset.UtcNow;
         using HttpRequestMessage request = new(method, url);
         request.Headers.TryAddWithoutValidation(ClientTrace.Header, trace.Traceparent);
+        foreach ((string header, string value) in FetchMetadata)
+        {
+            request.Headers.TryAddWithoutValidation(header, value);
+        }
+
         if (cookies is not null)
         {
             request.Headers.TryAddWithoutValidation("Cookie", cookies.Reveal());

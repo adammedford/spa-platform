@@ -37,7 +37,9 @@ Each line starts `issue-labels:`, and the last is the verdict: `issue-labels: pa
 or `issue-labels: fail: ...` with exit 1 when an issue drifted (check) or was skipped, and exit 2
 when nothing could be judged (`fail: nothing judged: ...`), a write failed part-way
 (`fail: write failed: ...`) or an issue needs a label the repository lacks (`fail: label missing:
-...`, made before any write for that issue); the last two count what was written before them.
+...`, made before any write for that issue); the last two count the issues written before them,
+and a write failure also names what the failing issue's own earlier writes made, or that they made
+nothing.
 .github/workflows/issue-labels.yml runs it.
 """
 from __future__ import annotations
@@ -255,7 +257,9 @@ def quoted(name: str) -> str:
     return urllib.parse.quote(name, safe="")
 
 
-def write(number: int, add: list[str], remove: list[str]) -> None:
+def write(number: int, add: list[str], remove: list[str], made: list[str]) -> None:
+    """Each write that succeeds is appended to `made` as it lands, so a failure part-way through
+    an issue can say what that issue was given before it (#831)."""
     # POST adds the labels it names and DELETE removes the one it names, each leaving the rest
     # (https://docs.github.com/en/rest/issues/labels#add-labels-to-an-issue and
     # https://docs.github.com/en/rest/issues/labels#remove-a-label-from-an-issue). The PUT route
@@ -264,8 +268,10 @@ def write(number: int, add: list[str], remove: list[str]) -> None:
     if add:
         gh("api", "--method", "POST", f"repos/{{owner}}/{{repo}}/issues/{number}/labels",
            *[arg for name in add for arg in ("-f", f"labels[]={name}")])
+        made.append(f"added {', '.join(add)}")
     for name in remove:
         gh("api", "--method", "DELETE", f"repos/{{owner}}/{{repo}}/issues/{number}/labels/{quoted(name)}")
+        made.append(f"removed {name}")
 
 
 def repo_labels() -> dict[str, dict]:
@@ -303,11 +309,16 @@ def run_issues(apply: bool, target: str) -> int:
                 raise LabelMissing(f"#{issue.number}: the repository has no label "
                                    f"{', '.join(missing)}; run `labels apply` first; {written} "
                                    f"issue(s) written before it")
+            made: list[str] = []
             try:
-                write(issue.number, add, remove)
+                write(issue.number, add, remove, made)
             except Unreadable as error:
+                # A partly written issue is not one of the issues written before it; the line says
+                # what its own earlier writes made instead (#831).
+                part = (f"on #{issue.number}, {'; '.join(made)} before the failure" if made
+                        else f"nothing written on #{issue.number}")
                 raise WriteFailed(f"#{issue.number}: {error}; {written} issue(s) written before "
-                                  f"it") from error
+                                  f"it; {part}") from error
             written += 1
     counted = f"{len(found)} issue(s) read, {drifted} drifted, {skipped} skipped"
     if apply:

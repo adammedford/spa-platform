@@ -166,6 +166,9 @@ const LOG = `${REPO}/.scratch/overnight/log`
 const ADAM = 'adammedford'
 const PARENT_ISSUE = 51 // the parent the overnight workflow files plan-row tickets under (#78 -> "Apply")
 const READER = `python3 -I ${REPO}/tools/review_record.py` // the repository's one record reader (#67)
+// The Overnight report's ticket reader (#971): its `report` command reads the body's `## Tickets` table,
+// or a body of an earlier night's shape, into rows, claimed branches and morning steps, as the retro does.
+const REPORT_READER = `python3 -I ${REPO}/tools/retro_record.py report`
 const TRAILER = 'Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>'
 const paths = (date) => ({
   mdir: `${LOG}/morning-${date}`,
@@ -305,9 +308,10 @@ const VERIFY = {
     oldTip: { type: 'string' },
     lanes: { type: 'array', items: { type: 'object', properties: { issue: { type: 'integer' }, task: { type: 'string' }, outcome: { type: 'string', enum: ['integrated', 'partial', 'failed'] }, complete: { type: 'boolean' }, mergeSha: { type: 'string' }, outstanding: { type: 'string' } }, required: ['issue', 'task', 'outcome', 'complete', 'mergeSha', 'outstanding'] } },
     claimed: { type: 'array', items: { type: 'string' } },
+    steps: { type: 'array', items: { type: 'string' } },
     record: { type: 'object', properties: { verdict: { type: 'string', enum: ['merge', 'hold', 'none'] }, head: { type: 'string' }, url: { type: 'string' }, reader: { type: 'string' } }, required: ['verdict', 'head', 'url', 'reader'] },
   },
-  required: ['outcome', 'step', 'reason', 'prState', 'landed', 'merge', 'verifiedHead', 'originMain', 'contained', 'base', 'forkPoint', 'head', 'branch', 'pr', 'prBodyFile', 'mergeBodyFile', 'mergeSubject', 'prReused', 'prBody', 'merges', 'ci', 'ciUrl', 'failingJobs', 'pushed', 'mainMoved', 'findings', 'worktrees', 'oldTip', 'lanes', 'claimed', 'record'],
+  required: ['outcome', 'step', 'reason', 'prState', 'landed', 'merge', 'verifiedHead', 'originMain', 'contained', 'base', 'forkPoint', 'head', 'branch', 'pr', 'prBodyFile', 'mergeBodyFile', 'mergeSubject', 'prReused', 'prBody', 'merges', 'ci', 'ciUrl', 'failingJobs', 'pushed', 'mainMoved', 'findings', 'worktrees', 'oldTip', 'lanes', 'claimed', 'steps', 'record'],
 }
 const KINDS = ['no-repo-change', 'integrator-edit', 'workstream-ticket', 'decision-to-record', 'follow-up', 'ticket-edit']
 // Every question carries the follow-up and ticket-edit fields, empty when its kind is another (#320),
@@ -329,8 +333,8 @@ const APPLIED = {
     commits: MADE({ sha: { type: 'string' }, subject: { type: 'string' } }),
     issues: MADE({ number: { type: 'integer' }, url: { type: 'string' }, title: { type: 'string' } }),
     candidates: MADE({ url: { type: 'string' } }),
-    rewrites: { type: 'array', items: { type: 'object', properties: { issue: { type: 'integer' }, preserved: { type: 'string' } }, required: ['issue', 'preserved'] } },
-    edits: MADE({ issue: { type: 'integer' }, preserved: { type: 'string' }, removed: { type: 'array', items: { type: 'string' } } }),
+    rewrites: { type: 'array', items: { type: 'object', properties: { issue: { type: 'integer' }, comment: { type: 'string' } }, required: ['issue', 'comment'] } },
+    edits: MADE({ issue: { type: 'integer' }, comment: { type: 'string' }, removed: { type: 'array', items: { type: 'string' } } }),
     edges: MADE({ issue: { type: 'integer' }, blockedBy: { type: 'array', items: { type: 'integer' } } }),
     skipped: { type: 'array', items: { type: 'object', properties: { q: { type: 'integer' }, why: { type: 'string' } }, required: ['q', 'why'] } },
     pushed: { type: 'object', properties: { branch: { type: 'string' }, tip: { type: 'string' }, ok: { type: 'boolean' }, reason: { type: 'string' } }, required: ['branch', 'tip', 'ok', 'reason'] },
@@ -434,9 +438,13 @@ const judgeLookup = (listing, open = false) => {
 const replayedAny = (counts) => Object.values(counts || {}).some((c) => c && (c.applied || c.failed))
 // Where Replay stopped, or "" when no line failed (#319). A stop is a failed line: stoppedAt above zero
 // names it, and a failed count with stoppedAt 0 is still one, whose number the agent did not give, so
-// it is refused rather than read as no stop (CODING_STANDARDS.md -> "A check fails closed").
+// it is refused rather than read as no stop (CODING_STANDARDS.md -> "A check fails closed"). A
+// pending file Replay read and left unrenamed is one too (#895): the prompt renames the file only once
+// every line is applied, so with no line failed the replay stopped at a line it did not name, and its
+// reason is that stop's, never a note. Read after blankField, so a pending of '""' names no file.
 const replayStop = (r) => (r.stoppedAt > 0 ? `line ${r.stoppedAt}`
-  : Object.values(r.counts || {}).some((c) => c && c.failed > 0) ? 'a line it did not number' : '')
+  : Object.values(r.counts || {}).some((c) => c && c.failed > 0) ? 'a line it did not number'
+    : r.pending && !r.renamed ? 'a line it did not name (no line failed, but the pending file was left unrenamed)' : '')
 // A Replay string field holding only a pair of quotes, or only whitespace, is empty (#299). On
 // 2026-10-22 no pending-writes file existed and the Replay agent returned pending, renamed and reason
 // as the two-character string "", which the run read as a stop and refused beside the real one.
@@ -473,23 +481,28 @@ const createLines = (r) => createsOf(r).map((c) => `create line ${c.line}: #${c.
 // ---------------------------------------------------------------- follow-ups, read here
 // review-queue.js's record recogniser and follow-ups table, by copy: a workflow script imports
 // nothing, and morning_tests.mjs holds each line below equal to its twin there, so a change to the
-// grammar is an edit to both scripts together (and to tools/review_record.py for the record line).
+// grammar is an edit to both scripts together (and to tools/review_record.py for the record line and
+// the table). The table has five columns since #966, its last the Fails on sentence each row's body
+// carries; a record from before it has the four of FOLLOW_UP_HEAD_FOUR, and its rows read with
+// failsOn "".
 const PY_LINE_BREAK = /\r\n|[\n\v\f\r\x1c-\x1e\x85\u2028\u2029]/
 const PY_SPACE = '[\\t\\n\\v\\f\\r\\x1c-\\x1f \\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]'
 const PY_STRIP = new RegExp(`^${PY_SPACE}+|${PY_SPACE}+$`, 'g')
 const RECORD = /^Reviewed ([0-9a-f]{40}) against ([0-9a-f]{40}): (merge|hold)$/
 const REPOSITORY_ACCOUNTS = ['OWNER', 'MEMBER', 'COLLABORATOR']
-const FOLLOW_UP_HEAD = '| Finding | Axis | Where | First carried by |'
+const FOLLOW_UP_HEAD = '| Finding | Axis | Where | First carried by | Fails on |'
+const FOLLOW_UP_HEAD_FOUR = '| Finding | Axis | Where | First carried by |'
 const THIS_RECORD = 'this record'
 const followUpsOf = (body, url = '') => {
   const lines = String(body || '').split(PY_LINE_BREAK).map((l) => l.trim())
-  const at = lines.indexOf(FOLLOW_UP_HEAD)
+  const at = lines.findIndex((l) => l === FOLLOW_UP_HEAD || l === FOLLOW_UP_HEAD_FOUR)
   if (at < 0) return []
+  const width = lines[at] === FOLLOW_UP_HEAD ? 5 : 4
   const rows = []
   for (const line of lines.slice(at + 2)) {
     if (!line.startsWith('|') || !line.endsWith('|')) break
     const cells = line.slice(1, -1).split(/(?<!\\)\|/).map((c) => c.trim().replace(/\\\|/g, '|'))
-    if (cells.length === 4 && cells[0]) rows.push({ title: cells[0], axis: cells[1], where: cells[2], firstCarried: cells[3] === THIS_RECORD ? url : cells[3] })
+    if (cells.length === width && cells[0]) rows.push({ title: cells[0], axis: cells[1], where: cells[2], firstCarried: cells[3] === THIS_RECORD ? url : cells[3], failsOn: width === 5 ? cells[4] : '' })
   }
   return rows
 }
@@ -592,6 +605,10 @@ const placeOf = (rules, where) => {
 }
 
 // ---------------------------------------------------------------- follow-ups, their bodies
+// The finding is the ticket's title, and the body does not repeat it (#972): the Raised-by line
+// filedAs reads, the Owner line ticket_shape's owner-line wants (#479), the Touches line or why it
+// has none, the row's Fails on sentence and one box. The record the Raised-by line links holds the
+// rest of the row (its axis, place and first record).
 const followUpBody = (pr, record, f, place) => [
   `**Raised by:** #${pr}, from its review record ${record}`,
   `**Owner:** ${place.owner}`,
@@ -599,11 +616,13 @@ const followUpBody = (pr, record, f, place) => [
   '',
   '## What to build',
   '',
-  `The review of #${pr} carried this finding rather than holding on it (${f.axis || 'no'} axis), first carried by ${f.firstCarried || record}: ${f.title}, at ${f.where || 'no place named'}. The record lists it under "## Follow-ups", which names no open ticket for it; this issue is that ticket.`,
+  // The input or state on which it gives the wrong result (#966); a four-column row names none.
+  ...(f.failsOn ? [`Fails on: ${f.failsOn}`, ''] : []),
+  'The record lists it under Follow-ups; this issue is that ticket.',
   '',
   '## Acceptance criteria',
   '',
-  `- [ ] ${f.title}: fixed, or declined with the reason in this issue's Answer.`,
+  "- [ ] Fixed, or declined with the reason in this issue's Answer.",
 ].join('\n')
 // The rows to file and those already filed, from what the reader returned: per open pull request, the
 // latest record's table, each row checked against the issues already filed, and its owner, Touches
@@ -824,9 +843,57 @@ const openApplyTickets = (listed, filedToday) => {
 // before reading, so a question cut at a part boundary is read whole. A ticket whose parts are not
 // all present, a questions comment with no question in it, or a number that appears twice, is a
 // refusal, and those questions stay unread: nothing is applied from a partial read.
+// A pre-accepted question is one table row (#965): under a "### Pre-accepted" heading, up to the next
+// heading, each row of the table is a question, "| **Q94.** | (#244 Q9) | <question> | <recommendation> |",
+// its first cell the number in any of the three forms above, its last the recommendation, the one
+// before it the question, and anything between them (the ticket-local number) opens the question's
+// text as it does in the full form. A row's answer is the standing answer's yes, so to Apply a row
+// and a full-form question answered "yes, pre-accepted" are the same. The rows and the heading are
+// taken out before the full form is read, so the last full-form question above the table does not
+// swallow it. A table's header row (the line above its "---" separator) and the separator are not
+// questions; any other row whose first cell carries no number is a refusal, as above.
 const HEADING = /^## Questions: #(\d+), ([^,]+), (.*)$/
 const PART = /\s*\(part (\d+) of (\d+)\)\s*$/
 const Q_MARK = /^[ \t]*(?:\*\*Q(\d+)\.?\*\*|Q(\d+)\.(?=[ \t]))[ \t]*/gm
+const PRE_ROWS_HEADING = /^[ \t]*###[ \t]+Pre-accepted\b.*$/
+const ROW_NUMBER = /^(?:\*\*Q(\d+)\.?\*\*|Q(\d+)\.)$/
+const isRow = (line) => /^[ \t]*\|/.test(line)
+const isSeparator = (line) => /^[ \t]*\|?[ \t]*:?-{3,}:?[ \t]*(?:\|[ \t]*:?-{3,}:?[ \t]*)*\|?[ \t]*$/.test(line)
+const rowCellsOf = (line) => line.trim().replace(/^\|/, '').replace(/(?<!\\)\|$/, '').split(/(?<!\\)\|/).map((c) => c.trim().replace(/\\\|/g, '|'))
+// The "### Pre-accepted" tables of one questions comment's text: { rest, rows, unnumbered }, rest
+// being the text with each such heading and its table lines taken out, every other line kept in place.
+const preAcceptedOf = (text) => {
+  const lines = text.split('\n')
+  const keep = []
+  const rows = []
+  const unnumbered = []
+  let inSection = false
+  let date = ''
+  lines.forEach((line, i) => {
+    if (PRE_ROWS_HEADING.test(line)) { inSection = true; date = (/granted (\d{4}-\d{2}-\d{2})/.exec(line) || [, ''])[1]; return }
+    if (inSection && /^[ \t]*#{1,6}[ \t]/.test(line)) inSection = false
+    if (!inSection) { keep.push(line); return }
+    if (!isRow(line)) {
+      // The section's own answer line, "Answer for every row: yes, pre-accepted under the standing answer
+      // granted <date>", dates the rows and is no part of any full-form question.
+      const d = /standing answer granted (\d{4}-\d{2}-\d{2})/.exec(line)
+      if (d) date = d[1]
+      else keep.push(line)
+      return
+    }
+    if (isSeparator(line) || (i + 1 < lines.length && isSeparator(lines[i + 1]))) return
+    const cells = rowCellsOf(line)
+    const n = ROW_NUMBER.exec(cells[0])
+    if (!n || cells.length < 3) { unnumbered.push(line.trim()); return }
+    rows.push({
+      q: Number(n[1] || n[2]),
+      text: cells.slice(1, -1).filter((c) => c).join(' '),
+      recommendation: cells[cells.length - 1],
+      answer: `yes, pre-accepted under the standing answer${date ? ` granted ${date}` : ''}`,
+    })
+  })
+  return { rest: keep.join('\n'), rows, unnumbered }
+}
 // What makes a comment one the readers read, said once: batchesOf picks the comments to fetch with
 // these two functions, on the head of each body, so it cannot pick a narrower set than the readers do.
 const headingOf = (body) => HEADING.exec(String(body || '').split('\n')[0].trim())
@@ -852,12 +919,19 @@ const readQuestions = (comments) => {
       refusals.push(`the questions of #${g.issue} are split into ${g.of} parts and ${ks.size} distinct part(s) were found; none of them is read`)
       continue
     }
-    const text = [...g.parts].sort((a, b) => a.k - b.k).map((p) => p.text).join('\n')
-    const marks = [...text.matchAll(Q_MARK)]
-    if (!marks.length) {
-      refusals.push(`the questions comment of #${g.issue} carries no question the morning can read (none opens "**Q<n>.**", "**Q<n>**" or "Q<n>."); none of it is read`)
+    const joined = [...g.parts].sort((a, b) => a.k - b.k).map((p) => p.text).join('\n')
+    const pre = preAcceptedOf(joined)
+    if (pre.unnumbered.length) {
+      refusals.push(`the questions comment of #${g.issue} has ${pre.unnumbered.length} "### Pre-accepted" row(s) the morning cannot number (the first cell opens none of "**Q<n>.**", "**Q<n>**" or "Q<n>.", or the row has no question and recommendation cells), the first ${JSON.stringify(pre.unnumbered[0].slice(0, 80))}; none of it is read`)
       continue
     }
+    const text = pre.rest
+    const marks = [...text.matchAll(Q_MARK)]
+    if (!marks.length && !pre.rows.length) {
+      refusals.push(`the questions comment of #${g.issue} carries no question the morning can read (none opens "**Q<n>.**", "**Q<n>**" or "Q<n>.", and no "### Pre-accepted" row); none of it is read`)
+      continue
+    }
+    for (const r of pre.rows) found.push({ q: r.q, issue: g.issue, task: g.task, title: g.title, text: r.text, recommendation: r.recommendation, answer: r.answer })
     marks.forEach((mk, i) => {
       const block = text.slice(mk.index + mk[0].length, i + 1 < marks.length ? marks[i + 1].index : text.length)
       const rec = /^[ \t]*(?:[-*][ \t]+)?Recommended:[ \t]*(.*)$/m.exec(block)
@@ -1270,7 +1344,7 @@ const replayPrompt = () => `Replay: find the night's Overnight issue, then repla
 ${HOUSE(paths(A.date || '<date>').mdir)}
 
 ${LOOKUP(`The date${A.date ? ` is ${A.date}` : ' is the one in that title'}; call it <date> below.`)}
-2. The pending-writes file, checked before any replay step (#319): run \`test -e ${LOG}/pending-<date>.jsonl && echo pending; test -e ${LOG}/pending-<date>.replayed.jsonl && echo replayed\` and nothing else first. If neither exists, there is nothing to replay: pending and renamed are "", every count is zero, creates is [], stoppedAt is 0 and reason is "", and skip to step 3 at once, reading no other file and running no other command for this step. If only the replayed file exists, an earlier morning replayed it: replay nothing and skip to step 3. Otherwise the pending file holds JSON lines {"issue", "action": "comment"|"edit"|"close"|"create", "body"}, a create line carrying "title", "label" and "blocking" too, and "searched" when a lane queued it since #678: apply its lines in file order, skipping each line already listed in the progress file ${LOG}/pending-<date>.progress (one line number per applied line), and append each line's number to the progress file the moment it is applied (a create line's once its last step is done, as below):
+2. The pending-writes file, checked before any replay step (#319): run \`test -e ${LOG}/pending-<date>.jsonl && echo pending; test -e ${LOG}/pending-<date>.replayed.jsonl && echo replayed\` and nothing else first. If neither exists, there is nothing to replay: pending and renamed are "", every count is zero, creates is [], stoppedAt is 0 and reason is "", and skip to step 3 at once, reading no other file and running no other command for this step. If only the replayed file exists, an earlier morning replayed it: replay nothing, and return pending and renamed as "" (this morning read no pending file and renamed none, and a pending path with no renamed one is read as a replay that stopped, #895), every count zero, creates [], stoppedAt 0 and reason "", then skip to step 3. Otherwise the pending file holds JSON lines {"issue", "action": "comment"|"edit"|"close"|"create", "body"}, a create line carrying "title", "label" and "blocking" too, and "searched" when a lane queued it since #678: apply its lines in file order, skipping each line already listed in the progress file ${LOG}/pending-<date>.progress (one line number per applied line), and append each line's number to the progress file the moment it is applied (a create line's once its last step is done, as below):
    - a comment: write its body to ${LOG}/morning-<date>/replay-<line>.md and post it, \`cd ${REPO} && gh issue comment <issue> --body-file ${LOG}/morning-<date>/replay-<line>.md\`;
    - an edit that changes labels or assignees: \`cd ${REPO} && gh issue edit <issue> <its flags>\`;
    - an edit that replaces a body (--body-file): only if the issue's body is still the one the lane read, which the lane's saved body file in ${LOG}/ shows (\`cd ${REPO} && gh issue view <issue> --json body --jq .body\`, compared byte for byte); otherwise skip it and count it skipped, because a stale body would clobber a newer spec;
@@ -1295,13 +1369,14 @@ ${HOUSE(p.mdir)}
 PHASE FILE: ${p.mdir}/verify.json INPUTS: ${phaseKey}
 OUTPUT FILE: ${p.mdir}/pr-body.md
 OUTPUT FILE: ${p.mdir}/merge-body.md
+OUTPUT FILE: ${p.mdir}/report-body.md
 Write {"inputs": "${phaseKey}", "result": <your return value>} to the PHASE FILE as JSON before you return, except on the merged outcome of step 0, which leaves the PHASE FILE as an earlier morning wrote it: it holds the head that morning verified, which step 0 and the after pass compare against.
 MERGE SUBJECT: ${JSON.stringify(subjectFor(date))}
 
-Read the Overnight issue first: \`cd ${REPO} && gh issue view ${issue} --json body,comments\`. It names the base, the integration branch ${p.intBranch} and its worktree ${p.intWt}, and the integrated, partial and failed rows; the lane merge bodies on the branch carry the rest. Step 0 runs first and is not a stop. Each step after it reads durable state first and skips what is already done. Each of steps 1 to 8 is a stop: on the first one that fails, set outcome "stop", step its number and reason what failed, push nothing more, and return.
+Read the Overnight issue first: \`cd ${REPO} && gh issue view ${issue} --json body,comments\`. It names the base, the integration branch ${p.intBranch} and its worktree ${p.intWt}, and the integrated, partial and failed rows; the lane merge bodies on the branch carry the rest. Its tickets are read by the reader, never by eye (#971): save the body, \`cd ${REPO} && gh issue view ${issue} --json body --jq .body > ${p.mdir}/report-body.md\`, then run \`${REPORT_READER} ${p.mdir}/report-body.md --title "Overnight ${date}"\`, which reads a body that opens with the \`## Tickets\` table and a body of an earlier night's shape alike and prints tickets {shape, rows, claimed, steps, unread}. claimed is its tickets.claimed and steps its tickets.steps, each verbatim and in order. Each line of its tickets.unread is a table row the reader could not read, so it is in neither list: add it to findings as "report row not read: <the line>", since a claimed branch it holds would otherwise leave the hand-over unnoticed. lanes are its tickets.rows whose outcome is integrated or failed, an integrated row whose detail is partial being partial, each row's task the task id its merge subject on ${p.intBranch} names and mergeSha that merge's full sha; for an earlier night's shape, whose rows hold only the integrated ones, the issue's "## Partial (Outstanding)" and "## Failed" sections give the rest. Step 0 runs first and is not a stop. Each step after it reads durable state first and skips what is already done. Each of steps 1 to 8 is a stop: on the first one that fails, set outcome "stop", step its number and reason what failed, push nothing more, and return.
 0. The landing, first, before any step that needs ${p.intBranch}, which tools/land.sh deletes once the pull request merges (#661; #476). \`git -C ${REPO} fetch origin\`, then \`cd ${REPO} && gh pr list --head ${p.intBranch} --base main --state merged --json number,url,headRefOid,mergeCommit,mergedAt\`. landed is every pull request it lists, each as {number, url, headRefOid, mergeCommit: its merge commit's full oid, mergedAt}, never filtered or chosen among.
    - When it lists none: prState is "open" when \`cd ${REPO} && gh pr list --head ${p.intBranch} --base main --state open --json number\` lists one or step 6 opens one, else "none"; merge is {"commit": "", "mergedAt": ""}, verifiedHead and originMain are "", contained is false, and go on to step 1.
-   - When it lists one or more: prState is "merged" and outcome "merged", which is not a stop, and you run none of steps 1 to 8: push nothing, open, edit or comment on no pull request, and run no check, since the pull request has merged. When it lists exactly one, pr is its {number, url}, head its headRefOid and merge {commit: its merge commit's full oid, mergedAt}; when it lists more, leave pr, head and merge empty and return, because the script refuses the report. verifiedHead is the result's head in ${p.mdir}/verify.json as an earlier morning wrote it, read before anything else and never overwritten on this outcome, or "" when that file does not exist. originMain is \`git -C ${REPO} rev-parse origin/main\`, after the fetch above; contained is whether \`git -C ${REPO} merge-base --is-ancestor <head> origin/main\` exits 0. The record naming head, read as step 8 reads it from that pull request's comments and reviews, with exit 2 read as record {verdict "none", head "", url ""}; CI on head as step 7 reads it, without the wait: \`cd ${REPO} && gh pr checks <number> --json name,state,bucket,link\`, ci green when every check passed or was skipped, red when one failed, pending when one has not finished, none when none is reported. lanes and claimed from the issue, as below; every other field empty. Then return.
+   - When it lists one or more: prState is "merged" and outcome "merged", which is not a stop, and you run none of steps 1 to 8: push nothing, open, edit or comment on no pull request, and run no check, since the pull request has merged. When it lists exactly one, pr is its {number, url}, head its headRefOid and merge {commit: its merge commit's full oid, mergedAt}; when it lists more, leave pr, head and merge empty and return, because the script refuses the report. verifiedHead is the result's head in ${p.mdir}/verify.json as an earlier morning wrote it, read before anything else and never overwritten on this outcome, or "" when that file does not exist. originMain is \`git -C ${REPO} rev-parse origin/main\`, after the fetch above; contained is whether \`git -C ${REPO} merge-base --is-ancestor <head> origin/main\` exits 0. The record naming head, read as step 8 reads it from that pull request's comments and reviews, with exit 2 read as record {verdict "none", head "", url ""}; CI on head as step 7 reads it, without the wait: \`cd ${REPO} && gh pr checks <number> --json name,state,bucket,link\`, ci green when every check passed or was skipped, red when one failed, pending when one has not finished, none when none is reported. lanes, claimed and steps from the issue, as below; every other field empty. Then return.
 1. The main checkout's tracked files are unchanged: \`git -C ${REPO} status --porcelain --untracked-files=no\` prints nothing. Untracked files are listed in findings against what the run recorded at its start, never a stop.
 2. \`git -C ${REPO} fetch origin\`. The integration branch exists and the base the issue names, resolved to its full sha, is an ancestor of it: \`git -C ${REPO} merge-base --is-ancestor <base> ${p.intBranch}\`. mainMoved is whether origin/main has moved past the base; that is reported, never merged in or rebased onto. forkPoint is the integration branch's merge base with origin/main, the commit the landing merges onto, as a full sha: \`git -C ${REPO} merge-base origin/main ${p.intBranch}\`. It is the base unless main was merged into the branch (#326). Return it even on a stop at this step; "" only when the branch does not exist.
 3. Every worktree under ${WTROOT} other than ${p.intWt} and ${p.morningWt}: \`git -C <path> status --porcelain\` prints nothing (a dirty one is a stop naming the worktree and its files), and its tip is an ancestor of the integration tip, \`git -C ${REPO} merge-base --is-ancestor <tip> ${p.intBranch}\`. A tip that is not is a stop when the issue lists its lane as integrated or partial, because the report and git disagree; for a failed lane it is expected, and the worktree is kept and listed. Worktrees left from earlier runs are findings. Read every worktree before you stop, and return each as {path, branch, tip: its full sha, clean, ancestor, lane, partner}: lane is the task id of the issue's row whose branch it holds, "" for a worktree no row names; partner, for a tip that is not an ancestor, is the commit on the integration branch with the same tree, which marks a rebuild rather than a lane that never merged: compare \`git -C ${REPO} rev-parse <tip>^{tree}\` with \`git -C ${REPO} log --format=%H%x09%T%x09%P <base>..${p.intBranch}\` and take the matching commit with one parent over a merge, whose tree a --no-ff merge of a lane forked from the branch's own tip shares (tools/remap_rebuild.py); "" when none matches or the tip is an ancestor. oldTip, when any integrated or partial lane's tip is not an ancestor, is the integration tip those lanes were merged into: the tip the issue's Run: paragraph names, resolved to its full sha, when every such lane tip is an ancestor of it, else the newest entry of \`git -C ${REPO} reflog --format=%H refs/heads/${p.intBranch}\` that every such lane tip is an ancestor of; "" when neither is, or when every lane tip is an ancestor. head is the integration tip, \`git -C ${REPO} rev-parse ${p.intBranch}\`, and lanes are the issue's rows, both returned even on a stop here. The script builds this stop's remedy from those fields (#321): your reason states the symptoms only.
@@ -1309,8 +1384,8 @@ Read the Overnight issue first: \`cd ${REPO} && gh issue view ${issue} --json bo
 5. The push, with the hook running: compare \`git -C ${REPO} ls-remote origin refs/heads/${p.intBranch}\` with the local tip as the house rules say, then \`git -C ${p.intWt} push -u origin ${p.intBranch}\`. pushed is whether the remote now holds the local tip.
 6. One pull request from ${p.intBranch} to main: \`cd ${REPO} && gh pr list --head ${p.intBranch} --state open --json number,url,headRefOid\` reuses an open one. merges is the branch's first-parent merges from the base, oldest first, each {sha: the full sha, subject}: \`git -C ${REPO} log --first-parent --merges --reverse --format=%H%x09%s <base>..${p.intBranch}\`. prReused is whether you reused an open pull request rather than opening one. When you reuse one, prBody is its description exactly as served, \`cd ${REPO} && gh pr view <number> --json body --jq .body\`, and you never edit it: the script compares the head it names with this head and refreshes it (#300). Otherwise prBody is "". Draft its body to ${p.mdir}/pr-body.md from the issue and the lane merge bodies, in the shape a later morning's refresh reads: a line "Overnight issue: #${issue}. Base <base>, head <head>. <n> integrated, <m> partial, <k> failed." with both shas in full and each in backticks; then tables headed "## Integrated", "## Partial" and "## Failed", each with the header "| Task | Issue | Task merge |" and one row per lane, "| <task id> | #<n> | <the merge's short sha, in backticks> |" for an integrated or partial lane and "| <task id> | #<n> | none; <what is kept, such as its branch> |" for a failed one, even a table with no rows; one line "Closes #<n>" for each integrated row whose lane reported complete and one line "Ticket: #<n>" for each partial row (#100); the aggregated "Outstanding:" and "Outstanding test ids:" lines; the evidence line (how many gate logs, the last integration gate's head and its test count); and the merge subject above. Draft the merge body to ${p.mdir}/merge-body.md: what was verified and how, citing each task merge by sha, with the same Outstanding lines and no Closes line. Open the pull request when none is open: \`cd ${REPO} && gh pr create --base main --head ${p.intBranch} --title ${JSON.stringify(subjectFor(date))} --body-file ${p.mdir}/pr-body.md\`. mergeSubject is the merge subject above, verbatim.
 7. CI on the exact head: the pull request's headRefOid must equal the local tip, else stop. Wait for its required checks in one Bash call with a 600000 ms timeout, \`cd ${REPO} && gh pr checks <number> --watch --interval 30\`, then read \`cd ${REPO} && gh pr checks <number> --json name,state,bucket,link\`. A skipped job counts as passing. ci is green, red (failingJobs naming each failing job), pending (the wait ran out) or none (no checks reported); ciUrl is a run's link on that head.
-8. The review record naming the head. Read the pull request's records exactly as tools/land.sh does: \`cd ${REPO} && comments=$(gh api --paginate --slurp repos/{owner}/{repo}/issues/<number>/comments) && reviews=$(gh api --paginate --slurp repos/{owner}/{repo}/pulls/<number>/reviews) && printf '{"comments": %s, "reviews": %s}\\n' "$comments" "$reviews" | ${READER} <head>\`. Exit 0: record {verdict "merge", head: the head you passed, url: the URL it printed}. Exit 1 with "says hold: <url>": record {verdict "hold", head, url}. Exit 1 otherwise: record {verdict "none", head "", url ""}. Exit 2: a stop with its message. reader is the exit status and its first line. A hand-written record in the fixed form counts; nothing else does, and you never write one.
-Return every field: lanes from the issue's rows (issue, task, outcome, complete, mergeSha, outstanding), claimed the claimed branches the issue names, worktrees as step 3 read them, findings as plain lines. Fields a stop left unread are empty.`
+8. The review record naming the head. Read the pull request's records with the reader's --pr form, pinned to the head as tools/land.sh pins it (#488): \`cd ${REPO} && ${READER} --pr <number> --head <head>\`, which lists every page of the comments and reviews itself. Exit 0: record {verdict "merge", head: the head you passed, url: the URL it printed}. Exit 1 with "says hold: <url>": record {verdict "hold", head, url}. Exit 1 otherwise: record {verdict "none", head "", url ""}. Exit 2: a stop with its message. reader is the exit status and its first line. A hand-written record in the fixed form counts; nothing else does, and you never write one.
+Return every field: lanes from the issue's rows (issue, task, outcome, complete, mergeSha, outstanding), claimed and steps from the reader as above, worktrees as step 3 read them, findings as plain lines. Fields a stop left unread are empty.`
 }
 
 // Its agent writes nothing anywhere and keeps no phase file, since a rerun must read the comments as
@@ -1348,10 +1423,12 @@ const BATCH_BYTES = 24000
 // Two heads cannot be judged. One is full length with less than MIN_VISIBLE characters of it after
 // its leading whitespace: the cut may have fallen before the pattern could show. The other is full
 // length, its first line cut (no newline in it), and what is visible is only the start of a heading,
-// short of its second comma (a long padded or long second field): HEADING needs the whole line to
-// match, so a head cut there says nothing either way.
+// up to and including its second comma (a long padded or long second field): HEADING needs the whole
+// line to match, so a head cut there says nothing either way. A cut at the second comma, or at the
+// space after it, which the trim drops, leaves a line ending in that comma, short of the ", " HEADING
+// needs after the second field (#832).
 const MIN_VISIBLE = 40
-const HEADING_CUT = /^## Questions: #\d*(?:, [^,]*)?$/
+const HEADING_CUT = /^## Questions: #\d*(?:, [^,]*,?)?$/
 const undecidableHead = (head) => head.length >= HEAD_CHARS &&
   (head.trim().length < MIN_VISIBLE || (!head.includes('\n') && HEADING_CUT.test(head.trim())))
 // A body the reader returned must be the one the index describes: the same length in bytes and the same
@@ -1409,6 +1486,55 @@ summary says in one line what applying it changes. rewrites lists each ticket wh
 const afterApplyRules = (issue) => `This is the after pass (#635), run once the landing merged. First \`git -C ${REPO} fetch origin\`, so origin/main is fresh. A commit an earlier pass made may have landed already: look for one whose body cites #${issue} and the question on origin/main too, \`git -C ${REPO} log origin/main --format=%B\`, and when one does, that commit is the question's, made already. Before you skip anything as already done, check that its effect is still in place: the commit on origin/main or on the morning branch, the filed issue still there (\`cd ${REPO} && gh issue view <n> --json number,state\`), the comment still among its ticket's comments, the box still gone, the edge still among the blockers. An effect no longer in place is made again, never skipped.
 verified lists each question of the unit whose work is now in place, made by you or found still in place, as {q, effect, held, onMain}: effect is the commit's full sha, or the URL of the issue filed, the comment posted or the ticket edited; held is the number of the issue that now holds the question's remaining work, the workstream ticket or the follow-up filed for it, and 0 when none does (a commit answer's own ticket never holds it); onMain, for a commit, is whether \`git -C ${REPO} merge-base --is-ancestor <sha> origin/main\` exits 0, and false for anything else. A commit you made on the morning branch now is not on origin/main. A question whose work is not in place is not listed.
 `
+// The record a body rewrite posts (#968). GitHub keeps every edit of an issue body in the issue's edit
+// history, so the verbatim old body exists without a copy: 142 "## Body before <date>" comments held
+// 461 KB, the median one 80% identical to the body that replaced it. The comment names the questions
+// applied and the changed paragraphs as a unified diff, whose context stops at a blank line, so a
+// paragraph left alone is never quoted. The program runs as the applier writes it from the prompt,
+// byte for byte, and morning_tests.mjs runs the copy the prompt carries on a fixture rewrite.
+// GitHub's edit history covers issue bodies and keeps the original and the latest 99 edits of each
+// (https://docs.github.com/en/communities/moderating-comments-and-conversations/tracking-changes-in-a-comment,
+// "Edit limits"); a writer with write access can delete a revision's content.
+const EDIT_HISTORY = 'The previous body verbatim is this issue\'s edit history, which GitHub keeps for every edit of a body.'
+const BODY_DIFF = String.raw`import difflib, sys
+def lines(name):
+    text = open(name, encoding="utf-8").read()
+    return (text[:-1] if text.endswith("\n") else text).split("\n")
+old, new = lines(sys.argv[1]), lines(sys.argv[2])
+ops = difflib.SequenceMatcher(None, old, new, autojunk=False).get_opcodes()
+hunks = []
+for k, (tag, i1, i2, j1, j2) in enumerate(ops):
+    if tag == "equal":
+        continue
+    back = 0
+    if k > 0:
+        while back < i1 - ops[k - 1][1] and old[i1 - 1 - back].strip():
+            back += 1
+    ahead = 0
+    if k + 1 < len(ops):
+        while ahead < ops[k + 1][2] - i2 and old[i2 + ahead].strip():
+            ahead += 1
+    if hunks and i1 - back <= hunks[-1][1]:
+        hunks[-1][1], hunks[-1][3] = i2 + ahead, j2 + ahead
+    else:
+        hunks.append([i1 - back, i2 + ahead, j1 - back, j2 + ahead])
+print("--- before")
+print("+++ after")
+for a1, a2, b1, b2 in hunks:
+    print("@@ -%d,%d +%d,%d @@" % (a1 + 1 if a2 > a1 else a1, a2 - a1, b1 + 1 if b2 > b1 else b1, b2 - b1))
+    for tag, i1, i2, j1, j2 in ops:
+        if tag == "equal":
+            for i in range(max(i1, a1), min(i2, a2)):
+                print(" " + old[i])
+        elif a1 <= i1 and i2 <= a2:
+            for line in old[i1:i2]:
+                print("-" + line)
+            for line in new[j1:j2]:
+                print("+" + line)
+`
+const rewriteRecord = (date, issue, mdir) => `REWRITE RECORD: a ticket's body is changed in four steps (#968). 1. Save its current body, \`cd ${REPO} && gh issue view <n> --json body --jq .body > <a file under ${mdir}/>\`, and write the new body to another file under ${mdir}/. 2. Diff the two, \`python3 -I ${mdir}/body-diff.py <the current body's file> <the new body's file>\`: body-diff.py is the program between the lines "BEGIN body-diff.py" and "END body-diff.py" below, written to that path byte for byte when it is not there, and its output is the changed paragraphs as a unified diff, old lines and new. 3. Post a comment whose lines are, in order: "## Body rewritten ${date}"; "Applied: Q<n> of #${issue}." naming every question number applied, as "Applied: Q<n>, Q<m> of #${issue}."; "${EDIT_HISTORY}"; "~~~diff"; the diff's output, every line; "~~~" (\`cd ${REPO} && gh issue comment <n> --body-file <its file>\`). The comment carries no copy of the old body. 4. Edit the body, \`cd ${REPO} && gh issue edit <n> --body-file <the new body's file>\`.
+BEGIN body-diff.py
+${BODY_DIFF}END body-diff.py`
 const applyPrompt = (date, issue, unit, phaseKey, after = false) => {
   const p = paths(date)
   const commits = unit.kind === 'commit'
@@ -1420,26 +1546,27 @@ PHASE FILE: ${p.mdir}/${after ? 'after' : 'apply'}/${unit.key}.json INPUTS: ${ph
 Write {"inputs": "${phaseKey}", "result": <your return value>} to the PHASE FILE as JSON before you return.
 UNIT: ${JSON.stringify(unit)}
 
-Skip what an earlier morning already did, and list it in skipped with why: a commit on ${p.morningBranch} whose body cites #${issue} and the question (\`git -C ${REPO} log origin/main..${p.morningBranch} --format=%B\`), an issue whose body cites them (\`cd ${REPO} && gh issue list --state all --search "#${issue} Q<n> in:body" --json number,url,title\`), a candidate or a preserved body already among the ticket's comments, a box already gone from its target's body, an edge already among its target's blockers.
+Skip what an earlier morning already did, and list it in skipped with why: a commit on ${p.morningBranch} whose body cites #${issue} and the question (\`git -C ${REPO} log origin/main..${p.morningBranch} --format=%B\`), an issue whose body cites them (\`cd ${REPO} && gh issue list --state all --search "#${issue} Q<n> in:body" --json number,url,title\`), a candidate, or a "## Body rewritten" comment naming the question (an earlier morning's "## Body before" one), already among the ticket's comments, a box already gone from its target's body, an edge already among its target's blockers.
 ${commits ? `Integrator edits, one commit each, on ${p.morningBranch} in the morning worktree ${p.morningWt}, forked from origin/main: reuse it when it exists, else \`git -C ${REPO} fetch origin && git -C ${REPO} worktree add -b ${p.morningBranch} ${p.morningWt} origin/main\` (when the branch exists without the worktree, \`git -C ${REPO} worktree add ${p.morningWt} ${p.morningBranch}\`). Each commit's subject says what changed; its body cites the Overnight issue as #${issue}, the question as Q<n> and its answer line verbatim; its last paragraph carries the attribution line and, on a line of its own, "Authority: <the question's authority URL>", because every such edit is to a steering document (docs/agents/landing-work.md). Commit with \`git -C ${p.morningWt} commit -F <a message file under ${p.mdir}/>\`. When the branch has commits, push it with the hook running, as the house rules say: \`git -C ${p.morningWt} push -u origin ${p.morningBranch}\`. A hook failure leaves it local: pushed.ok false and reason the hook's last lines.
 ` : `You make no commit. pushed is {branch: "", tip: "", ok: true, reason: "no commits"}.
-`}Workstream tickets: file each as \`cd ${REPO} && gh issue create --title "<what to build>" --label needs-triage --parent ${PARENT_ISSUE} --body-file <a file under ${p.mdir}/>\` (#78 grill Q9: the night's Route phase writes the brief), its body opening with the owner line (**Owner:** and the OWNERSHIP.md role) and the plan row where there is one, citing #${issue} and Q<n>, and add the blocked-by edges the recommendation names with \`cd ${REPO} && gh issue edit <new> --add-blocked-by <n>\`.
+`}Workstream tickets: file each as \`cd ${REPO} && gh issue create --title "<what to build>" --label needs-triage --parent ${PARENT_ISSUE} --body-file <a file under ${p.mdir}/>\` (#78 grill Q9: the night's Route phase writes the brief), its body opening with the owner line (**Owner:** and the OWNERSHIP.md role) and the plan row where there is one, citing #${issue} and Q<n>, then a \`## What to build\` section and an \`## Acceptance criteria\` section of \`- [ ]\` boxes, under no other \`##\` heading, since the ticket template's headings are the ones tools/ticket_shape.py notes nothing on (#973), and add the blocked-by edges the recommendation names with \`cd ${REPO} && gh issue edit <new> --add-blocked-by <n>\`.
 Decisions to record: draft each ADR candidate as a comment on its ticket, \`cd ${REPO} && gh issue comment <ticket> --body-file <a file under ${p.mdir}/>\`: the decision, the rejected alternatives, and any sentence that contradicts an existing ADR flagged as docs/agents/domain.md asks. Never an ADR file.
-Rewrites (a ticket with "rewrite": true): first preserve the current body verbatim in a comment headed "## Body before ${date}" (\`cd ${REPO} && gh issue comment <ticket> --body-file <file>\`), then rewrite it as current decision, what to build and acceptance, naming every confirmed question number, \`cd ${REPO} && gh issue edit <ticket> --body-file <file>\`. A spec's body is never rewritten (#78 grill Q13): list that one in skipped.
+Rewrites (a ticket with "rewrite": true): rewrite its body as current decision, what to build and acceptance, naming every confirmed question number, by the REWRITE RECORD's four steps below. List each in rewrites {issue: the ticket, comment: the "## Body rewritten ${date}" comment's URL}. A spec's body is never rewritten (#78 grill Q13): list that one in skipped.
 FOLLOW-UP TICKETS: the unit's followUps, each with its q, title, blockedBy, file and body, written by the script (#320). For each, in order:
 1. Write its body to its file, exactly, but for an Owner line reading <role>: replace <role> with the one OWNERSHIP.md role its Touches paths derive (the last matching line wins, as git's rule). Paths that derive more than one role are filed by nobody: list it in skipped with the roles.
 2. Check its shape as the overnight run checks a new ticket, under the label and blockers it will be filed with: \`cd ${REPO} && python3 -I -c 'import json,sys; print(json.dumps({"number": 0, "body": open(sys.argv[1]).read(), "labels": [{"name": sys.argv[2]}], "subIssuesSummary": {"total": 0}, "blockedBy": {"nodes": [{"number": int(n), "state": "OPEN"} for n in sys.argv[3:]]}}))' <its file> needs-triage <each blockedBy number> | python3 -I tools/ticket_shape.py -\` (bare numbers; with none, nothing after the label).
 3. Only when that exits 0, its last line starting "ticket-shape: pass:", file it: \`cd ${REPO} && gh issue create --title "<its title>" --label needs-triage --body-file <its file>\`, adding --blocked-by <n> for each blockedBy number. It is neither a sub-issue nor a blocker of the ticket that raised it (docs/agents/tracker-policy.md): no --parent. On exit 1 file nothing and list it in skipped with each "ticket-shape: <rule>:" line; on any other exit file nothing and say in skipped that the check did not judge it, quoting its last line. Never reword a body to get past the check: a failure is reported, not repaired. List each one filed in issues with its number, url, title and questions [its q].
-Ticket edits: the unit's edits, each {q, target, removeBoxes} (#320). Read the target, \`cd ${REPO} && gh issue view <target> --json body,subIssuesSummary\`. A spec, an issue with sub-issues, is never edited (#78 grill Q13): list it in skipped. Each line of removeBoxes must be a whole line of the body, byte for byte; when one is not, edit nothing for that q and list it in skipped with the line not found. Otherwise, as a rewrite does, first preserve the current body verbatim in a comment headed "## Body before ${date}" whose next line names Q<n> of #${issue} (\`cd ${REPO} && gh issue comment <target> --body-file <file>\`), then write the body with exactly those lines removed and no other byte changed, \`cd ${REPO} && gh issue edit <target> --body-file <file>\`. List each in edits {issue: the target, preserved: that comment's URL, removed: the lines removed, questions: [its q]}. The unit's edits run in order, each reading the body the last one left.
+Ticket edits: the unit's edits, each {q, target, removeBoxes} (#320). Read the target, \`cd ${REPO} && gh issue view <target> --json body,subIssuesSummary\`. A spec, an issue with sub-issues, is never edited (#78 grill Q13): list it in skipped. Each line of removeBoxes must be a whole line of the body, byte for byte; when one is not, edit nothing for that q and list it in skipped with the line not found. Otherwise, as a rewrite does, change it by the REWRITE RECORD's four steps below, its new body the current one with exactly those lines removed and no other byte changed, and its comment's question line naming Q<n> of #${issue}. List each in edits {issue: the target, comment: the "## Body rewritten ${date}" comment's URL, removed: the lines removed, questions: [its q]}. The unit's edits run in order, each reading the body the last one left.
 Ticket edges: the unit's edges, each {q, target, addBlockedBy}. Read the target's blockers, \`cd ${REPO} && gh issue view <target> --json blockedBy\`, and add each one missing, \`cd ${REPO} && gh issue edit <target> --add-blocked-by <n>\`, one call per number. List each in edges {issue: the target, blockedBy: the numbers it now carries from addBlockedBy, questions: [its q]}.
-${after ? afterApplyRules(issue) : ''}A no-repo-change question needs nothing. If GitHub cannot be reached, stop writing, set unreachable true and return what was made. refused is "" unless you refused the whole unit, with why.`
+${after ? afterApplyRules(issue) : ''}A no-repo-change question needs nothing. If GitHub cannot be reached, stop writing, set unreachable true and return what was made. refused is "" unless you refused the whole unit, with why.
+${rewriteRecord(date, issue, p.mdir)}`
 }
 
 // The line split the jq programs below cut a body at: PY_LINE_BREAK's set, as a jq string.
 const JQ_LINES = '"\\r\\n|[\\n\\u000b\\f\\r\\u001c-\\u001e\\u0085\\u2028\\u2029]"'
 // A comment's or a review's index entry (#514), as INDEXED: the lines that look like a record line, a
 // pattern looser than RECORD, which the script applies, so the cut drops no record.
-const JQ_INDEX = (at, state) => `[.[][] | (.body // "") as $b | {url: .html_url, at: (.${at} // ""), association: .author_association, state: ${state}, bytes: ($b | utf8bytelength), hasTable: ($b | contains("${FOLLOW_UP_HEAD}")), lines: [$b | splits(${JQ_LINES}) | select(test("Reviewed [0-9a-f]{40} against [0-9a-f]{40}: (merge|hold)"))]} | select(.lines | length > 0)]`
+const JQ_INDEX = (at, state) => `[.[][] | (.body // "") as $b | {url: .html_url, at: (.${at} // ""), association: .author_association, state: ${state}, bytes: ($b | utf8bytelength), hasTable: ($b | contains("${FOLLOW_UP_HEAD_FOUR}")), lines: [$b | splits(${JQ_LINES}) | select(test("Reviewed [0-9a-f]{40} against [0-9a-f]{40}: (merge|hold)"))]} | select(.lines | length > 0)]`
 
 const windowPrompt = (date) => {
   const p = paths(date)
@@ -1544,7 +1671,7 @@ ${HOUSE(paths(A.date || '<date>').mdir)}
 
 ${LOOKUP(`The date${A.date ? ` is ${A.date}` : ' is the one in that title'}; call it <date> below. issue is {number, title, url} of that issue.`, true)}
 2. The landing (#635 Q23). You never need the integration branch overnight/<date>, which the landing deleted, and you run no Verify. The landing pull request: \`cd ${REPO} && gh pr list --head overnight/<date> --state all --json number,headRefOid,state,mergeCommit\`. pr is the one whose state is MERGED, as {number, state, headRefOid, mergeCommit: its merge commit's oid}; when none merged, the first listed, or {number: 0, state: "", headRefOid: "", mergeCommit: ""} when none is listed. tip is pr's headRefOid. verifiedHead is the head the morning verified, the result's head in ${LOG}/morning-<date>/verify.json, or "" when that file does not exist. \`git -C ${REPO} fetch origin\`; originMain is \`git -C ${REPO} rev-parse origin/main\`; contained is whether \`git -C ${REPO} merge-base --is-ancestor <tip> origin/main\` exits 0. If pr did not merge, verifiedHead is not "" and differs from tip, or tip is not contained, stop here: reason says which, with the shas, and close, unassign and remove nothing.
-3. The landed head's evidence, read and never written (#635 Q23: containment proves the landing, not the review). The record naming tip, read exactly as tools/land.sh does: \`cd ${REPO} && comments=$(gh api --paginate --slurp repos/{owner}/{repo}/issues/<pr number>/comments) && reviews=$(gh api --paginate --slurp repos/{owner}/{repo}/pulls/<pr number>/reviews) && printf '{"comments": %s, "reviews": %s}\\n' "$comments" "$reviews" | ${READER} <tip>\`. Exit 0: record {verdict "merge", head: tip, url: the URL it printed}. Exit 1 with "says hold: <url>": {verdict "hold", head: tip, url}. Exit 1 otherwise, or exit 2: {verdict "none", head "", url ""}. reader is the exit status and its first line. CI on tip: \`cd ${REPO} && gh pr checks <pr number> --json name,state,bucket,link\`; ci is green when every check passed or was skipped, red when one failed, pending when one has not finished, none when none is reported; ciUrl is a run's link on that head.
+3. The landed head's evidence, read and never written (#635 Q23: containment proves the landing, not the review). The record naming tip, read with the reader's --pr form, pinned to tip as tools/land.sh pins its head (#488): \`cd ${REPO} && ${READER} --pr <pr number> --head <tip>\`, which lists every page of the comments and reviews itself. Exit 0: record {verdict "merge", head: tip, url: the URL it printed}. Exit 1 with "says hold: <url>": {verdict "hold", head: tip, url}. Exit 1 otherwise, or exit 2: {verdict "none", head "", url ""}. reader is the exit status and its first line. CI on tip: \`cd ${REPO} && gh pr checks <pr number> --json name,state,bucket,link\`; ci is green when every check passed or was skipped, red when one failed, pending when one has not finished, none when none is reported; ciUrl is a run's link on that head.
 4. The cleanup. Read the Overnight issue (\`cd ${REPO} && gh issue view <number> --json body,comments\`) and its last "## Morning <date>" comment, which stays the source of the rows. Close each landed row's issue that is still open, with a comment citing the merge sha: \`cd ${REPO} && gh issue close <n> --comment "Landed in <merge sha> on main."\`. Unassign each partial row's issue: \`cd ${REPO} && gh issue edit <n> --remove-assignee @me\`. Never close the Overnight issue itself: that is a later agent's, once the script has judged it.
 5. Each lane worktree under ${WTROOT}, then the morning worktree ${WTROOT}/morning, then the integration worktree overnight last: remove it only when it is clean and \`git -C ${REPO} merge-base --is-ancestor <its tip> origin/main\` exits 0, with \`git -C ${REPO} worktree remove <path>\`; every other is kept and listed in kept with why. A morning worktree whose tip is not on origin/main holds morning commits not yet landed: keep it. Then \`git -C ${REPO} worktree prune\`.
 6. phaseFiles: the classification an earlier pass made, ${LOG}/morning-<date>/classify.json, as [{name: "classify", inputs, result}] from its contents; [] when it does not exist.
@@ -1575,6 +1702,9 @@ END HAND-OVER`
 // Written here so that every item #78 -> "Hand-over" lists is always present and every refusal
 // reaches it with its reason. It carries no backtick span, because a span is what a prompt asks an
 // agent to run, and the landing command is Adam's to run, never an agent's.
+// The report's per-ticket morning steps (#971), as the reader gives them from its ## Tickets table, or the
+// Morning steps of a report of an earlier night's shape.
+const STEPS_TITLE = 'Morning steps the report gives'
 const handoverText = (s) => {
   const p = paths(s.date)
   const v = s.verify
@@ -1603,6 +1733,7 @@ const handoverText = (s) => {
     const lanes = (v && v.lanes) || [] // empty-ok: Verify's lanes are only reported here
     list('Issues landed by the merge', lanes.filter((l) => l.outcome === 'integrated' && l.complete).map((l) => `#${l.issue} (${l.task}, merge ${l.mergeSha}): its Closes line closed it at the merge; the after pass closes it if still open`))
     list('Partial rows, for the after pass to unassign', lanes.filter((l) => l.outcome === 'partial').map((l) => `#${l.issue} (${l.task}): Outstanding: ${l.outstanding || 'see its Answer'}`))
+    list(STEPS_TITLE, (v && v.steps) || []) // empty-ok: these steps are only reported (#971)
   } else {
     // The fork point, not the night's base, is what the landing merges onto: on 2026-10-23 main was
     // merged into the branch, and the hand-over named the night's start as its base (#326).
@@ -1635,6 +1766,7 @@ const handoverText = (s) => {
     list('Issues to unassign, once merged', lanes.filter((l) => l.outcome === 'partial').map((l) => `#${l.issue} (${l.task}): Outstanding: ${l.outstanding || 'see its Answer'}`))
     list('Worktrees to remove after the landing, then git worktree prune', ((v && v.worktrees) || []).map((w) => `${w.path} (${w.branch} at ${w.tip}: ${w.clean ? 'clean' : 'dirty'}, ${w.ancestor ? 'on the integration branch' : 'not on the integration branch'})`)) // empty-ok: a null Verify is named in Refusals by judgeVerify; these lists are only reported
     list('Claimed branches needing their own pull requests', (v && v.claimed) || []) // empty-ok: a null Verify is named in Refusals by judgeVerify; these lists are only reported
+    list(STEPS_TITLE, (v && v.steps) || []) // empty-ok: a null Verify is named in Refusals by judgeVerify; these lists are only reported
     list('Failed lanes\' branches, kept', lanes.filter((l) => l.outcome === 'failed').map((l) => `#${l.issue} (${l.task})`))
   }
   const mb = s.apply.morning
@@ -1650,16 +1782,18 @@ const handoverText = (s) => {
   list('Open questions', s.apply.open.length ? [s.apply.open.map((q) => 'Q' + q).join(', ')] : [])
   list('Answered no, untouched', s.apply.no.length ? [s.apply.no.map((q) => 'Q' + q).join(', ')] : [])
   const c = s.replay.counts || {}
-  // A stop is a failed line (#319): only a failed line (replayStop) says "stopped"; a reason the agent
-  // gave with no line failed is kept as its note, never read as a stop.
+  // A stop is a failed line (#319), or a pending file left unrenamed (#895): only a stop (replayStop)
+  // says "stopped"; a reason the agent gave with neither is kept as its note, never read as a stop.
   const stopped = replayStop(s.replay)
   const none = !stopped && !s.replay.renamed && VERBS.every((a) => !((c[a] || {}).applied || (c[a] || {}).skipped || (c[a] || {}).failed))
   list('Replay', [VERBS.map((a) => `${a} ${(c[a] || {}).applied || 0} applied, ${(c[a] || {}).skipped || 0} skipped, ${(c[a] || {}).failed || 0} failed`).join('; ') + (s.replay.renamed ? `; renamed to ${s.replay.renamed}` : '') + (stopped ? `; stopped at ${stopped}: ${s.replay.reason || 'no reason given'}` : '') + (!stopped && s.replay.reason ? `; the agent noted: ${s.replay.reason}` : '') + (none ? '; nothing was replayed' : ''), ...createLines(s.replay)])
   if (!m) list('main', [v && v.mainMoved ? 'origin/main has moved past the base; nothing was merged in or rebased' : 'origin/main has not moved past the base'])
   if (v && v.findings && v.findings.length) list('Findings', v.findings)
   const fu = s.followUps || { filed: [], already: [], refused: [], forHuman: [] }
-  list('Follow-ups filed', fu.filed.map((f) => `#${f.number} from #${f.pr}: ${f.title} (${f.url})`), 'none')
-  if ((fu.forHuman || []).length) list('Follow-ups filed ready-for-human', fu.forHuman.map((f) => `#${f.number} from #${f.pr}: ${f.title}: ${f.why}`))
+  // By number and title only (#972): GitHub links the number, and the ticket's body holds the rest,
+  // a ready-for-human one's why on its "Filed ready-for-human" line.
+  list('Follow-ups filed', fu.filed.map((f) => `#${f.number} from #${f.pr}: ${f.title}`), 'none')
+  if ((fu.forHuman || []).length) list('Follow-ups filed ready-for-human', fu.forHuman.map((f) => `#${f.number} from #${f.pr}: ${f.title}`))
   if ((fu.refused || []).length) list('Follow-ups not filed: tools/ticket_shape.py failed them', fu.refused.map((f) => `from #${f.pr}: ${f.title}: ${f.why}`))
   if (fu.already.length) list('Follow-ups already filed', fu.already.map((f) => `#${f.number} from #${f.pr}: ${f.title}`))
   // Last, so its line is the comment's last window line, the one the next morning reads (#514).
@@ -1877,7 +2011,7 @@ const applyAnswers = async ({ date, issue, gate, refusals, reuse, after = false 
       for (const t of byTicket) {
         for (const q of t.questions) if (q.kind !== 'no-repo-change') apply.wouldDo.push(`Q${q.q} (#${t.issue}): ${q.kind}: ${q.summary}`)
         for (const f of t.followUps) apply.wouldDo.push(`Q${f.q} (#${t.issue}): file the follow-up "${f.title}"`)
-        if (t.rewrite) apply.wouldDo.push(`#${t.issue}: rewrite its body, the old one preserved in a dated comment`)
+        if (t.rewrite) apply.wouldDo.push(`#${t.issue}: rewrite its body, the changed paragraphs posted as a diff in a dated comment`)
       }
     } else {
       const units = unitsFor(byTicket)
@@ -1908,8 +2042,8 @@ const applyAnswers = async ({ date, issue, gate, refusals, reuse, after = false 
         for (const i of r.issues) apply.done.push(`filed #${i.number} ${i.title} (${i.questions.map((q) => 'Q' + q).join(', ')}): ${i.url}`)
         for (const i of r.issues) apply.filed.push({ number: i.number, title: i.title, url: i.url, body: bodies.get(i.title) || '' })
         for (const c of r.candidates) apply.done.push(`ADR candidate (${c.questions.map((q) => 'Q' + q).join(', ')}): ${c.url}`)
-        for (const w of r.rewrites) apply.done.push(`rewrote #${w.issue}; the old body is at ${w.preserved}`)
-        for (const e of r.edits) apply.done.push(`edited #${e.issue}: removed ${e.removed.length} box(es); the old body is at ${e.preserved} (${e.questions.map((q) => 'Q' + q).join(', ')})`)
+        for (const w of r.rewrites) apply.done.push(`rewrote #${w.issue}; the diff is at ${w.comment}`)
+        for (const e of r.edits) apply.done.push(`edited #${e.issue}: removed ${e.removed.length} box(es); the diff is at ${e.comment} (${e.questions.map((q) => 'Q' + q).join(', ')})`)
         for (const e of r.edges) apply.done.push(`blocked #${e.issue} by ${e.blockedBy.map((n) => '#' + n).join(', ')} (${e.questions.map((q) => 'Q' + q).join(', ')})`)
         for (const s of r.skipped) apply.done.push(`skipped Q${s.q}: ${s.why}`)
         if (r.refused) refusals.push(`applier ${r.unit} refused: ${r.refused}`)
@@ -2039,9 +2173,10 @@ const SUBJECT = subjectFor(DATE)
 // replaying the stop.
 const { reuse, reused } = reuser(rep.phaseFiles)
 const refusals = []
-// A stop is a failed line, so the refusal keys on a failed line (replayStop), never on reason alone
-// (#319): on 2026-10-22 a reason of "" with stoppedAt 0 was refused as "Replay stopped at line 0". A
-// stop with no reason is still a stop (CODING_STANDARDS.md -> "A check fails closed").
+// A stop is a failed line, or a pending file left unrenamed (#895), so the refusal keys on those
+// (replayStop), never on reason alone (#319): on 2026-10-22 a reason of "" with stoppedAt 0 was
+// refused as "Replay stopped at line 0". A stop with no reason is still a stop (CODING_STANDARDS.md
+// -> "A check fails closed").
 if (replayStop(rep)) refusals.push(`Replay stopped at ${replayStop(rep)} of ${rep.pending || P.pending}: ${rep.reason || 'no reason given'}`)
 refusals.push(...judgeCreates(rep))
 log(`morning ${DATE} (#${ISSUE}): run log ${P.mdir}`)
@@ -2128,7 +2263,8 @@ if (!fr) {
       followUps.filed.push(...fd.filed)
       followUps.already.push(...fd.skipped)
       followUps.refused.push(...fd.refused)
-      // Filed ready-for-human, each with why, so the hand-over names what a person must place (#479).
+      // Filed ready-for-human, each with why (#479): the hand-over lists them under a heading of their
+      // own, and the return keeps the why the ticket's body carries.
       for (const f of fd.filed) {
         const sent = toFile.find((t) => t.pr === f.pr && sameFinding(t.title, f.title))
         if (sent && sent.label === 'ready-for-human') followUps.forHuman.push({ ...f, why: sent.why })

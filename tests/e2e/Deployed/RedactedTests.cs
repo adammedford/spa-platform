@@ -80,4 +80,46 @@ public sealed class RedactedTests
         Assert.Equal("net::ERR_ABORTED at https://app1.spa-poc.test:8443/signin-oidc", thrown.Message);
         Assert.Equal(42, await Redacted.PlaywrightAsync(() => Task.FromResult(42)));
     }
+
+    // ---- a page's text, as a timed-out hold records it (#1003) ----
+
+    private const string Jwt = "eyJhbGciOiJub25lIn0.eyJzdWIiOiJjYW5hcnkifQ.c2lnbmF0dXJl";
+
+    [Fact]
+    public void A_pages_text_loses_the_values_it_is_given_every_urls_query_and_every_jwt_and_keeps_the_rest()
+    {
+        string text = Redacted.Text($"Sign in. state {State} is stale; go to {Callback} with {Jwt}. en", [State, "en"]);
+
+        Assert.Equal($"Sign in. state {Redacted.Removed} is stale; go to https://app1.spa-poc.test:8443/signin-oidc with {Redacted.Removed}. en", text);
+    }
+
+    [Fact]
+    public void A_pages_text_is_cut_at_its_bound()
+    {
+        string text = Redacted.Text(new string('a', Redacted.MaxText + 10), []);
+
+        Assert.Equal(new string('a', Redacted.MaxText) + " (cut)", text);
+        Assert.Equal("short", Redacted.Text("short", []));
+    }
+
+    [Fact]
+    public void A_urls_parameter_values_come_from_its_query_and_its_fragment_as_written_and_decoded()
+    {
+        string[] values = [.. Redacted.ParameterValues($"https://app1.spa-poc.test:8443/signin-oidc?code={Code}&state=a%2Bb#id_token={Jwt}")];
+
+        Assert.Equal([Code, Code, "a%2Bb", "a+b", Jwt, Jwt], values);
+        Assert.Empty(Redacted.ParameterValues($"not a url ?code={Code}"));
+    }
+
+    [Fact]
+    public async Task A_timed_out_hold_is_rethrown_as_one_and_keeps_what_the_page_showed()
+    {
+        PageShown page = new("https://spa-poc.auth.us-east-1.amazoncognito.com/login", "Sign in with your username and password");
+
+        HoldTimeoutException thrown = await Assert.ThrowsAsync<HoldTimeoutException>(
+            () => Redacted.PlaywrightAsync(() => throw new HoldTimeoutException($"no request came; the page is at {Authorize}", page)));
+
+        Assert.Equal("no request came; the page is at https://spa-poc.auth.us-east-1.amazoncognito.com/oauth2/authorize", thrown.Message);
+        Assert.Equal(page, thrown.Page);
+    }
 }

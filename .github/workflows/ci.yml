@@ -297,9 +297,9 @@ jobs:
         # that names the pull request or a ticket it closes (#531), and this is the code that reads
         # them. Its companion feeds it GitHub's shapes of the open issues and their comments built
         # to trip each rule -- a title merely containing Overnight, a pull request in the listing,
-        # a number inside a longer one or a decision URL, a question split across parts, a Confirm
-        # whose first sentence, override lines or author decide coverage -- and the land.sh
-        # companion below runs only one case of each.
+        # a number inside a longer one, an HTML entity or a link fragment, a question split across
+        # parts, a Confirm whose first sentence, override lines or author decide coverage -- and
+        # the land.sh companion below runs only one case of each.
         run: python3 -I tools/overnight_answers_tests.py
 
       - name: The retro's record reader reads each record line the way its rules say
@@ -438,6 +438,14 @@ jobs:
         # passing case lines are the one shape let through, and the terminal's --stream mode masks
         # each line as it arrives and passes AccessDenied through (#468).
         run: python3 -I tools/wiz_redact_tests.py
+
+      - name: The wiz skill's prelude names the record after the pinned date, refuses without one, and is copied nowhere
+        # Every Bash call of a sitting sources tools/wiz_prelude.sh (#1010). Its companion starts the real
+        # file under /bin/bash in a throwaway repository: a date pinned the day before names the record
+        # and the bundle, not today's; no pin, or one that is not a date, exits non-zero naming Stage 0
+        # before the rest of the call runs; --pin writes today's UTC date; and the wiz skill's text
+        # holds no copy of the prelude's commands.
+        run: python3 -I tools/wiz_prelude_tests.py
 
       - name: The derived issue labels follow the table, write by name, and delete a label only when nothing carries it
         # tools/issue_labels.py (#680) works out each issue's kind:, area: and vendor: labels and

@@ -236,6 +236,11 @@ internal sealed class IdentityGateway : IAsyncDisposable
     /// the same cell would; its provider stays its own to dispose, and <paramref name="idpClock"/> is
     /// not used. A new provider and store when null.
     /// </param>
+    /// <param name="authority">
+    /// The issuer's authority in platform configuration, in place of the provider's origin: for a test
+    /// whose provider cannot be reached (<see cref="UnreachableIssuer"/>). The provider still starts, and
+    /// is still the issuer's browser origin.
+    /// </param>
     public static async Task<IdentityGateway> StartAsync(
         IEnumerable<AppDefinition> apps,
         Action<IServiceCollection>? services = null,
@@ -245,7 +250,8 @@ internal sealed class IdentityGateway : IAsyncDisposable
         IXmlRepository? keys = null,
         IdentityGateway? beside = null,
         RecordingSessionStore? sessions = null,
-        IRefreshLeases? leases = null)
+        IRefreshLeases? leases = null,
+        Uri? authority = null)
     {
         AppDefinition[] entries = [.. apps];
         TestIdentityProvider idp = beside?.Idp ?? new(idpClock);
@@ -273,7 +279,7 @@ internal sealed class IdentityGateway : IAsyncDisposable
         HostApplicationBuilder builder = Host.CreateEmptyApplicationBuilder(new HostApplicationBuilderSettings());
         builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
         {
-            [$"Issuers:{IssuerName}:Authority"] = idp.BaseUrl,
+            [$"Issuers:{IssuerName}:Authority"] = authority?.AbsoluteUri ?? idp.BaseUrl,
             [$"Issuers:{IssuerName}:Profile"] = issuerProfile,
             [$"Issuers:{IssuerName}:BrowserOrigin"] = idp.BaseUrl,
         });

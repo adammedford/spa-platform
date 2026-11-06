@@ -813,7 +813,8 @@ const HOUSE_CREATE = 'gh issue create` only for a change request, after the sear
 // 18b. A Touches: none ticket is foreground work (#480): #402, #404 and #405, each "Apply Qn of Overnight <date> to
 //      #m", stayed open from 2026-10-25 and #404 and #405 were grilled again on 2026-10-28, though no lane can make a
 //      tracker edit and the answer was already confirmed. Collect gives it the status foreground; the run gives it no
-//      lane, no Route agent and no grill agent, and the report lists it under its own Foreground section.
+//      lane, no Route agent and no grill agent, and the report lists it as a "carried (foreground)" row of its
+//      Tickets table whose Morning step names the issue it edits (#971 retired the Foreground section).
 {
   const id = FOREGROUND_T.id
   const report = allPrompts.find((x) => x.label === 'report')
@@ -823,8 +824,8 @@ const HOUSE_CREATE = 'gh issue create` only for a change request, after the sear
   if (!(result.foreground || []).includes(id)) fail(`${id} is not in the run's foreground`)
   if ((result.needsHuman || []).includes(id) || (result.skipped || []).includes(id)) fail(`${id} is foreground, yet the run reports it needs-human or skipped`)
   if (!summary || !(summary.foreground || []).some((f) => f.id === id && f.issue === FOREGROUND_T.issue && f.title === FOREGROUND_T.title)) fail(`the report's results do not list ${id} (#${FOREGROUND_T.issue}) with its title as foreground`)
-  if (!report || !report.prompt.includes('- Foreground (#480): every entry of the run results\' "foreground"') || !report.prompt.includes('under a "## Foreground" heading')) fail('the report prompt does not name the Foreground section')
-  if (!report || !report.prompt.includes('the issue it edits')) fail('the report prompt does not give each foreground ticket its target issue')
+  if (!report || !report.prompt.includes('- Foreground (#480): every entry of the run results\' "foreground"') || !report.prompt.includes('Each is a row of the Tickets table, "carried (foreground)", whose Morning step names the issue it edits')) fail('the report prompt does not give each foreground ticket a carried (foreground) row of the Tickets table')
+  if (!report || !report.prompt.includes('A foreground ticket\'s step names the issue it edits (#480): "edit #<m> in a foreground session"')) fail('the report prompt does not give each foreground ticket its target issue')
   const FG_RULE = '`**Touches:** none` line, whatever its label -> "foreground"'
   for (const c of allPrompts.filter((x) => x.label === 'collect')) if (!c.prompt.includes(FG_RULE)) fail('the collect prompt does not give a Touches: none ticket the status foreground')
 }
@@ -845,7 +846,7 @@ const HOUSE_CREATE = 'gh issue create` only for a change request, after the sear
   const REPORT_CREATE = 'gh issue create --title "Overnight '
   const top = path.resolve(here, '..', '..')
   const bodyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'overnight-tests-shape-'))
-  const body = (extra) => `**Owner:** integrator\n**Plan row:** I-9\n\n**What to build:** the row's What, citing \`contracts/pipeline.md\`, and its Done when.\n## Acceptance\n- [ ] the companion passes\n${extra}`
+  const body = (extra) => `**Owner:** integrator\n**Plan row:** I-9\n\n## What to build\n\nThe row's What, citing \`contracts/pipeline.md\`, and its Done when.\n\n## Acceptance criteria\n\n- [ ] the companion passes\n${extra}`
   fs.writeFileSync(path.join(bodyDir, 'good.md'), body(''))
   fs.writeFileSync(path.join(bodyDir, 'bad.md'), body('**Session:** foreground\n'))
   const shapeOf = (cmd, file, blockers) => {
@@ -1149,23 +1150,52 @@ for (const c of allPrompts.filter((x) => x.label.startsWith('review:'))) {
 // 29. The report checks each claimed branch's open pull request against the run branch the night before (#628): on
 //     2026-10-29 PR #492, listed under "Claimed branches to merge", landed first and changed the files the run's lanes
 //     changed, so the landing PR #529 was CONFLICTING with main, ran no CI, and the morning stopped at step 7 until the
-//     back-merge 55d0be0. The report's "Claimed branches to merge" item runs `git merge-tree --write-tree` of the run
-//     branch against each open pull request's head and lists the conflicting files, and the Morning steps take their
-//     landing order from that item rather than always landing the run's pull request first.
+//     back-merge 55d0be0. The report runs `git merge-tree --write-tree` of the run branch against each open pull
+//     request's head and lists the conflicting files, and the morning takes its landing order from that check rather
+//     than always landing the run's pull request first. Since #971 the check is the Tickets item's, a claimed row's
+//     Morning step carries the order, and the morning paragraph lands the claimed branches in that order.
 {
   const MERGE_TREE = `\`git -C ${fixture.args.repo} merge-tree --write-tree overnight/${fixture.args.date} <its head>\``
-  const ORDER = 'merge the claimed branches in their own PRs, in the order "Claimed branches to merge" gives'
+  const ORDER = 'The claimed branches land in their own pull requests, in the order the claimed rows\' Morning steps give'
   const reports = allPrompts.filter((c) => c.label === 'report')
   if (!reports.length) fail('#628: no report prompt was rendered, so the claimed-branches check read nothing')
   for (const c of reports) {
-    const item = c.prompt.split('\n').find((l) => l.includes('Claimed branches to merge (')) || ''
-    if (!item.includes(MERGE_TREE)) fail(`#628: the report's "Claimed branches to merge" item does not run ${MERGE_TREE} against each open pull request it names`)
-    if (!item.includes('list every file that conflicts') || !item.includes('back-merges main before its review')) fail('#628: the report\'s "Claimed branches to merge" item does not list the conflicting files and say which pull request lands first and which back-merges main')
+    const item = c.prompt.split('\n').find((l) => l.startsWith('   - Tickets (#971)')) || ''
+    if (!item.includes(MERGE_TREE)) fail(`#628: the report's Tickets item does not run ${MERGE_TREE} against each open pull request a claimed row names`)
+    if (!item.includes('the conflicting files going under Exceptions') || !item.includes('back-merges main before its review')) fail('#628: the report\'s Tickets item does not list the conflicting files and say which pull request lands first and which back-merges main')
     // A merge-tree that could not run (first line not a tree id; a missing head exits 1, as a conflict does) must not
     // read as a clean merge (CODING_STANDARDS.md, "A check fails closed").
-    if (!item.includes('first line is not a tree id') || !item.includes('never "none conflict"')) fail('#628: the report\'s "Claimed branches to merge" item lets a merge-tree that failed to run read as "none conflict"')
-    const morning = c.prompt.split('\n').find((l) => l.includes('- Morning steps: ')) || ''
-    if (!morning.includes(ORDER)) fail('#628: the report\'s Morning steps do not take the landing order from "Claimed branches to merge"')
+    if (!item.includes('first line is not a tree id') || !item.includes('never "none conflict"')) fail('#628: the report\'s Tickets item lets a merge-tree that failed to run read as "none conflict"')
+    const morning = c.prompt.split('\n').find((l) => l.startsWith('   - The morning (#971)')) || ''
+    if (!morning.includes(ORDER)) fail('#628: the report\'s morning paragraph does not take the landing order from the claimed rows\' Morning steps')
+  }
+}
+
+// 29b. The report is one ticket table (#971). An Overnight body was about 23 KB, because its Integrated, Claimed
+//      branches to merge, Morning steps and Foreground sections each walked the night's tickets again in prose, so
+//      one ticket's state was written three or four times. The report prompt asks for one `## Tickets` table with
+//      the seven columns tools/retro_record.py reads, first among the sections, the outcomes it reads, an
+//      `## Exceptions` section, the sections the table cannot hold kept, and none of the four removed headings.
+{
+  const COLUMNS = '| Ticket | Title | Lane | Outcome | Branch | Head | Morning step |'
+  const reports = allPrompts.filter((c) => c.label === 'report')
+  if (!reports.length) fail('#971: no report prompt was rendered, so the ticket-table check read nothing')
+  for (const c of reports) {
+    const p = c.prompt
+    const item = p.split('\n').find((l) => l.startsWith('   - Tickets (#971)')) || ''
+    if (!item.includes('under the heading `## Tickets`') || !item.includes(`with the header "${COLUMNS}"`)) fail(`#971: the report prompt does not ask for the ## Tickets table with the header ${COLUMNS}`)
+    if (!item.includes('One row per ticket the run touched')) fail('#971: the report prompt\'s Tickets table is not one row per ticket the run touched')
+    if (!item.includes('Outcome one of integrated, claimed, failed, grilled or carried')) fail('#971: the report prompt\'s Tickets table does not name the five outcomes')
+    if (!item.includes('python3 -I tools/retro_record.py report <body file>')) fail('#971: the report prompt does not name the reader the morning and the retro read the table with')
+    const sections = p.split('\n').filter((l) => /^ {3}- /.test(l))
+    const at = (start) => sections.findIndex((l) => l.startsWith(start))
+    if (!(at('   - one line: N integrated') >= 0 && at('   - Tickets (#971)') === at('   - one line: N integrated') + 1)) fail('#971: the Tickets table is not the body\'s first section, after its two opening lines')
+    if (!p.includes('   - Exceptions (#971): under the heading `## Exceptions`, one paragraph for each ticket whose row needs more than its cells') || !p.includes('opening with its #<issue>')) fail('#971: the report prompt does not give a row that needs more than its cells a paragraph under ## Exceptions naming its number')
+    for (const [start, heading] of [['   - Decisions taken overnight:', ''], ['   - Change requests (', ''], ['   - Closing check (#629)', '`### Closing check`'], ['   - Findings:', '`## Findings`']]) {
+      if (at(start) < 0) fail(`#971: the report prompt lost its kept section ${start.trim()}`)
+      else if (heading && !sections[at(start)].includes(heading)) fail(`#971: the report prompt's ${start.trim()} section is not headed ${heading}`)
+    }
+    for (const gone of ['## Integrated', '## Claimed branches to merge', '## Morning steps', '## Foreground', '   - Integrated:', 'Claimed branches to merge (', '   - Morning steps:', '"## Foreground" heading']) if (p.includes(gone)) fail(`#971: the report prompt still asks for the removed section ${JSON.stringify(gone)}`)
   }
 }
 
@@ -1723,19 +1753,41 @@ const LIMIT_HALTED = 'usage limit; resume after 10pm (America/Chicago)'
 // 41. Gap decisions are read from the Answer (#631): the implement prompt records a gap decision only in the Answer's
 //     "Decided by implementer" list, and a "## Decisions taken" comment only for a human-owned one. So every review
 //     prompt's decisions step reads that list and finds no fault in the missing comment, and the report takes a gap
-//     decision's alternatives from the Answer, which is among the comments it reads past the results JSON.
+//     decision's alternatives from the Answer, which is among the comments it reads past the results JSON. The list's
+//     label is read from each implement prompt, never copied here, so a label renamed there alone fails this check
+//     (#914; CODING_STANDARDS.md "A guard reads the thing it guards"). Since the report takes the alternatives from
+//     that list, each implement prompt asks the list to give them, on the line that names it (#915).
 {
-  const REVIEW = 'Then read the "## Decisions taken" comment, if any, and the Answer\'s "Decided by implementer" list, where a gap decision is recorded (no gap decision gets a "## Decisions taken" comment, so its absence is no finding).'
-  const REPORT = '(a "Human-owned:" one from the issue\'s "## Decisions taken" comment, a gap decision from the "Decided by implementer" list in its "## Answer" comment)'
-  const READS = 'the "## Decisions taken" alternatives, the "Decided by implementer" list in an "## Answer" comment'
-  const reviews = allPrompts.filter((x) => x.label.startsWith('review:'))
-  if (!reviews.length) fail('#631: no review prompt was captured, so the gap-decision check read nothing')
-  for (const c of reviews) if (!c.prompt.includes(REVIEW)) fail(`#631: the ${c.label} prompt's decisions step does not read the Answer's "Decided by implementer" list`)
-  if (!reportPrompt) fail('#631: no report prompt was rendered, so the gap-decision check read nothing')
-  else {
-    const item = (/^   - Decisions taken overnight:.*$/m.exec(reportPrompt) || [''])[0]
-    if (!item.includes(REPORT)) fail('#631: the report\'s "Decisions taken overnight" item does not take a gap decision\'s alternatives from the Answer\'s "Decided by implementer" list')
-    if (!reportPrompt.includes(READS)) fail('#631: the report does not read the Answer\'s "Decided by implementer" list among the comments the results JSON lacks')
+  const impls = allPrompts.filter((x) => x.label.startsWith('implement:'))
+  if (!impls.length) fail('#914: no implement prompt was rendered, so the gap-decision label was read from nothing')
+  const labels = new Set()
+  const GIVES = ' For each, that list gives the question, at least two alternatives with what each costs, and the one you took and why: the morning report takes a gap decision\'s alternatives from it (#915).'
+  for (const c of impls) {
+    const m = /^Gap decisions that are not human-owned you may take; list each in delegatedDecisions and in the Answer as "([^"]+)"\.(.*)$/m.exec(c.prompt)
+    if (!m) fail(`#914: the ${c.label} prompt does not name the Answer's list a gap decision goes in`)
+    else {
+      labels.add(m[1])
+      if (m[2] !== GIVES) fail(`#915: the ${c.label} prompt does not ask the Answer's "${m[1]}" list to give each gap decision's alternatives, which the report takes from it`)
+    }
+  }
+  if (labels.size > 1) fail(`#914: the implement prompts name ${labels.size} labels for the Answer's gap-decision list: ${[...labels].join(', ')}`)
+  const LABEL = labels.size === 1 ? [...labels][0] : ''
+  if (LABEL) {
+    const REVIEW = `Then read the "## Decisions taken" comment, if any, and the Answer's "${LABEL}" list, where a gap decision is recorded (no gap decision gets a "## Decisions taken" comment, so its absence is no finding).`
+    const REPORT = `(a "Human-owned:" one from the issue's "## Decisions taken" comment, a gap decision from the "${LABEL}" list in its "## Answer" comment)`
+    const READS = `the "## Decisions taken" alternatives, the "${LABEL}" list in an "## Answer" comment`
+    const reviews = allPrompts.filter((x) => x.label.startsWith('review:'))
+    if (!reviews.length) fail('#631: no review prompt was captured, so the gap-decision check read nothing')
+    for (const c of reviews) if (!c.prompt.includes(REVIEW)) fail(`#631: the ${c.label} prompt's decisions step does not read the Answer's "${LABEL}" list`)
+    if (!reportPrompt) fail('#631: no report prompt was rendered, so the gap-decision check read nothing')
+    else {
+      const item = (/^   - Decisions taken overnight:.*$/m.exec(reportPrompt) || [''])[0]
+      if (!item.includes(REPORT)) fail(`#631: the report's "Decisions taken overnight" item does not take a gap decision's alternatives from the Answer's "${LABEL}" list`)
+      // The implement prompt's sentence (#915) is there because this item reads alternatives from that list: tie the
+      // two, so an item that stops taking the alternatives fails here rather than leaving the lanes writing for nothing.
+      else if (!item.includes(`each with the alternatives it was weighed against ${REPORT}`)) fail(`#915: the report's "Decisions taken overnight" item no longer takes each decision's alternatives from where it names, so the implement prompt's request for them in the "${LABEL}" list has no reader`)
+      if (!reportPrompt.includes(READS)) fail(`#631: the report does not read the Answer's "${LABEL}" list among the comments the results JSON lacks`)
+    }
   }
 }
 
@@ -2151,6 +2203,109 @@ const forkOf = (prompt) => (/Otherwise fork from [^:]+: forkSha = (\S+?)\. Take 
     if (r === STALLED) { fail(`#916: forward cycle run ${c.label} did not finish: the cycle guard let a path wait close a cycle through a wait that points forwards in n`); continue }
     for (const x of [1, 2, 3, 4, 5, 6].map(id)) if (!(r.integrated || []).includes(x)) fail(`#916: ${x} did not integrate in forward cycle run ${c.label}: ${JSON.stringify((r.reasons || []).find((y) => y.id === x))}`)
     if (!logged.some((l) => l.text === c.drop(id))) fail(`#916: forward cycle run ${c.label} did not log "${c.drop(id)}": ` + JSON.stringify(logged.filter((l) => l.text.includes('no path wait behind')).map((l) => l.text)))
+  }
+}
+
+// 40. A pre-accepted question is one table row, and the full form is kept for what needs a human (#965). On 2026-10-22
+//     263 of 284 questions, and on 2026-10-27 204 of 232, were written in full with the line "Answer: yes, pre-accepted
+//     under the standing answer granted <date>" under each. Two short runs on one ticket for a grill render the grill's
+//     and the report's prompts with the standing answer granted and not. Granted, the grill's "## Questions for Adam"
+//     and the report's step 1b ask for the questions it covers in one table under "### Pre-accepted", its four columns
+//     the number, the ticket-local number in parentheses, the question in one sentence and the recommendation in one
+//     sentence, and for the full form only for the kinds it leaves out; not granted, both prompts carry the sentences
+//     they carried before and nothing of the table.
+{
+  const GRILLED = { ...synthetic(4101, 'issue-4101', 'ready-for-human', [], 2), owner: 'integrator' }
+  const render = async (standingAnswer) => {
+    const prompts = {}
+    globalThis.args = { ...fixture.args, skills: OTHER_SKILLS, only: null, skip: [], standingAnswer }
+    globalThis.log = () => {}
+    globalThis.agent = async (prompt, opts) => {
+      const [kind] = opts.label.split(':')
+      prompts[kind] = prompt
+      if (kind === 'collect') return { outcome: 'ok', reason: 'companion', tickets: [{ ...GRILLED }], landed: [], base: 'a'.repeat(40), shell: '3.2', shellCommand: '/bin/bash' }
+      if (kind === 'grill') return { questions: grillQuestions(2), changeRequests: [], adrCandidates: [], draftDecision: '', decided: '', summary: 's' }
+      if (kind === 'closing') return { ok: true, headSha: CLOSING_TIP, lastLine: 'check: pass: companion.', notes: '' }
+      if (kind === 'report') return { questions: 2, mainCheckoutClean: true, leftovers: '', issue: 0, url: '' }
+      throw new Error(`unexpected agent label ${opts.label} in the pre-accepted rows run`)
+    }
+    const src = fs.readFileSync(scriptPath, 'utf8').replace(/^export const meta/m, 'const meta')
+    try { await new Function('return (async () => {' + src + '\n})()')() } catch (e) { fail(`#965: the run with standingAnswer ${standingAnswer} threw: ${e && e.message ? e.message : e}`) }
+    return prompts
+  }
+  const D = fixture.args.date
+  const granted = await render(true)
+  const none = await render(false)
+  const TABLE = [
+    'under the heading "### Pre-accepted"',
+    `the line "Answer for every row: yes, pre-accepted under the standing answer granted ${D}" between the heading and the table`,
+    'the columns "| Q | Ticket | Question | Recommended |"',
+  ]
+  const GRILL_TABLE = [...TABLE,
+    `one row each: its number as "**Q<n>.**", then "(#${GRILLED.issue} Q<n>)" with the same number, the question in one sentence, and the recommendation in one sentence`,
+    'The full form only for the questions the standing answer does not cover, first',
+    'it covers every question but one kind (#965): a human-owned decision the plan cannot settle',
+    'A change request is the other kind it leaves out, and it is never a question here',
+    'One it does not cover keeps the line "Answer: open"',
+  ]
+  const REPORT_TABLE = [...TABLE,
+    'one row each, as in "| **Q96.** | (#244 Q10) | <the question in one sentence> | <the recommendation in one sentence> |"',
+    'the questions whose "Answer:" line is open (a status note\'s question, a partial\'s choice for Adam, a grill question its comment gives in full with "Answer: open") come first, in the full form above',
+  ]
+  // What the two prompts said before #965, which an ungranted run must still say word for word.
+  const OLD_GRILL = [
+    'NO STANDING ANSWER was granted for this run. Under each question write the line "Answer: open". To reach the next round, assume your recommendation provisionally and say so; nothing is decided until Adam answers.',
+    '- "## Questions for Adam": numbered, each worded so "yes" accepts your recommendation, each with the recommendation, a one-line why, and its "Answer:" line as the standing-answer rule above dictates.\n',
+  ]
+  const OLD_REPORT = 'and "Answer: open", numbered as a status note\'s question is (#632). A steering change is a change request now'
+  const NONE_OF = ['Pre-accepted', '| Q | Ticket |', 'Answer for every row', 'one table row']
+  if (!granted.grill || !none.grill || !granted.report || !none.report) fail(`#965: a run rendered no ${!granted.grill || !none.grill ? 'grill' : 'report'} prompt, so the checks below read nothing`)
+  else {
+    for (const w of GRILL_TABLE) if (!granted.grill.includes(w)) fail(`#965: the grill prompt, standing answer granted, lacks: ${w}`)
+    for (const w of REPORT_TABLE) if (!granted.report.includes(w)) fail(`#965: the report prompt, standing answer granted, lacks: ${w}`)
+    if (!granted.grill.includes('"## Questions for Adam": numbered')) fail('#965: the granted grill prompt lost its numbered questions')
+    for (const w of OLD_GRILL) if (!none.grill.includes(w)) fail(`#965: the grill prompt, no standing answer, no longer says: ${w.slice(0, 100)}`)
+    if (!none.report.includes(OLD_REPORT)) fail('#965: the report prompt, no standing answer, no longer runs from the partial\'s choice straight to the steering change as before')
+    for (const [name, p] of [['grill', none.grill], ['report', none.report]]) for (const w of NONE_OF) if (p.includes(w)) fail(`#965: the ${name} prompt with no standing answer names ${JSON.stringify(w)}`)
+    if (granted.grill.includes('Under each question write the line "Answer: yes, pre-accepted')) fail('#965: the granted grill prompt still writes the pre-accepted line under each question')
+  }
+}
+
+// 47. The run's filer writes the ticket template's headings (#973). NEW TICKETS wrote a bold "**What to build:**"
+//     line and "## Acceptance", which tools/ticket_shape.py notes as outside the ticket's set since #970. The body
+//     template each collect prompt gives is filled in and run through the real check: its `##` headings are the
+//     set the ticket names, `## What to build` and `## Acceptance criteria` among them, it writes no bold What line,
+//     and the check passes it under ready-for-human printing no heading note and no derived-owner note (the template
+//     has no Touches line, so its Owner line is the owner). The integrate step's acceptance reader, which pulls the
+//     acceptance list out of a partial's issue body, reads a `## Acceptance criteria` section, which is now the
+//     heading every filer writes, and stops at the next heading.
+{
+  const SET = ['Parent', 'What to build', 'Acceptance criteria', 'Blocked by']
+  const top = path.resolve(here, '..', '..')
+  const collects = allPrompts.filter((x) => x.label === 'collect')
+  if (!collects.length) fail('#973: no collect prompt was rendered, so the NEW TICKETS template went unread')
+  for (const c of collects) {
+    const start = c.prompt.indexOf('  1. Write its body to')
+    const end = c.prompt.indexOf('\n  2. Check its shape', start)
+    if (start < 0 || end < 0) { fail('#973: NEW TICKETS carries no body template between its steps 1 and 2'); continue }
+    const template = c.prompt.slice(start, end).split('\n').slice(1).map((l) => l.replace(/^ {2}/, ''))
+    const body = template.join('\n').replace('<role>', 'integrator').replace('<id>', 'I-9') + '\n'
+    const heads = template.filter((l) => /^## /.test(l)).map((l) => l.slice(3).trim())
+    for (const h of heads) if (!SET.includes(h)) fail(`#973: the NEW TICKETS template writes "## ${h}", outside the ticket's set ${SET.join(', ')}`)
+    for (const h of ['What to build', 'Acceptance criteria']) if (!heads.includes(h)) fail(`#973: the NEW TICKETS template writes no "## ${h}" heading`)
+    if (template.some((l) => /^\*\*What to build:\*\*/.test(l))) fail('#973: the NEW TICKETS template still writes a bold "**What to build:**" line')
+    const r = spawnSync('python3', ['-I', 'tools/ticket_shape.py', '-'], { cwd: top, encoding: 'utf8', input: JSON.stringify({ number: 0, body, labels: [{ name: 'ready-for-human' }], subIssuesSummary: { total: 0 }, blockedBy: { nodes: [] } }) })
+    const notes = String(r.stdout || '').split('\n').filter((l) => /^ticket-shape: note: (heading|derived-owner):/.test(l))
+    if (r.status !== 0) fail(`#973: the filled-in NEW TICKETS template fails tools/ticket_shape.py: exit ${r.status}, ${(r.stdout + r.stderr).trim()}`)
+    if (notes.length) fail(`#973: tools/ticket_shape.py notes the filled-in NEW TICKETS template: ${notes.join(' | ')}`)
+  }
+  const src = fs.readFileSync(scriptPath, 'utf8')
+  const reader = (/acceptance list alone: [^\n]*?\| awk '([^']*)'/.exec(src) || [])[1]
+  if (!reader) fail('#973: the integrate prompt carries no awk reader of the acceptance list')
+  else {
+    const issueBody = '## What to build\n\nx\n\n## Acceptance criteria\n\n- [ ] F-01 passes\n- [x] F-02 passes\n\n## Blocked by\n\n- [ ] not a box of the list\n'
+    const r = spawnSync('awk', [reader], { encoding: 'utf8', input: issueBody })
+    if (r.status !== 0 || !r.stdout.includes('- [ ] F-01 passes') || r.stdout.includes('not a box of the list')) fail(`#973: the acceptance reader awk '${reader}' does not read the "## Acceptance criteria" section alone: exit ${r.status}, ${JSON.stringify(r.stdout)}`)
   }
 }
 

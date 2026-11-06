@@ -174,7 +174,9 @@ const STATE = {
 // The record index (#77 user story 22): the one input every later phase reads. Its shape, for a
 // sibling workflow that reads the same record:
 //   night          {date, issue (0 when the archive shape has none), shape: issues|archive, base, integrationBranch}
-//   report         {source, date, kind, sections[]}: the report, as `retro_record.py report` resolves it
+//   report         {source, date, kind, sections[], tickets}: the report, as `retro_record.py report` resolves it;
+//                  tickets {shape: table|sections|none, rows, claimed, steps} is its reading of the body's
+//                  `## Tickets` table, or of an earlier night's sections (#971)
 //   questions      [{source, date}]
 //   lanes          [{owner, tasks: [{id, issue, ticket}], size}]: the owner lanes that ran; size is the tasks' count
 //   logs, sideLogs, notLogs, rounds   `retro_record.py logs` for the night's logs, verbatim
@@ -198,11 +200,25 @@ const LOG_ENTRY = {
   properties: { path: { type: 'string' }, task: { type: 'string' }, stage: { type: 'string' }, round: { type: 'string' }, sha: { type: 'string' }, verdict: { type: 'string' }, verdictLine: { type: 'string' }, lastLines: { type: 'array', items: { type: 'string' } }, lines: { type: 'integer' }, mtime: { type: 'string' }, side: { type: 'boolean' } },
   required: ['path', 'task', 'verdict', 'lastLines', 'lines', 'side'],
 }
+// The report's tickets as `retro_record.py report` prints them (#971). Optional in the index, since a Gather
+// phase file written before #971 has none and reads as the earlier shape.
+const TICKETS = {
+  type: 'object',
+  properties: {
+    shape: { type: 'string', enum: ['table', 'sections', 'none'] },
+    rows: { type: 'array', items: { type: 'object', properties: { issue: { type: 'integer' }, title: { type: 'string' }, lane: { type: 'string' }, outcome: { type: 'string' }, detail: { type: 'string' }, branch: { type: 'string' }, head: { type: 'string' }, step: { type: 'string' } }, required: ['issue', 'title', 'lane', 'outcome', 'detail', 'branch', 'head', 'step'] } },
+    claimed: { type: 'array', items: { type: 'string' } },
+    steps: { type: 'array', items: { type: 'string' } },
+    // The table rows the reader could not read; optional, since an index written before it has none.
+    unread: { type: 'array', items: { type: 'string' } },
+  },
+  required: ['shape', 'rows', 'claimed', 'steps'],
+}
 const INDEX = {
   type: 'object',
   properties: {
     night: { type: 'object', properties: { date: { type: 'string' }, issue: { type: 'integer' }, shape: { type: 'string', enum: ['issues', 'archive'] }, base: { type: 'string' }, integrationBranch: { type: 'string' } }, required: ['date', 'issue', 'shape', 'base', 'integrationBranch'] },
-    report: { type: 'object', properties: { source: { type: 'string' }, date: { type: 'string' }, kind: { type: 'string' }, sections: { type: 'array', items: { type: 'string' } } }, required: ['source', 'date', 'kind', 'sections'] },
+    report: { type: 'object', properties: { source: { type: 'string' }, date: { type: 'string' }, kind: { type: 'string' }, sections: { type: 'array', items: { type: 'string' } }, tickets: TICKETS }, required: ['source', 'date', 'kind', 'sections'] },
     questions: { type: 'array', items: { type: 'object', properties: { source: { type: 'string' }, date: { type: 'string' } }, required: ['source', 'date'] } },
     lanes: { type: 'array', items: { type: 'object', properties: { owner: { type: 'string' }, tasks: { type: 'array', items: { type: 'object', properties: { id: { type: 'string' }, issue: { type: 'integer' }, ticket: { type: 'string' } }, required: ['id', 'issue', 'ticket'] } }, size: { type: 'integer' } }, required: ['owner', 'tasks', 'size'] } },
     logs: { type: 'array', items: LOG_ENTRY },
@@ -283,8 +299,8 @@ ${RECORD}
 PHASE FILE: ${scratch}/gather.json INPUTS: ${phaseKey}
 Write {"inputs": "${phaseKey}", "result": <your return value>} to the PHASE FILE as JSON before you return.
 
-1. Resolve the shape. ${issue ? `The Issues shape: \`cd ${REPO} && gh issue view ${issue} --json number,title,body,comments\`; report.source is its URL and \`${READER} report <a copy of its body under ${scratch}/> --title "Overnight ${date}"\` gives its sections.` : `No Overnight issue: the archive shape. Resolve the report and questions files under ${REPO}/.scratch/overnight/ by their first lines with \`${READER} report <file>\`, since REPORT.md and questions.md carry no date in their names.`}
-2. lanes: the owner lanes that ran that night, from the report's task lists and the lane tickets (issue comments, or archived ticket files): one entry per OWNERSHIP.md role with its tasks and size = the number of tasks.
+1. Resolve the shape. ${issue ? `The Issues shape: \`cd ${REPO} && gh issue view ${issue} --json number,title,body,comments\`; report.source is its URL and \`${READER} report <a copy of its body under ${scratch}/> --title "Overnight ${date}"\` gives its sections and its tickets.` : `No Overnight issue: the archive shape. Resolve the report and questions files under ${REPO}/.scratch/overnight/ by their first lines with \`${READER} report <file>\`, since REPORT.md and questions.md carry no date in their names.`} report.tickets is its tickets, verbatim: the body's \`## Tickets\` table read into rows, or, for a report of an earlier night's shape, its sections (#971).
+2. lanes: the owner lanes that ran that night, from the report's ticket rows (report.tickets.rows, each row's Lane, when report.tickets.shape is table) or, for an earlier night, its task lists, and the lane tickets (issue comments, or archived ticket files): one entry per OWNERSHIP.md role with its tasks and size = the number of tasks.
 3. logs, sideLogs, notLogs, rounds: \`${READER} logs ${NIGHT_LOG}\`, keeping the entries of that night's tasks (by task id and by modification time against the night's comments) and their earlier rounds.
 4. integration: the night's integration branch (overnight/${date}): \`git -C ${REPO} log --first-parent --format='%H%x09%s' <base>..overnight/${date}\` and each merge's body with \`git -C ${REPO} show -s --format=%B <sha>\`; its \`Review:\` commits; every \`attempt, not green\` or \`partial, question for Adam\` subject in \`git -C ${REPO} log --all --format='%H%x09%D%x09%s'\` for the night's task branches.
 5. worktrees: ${WTROOT ? `each lane worktree under ${WTROOT} that exists: \`git -C <path> status --short\` and \`git -C <path> reflog -20\`.` : 'wt was not given: an empty list, and "worktrees: not given" in missing.'}
@@ -360,7 +376,7 @@ ${refusalLines(index).join('\n') || '(none: the index carries no refusal line, s
 1. ${DRY ? 'A dry run reads GitHub only for the citations below.' : `Look again for an open "Retro ${date}" issue (\`cd ${REPO} && gh issue list --state open --search "Retro ${date} in:title" --json number,title,url\`). If one is titled exactly that, file nothing: return it as parent, tickets [], refused "an open Retro ${date} exists".`}
 2. Every #NNN a body cites is one you read with \`cd ${REPO} && gh issue view <n>\` in this run; cite nothing from memory.
 3. The parent's body, written to ${bodies}/parent.md: the night's one-line summary and base (${index.night.base || 'from the index'}${issue ? `, Overnight #${issue}` : ''}); a table of the findings with type, cost, confidence and ticket; the dropped list with its #NNN citations; the coverage block${KNOWN.length ? '' : ' (none: no knownIssues)'}; the index's missing list verbatim; the REFUSAL LINES above verbatim, under the heading "Edit and Write refusals", a missing line as missing and never as a zero; and one paragraph saying what a record-only retrospective cannot see (the transcripts beyond the refusal lines, anything the missing list names). Its title is "Retro ${date}". It carries no triage label.
-4. Each ticket's body, written to its OUTPUT FILE in order, in the overnight collect step's shape: \`**Owner:** <fix.owner>\`, \`**Plan row:** none\`, \`**What to build:**\` with the finding's evidence lines (ref and quote) and its cost, and \`## Acceptance\` with \`- [ ]\` boxes each naming an observable in a later run's record ("no lane's log shows the repair"). A fix with a diff carries it in a \`\`\`diff block for the human to apply. Check each with \`${READER} body-check < <file>\` and fix it until it exits 0. The label: ready-for-agent when the fix is provable on this Mac by a build, a test, a check run or terraform validate, writes only its owner's paths and needs no decision; ready-for-human when fix.kind is decision, or it needs a contract or ADR change, an AWS action, or applying a diff to the local workflow. A ticket pairing a tracked change with a workflow diff is ready-for-agent and carries the diff (#68's precedent). Its title is "<type>: <title>".
+4. Each ticket's body, written to its OUTPUT FILE in order, in the overnight collect step's shape: \`**Owner:** <fix.owner>\`, \`**Plan row:** none\`, \`## What to build\` with the finding's evidence lines (ref and quote) and its cost, and \`## Acceptance criteria\` with \`- [ ]\` boxes each naming an observable in a later run's record ("no lane's log shows the repair"). A fix with a diff carries it in a \`\`\`diff block for the human to apply. Check each with \`${READER} body-check < <file>\` and fix it until it exits 0. The label: ready-for-agent when the fix is provable on this Mac by a build, a test, a check run or terraform validate, writes only its owner's paths and needs no decision; ready-for-human when fix.kind is decision, or it needs a contract or ADR change, an AWS action, or applying a diff to the local workflow. A ticket pairing a tracked change with a workflow diff is ready-for-agent and carries the diff (#68's precedent). Its title is "<type>: <title>".
 ${DRY ? `5. ${SHAPE_CHECK(bodies, true)}
 6. Write nothing to GitHub. Return parent {number: 0, url: "", title: "Retro ${date}", file: "${bodies}/parent.md"}, and each ticket that passed with number 0, url "", its label and its file, dryRun true, refused (the check's lines for each ticket it did not pass, else ""), unreachable false.` : `5. Create the parent: \`cd ${REPO} && gh issue create --title "Retro ${date}" --body-file ${bodies}/parent.md\`.
 6. Create each ticket in order, each only after its check: ${SHAPE_CHECK(bodies, false)} When it passes, file it: \`cd ${REPO} && gh issue create --title "<type>: <title>" --label <label> --parent <parent number> --body-file <its file>\`.
@@ -379,6 +395,16 @@ const SHAPE_CHECK = (bodies, dry) => `Check each ticket's body, in order, under 
 // ---------------------------------------------------------------- lanes and groups
 // Owner lanes beyond maxLaneAgents are grouped, the smallest together (#77 -> "Arguments"): the
 // largest maxLaneAgents - 1 keep an agent each and the rest share the last one.
+// The report's parts the integration unit reads (#971): a report that opens with the ## Tickets table is read
+// at the rows whose outcome is not integrated whole or grilled, each by number and outcome, and the
+// Exceptions paragraphs; a report of the earlier shape, or an index written before #971, at its sections.
+const reportParts = (report) => {
+  const t = (report && report.tickets) || { shape: 'none', rows: [] }
+  if (t.shape !== 'table') return 'the report\'s Failed, Partial and Needs-you sections'
+  const need = t.rows.filter((r) => !((r.outcome === 'integrated' && !r.detail) || r.outcome === 'grilled'))
+  const named = need.map((r) => `#${r.issue} (${r.outcome}${r.detail ? ` (${r.detail})` : ''})`).join(', ')
+  return `the report's ## Tickets rows that need more than integrated: ${named || 'none'}, with their ## Exceptions paragraphs and the Failed, Partial and Needs-you sections`
+}
 const laneUnits = (index) => {
   const lanes = [...index.lanes].sort((a, b) => b.size - a.size || (a.owner < b.owner ? -1 : 1))
   const groups = lanes.length <= MAX_LANES ? lanes.map((l) => [l]) : [...lanes.slice(0, MAX_LANES - 1).map((l) => [l]), lanes.slice(MAX_LANES - 1)]
@@ -391,7 +417,7 @@ const laneUnits = (index) => {
       read: `Read only these lanes' tasks, tickets, check logs (and their earlier rounds), merges and review records.`,
     }
   })
-  units.push({ kind: 'integration', key: 'integration', title: 'integration and report', tasks: [], red: [], read: 'Read the serialized merges and the integration verdicts (the -integrate logs), the report\'s Failed, Partial and Needs-you sections, the main-checkout findings and the leftovers (branches, worktrees, the pending-writes file).' })
+  units.push({ kind: 'integration', key: 'integration', title: 'integration and report', tasks: [], red: [], read: `Read the serialized merges and the integration verdicts (the -integrate logs), ${reportParts(index.report)}, the main-checkout findings and the leftovers (branches, worktrees, the pending-writes file).` })
   units.push({ kind: 'prompts', key: 'prompts', title: 'the overnight workflow\'s own prompts', tasks: [], red: [], read: `Read the overnight script the index names (overnightScript: path, sha256, mtime) against the lanes' records of repairing, working around or asking about one of its instructions. A fix here is fix.kind prompt with a unified diff against that file. Say in a finding when the script's hash shows it changed since the night.` })
   return units
 }

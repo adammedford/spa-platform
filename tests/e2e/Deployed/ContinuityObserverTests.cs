@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using Gateway.E2ETests.Stack;
 using Gateway.TestHarness;
 
@@ -11,7 +12,7 @@ namespace Gateway.E2ETests.Deployed;
 /// for each of #348's rows 3 to 9 a recording that satisfies the row passes, and one recording per
 /// rule breaks it and reports failed or not proved, never passed.
 /// </summary>
-public sealed class ContinuityObserverTests
+public sealed partial class ContinuityObserverTests
 {
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
@@ -50,7 +51,7 @@ public sealed class ContinuityObserverTests
             {
                 ["ts"] = at.ToString("O"),
                 ["level"] = "information",
-                ["msg"] = $"Refreshed the access token for app app1, session {sessionRef}.",
+                ["msg"] = RefreshedTemplate.Replace("{AppId}", "app1", StringComparison.Ordinal).Replace("{SessionRef}", sessionRef, StringComparison.Ordinal),
                 ["category"] = "Platform.Identity.AccessTokenSource",
                 ["app_id"] = "app1",
                 ["session_ref"] = sessionRef,
@@ -86,6 +87,32 @@ public sealed class ContinuityObserverTests
     private static DateTimeOffset Deadline => T0.AddHours(1);
 
     private static readonly (string, string)[] SessionPair = [("session-1", "session-2")];
+
+    /// <summary>The status a planted challenge answers: contracts/http-contract.md's Errors row unauthenticated, never a literal (#863).</summary>
+    private static readonly int Unauthenticated = Contract.Error("unauthenticated").Status;
+
+    /// <summary>
+    /// The <c>Message</c> of the identity library's Refreshed <c>[LoggerMessage]</c>, read from
+    /// src/Platform.Identity/AccessTokenSource.cs, so neither <see cref="GatewayEvent.IsRefreshed"/> nor
+    /// the recorded Refreshed lines above hold a copy of it that can drift from its source (#872).
+    /// </summary>
+    private static string RefreshedTemplate =>
+        Assert.Single(RefreshedLoggerMessage().Matches(File.ReadAllText(Path.Combine(FixtureFiles.RepositoryRoot, "src", "Platform.Identity", "AccessTokenSource.cs"))))
+            .Groups["message"].Value;
+
+    [GeneratedRegex("""\[LoggerMessage\((?<args>[^\]]*?)Message\s*=\s*"(?<message>[^"]*)"\s*\)\]\s*private static partial void Refreshed\(""", RegexOptions.Singleline | RegexOptions.CultureInvariant, RegexTimeout.Milliseconds)]
+    private static partial Regex RefreshedLoggerMessage();
+
+    // ---- the Refreshed line's source (#872) ----
+
+    [Fact]
+    public void IsRefreshed_matches_the_prefix_of_the_identity_librarys_Refreshed_log_message()
+    {
+        string template = RefreshedTemplate;
+
+        Assert.StartsWith(GatewayEvent.RefreshedPrefix, template, StringComparison.Ordinal);
+        Assert.DoesNotContain('{', GatewayEvent.RefreshedPrefix);
+    }
 
     // ---- the control (Q143) ----
 
@@ -216,7 +243,7 @@ public sealed class ContinuityObserverTests
     [Fact]
     public async Task A_challenge_on_any_attempt_fails_the_row()
     {
-        Attempt attempt = new(1, [Sent("session-1", 0), Sent("session-2", 1, status: 401)]);
+        Attempt attempt = new(1, [Sent("session-1", 0), Sent("session-2", 1, status: Unauthenticated)]);
         GatewayCapture capture = await new CloudWatch()
             .Request(TaskA, attempt.Steps[0]).Request(TaskB, attempt.Steps[1])
             .CaptureAsync(Deadline);
@@ -275,8 +302,6 @@ public sealed class ContinuityObserverTests
 
     private static readonly (string, string)[] LogoutPair = [("logout", "replay")];
 
-    private static readonly int Unauthenticated = Contract.Error("unauthenticated").Status;
-
     private static Attempt Row9Attempt(int seconds, int controlStatus = 200, int? replayStatus = null) => new(1,
     [
         Sent("control", seconds, controlStatus, expect: null),
@@ -296,11 +321,12 @@ public sealed class ContinuityObserverTests
     }
 
     [Theory]
-    [InlineData(false, 200)]
-    [InlineData(true, 401)]
-    [InlineData(true, 0)]
-    public async Task Row9s_pre_logout_replay_without_its_200_control_proves_nothing(bool controlSent, int controlStatus)
+    [InlineData(false, null, 200)]
+    [InlineData(true, "unauthenticated", null)]
+    [InlineData(true, null, 0)] // Not an Errors row: 0 plants a control that failed to connect.
+    public async Task Row9s_pre_logout_replay_without_its_200_control_proves_nothing(bool controlSent, string? refusal, int? other)
     {
+        int controlStatus = refusal is null ? other!.Value : Contract.Error(refusal).Status;
         Attempt full = Row9Attempt(0, controlStatus);
         Attempt attempt = controlSent
             ? controlStatus == 0 ? full with { Steps = [Step.Failed("control", ClientTrace.Fresh(), T0, new IOException()), .. full.Steps.Skip(1)] } : full
@@ -354,7 +380,7 @@ public sealed class ContinuityObserverTests
         // The stopped task draining is not a replacement.
         Assert.Equal(Verdict.NotProved, ContinuityObserver.Replacement(TaskA, TaskB, [attempt], capture).Verdict);
 
-        Attempt challenged = new(1, [attempt.Steps[0], attempt.Steps[1] with { Status = 401 }]);
+        Attempt challenged = new(1, [attempt.Steps[0], attempt.Steps[1] with { Status = Unauthenticated }]);
         Assert.Equal(Verdict.Failed, ContinuityObserver.Replacement(TaskA, TaskB, [challenged], capture).Verdict);
     }
 

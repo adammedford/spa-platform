@@ -132,11 +132,17 @@ public sealed record GatewayEvent(string Stream, string TaskId, DateTimeOffset T
     public bool IsRequest => Field("msg") == "request";
 
     /// <summary>
-    /// The identity library's Information line for a refresh (src/Platform.Identity/AccessTokenSource.cs,
-    /// "Refreshed the access token for app {AppId}, session {SessionRef}."), written with
-    /// <c>session_ref</c> as a field.
+    /// The literal head of the identity library's Refreshed message (src/Platform.Identity/AccessTokenSource.cs,
+    /// its <c>Refreshed</c> <c>[LoggerMessage]</c>). ContinuityObserverTests reads that attribute from
+    /// the source file and fails when its message no longer starts with this (#872).
     /// </summary>
-    public bool IsRefreshed => Field("msg")?.StartsWith("Refreshed the access token", StringComparison.Ordinal) == true;
+    public const string RefreshedPrefix = "Refreshed the access token";
+
+    /// <summary>
+    /// The identity library's Information line for a refresh, whose <c>msg</c> starts with
+    /// <see cref="RefreshedPrefix"/>, written with <c>session_ref</c> as a field.
+    /// </summary>
+    public bool IsRefreshed => Field("msg")?.StartsWith(RefreshedPrefix, StringComparison.Ordinal) == true;
 
     /// <summary>The line's own <c>ts</c>, which row 6 compares with the interval (Q146).</summary>
     public DateTimeOffset? Ts =>

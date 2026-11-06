@@ -23,14 +23,18 @@ it cannot read exit 2. land.sh stops on either.
 
 **`--follow-ups`, last in either form, adds the carried findings** (#521): after the URL, one line
 per row of the `## Follow-ups` table in the comment or review holding the clearing record, each the
-row's Finding cell. docs/agents/review.md -> "Landing or holding" has the review-queue workflow end
-a record's findings with that table when the review carries a finding rather than holding on it,
-and the merge body then owes an `Outstanding:` line, which land.sh checks with these lines. The
-table is read as .claude/workflows/morning.js's followUpsOf reads it, so the two cannot name
-different rows: the line `| Finding | Axis | Where | First carried by |`, the separator after it,
-then every following line bracketed by `|`, split on each `|` not escaped as `\\|`, a row where it
-has four cells and a Finding. A refusal prints nothing, with or without the flag. Without the flag
-the URL stands alone, as it always did.
+row's Finding cell, a tab, and its Fails on cell (#966), with any tab inside a cell printed as a
+space so the first tab on the line is the separator. docs/agents/review.md -> "Landing or holding"
+has the review-queue workflow end a record's findings with that table when the review carries a
+finding rather than holding on it, and the merge body then owes an `Outstanding:` line, which
+land.sh checks with these lines, cutting each at its tab to match the Finding against the issues
+filed. The table is read as .claude/workflows/morning.js's followUpsOf reads it, so the two cannot
+name different rows: the line `| Finding | Axis | Where | First carried by | Fails on |`, or the
+four-column `| Finding | Axis | Where | First carried by |` every record before #966 carries, the
+separator after it, then every following line bracketed by `|`, split on each `|` not escaped as
+`\\|`, a row where it has as many cells as its header and a Finding. A four-column row prints an
+empty Fails on. A refusal prints nothing, with or without the flag. Without the flag the URL stands
+alone, as it always did.
 
 **The record is one fixed line**, specified in docs/agents/review.md -> "Landing or holding":
 
@@ -89,9 +93,13 @@ USAGE = ("the two forms are `review_record.py --pr <number> [--head <40-hex head
          "pull request up with gh, and `review_record.py <40-hex head>` with the two `gh api "
          "--paginate --slurp` listings on standard input, either with `--follow-ups` last")
 FOLLOW_UPS = "--follow-ups"
-# The header of the table review-queue.js's followUpLines writes under `## Follow-ups`, and the
-# cell separator its cell() escapes: the same two strings morning.js's followUpsOf reads by.
-FOLLOW_UP_HEAD = "| Finding | Axis | Where | First carried by |"
+# The header of the table review-queue.js's followUpLines writes under `## Follow-ups`, the
+# four-column header of the records written before #966, and the cell separator its cell() escapes:
+# the same three strings morning.js's followUpsOf reads by. Each header's width is the cell count of
+# its rows.
+FOLLOW_UP_HEAD = "| Finding | Axis | Where | First carried by | Fails on |"
+FOLLOW_UP_HEAD_FOUR = "| Finding | Axis | Where | First carried by |"
+FOLLOW_UP_WIDTHS = {FOLLOW_UP_HEAD: 5, FOLLOW_UP_HEAD_FOUR: 4}
 UNESCAPED_PIPE = re.compile(r"(?<!\\)\|")
 RECORD = re.compile(r"Reviewed (?P<head>[0-9a-f]{40}) against (?P<base>[0-9a-f]{40}): "
                     r"(?P<verdict>merge|hold)")
@@ -114,30 +122,34 @@ class Unreadable(Exception):
 
 class Record:
     def __init__(self, head: str, verdict: str, at: datetime.datetime, url: str,
-                 follow_ups: list[str]):
+                 follow_ups: list[tuple[str, str]]):
         self.head = head
         self.verdict = verdict
         self.at = at
         self.url = url
-        # The Finding cells of the `## Follow-ups` table in the comment or review holding the line.
+        # The (Finding, Fails on) cells of each row of the `## Follow-ups` table in the comment or
+        # review holding the line; Fails on is "" in a four-column table.
         self.follow_ups = follow_ups
 
 
-def follow_ups(body: str) -> list[str]:
-    """The Finding cell of each row of the body's `## Follow-ups` table, as morning.js's followUpsOf
-    reads it: the first line equal to the header once stripped, skipping the separator line, and
-    then each line bracketed by pipes until the first that is not; a row counts when it has four
-    cells and a Finding. `\\|` inside a cell is the pipe review-queue.js escaped."""
+def follow_ups(body: str) -> list[tuple[str, str]]:
+    """The Finding and Fails on cells of each row of the body's `## Follow-ups` table, as
+    morning.js's followUpsOf reads them: the first line equal to either header once stripped,
+    skipping the separator line, and then each line bracketed by pipes until the first that is not;
+    a row counts when it has as many cells as its header and a Finding, and a four-column row's
+    Fails on is "". `\\|` inside a cell is the pipe review-queue.js escaped."""
     lines = [line.strip() for line in body.splitlines()]
-    if FOLLOW_UP_HEAD not in lines:
+    at = next((i for i, line in enumerate(lines) if line in FOLLOW_UP_WIDTHS), None)
+    if at is None:
         return []
+    width = FOLLOW_UP_WIDTHS[lines[at]]
     found = []
-    for line in lines[lines.index(FOLLOW_UP_HEAD) + 2:]:
+    for line in lines[at + 2:]:
         if not (line.startswith("|") and line.endswith("|")):
             break
         cells = [cell.strip().replace("\\|", "|") for cell in UNESCAPED_PIPE.split(line[1:-1])]
-        if len(cells) == 4 and cells[0]:
-            found.append(cells[0])
+        if len(cells) == width and cells[0]:
+            found.append((cells[0], cells[4] if width == 5 else ""))
     return found
 
 
@@ -330,8 +342,9 @@ def main(arguments: list[str]) -> int:
         return 1
     print(record.url)
     if with_follow_ups:
-        for finding in record.follow_ups:
-            print(finding)
+        # One line a row, the Finding and its Fails on split by the line's only tab (#966).
+        for finding, fails_on in record.follow_ups:
+            print(f"{finding.replace(chr(9), ' ')}\t{fails_on.replace(chr(9), ' ')}")
     return 0
 
 

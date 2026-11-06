@@ -1,3 +1,5 @@
+using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Platform.Abstractions;
 using Platform.Testing;
@@ -195,37 +197,156 @@ public sealed class AssetReadRefusalTests
     }
 
     /// <summary>
-    /// A failure that is neither absence nor a refusal is not a 404: the S3 store lets another 403
-    /// code, <c>NoSuchBucket</c>, a 5xx, a transport failure and cancellation propagate, and the route
-    /// does not turn any of them into "not found". These stand for them here, where the AWS SDK is not
-    /// referenced: whatever the store throws that is not <see cref="ObjectReadRefusedException"/>.
+    /// A failure that is neither absence nor a refusal answers 503 <c>store_unavailable</c>, never
+    /// cached, for an asset and for the shell alike, its fallback included (contracts/http-contract.md
+    /// -> Errors, #543, #907): the S3 store lets another 403 code, <c>NoSuchBucket</c>, a 5xx, a
+    /// transport failure and an SDK timeout propagate, and the route turns none of them into "not
+    /// found" or "shell unavailable". These stand for them here, where the AWS SDK is not referenced:
+    /// whatever the store throws that is not <see cref="ObjectReadRefusedException"/>, while the
+    /// request has not been aborted. It is an answer, not a rejection, so it carries no rule id, and
+    /// it is not a refusal, so it marks no <c>read_refused</c>.
     ///
-    /// Mutation: catch every exception of the read as a refusal, and every row fails on the 404 and
-    /// on <c>asset</c> (6 of 6).
+    /// <para>Each writes one Warning naming the app and the exception's type, and no line of the
+    /// platform's own carries the key, which holds the client's path, or the exception's message,
+    /// which here names a canary of its own. <c>cancelled</c> is an
+    /// <see cref="OperationCanceledException"/> the client did not cause, as an SDK timeout throws.</para>
+    ///
+    /// <para>Mutations, each counted of 18 rows: catch only the refusal, as before #907, and every row
+    /// fails on the status (500 with no body) (18); leave the 503's <c>Cache-Control</c> unset, and
+    /// every row fails on the header (18); drop the Warning, and every row fails (18); log the
+    /// exception's message in its type's place, and every row fails on the message canary (18); log
+    /// the key on a Debug line of its own, and every row fails on the release prefix (18); log the
+    /// client's path in the kind's place, and the twelve rows whose path carries the canary fail (12);
+    /// mark <c>read_refused</c> as a refusal does, and every row fails (18); answer the shell's failure
+    /// 500 <c>shell_unavailable</c>, and the twelve shell rows fail (12).</para>
     /// </summary>
     [Theory]
-    [InlineData("GET", "transport")]
-    [InlineData("GET", "configuration")]
-    [InlineData("GET", "cancelled")]
-    [InlineData("HEAD", "transport")]
-    [InlineData("HEAD", "configuration")]
-    [InlineData("HEAD", "cancelled")]
-    public async Task Any_other_store_failure_is_not_a_404(string method, string failure)
+    [InlineData("GET", "/assets/canary-7f3e.js", "assets/canary-7f3e.js", "transport")]
+    [InlineData("GET", "/assets/canary-7f3e.js", "assets/canary-7f3e.js", "configuration")]
+    [InlineData("GET", "/assets/canary-7f3e.js", "assets/canary-7f3e.js", "cancelled")]
+    [InlineData("HEAD", "/assets/canary-7f3e.js", "assets/canary-7f3e.js", "transport")]
+    [InlineData("HEAD", "/assets/canary-7f3e.js", "assets/canary-7f3e.js", "configuration")]
+    [InlineData("HEAD", "/assets/canary-7f3e.js", "assets/canary-7f3e.js", "cancelled")]
+    [InlineData("GET", "/", "index.html", "transport")]
+    [InlineData("GET", "/", "index.html", "configuration")]
+    [InlineData("GET", "/canary-7f3e/42", "index.html", "transport")]
+    [InlineData("GET", "/canary-7f3e/42", "index.html", "configuration")]
+    [InlineData("GET", "/canary-7f3e/42", "index.html", "cancelled")]
+    [InlineData("GET", "/index.html", "index.html", "transport")]
+    [InlineData("HEAD", "/", "index.html", "transport")]
+    [InlineData("HEAD", "/", "index.html", "configuration")]
+    [InlineData("HEAD", "/canary-7f3e/42", "index.html", "transport")]
+    [InlineData("HEAD", "/canary-7f3e/42", "index.html", "configuration")]
+    [InlineData("HEAD", "/canary-7f3e/42", "index.html", "cancelled")]
+    [InlineData("HEAD", "/index.html", "index.html", "transport")]
+    public async Task Any_other_store_failure_is_503_store_unavailable_with_no_store(string method, string path, string key, string failure)
     {
         (HostingHost gateway, RecordingObjectStore store) = await StartAsync(Answer.Refused, withShell: true);
         await using HostingHost _ = gateway;
-        store.FailWith = failure switch
+        Exception thrown = failure switch
         {
-            "transport" => new IOException("The connection was reset."),
-            "configuration" => new InvalidOperationException("The bucket does not exist."),
-            _ => new OperationCanceledException(),
+            "transport" => new IOException("The connection was reset: message-canary-5d1b."),
+            "configuration" => new InvalidOperationException("The bucket does not exist: message-canary-5d1b."),
+            _ => new OperationCanceledException("The read timed out: message-canary-5d1b."),
         };
+        store.FailWith = thrown;
 
-        RawResponse response = await gateway.SendAsync(method, App1.Host, "/assets/missing-9c9c.js", Ct, "Accept: */*\r\n");
+        RawResponse response = await gateway.SendAsync(method, App1.Host, path, Ct, Navigation);
 
-        Assert.NotEqual(404, response.StatusCode);
-        Assert.NotEqual(200, response.StatusCode);
+        Assert.Equal(503, response.StatusCode);
+        Assert.Equal(NoStore, response.Header("cache-control"));
+        Assert.Equal("application/problem+json", response.Header("content-type"));
+        Assert.Equal(method == "HEAD" ? "" : "{\"status\":503,\"code\":\"store_unavailable\"}", response.BodyText);
+        Assert.Equal([Prefix + key], store.KeysRead);
         Assert.Null(gateway.LastTelemetry?.ReadRefused);
+        Assert.Null(gateway.LastTelemetry?.Rule);
+
+        CapturedLine warning = Assert.Single(gateway.Log.Lines, line =>
+            line.Category.StartsWith("Platform.", StringComparison.Ordinal) && line.Level >= LogLevel.Warning);
+        Assert.Equal("Platform.Hosting.Assets", warning.Category);
+        Assert.Equal(LogLevel.Warning, warning.Level);
+        Assert.Contains(new KeyValuePair<string, object?>("AppId", App1.AppId), warning.State);
+        Assert.Contains(new KeyValuePair<string, object?>("ExceptionType", thrown.GetType().FullName), warning.State);
+        Assert.DoesNotContain(gateway.Log.Lines, line =>
+            line.Category.StartsWith("Platform.", StringComparison.Ordinal)
+            && (line.Text.Contains("canary-7f3e", StringComparison.OrdinalIgnoreCase)
+                || line.Text.Contains("message-canary-5d1b", StringComparison.Ordinal)
+                || line.Text.Contains(Prefix, StringComparison.Ordinal)
+                || line.State.Any(pair => pair.Value?.ToString()?.Contains("canary", StringComparison.OrdinalIgnoreCase) == true)));
+    }
+
+    /// <summary>
+    /// A read that <c>RequestAborted</c> ended is not answered: the client went away, so no problem
+    /// body is written and what the store threw propagates, as it did before #907, with no Warning.
+    /// The request's token is cancelled during the read, inside the store, and the store then throws
+    /// what a cancelled read throws or what a reset connection throws: whichever it is, the abort is
+    /// what ended the read. Run on the endpoint itself, over a <see cref="DefaultHttpContext"/>, so the
+    /// abort lands at a known point and the response can be read after it, which a closed socket
+    /// cannot show.
+    ///
+    /// Mutation: drop the filter on the abort token, so every failure but a refusal answers, and every
+    /// row fails on the status (503 set before the cancelled write) and on the Warning (4 of 4).
+    /// </summary>
+    [Theory]
+    [InlineData("/assets/app-3f2a.js", "cancelled")]
+    [InlineData("/assets/app-3f2a.js", "transport")]
+    [InlineData("/", "cancelled")]
+    [InlineData("/", "transport")]
+    public async Task A_read_the_request_abort_ended_is_not_answered(string path, string failure)
+    {
+        using CancellationTokenSource abort = new();
+        AbortingObjectStore store = new(abort, failure == "transport" ? new IOException("The connection was reset.") : null);
+        CapturedLog log = new();
+        using ILoggerFactory factory = LoggerFactory.Create(logging => logging.SetMinimumLevel(LogLevel.Trace).AddProvider(log.Provider));
+        Assets assets = new(factory.CreateLogger("Platform.Hosting.Assets"));
+        await using ServiceProvider services = new ServiceCollection().AddSingleton<IObjectStore>(store).BuildServiceProvider();
+        using MemoryStream body = new();
+        DefaultHttpContext context = new() { RequestServices = services, RequestAborted = abort.Token };
+        context.Features.Set<IAppFeature>(SettableAppFeature.For(App1));
+        context.Request.Method = "GET";
+        context.Request.Path = path;
+        context.Request.Headers.Accept = "text/html";
+        context.Response.Body = body;
+
+        Exception propagated = await Assert.ThrowsAnyAsync<Exception>(() => assets.InvokeAsync(context));
+
+        Assert.True(store.Read);
+        Assert.Same(store.Thrown, propagated);
+        Assert.Equal(200, context.Response.StatusCode);
+        Assert.Null(context.Response.ContentType);
+        Assert.Equal(0, body.Length);
+        Assert.Empty(log.Lines);
+    }
+
+    /// <summary>
+    /// A store whose read cancels the request's token, as a client going away mid-read does, then
+    /// throws: the cancellation of the token it was handed, or <paramref name="after"/> when given.
+    /// </summary>
+    private sealed class AbortingObjectStore(CancellationTokenSource abort, Exception? after) : IObjectStore
+    {
+        public bool Read { get; private set; }
+
+        public Exception? Thrown { get; private set; }
+
+        public async Task<StoredObject?> GetAsync(string key, string? ifNoneMatch, CancellationToken ct)
+        {
+            Read = true;
+            await abort.CancelAsync();
+            try
+            {
+                ct.ThrowIfCancellationRequested();
+            }
+            catch (OperationCanceledException cancelled)
+            {
+                Thrown = after ?? cancelled;
+                throw Thrown;
+            }
+
+            throw new InvalidOperationException("The read was not handed the request's abort token.");
+        }
+
+        public Task<bool> PutAsync(string key, Stream body, string? ifMatch, CancellationToken ct) =>
+            throw new InvalidOperationException("The gateway cannot write (contracts/s3-layout.md, P-03).");
     }
 
     private static void AssertNotFound(RawResponse response, string method)

@@ -7,9 +7,11 @@ The `wiz` skill pipes every post through tools/wiz_redact.py (#259), so a rule t
 leaks an account id, an authorization code or a secret into a public comment and says nothing. Each
 case starts the real script as a subprocess under `python3 -I`, in D-3's shape, feeds it text on
 stdin and compares stdout, stderr and the exit code with values written out by hand. Each of the
-eight rules has at least one case that turns red when that rule is removed from the script; #259's
+ten rules has at least one case that turns red when that rule is removed from the script; #259's
 merge body names the mutation and the case. #468 added the terminal's --stream mode and P-04's
-passing case lines, which a post carries as they are.
+passing case lines, which a post carries as they are. #1004 added the user pool id and the SSM
+session id, and the hash guard that keeps a twelve-digit run inside a hexadecimal word, each case
+run in both modes.
 
 The ids, codes and secrets below are made up for the cases; none is a real account or credential.
 """
@@ -286,8 +288,23 @@ class RuleEightTerraformClientIds(Redacts):
             '      - managed_login_branding_id   = "d44f0937-7779-4298-825d-55f4091f8a57" -> null\n'
             '      - region                      = "us-east-2" -> null\n'
             '      - id                          = "spa-platform-poc" -> null\n'
-            '                          - value = "https://cognito-idp.us-east-2.amazonaws.com/us-east-2_7PJ6SDHlO"\n'
             '      - id     = "spa-platform-poc-task:spa-platform-poc-task" -> null\n'
+        )
+        self.assertRedacts(text, text)
+
+    def test_a_value_one_step_outside_the_client_id_shape_is_kept(self) -> None:
+        # Each line misses the client-id shape by one step, so each turns red under one widening of
+        # the matcher: the length bound (24 and 27 characters), the character class (upper case, a
+        # hyphen), the key list (`name`, `client_name`) and the lookbehind (`_id` and `-id` endings).
+        text = (
+            '      - id                          = "3n4b5c6d7e8f9g0h1i2j3k4l" -> null\n'
+            '      - id                          = "3n4b5c6d7e8f9g0h1i2j3k4l5m6" -> null\n'
+            '      - client_id                   = "3N4B5C6D7E8F9G0H1I2J3K4L5" -> null\n'
+            '      - client_id                   = "3n4b5c6d7e8f9g0h1i2j3k4-5" -> null\n'
+            '      - name                        = "3n4b5c6d7e8f9g0h1i2j3k4l5" -> null\n'
+            '      - client_name                 = "3n4b5c6d7e8f9g0h1i2j3k4l5" -> null\n'
+            '      - managed_login_branding_id   = "3n4b5c6d7e8f9g0h1i2j3k4l5" -> null\n'
+            '          - "app-id"                = "3n4b5c6d7e8f9g0h1i2j3k4l5"\n'
         )
         self.assertRedacts(text, text)
 
@@ -322,6 +339,91 @@ class RuleEightTerraformClientIds(Redacts):
             '  }\n'
             '}\n'
             '    clientId = "<elided>"\n',
+        )
+
+
+class InBothModes(Redacts):
+    def assertRedactsInBothModes(self, text: str, expected: str) -> None:
+        with self.subTest(mode="post"):
+            self.assertRedacts(text, expected)
+        with self.subTest(mode="stream"):
+            self.assertRedacts(text, expected, "--stream")
+
+
+class RuleOneLeavesHashesWhole(InBothModes):
+    # Sitting D of 2026-11-04 (#1004): the account rule masked part of an image digest and part of a
+    # junit file's SHA-256. A twelve-digit run touching a hexadecimal letter is part of a hash word.
+    def test_a_sha256_digest_holding_a_twelve_digit_run_is_kept(self) -> None:
+        # The run ends the digest, so only the letter before it marks it as part of the word.
+        text = ("imageDigest sha256:9e8d7c6b5a4f3e2d1c0b9e8d7c6b5a4f3e2d1c0b9e8d7c6b5a4f123456789012\n"
+                "gateway@sha256:4E5F210987654321A0BC1D2E3F4A5B6C7D8E9F0C1D2E3F4A5B6C7D8E9F0C1D2E\n")
+        self.assertRedactsInBothModes(text, text)
+
+    def test_a_bare_sha256_holding_a_twelve_digit_run_is_kept(self) -> None:
+        # The run starts the hash, so only the letter after it marks it as part of the word.
+        text = "123456789012fe9e8d7c6b5a4f3e2d1c0b9e8d7c6b5a4f3e2d1c0b9e8d7c6b5a  TestResults/junit.xml\n"
+        self.assertRedactsInBothModes(text, text)
+
+    def test_a_bare_twelve_digit_account_id_is_still_masked(self) -> None:
+        self.assertRedactsInBothModes(
+            "account 123456789012, 210987654321.dkr.ecr.us-east-2.amazonaws.com, -123456789012-\n",
+            "account <account>, <account>.dkr.ecr.us-east-2.amazonaws.com, -<account>-\n",
+        )
+
+    def test_a_run_beside_a_word_that_is_not_hexadecimal_is_still_masked(self) -> None:
+        # A hexadecimal letter beside the run is not enough: the whole word must be hexadecimal and
+        # longer than the run, so a name ending in "web" or "lab" does not carry an account out.
+        self.assertRedactsInBothModes(
+            "web123456789012 lab123456789012x 123456789012fez\n",
+            "web<account> lab<account>x <account>fez\n",
+        )
+
+
+class RuleNineUserPoolIds(InBothModes):
+    def test_a_user_pool_id_is_masked(self) -> None:
+        # The identity root's apply output, a plan's issuer value and a pool's ARN.
+        self.assertRedactsInBothModes(
+            'user_pool_id = "us-east-2_Ab3dE6gH9"\n'
+            '                          - value = "https://cognito-idp.us-east-2.amazonaws.com/us-east-2_7PJ6SDHlO"\n'
+            "arn:aws:cognito-idp:us-east-2:123456789012:userpool/us-east-2_Ab3dE6gH9\n"
+            "--user-pool-id us-gov-west-1_9ZYXWVUTS spa-poc-us-east-2_Ab3dE6gH9\n",
+            'user_pool_id = "<user-pool>"\n'
+            '                          - value = "https://cognito-idp.us-east-2.amazonaws.com/<user-pool>"\n'
+            "userpool/<user-pool>\n"
+            "--user-pool-id <user-pool> spa-poc-<user-pool>\n",
+        )
+
+    def test_a_region_beside_nine_lowercase_letters_is_kept(self) -> None:
+        # A pool id's nine characters carry a digit or a capital; a word does not.
+        text = "us-east-2_telemetry us-east-2_Ab3dE6gH9x us-east-2_Ab3dE6gH\n"
+        self.assertRedactsInBothModes(text, text)
+
+
+class RuleTenSsmSessionIds(InBothModes):
+    def test_the_tunnels_session_id_lines_are_masked(self) -> None:
+        # tunnel.sh's port forward through the session manager plugin, as sitting D printed it.
+        self.assertRedactsInBothModes(
+            "Starting session with SessionId: 0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d-q2w3e4r5t6y7u8i9o0p1a2s3d4\n"
+            "Port 8443 opened for sessionId 0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d-q2w3e4r5t6y7u8i9o0p1a2s3d4.\n"
+            "Waiting for connections...\n"
+            "Exiting session with sessionId: 0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d-q2w3e4r5t6y7u8i9o0p1a2s3d4.\n",
+            "Starting session with SessionId: <elided>\n"
+            "Port 8443 opened for sessionId <elided>.\n"
+            "Waiting for connections...\n"
+            "Exiting session with sessionId: <elided>.\n",
+        )
+
+    def test_a_session_id_held_as_a_json_member_is_masked_and_the_word_sessionids_is_kept(self) -> None:
+        self.assertRedactsInBothModes(
+            '{"SessionId": "adam-0a1b2c3d4e5f67890", "Status": "Connected"} SessionIds: 2\n',
+            '{"SessionId": "<elided>", "Status": "Connected"} SessionIds: 2\n',
+        )
+
+    def test_a_cookie_whose_name_ends_in_sessionid_keeps_rule_fives_shape(self) -> None:
+        # The key must start a word: rule 5 elides the cookie's value and keeps its name and `=`.
+        self.assertRedactsInBothModes(
+            "Cookie: JSESSIONID=abc123; theme=dark\n",
+            "Cookie: JSESSIONID=<elided>; theme=<elided>\n",
         )
 
 

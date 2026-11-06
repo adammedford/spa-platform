@@ -52,7 +52,6 @@ public sealed class ReadRefusalTests
         // assertion with "The given key was not present".
         JsonElement line = Assert.Single(RequestLines(host));
         Assert.Equal("asset", line.GetProperty("read_refused").GetString());
-        Assert.Equal(404, line.GetProperty("status").GetInt32());
 
         // Beside rule and session_ref, the feature's other two fields, so the line keeps the feature's
         // fields together. Mutation: appending read_refused after duration_ms fails this.
@@ -73,14 +72,16 @@ public sealed class ReadRefusalTests
         // null"), and the feature is fresh per request, so the second line on the same connection has
         // none. Mutation that turns it red: writing read_refused unconditionally, as rule and session_ref
         // are, puts a null on the second line.
-        IReadOnlyList<JsonElement> lines = RequestLines(host);
-        Assert.Equal(2, lines.Count);
-
-        // A refused shell answers 500 shell_unavailable, as Assets.cs does since #428 (issue #465).
-        // Mutation that turns it red: the double answering 404 for every class leaves no line at 500.
-        Assert.Equal("shell", Assert.Single(lines, l => l.GetProperty("status").GetInt32() == 500).GetProperty("read_refused").GetString());
-        JsonElement plain = Assert.Single(lines, l => l.GetProperty("status").GetInt32() == 200);
-        Assert.False(plain.TryGetProperty("read_refused", out _), "a request whose read was not refused carries read_refused.");
+        //
+        // The lines are told apart by the order the requests were sent in, not by status: what a refused
+        // shell answers is Platform.Hosting's rule, proved in its own tests, and a status here would be
+        // the double's copy of it (#869). The order holds because UsePlatformTelemetry writes the line
+        // before its delegate returns, so before the response is sent, and the capture is synchronous.
+        // Mutation that turns the first element red: leaving read_refused out of RequestLine's fields.
+        Assert.Collection(
+            RequestLines(host),
+            shell => Assert.Equal("shell", shell.GetProperty("read_refused").GetString()),
+            plain => Assert.False(plain.TryGetProperty("read_refused", out _), "a request whose read was not refused carries read_refused."));
     }
 
     [Fact]

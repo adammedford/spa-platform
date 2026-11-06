@@ -7,7 +7,11 @@ it (the numbers in #173's Answer), not here. What runs here is everything that d
 without Docker: reading dockerd's timestamps, the probe's clocks against a real socket, the summary's
 medians, maxima and gaps, the verdict mode's rules and command line (ADR-0033, where a `B-` id is
 proved by the benchmark's verdict and the verdict's logic here), and the gateway's environment, read
-from the contract's example rather than from a copy.
+from the contract's example rather than from a copy. One class reads the two Dockerfiles the
+benchmark builds, and holds the floor's image chain to the gateway's (#910); the line below names
+them for tools/check.sh, so a change to either runs this companion.
+
+Checkout inputs: src/Gateway/Dockerfile tools/bench/floor/Dockerfile
 
 Run: python3 -I tools/bench/startup_tests.py
 """
@@ -18,6 +22,7 @@ import http.server
 import importlib.util
 import json
 import pathlib
+import re
 import socket
 import threading
 import time
@@ -219,6 +224,45 @@ class GatewayEnvironment(unittest.TestCase):
         self.assertEqual("us-east-1", self.env["AWS_REGION"])
         self.assertIn("AWS_ACCESS_KEY_ID", self.env)
         self.assertIn("AWS_SECRET_ACCESS_KEY", self.env)
+
+
+# A Dockerfile's FROM: optional flags such as --platform, the image, and an optional stage name.
+FROM_LINE = re.compile(r"^FROM\s+(?P<flags>(?:--\S+\s+)*)(?P<ref>\S+)(?:\s+AS\s+(?P<stage>\S+))?\s*$", re.I)
+
+
+def image_chain(path: str):
+    """Each stage of a Dockerfile as (flags, image, stage, the stage's ENV and USER lines), in order."""
+    stages = []
+    for line in (ROOT / path).read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        m = FROM_LINE.match(line)
+        if m:
+            stages.append((m["flags"].strip(), m["ref"], m["stage"], []))
+        elif stages and line.split(" ", 1)[0].upper() in ("ENV", "USER"):
+            stages[-1][3].append(line)
+    return stages
+
+
+class FloorImage(unittest.TestCase):
+    """tools/bench/floor/Dockerfile builds on the gateway's chain, so the floor is a floor of it (#173, #910).
+
+    The floor's header says it follows src/Gateway/Dockerfile line for line where that applies; on
+    #910 the gateway's bases had moved to digests and a chiseled runtime (#781) while the floor's
+    still floated on the plain noble ones. These cases read both files as they are, so a change to
+    either that the other does not make fails here.
+    """
+
+    FLOOR = "tools/bench/floor/Dockerfile"
+    GATEWAY = "src/Gateway/Dockerfile"
+
+    def test_the_floor_builds_on_the_gateways_bases_by_the_same_digests(self):
+        floor, gateway = image_chain(self.FLOOR), image_chain(self.GATEWAY)
+        self.assertEqual([(flags, ref, stage) for flags, ref, stage, _ in gateway],
+                         [(flags, ref, stage) for flags, ref, stage, _ in floor])
+
+    def test_the_floor_runs_with_the_gateways_runtime_environment_and_user(self):
+        floor, gateway = image_chain(self.FLOOR), image_chain(self.GATEWAY)
+        self.assertEqual(sorted(gateway[-1][3]), sorted(floor[-1][3]))
 
 
 def starts(kind: str, count: int, **after_ms):

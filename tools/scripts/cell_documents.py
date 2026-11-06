@@ -25,6 +25,10 @@ one file back.
         A registry document's revision, the number /readyz reports once it is live.
     cell_documents.py release <directory>
         A release name for a fixture directory, derived from its content.
+    cell_documents.py requests
+        A filter for logs.sh --requests: of the `aws logs tail --format detailed` lines on standard
+        input, each gateway request record becomes one line on standard output, and every other
+        line, a health check's record among them, becomes nothing. Each line is written as it is read.
 
 Exit status: 0 done; 1 the input is not what the document needs, with the reason on standard error;
 2 a command line it does not take.
@@ -286,7 +290,55 @@ def release(directory: str) -> int:
     return 0
 
 
-COMMANDS = {"outputs": (outputs, 5), "field": (field, 3), "clients": (clients, 2), "config": (config, 2), "apps": (apps, 1), "revision": (revision, 1), "release": (release, 1)}
+# --- requests --------------------------------------------------------------------------------------
+
+# The category the gateway's request line is written under: RequestTelemetry.Category in
+# src/Platform.Telemetry/RequestTelemetry.cs. contracts/telemetry.md gives the line's fields, and a
+# request line carries no path, so a health check is told by its route: the contract's `health`,
+# which the telemetry stage gives /healthz and /readyz and nothing else.
+REQUEST_CATEGORY = "Platform.Telemetry.Request"
+HEALTH_ROUTE = "health"
+
+
+def request_line(line: str) -> str | None:
+    """`<time> <task id's first eight> <app> <route> <rule> <status>` for one tail line that holds a
+    gateway request record, else None. The tail's detailed format is the event's timestamp, its
+    stream and its message (https://awscli.amazonaws.com/v2/documentation/api/latest/reference/logs/tail.html,
+    `--format`); the stream is <container>/<container>/<task id> (infra/modules/cell/ecs.tf).
+    A null app (a request refused before its app was resolved) or rule prints as -."""
+    parts = line.rstrip("\n").split(" ", 2)
+    if len(parts) < 3:
+        return None
+    _, stream, message = parts
+    try:
+        record = json.loads(message)
+    except ValueError:
+        return None
+    if not isinstance(record, dict) or record.get("category") != REQUEST_CATEGORY:
+        return None
+    if record.get("route") == HEALTH_ROUTE:
+        return None
+    task = stream.rsplit("/", 1)[-1][:8]
+    fields = [record.get("ts"), task, record.get("app_id"), record.get("route"), record.get("rule"), record.get("status")]
+    return " ".join("-" if value is None else str(value) for value in fields)
+
+
+def requests() -> int:
+    """Reads line by line and flushes each answer, so that logs.sh --requests --follow prints a
+    request as it arrives. Control-C ends logs.sh's read, and this filter with it, quietly."""
+    try:
+        for line in iter(sys.stdin.readline, ""):
+            shown = request_line(line)
+            if shown is not None:
+                print(shown, flush=True)
+    except KeyboardInterrupt:
+        return 130
+    except BrokenPipeError:
+        return 0
+    return 0
+
+
+COMMANDS = {"outputs": (outputs, 5), "field": (field, 3), "clients": (clients, 2), "config": (config, 2), "apps": (apps, 1), "revision": (revision, 1), "release": (release, 1), "requests": (requests, 0)}
 
 
 def main(argv: list[str]) -> int:

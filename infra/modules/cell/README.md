@@ -109,8 +109,7 @@ Under `multi_task = true` (#347, #332 D6):
   route change on the tables that are already per zone. A regional one needs no
   public subnet ([AWS](https://docs.aws.amazon.com/vpc/latest/userguide/nat-gateways-regional.html)).
 - **The S3 and DynamoDB gateway endpoints** on both private tables, with AWS's
-  default policy, at no charge
-  ([AWS](https://docs.aws.amazon.com/vpc/latest/privatelink/gateway-endpoints.html)).
+  default policy, at no charge ([AWS](https://docs.aws.amazon.com/vpc/latest/privatelink/gateway-endpoints.html)).
   They are not a destination allowlist, which is P2-9's.
 - **The task's egress stays 443 alone**, and `ForwardedHeaders:TrustedNetworks` still
   names only the load balancer's public subnets, so no private subnet is trusted.
@@ -169,6 +168,10 @@ needs credentials, a state bucket and the first-deployment order in
   (`capabilities.drop = ["ALL"]`) and run an init process (`initProcessEnabled`), which
   forwards SIGTERM to `dotnet` and reaps zombies (#786); neither process needs a
   capability, since each runs as its image's non-root user on a port above 1024.
+  Both containers also spell out the values ECS fills in when they are left out
+  (`capabilities.add = []`, the gateway's `hostPort`, and empty `mountPoints`,
+  `systemControls` and `volumesFrom`), so the definition ECS reads back after an apply
+  is the configured one and a re-plan replaces nothing (#1006).
 - **The deployment.** One service, desired count 1 (2 under `multi_task`), circuit breaker on with rollback,
   minimum healthy 100% and maximum 200%, so a roll starts the replacement before it
   stops a task. Both images are variables with no default that names a tag:

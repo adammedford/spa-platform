@@ -15,6 +15,8 @@ case proves the same thing after #62 changes.
 """
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import os
 import pathlib
@@ -830,6 +832,89 @@ class SubjectForOpenBoxTests(unittest.TestCase):
         self.assertEqual(f"landing-subjects: subject: Merge task issue-{NO_SUCH_ISSUE}", last_line(done))
 
 
+STRICT = ("--base", "base", "--fail-unchecked")
+
+
+def unchecked_fail(count: int) -> str:
+    merges = "merge" if count == 1 else "merges"
+    return (f"landing-subjects: fail: {count} full-landing {merges} went unchecked, and --fail-unchecked holds "
+            "what it could not read; sign gh in or reach GitHub, then run it again.")
+
+
+class FailUncheckedTests(unittest.TestCase):
+    """#894: tools/check.sh --full passes --fail-unchecked, so an unreadable issue, an unreadable
+    listing or a missing gh fails the full check, which a lane and the overnight integrate gate run,
+    while the hook, which does not pass it, still lets an offline push through (UncheckedTests)."""
+
+    def test_an_unreachable_github_fails(self):
+        case = Case(self)
+        case.issue(62, ISSUE_62)
+        sha = case.commit("Merge task issue-62: operating notes", "Ticket: #62")
+        done = case.run(*STRICT, GH_FAIL="1")
+        self.assertEqual(1, done.returncode, done.stdout + done.stderr)
+        self.assertIn(f'landing-subjects: unchecked: {sha} "Merge task issue-62: operating notes": #62 could not '
+                      'be read: error connecting to api.github.com', done.stdout.splitlines())
+        self.assertEqual(unchecked_fail(1), last_line(done))
+
+    def test_an_issue_github_has_not_got_fails(self):
+        case = Case(self)
+        case.commit("Merge task issue-999: no such issue", f"Ticket: #{NO_SUCH_ISSUE}")
+        done = case.run(*STRICT)
+        self.assertEqual(1, done.returncode, done.stdout + done.stderr)
+        self.assertEqual(unchecked_fail(1), last_line(done))
+
+    def test_no_gh_fails(self):
+        case = Case(self, gh=False)
+        case.commit("Merge task issue-62: operating notes", "Ticket: #62")
+        done = case.run(*STRICT)
+        self.assertEqual(1, done.returncode, done.stdout + done.stderr)
+        self.assertIn("#62 could not be read: gh is not on PATH", done.stdout)
+        self.assertEqual(unchecked_fail(1), last_line(done))
+
+    def test_an_unreadable_listing_fails(self):
+        case = Case(self)
+        case.issue(344, CARRIER_P2_1)
+        case.commit("Merge task P2-1: the session store", "Ticket: #344")
+        done = case.run(*STRICT, GH_LIST_FAIL="1")
+        self.assertEqual(2, done.returncode, done.stdout)
+        self.assertIn("the open issues could not be listed completely", done.stdout)
+        self.assertIn("nothing judged", last_line(done))
+
+    def test_every_unchecked_merge_is_counted(self):
+        case = Case(self)
+        case.commit("Merge task issue-62: operating notes", "Ticket: #62")
+        case.commit("Merge task issue-999: no such issue", f"Ticket: #{NO_SUCH_ISSUE}")
+        done = case.run(*STRICT, GH_FAIL="1")
+        self.assertEqual(1, done.returncode, done.stdout)
+        self.assertEqual(unchecked_fail(2), last_line(done))
+
+    def test_a_held_merge_is_still_named_as_held(self):
+        case = Case(self)
+        case.issue(309, "- [ ] Open.\n")
+        case.commit("Merge task issue-999: unreadable", f"Ticket: #{NO_SUCH_ISSUE}")
+        case.commit("Merge task issue-309: held", "Ticket: #309")
+        done = case.run(*STRICT)
+        self.assertEqual(1, done.returncode, done.stdout)
+        self.assertIn("open box", last_line(done))
+
+    def test_a_range_it_could_read_passes_as_without_it(self):
+        case = Case(self)
+        case.issue(296, FINISHED)
+        case.commit("Merge task issue-296: finished", "Ticket: #296")
+        case.commit("Merge task 6.8: from before the move", "no ticket line")
+        strict, plain = case.run(*STRICT), case.run()
+        self.assertEqual(0, strict.returncode, strict.stdout)
+        self.assertEqual(plain.stdout, strict.stdout)
+        self.assertEqual("landing-subjects: pass: 2 full-landing merges from base to HEAD: 1 clear, 0 unchecked, "
+                         "1 with no Ticket line.", last_line(strict))
+
+    def test_it_is_no_option_of_subject_for(self):
+        case = Case(self)
+        done = case.run("--subject-for", "issue-296", "--ticket", "296", "--fail-unchecked")
+        self.assertEqual(2, done.returncode, done.stdout + done.stderr)
+        self.assertIn("--fail-unchecked", done.stderr)
+
+
 class BrokenTests(unittest.TestCase):
     def test_a_base_that_is_no_commit_judges_nothing_and_exits_2(self):
         case = Case(self)
@@ -854,6 +939,49 @@ class BrokenTests(unittest.TestCase):
         done = subprocess.run([sys.executable, "-I", str(SCRIPT)], cwd=case.repo, env=case.env,
                               capture_output=True, text=True)
         self.assertEqual(2, done.returncode)
+
+
+class GitTimeoutTests(unittest.TestCase):
+    # f7d81a7 bounded git's listing of the range by TIMEOUT, as gh's read is bounded, and no case
+    # held it (#896). A case cannot wait out 60 seconds, so these load the script in-process, lower
+    # its TIMEOUT, and put on PATH a git that never answers in time: it sleeps for SLEEP seconds, far
+    # past the lowered TIMEOUT, so a listing with no bound, or with a bound that is not TIMEOUT,
+    # waits it out and reads git's empty answer as a range with nothing to judge.
+    TIMEOUT = 0.5
+    SLEEP = 10
+
+    def setUp(self):
+        scratch = tempfile.TemporaryDirectory()
+        self.addCleanup(scratch.cleanup)
+        bin_dir = pathlib.Path(scratch.name).resolve()
+        sleep = shutil.which("sleep")
+        self.assertIsNotNone(sleep, "sleep is required to run this companion")
+        fake = bin_dir / "git"
+        # exec, so the process the timeout kills is the sleep itself, and no child holds the pipe open.
+        fake.write_text(f"#!/bin/bash\nexec {sleep} {self.SLEEP}\n")
+        fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
+        self.landing = load("landing_subjects")
+        self.landing.TIMEOUT = self.TIMEOUT
+        path = os.environ.get("PATH")
+        os.environ["PATH"] = str(bin_dir)
+        self.addCleanup(lambda: os.environ.__setitem__("PATH", path) if path is not None
+                        else os.environ.pop("PATH", None))
+
+    def test_a_listing_of_the_range_that_does_not_answer_judges_nothing_and_exits_2(self):
+        printed = io.StringIO()
+        with contextlib.redirect_stdout(printed):
+            code = self.landing.main(["--base", "base"])
+        lines = printed.getvalue().splitlines()
+        self.assertEqual(2, code, printed.getvalue())
+        self.assertTrue(lines and lines[-1].startswith(
+            "landing-subjects: fail: nothing judged: git log could not run: "), printed.getvalue())
+        self.assertIn(f"timed out after {self.TIMEOUT} seconds", lines[-1])
+
+    def test_a_listing_of_the_history_that_does_not_answer_is_broken(self):
+        with self.assertRaises(self.landing.Broken) as raised:
+            self.landing.history("HEAD")
+        self.assertTrue(str(raised.exception).startswith("git log could not run: "), str(raised.exception))
+        self.assertIn(f"timed out after {self.TIMEOUT} seconds", str(raised.exception))
 
 
 def load(name: str):

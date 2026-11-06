@@ -44,7 +44,12 @@ internal sealed class PlatformCookieHandler(
 /// static page (RemoteAuthenticationHandler.HandleRequestAsync:
 /// https://github.com/dotnet/aspnetcore/blob/v10.0.0/src/Security/Authentication/Core/src/RemoteAuthenticationHandler.cs).
 /// It is caught here instead and ends the request under <c>auth.store</c> with the problem body. The
-/// cookie handler appends the session cookie only once the store has answered, so none is sent. It
+/// cookie handler appends the session cookie only once the store has answered, so none is sent.
+///
+/// And a second (#908): a challenge first reads the provider's discovery document through
+/// <see cref="ProviderDiscovery"/>, which answers the request itself when the document cannot be read, so
+/// the identity model's exception never leaves the challenge as a <c>500</c>. Only the read is guarded,
+/// not the whole challenge, so any other failure of the handler's is still the gateway's generic one. It
 /// logs under the framework handler's category (<see cref="FrameworkCategory"/>).
 /// </summary>
 internal sealed class PlatformOidcHandler(
@@ -61,6 +66,14 @@ internal sealed class PlatformOidcHandler(
         {
             await StoreFailure.EndAsync(Context, e.Operation);
             return true;
+        }
+    }
+
+    protected override async Task HandleChallengeAsync(AuthenticationProperties properties)
+    {
+        if (await ProviderDiscovery.ReadAsync(Context, Options))
+        {
+            await base.HandleChallengeAsync(properties);
         }
     }
 }

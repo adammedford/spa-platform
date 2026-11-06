@@ -81,6 +81,16 @@ class Kind(unittest.TestCase):
         self.assertEqual(group(derived(title="Overnight workflow: launch by script path"), "kind"),
                          ["kind:ticket"])
 
+    def test_only_a_dated_title_is_a_report(self):
+        # #970: a ticket whose title merely begins "Overnight" is a ticket: #742 and #74 as filed.
+        self.assertEqual(group(derived(title="Overnight 2026-11-04"), "kind"), ["kind:report"])
+        for title in ("Overnight agents look in ~/.docker/bin before calling docker absent",
+                      "Overnight ticket 66 says its own work is still future",
+                      "Overnight 2026-11", "The Overnight 2026-11-04 record",
+                      "overnight 2026-11-04"):
+            with self.subTest(title):
+                self.assertEqual(group(derived(title=title), "kind"), ["kind:ticket"])
+
 
 class Area(unittest.TestCase):
     def test_the_longest_prefix_wins(self):
@@ -298,6 +308,24 @@ class CommandLine(unittest.TestCase):
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertIn("issue-labels: #7: in sync", done.stdout)
 
+    def test_742_and_74_labelled_reports_are_relabelled_tickets(self):
+        # #970: two tickets whose titles merely begin "Overnight", as labelled reports. On the
+        # tracker on 2026-11-05 #742 already carried kind:ticket and #74 no kind label, so each is
+        # given here the kind:report the ticket reports, and the run names the relabel it would make.
+        self.world({**self.current, "issues": [
+            issue(touching(".claude/workflows/overnight.js"), number=742,
+                  title="Overnight agents look in ~/.docker/bin before calling docker absent",
+                  have=("ready-for-agent", "kind:report", "area:process")),
+            issue("", number=74, title="Overnight ticket 66 says its own work is still future",
+                  have=("ready-for-agent", "kind:report"))]})
+        for number in ("742", "74"):
+            with self.subTest(number):
+                done = self.run_script("check", number)
+                self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+                self.assertIn(f"issue-labels: #{number}: add kind:ticket; remove kind:report",
+                              done.stdout)
+        self.assertEqual(self.writes(), [])
+
     def test_apply_writes_by_name_through_the_rest_routes(self):
         self.world({**self.current, "issues": [
             issue(touching("infra/main.tf"), have=("needs-triage", "area:product"), number=11),
@@ -367,6 +395,9 @@ class CommandLine(unittest.TestCase):
         self.assertEqual(self.writes(), [])
 
     def test_a_short_full_listing_does_not_delete_a_label_the_filtered_one_finds(self):
+        # The case that holds in_use()'s filtered listing (#828): the full listings come back empty,
+        # so only the filtered read finds either label. Deleting that read, or dropping its "issue"
+        # or its "pr" kind, deletes duplicate or question and turns this case red.
         defined = [{"name": name, **wanted} for name, wanted in TABLE.labels.items()]
         self.world({"issues": [issue(have=("duplicate",))],
                     "prs": [{"number": 3, "labels": [{"name": "question"}]}],
@@ -406,9 +437,40 @@ class CommandLine(unittest.TestCase):
         last = self.last_line(done)
         self.assertTrue(last.startswith("issue-labels: fail: write failed: #12: "), last)
         self.assertIn("1 issue(s) written before it", last)
+        self.assertIn("nothing written on #12", last)
         self.assertNotIn("nothing judged", last)
 
+    def test_a_write_that_fails_after_a_post_for_the_same_issue_says_what_it_made(self):
+        # The case #831 asks for: the POST that adds #11's labels succeeds and the DELETE that
+        # follows fails, so #11 is partly written. It is not one of the issues written before it,
+        # and the line names what the POST made, which the next apply then finds already there.
+        self.world({**self.current, "issues": [
+            issue(touching("infra/main.tf"), have=("area:product",), number=11)]})
+        done = self.run_script("apply", "--all", GH_FAIL_WRITES_AFTER="1")
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertEqual([call[2] for call in self.writes()], ["POST", "DELETE"])
+        last = self.last_line(done)
+        self.assertTrue(last.startswith("issue-labels: fail: write failed: #11: "), last)
+        self.assertIn("0 issue(s) written before it", last)
+        self.assertIn("on #11, added area:deployment, kind:ticket, vendor:aws before the failure", last)
+        self.assertNotIn("nothing written on #11", last)
+
+    def test_a_delete_that_fails_after_a_delete_for_the_same_issue_says_what_it_removed(self):
+        # Two stale labels and nothing to add: the first DELETE lands and the second fails.
+        self.world({**self.current, "issues": [issue(touching("tools/land.sh"), number=11, have=(
+            "kind:ticket", "area:process", "area:product", "vendor:aws"))]})
+        done = self.run_script("apply", "--all", GH_FAIL_WRITES_AFTER="1")
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertEqual([call[2] for call in self.writes()], ["DELETE", "DELETE"])
+        last = self.last_line(done)
+        self.assertTrue(last.startswith("issue-labels: fail: write failed: #11: "), last)
+        self.assertIn("0 issue(s) written before it; on #11, removed area:product before the failure",
+                      last)
+
     def test_a_label_write_that_fails_says_what_was_made(self):
+        # The case that holds run_labels()'s write-failed verdict (#829): the count alone is also in a
+        # nothing-judged line, so the prefix is what tells them apart. Raising Unreadable in place of
+        # WriteFailed, or dropping the try around change(), ends "nothing judged" and turns this red.
         self.world({"issues": [], "labels": []})
         done = self.run_script("labels", "apply", GH_FAIL_WRITES_AFTER="2")
         self.assertEqual(done.returncode, 2, done.stdout + done.stderr)

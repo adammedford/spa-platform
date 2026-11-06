@@ -1,0 +1,209 @@
+#!/usr/bin/env python3
+"""Test companion for tools/wiz_prelude.sh, the wiz skill's prelude. Owner: integrator.
+
+Run: python3 -I tools/wiz_prelude_tests.py
+
+Built in #1010. Every Bash call of a sitting used to repeat the prelude by hand from a block in
+.claude/skills/wiz/SKILL.md. In sitting D one call left out its Docker PATH line and
+tools/scripts/platform-tfvars.sh failed on docker-credential-desktop, and at midnight UTC its
+`date -u +%F` moved the record and bundle paths to the next day mid-sitting. Now every call sources
+one file, and the file names the record and the bundle after the date Stage 0 pinned, refusing to
+run without one.
+
+**What runs is the script itself.** The prelude finds the repository from git, as the skill's line
+does, so each case makes a throwaway git repository, copies the tracked .gitignore,
+tools/wiz_prelude.sh, tools/aws-project.env and tools/wiz_redact.py into it whole, and starts /bin/bash there, the shell
+the Bash tool runs (#183), which on macOS is 3.2. The environment is built, not inherited: PATH is
+the directories of git and python3 and the system's own, HOME is inside the case's directory, and
+git reads no configuration of the machine's.
+
+**The skill's text.** The third class reads the wiz skill's two files from this checkout and holds
+that no line of the prelude's commands is copied into them, so the file stays the one copy.
+
+Checkout inputs: .claude/skills/wiz/*.md .gitignore
+"""
+from __future__ import annotations
+
+import datetime
+import os
+import pathlib
+import shutil
+import subprocess
+import tempfile
+import unittest
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+PRELUDE = ROOT / "tools" / "wiz_prelude.sh"
+# .gitignore is the checkout's own, copied whole rather than restated, so the case reads the rule
+# that keeps the pin, the record and the bundle out of git: .scratch/sitting/ is tracked, its log/
+# is not (CODING_STANDARDS.md, "A guard reads the thing it guards").
+COPIED = (".gitignore", "tools/wiz_prelude.sh", "tools/aws-project.env", "tools/wiz_redact.py")
+SKILL_FILES = (ROOT / ".claude" / "skills" / "wiz" / "SKILL.md", ROOT / ".claude" / "skills" / "wiz" / "a-and-b.md")
+PIN = ".scratch/sitting/log/date"
+SOURCE = ". tools/wiz_prelude.sh"
+
+
+def utc_day(offset: int = 0) -> str:
+    return (datetime.datetime.now(datetime.timezone.utc).date() + datetime.timedelta(days=offset)).isoformat()
+
+
+def tool_path() -> str:
+    dirs = []
+    for tool in ("git", "python3"):
+        found = shutil.which(tool)
+        if found is None:
+            raise RuntimeError(f"{tool} is not on PATH")
+        dirs.append(str(pathlib.Path(found).parent))
+    dirs += ["/usr/bin", "/bin"]
+    return ":".join(dict.fromkeys(dirs))
+
+
+class Sitting(unittest.TestCase):
+    """A throwaway repository laid out as the main checkout, with the prelude copied in."""
+
+    def setUp(self) -> None:
+        self.dir = pathlib.Path(tempfile.mkdtemp(prefix="wiz-prelude-")).resolve()
+        self.addCleanup(shutil.rmtree, self.dir, True)
+        self.repo = self.dir / "repo"
+        (self.repo / "tools").mkdir(parents=True)
+        for path in COPIED:
+            shutil.copy2(ROOT / path, self.repo / path)
+        empty = self.dir / "gitconfig"
+        empty.write_text("")
+        self.env = {
+            "PATH": tool_path(),
+            "HOME": str(self.dir / "home"),
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_CONFIG_GLOBAL": str(empty),
+            "LC_ALL": "C",
+        }
+        (self.dir / "home").mkdir()
+        done = subprocess.run(["git", "init", "-q", str(self.repo)], env=self.env, capture_output=True, text=True,
+                              timeout=60, check=False)
+        self.assertEqual(done.returncode, 0, done.stderr)
+
+    def pin(self, text: str) -> None:
+        path = self.repo / PIN
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+
+    def bash(self, script: str, cwd: pathlib.Path | None = None) -> subprocess.CompletedProcess:
+        return subprocess.run(["/bin/bash", "-c", script], cwd=cwd or self.repo, env=self.env, capture_output=True,
+                              text=True, timeout=60, check=False)
+
+
+class PinnedDate(Sitting):
+    def test_a_date_pinned_yesterday_names_the_record_and_the_bundle_not_today(self) -> None:
+        yesterday = utc_day(-1)
+        self.pin(yesterday + "\n")
+        done = self.bash(SOURCE + ' && printf "%s\\n%s\\n" "$R" "$E" && shown echo hello')
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(done.stdout.splitlines()[:2],
+                         [f".scratch/sitting/log/{yesterday}.log", f".scratch/sitting/log/{yesterday}"])
+        log = self.repo / ".scratch" / "sitting" / "log"
+        self.assertTrue((log / yesterday).is_dir(), "the bundle directory of the pinned date was not made")
+        self.assertEqual((log / f"{yesterday}.log").read_text(), "$ echo hello\nhello\nexit=0\n")
+        for day in (utc_day(0), utc_day(1)):
+            self.assertFalse((log / day).exists(), f"a bundle directory was made for {day}")
+            self.assertFalse((log / f"{day}.log").exists(), f"a record was written for {day}")
+
+    def test_the_prelude_sets_the_profile_region_docker_path_umask_and_spactl(self) -> None:
+        self.pin(utc_day(-1) + "\n")
+        done = self.bash(SOURCE + ' && printf "%s\\n" "$AWS_PROFILE" "$AWS_REGION" "${PATH%%:*}" "$(umask)"'
+                         ' "$(type -t shown)" "$(type -t captured)" "$(type -t spactl)" "${SPACTL-unset}"')
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(done.stdout.splitlines(),
+                         ["spa-platform", "us-east-2", str(self.dir / "home" / ".docker" / "bin"), "0077",
+                          "function", "function", "function", "unset"])
+
+    def test_a_call_from_a_subdirectory_runs_at_the_top_level(self) -> None:
+        self.pin(utc_day(-1) + "\n")
+        (self.repo / "infra").mkdir()
+        done = self.bash(". ../tools/wiz_prelude.sh && pwd -P", cwd=self.repo / "infra")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(done.stdout, f"{self.repo}\n")
+
+
+class NoPinnedDate(Sitting):
+    def assertRefuses(self) -> None:
+        done = self.bash(SOURCE + "; echo the call went on")
+        self.assertNotEqual(done.returncode, 0)
+        self.assertIn("Stage 0", done.stderr)
+        self.assertNotIn("the call went on", done.stdout)
+        log = self.repo / ".scratch" / "sitting" / "log"
+        self.assertFalse(log.exists() and any(p.name != "date" for p in log.iterdir()),
+                         "the refused prelude wrote a record or a bundle")
+
+    def test_no_pin_exits_non_zero_naming_stage_0(self) -> None:
+        self.assertRefuses()
+
+    def test_a_pin_that_is_not_a_date_exits_non_zero_naming_stage_0(self) -> None:
+        for text in ("", "\n", "today\n", "2026-11-4\n", "2026-11-04 extra\n", "2026-11-04\n2026-11-05\n"):
+            with self.subTest(pin=text):
+                self.pin(text)
+                self.assertRefuses()
+
+
+class StageZeroPins(Sitting):
+    def test_pin_writes_todays_utc_date_once_and_the_prelude_reads_it(self) -> None:
+        before = utc_day(0)
+        done = self.bash("/bin/bash tools/wiz_prelude.sh --pin")
+        after = utc_day(0)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        pinned = (self.repo / PIN).read_text()
+        self.assertIn(pinned, (before + "\n", after + "\n"))
+        self.assertEqual(done.stdout, f"wiz prelude: the sitting's date is pinned to {pinned.strip()} in {PIN}\n")
+        self.assertEqual((self.repo / PIN).stat().st_mode & 0o777, 0o600)
+        ignored = subprocess.run(["git", "check-ignore", "-q", PIN], cwd=self.repo, env=self.env, capture_output=True,
+                                 text=True, timeout=60, check=False)
+        self.assertEqual(ignored.returncode, 0, "the pin is not ignored, so Stage 0's git status would show it")
+        later = self.bash(SOURCE + ' && echo "$R"')
+        self.assertEqual(later.returncode, 0, later.stderr)
+        self.assertEqual(later.stdout, f".scratch/sitting/log/{pinned.strip()}.log\n")
+
+    def test_pin_replaces_an_earlier_sittings_date(self) -> None:
+        self.pin("2026-01-01\n")
+        done = self.bash("/bin/bash tools/wiz_prelude.sh --pin")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertNotEqual((self.repo / PIN).read_text(), "2026-01-01\n")
+
+    def test_run_without_pin_it_refuses_and_writes_nothing(self) -> None:
+        for args in ("", " --pinn", " --pin extra"):
+            with self.subTest(args=args):
+                done = self.bash("/bin/bash tools/wiz_prelude.sh" + args)
+                self.assertEqual(done.returncode, 2, done.stderr)
+                self.assertIn("usage", done.stderr)
+                self.assertFalse((self.repo / PIN).exists())
+
+
+class SkillHoldsNoCopy(unittest.TestCase):
+    """The skill describes the prelude and sources it; it never repeats its commands (#1010)."""
+
+    # The commands a hand copy of the old block carried, written out here rather than read from the
+    # prelude, so a copy is caught even when the prelude changes.
+    SIGNATURES = ("date -u", ".docker/bin", "umask 077;", "aws-project.env && set +a", "shown() {", "captured() {",
+                  "spactl() {", "wiz_redact.py --stream; echo", "git check-ignore -q \"$E/x\"")
+
+    def skill_lines(self) -> list[tuple[str, int, str]]:
+        return [(path.name, n, line) for path in SKILL_FILES
+                for n, line in enumerate(path.read_text().splitlines(), 1)]
+
+    def test_the_skill_holds_none_of_the_old_blocks_commands(self) -> None:
+        for name, n, line in self.skill_lines():
+            for signature in self.SIGNATURES:
+                self.assertNotIn(signature, line, f"{name}:{n} copies the prelude")
+
+    def test_the_skill_holds_no_line_of_the_prelude(self) -> None:
+        commands = set()
+        for line in PRELUDE.read_text().splitlines():
+            code = line.split(" # ")[0].strip()
+            if len(code) >= 16 and not code.startswith("#"):
+                commands.add(code)
+        self.assertGreater(len(commands), 10, "the prelude's commands were not read")
+        for name, n, line in self.skill_lines():
+            for code in commands:
+                self.assertNotIn(code, line, f"{name}:{n} copies the prelude")
+
+
+if __name__ == "__main__":
+    unittest.main()
