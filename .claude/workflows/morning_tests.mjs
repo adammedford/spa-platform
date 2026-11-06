@@ -1955,8 +1955,8 @@ try {
     else {
       const canary = 'x'.repeat(300) + 'BODY-CANARY-' + 'z'.repeat(5000)
       const fromGh = JSON.stringify({ number: ISSUE, comments: [
-        { author: { login: 'adammedford' }, createdAt: 'a', url: 'u1', body: 'Confirm Q1 to Q3.\n\n' + canary },
-        { author: { login: 'adammedford' }, createdAt: 'b', url: 'u2', body: '## Questions: #1, issue-1, T\r\n\n' + canary },
+        { author: { login: 'adammedford' }, createdAt: 'a', url: 'u1', body: 'Confirm Q1 to Q3.\n\n' + canary + '\n' },
+        { author: { login: 'adammedford' }, createdAt: 'b', url: 'u2', body: '## Questions: #1, issue-1, T\r\n\n' + canary + '\n\n' },
         { author: { login: 'adammedford' }, createdAt: 'c', url: 'u3', body: 'é'.repeat(300) + canary },
       ] })
       const r = spawnSync('jq', ['-c', jqOf[1]], { input: fromGh, encoding: 'utf8' })
@@ -1971,7 +1971,7 @@ try {
           if (typeof c.bytes !== 'number' || c.bytes < 5000) fail(`the comments index gives a size of ${c.bytes} for a body over 5000 bytes`)
         }
         if (out.comments[2].bytes !== Buffer.byteLength('é'.repeat(300) + canary)) fail(`the comments index counts ${out.comments[2].bytes} bytes, not the body's UTF-8 bytes`)
-        if (out.comments.map((c) => c.tail).join() !== '0,0,0') fail(`the comments index counts the trailing newlines of ${JSON.stringify(out.comments.map((c) => c.tail))}, not 0,0,0`)
+        if (out.comments.map((c) => c.tail).join() !== '1,2,0') fail(`the comments index counts the trailing newlines of ${JSON.stringify(out.comments.map((c) => c.tail))}, not 1,2,0`)
         if (!out.comments[1].head.startsWith('## Questions: #1, issue-1, T\r')) fail('the comments index trims or rewrites the head the readers judge')
       }
     }
