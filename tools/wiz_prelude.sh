@@ -7,7 +7,8 @@
 # skill's rule 8: a call made from a worktree still runs the landed scripts), exports the AWS
 # profile and Region from tools/aws-project.env, puts a per-user Docker Desktop on PATH, sets umask
 # 077, names the sitting's record R and its evidence bundle E after the date Stage 0 pinned, makes
-# the bundle's directory once git confirms it is ignored, and defines shown, captured and spactl.
+# the bundle's directory once git confirms it is ignored, and defines shown, captured, spactl and
+# sitting_browser.
 # Run with --pin, once, in Stage 0, it writes today's UTC date to the pin file .scratch/sitting/log/
 # date, ignored as the rest of log/ is, and replaces an earlier sitting's.
 #
@@ -64,3 +65,4 @@ unset wiz_date wiz_pin
 shown() { echo "\$ $*" >> "$R"; "$@" 2>&1 | tee -a "$R" | python3 -I tools/wiz_redact.py --stream; echo "exit=${PIPESTATUS[0]}" | tee -a "$R"; }
 captured() { echo "\$ $*" >> "$R"; "$@" 2> >(tee -a "$R" | python3 -I tools/wiz_redact.py --stream >&2) | tee -a "$R"; local rc=${PIPESTATUS[0]}; echo "exit=$rc" | tee -a "$R" >&2; return "$rc"; }
 spactl() { dotnet run --project tools/spactl -- "$@"; }   # a function, so SPACTL stays unset (Q80)
+sitting_browser() { dotnet run --project tests/e2e -- sitting-browser --bundle "$E" "$@"; }   # #1023 Q5 and Q6; its socket is in the bundle

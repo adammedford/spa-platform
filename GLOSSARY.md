@@ -45,8 +45,8 @@ the glossary keeps for agent sessions and the gateway's session records.
 of the human's signed-in tab: the process and its browser together, holding one or more profiles.
 What it yields is observation lines; it never yields a screenshot, a cookie, a session's name or a
 password. _Avoid_: "driver" (the row runner in the deployed suite, and the browser automation's own
-process), "headless browser" unqualified, "the agent's tab", and "browser binding", the wizard's
-former phrase for the human's tab.
+process), "headless browser" unqualified, "the agent's tab", and "browser binding", the wiz skill's
+phrase for the human's tab, which this instrument replaces.
 
 **Profile** — one browser identity of a sitting browser: its own cookie jar and one page, named by
 the agent that drives it. Several live at once when a step needs more than one session. _Avoid_:

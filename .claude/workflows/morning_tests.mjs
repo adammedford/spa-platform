@@ -32,7 +32,21 @@ const OWNERSHIP_MD = fs.readFileSync(path.join(top, 'OWNERSHIP.md'), 'utf8')
 const shapeOf = (body, label) => {
   const r = spawnSync('python3', ['-I', SHAPE, '-'], { cwd: top, encoding: 'utf8', input: JSON.stringify({ number: 0, body, labels: [{ name: label }], subIssuesSummary: { total: 0 }, blockedBy: { nodes: [] } }) })
   const lines = String(r.stdout || '').trim().split('\n')
-  return { status: r.status, last: lines[lines.length - 1] || '', failures: lines.filter((l) => /^ticket-shape: (?!note:|pass:|fail:)/.test(l)) }
+  return { status: r.status, last: lines[lines.length - 1] || '', failures: lines.filter((l) => /^ticket-shape: (?!note:|pass:|fail:)/.test(l)), notes: lines.filter((l) => l.startsWith('ticket-shape: note: ')) }
+}
+// The ticket template's headings (#973), as the ticket names the set, and what a filed body breaks of
+// it: each `##` heading outside the set, and each heading note tools/ticket_shape.py prints on it. A
+// run of the check that judged nothing (exit 2, or no exit) is itself an entry, so an unreadable body
+// or a broken check reads as off the template rather than as a body with no notes (CODING_STANDARDS.md
+// -> "A check fails closed").
+const TICKET_SET = ['Parent', 'What to build', 'Acceptance criteria', 'Blocked by']
+const offTemplate = (body, label) => {
+  const shape = shapeOf(body, label)
+  return [
+    ...String(body).split('\n').filter((l) => /^## /.test(l) && !TICKET_SET.includes(l.slice(3).trim())).map((l) => `writes "${l}"`),
+    ...(shape.status === 0 || shape.status === 1 ? [] : [`tools/ticket_shape.py judged nothing: exit ${shape.status}, ${shape.last}`]),
+    ...shape.notes.filter((l) => /^ticket-shape: note: heading:/.test(l)),
+  ]
 }
 const DATE = '2026-10-21'
 const MORNING_REL = `.scratch/overnight/log/morning-${DATE}`
@@ -109,6 +123,18 @@ const FINDING_NOPATH = 'The pull request description names a test id the diff ne
 const FOLLOW_UPS_443 = `## Follow-ups\n\n| Finding | Axis | Where | First carried by |\n| --- | --- | --- | --- |\n| ${FINDING_DDB} | Standards | .github/workflows/ci.yml:657-658 | this record |\n| ${FINDING_DEADLINE} | Standards | tests/Platform.Identity.Tests/AccessTokenSourceTests.cs; \`tests/Platform.Identity.Tests/BackchannelTimeoutTests.cs:41\` | this record |\n| ${FINDING_NOPATH} | Spec | the pull request description | this record |\n`
 const REC443 = { body: `## Review\n\n${FOLLOW_UPS_443}\nReviewed ${sha('e')} against ${sha('f')}: merge`, author_association: 'OWNER', html_url: R443, created_at: '2026-10-28T01:00:00Z' }
 const FU443 = { prs: [{ number: 443, comments: [REC443], reviews: [] }], filed: [] }
+// #966: a record in the five-column table review-queue.js writes since, each row naming in its Fails on
+// cell the input or state on which the finding gives the wrong result. #443's and #287's records stay
+// four-column, as every record before #966 is, and their rows read with an empty Fails on.
+const PR966 = 'https://github.com/adammedford/spa-platform/pull/966'
+const R966 = `${PR966}#issuecomment-6600000001`
+const FINDING_TAB = 'review_record.py prints a tab inside a Finding cell unchanged'
+const FAILS_TAB = 'A Finding cell holding a tab is cut at that tab by tools/land.sh, so its title never matches the filed issue \\| its warning repeats.'
+const FINDING_DOCS = 'The landing guide still names the four-column table'
+const FAILS_DOCS = 'A hand-filer reading docs/agents/review.md writes a row with no Fails on.'
+const FOLLOW_UPS_966 = `## Follow-ups\n\n| Finding | Axis | Where | First carried by | Fails on |\n| --- | --- | --- | --- | --- |\n| ${FINDING_TAB} | Standards | tools/review_record.py:300 | this record | ${FAILS_TAB} |\n| ${FINDING_DOCS} | Spec | docs/agents/review.md | this record | ${FAILS_DOCS} |\n`
+const REC966 = { body: `## Review\n\n${FOLLOW_UPS_966}\nReviewed ${sha('a')} against ${sha('b')}: merge`, author_association: 'OWNER', html_url: R966, created_at: '2026-11-05T01:00:00Z' }
+const FU966 = { prs: [{ number: 966, comments: [REC966], reviews: [] }], filed: [] }
 
 // #300: #287's description as the morning wrote it at the first head, served verbatim from its edit
 // history, and the first-parent merges of the branch it was rebuilt to (76704c5), oldest first.
@@ -242,6 +268,20 @@ const readRecord = (head, comments, reviews = []) => {
   return { verdict: 'none', head: '', url: '', reader: `exit ${r.status}: ${r.stderr.split('\n')[0]}` }
 }
 
+// The Verify agent's ticket read (#971), played with the real reader: the body saved to a file, then
+// `retro_record.py report <file> --title "Overnight <date>"`, whose tickets it returns.
+const REPORT_READER = path.join(top, 'tools', 'retro_record.py')
+const readTickets = (body, date) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'morning-report-'))
+  try {
+    const file = path.join(dir, 'report-body.md')
+    fs.writeFileSync(file, body)
+    const r = spawnSync('python3', ['-I', REPORT_READER, 'report', file, '--title', `Overnight ${date}`], { encoding: 'utf8' })
+    if (r.status !== 0) throw new Error(`retro_record.py report exited ${r.status}: ${r.stderr}`)
+    return JSON.parse(r.stdout).tickets
+  } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+}
+
 // The follow-ups reader's index of one comment or review (#514), as the prompt's jq prints it: its
 // record-like lines (a looser pattern than the record grammar, which the script applies), its size and
 // whether it holds the follow-ups table's header. SPLIT is the jq's line split, PY_LINE_BREAK's set.
@@ -307,7 +347,7 @@ function stub(env, scriptArgs, served) {
         // first 200 characters of each body and no more (the prompt's jq is run on gh's shape in 19a).
         // served.commentsIssue: the number it reports reading, as a reader that read the wrong issue would.
         const issue = served.issue === undefined ? issueWith([...QUESTIONS, CONFIRM]) : served.issue
-        const indexed = (issue ? issue.comments : []).map((c) => ({ author: c.author, createdAt: c.createdAt, url: c.url, bytes: Buffer.byteLength(c.body), head: c.body.slice(0, 200) }))
+        const indexed = (issue ? issue.comments : []).map((c) => ({ author: c.author, createdAt: c.createdAt, url: c.url, bytes: Buffer.byteLength(c.body), tail: /\n*$/.exec(c.body)[0].length, head: c.body.slice(0, 200) }))
         out = { issue: { number: served.commentsIssue || (issue ? issue.number : 0), comments: indexed }, error: served.commentsError || '' }
       } else if (label === 'handover-read') {
         // The earlier hand-overs' reader (#969): the comments its prompt's jq names, verbatim.
@@ -323,13 +363,19 @@ function stub(env, scriptArgs, served) {
         // served.mangle: 'first' drops the **Q<n>.** marker from every question body the batch reader
         // returns but not from a re-read (label ends -retry<n>); 'always' drops it from both. 'head' and
         // 'tail' change comment 1 on every read so that only one of the index's two fields differs: 'head'
-        // rewrites its first character (same bytes, another head), 'tail' drops its last, past the head.
+        // rewrites its first character (same bytes, another head), 'tail' drops its last non-newline
+        // character, past the head. 'newline' drops one trailing newline from every body, as the reader did on #1071 (#1084).
         const marker = (c) => (served.mangle === 'always' || (served.mangle === 'first' && !/-retry\d+$/.test(label))) ? { ...c, body: c.body.replace(/\*\*Q\d+\.\*\* /, '') } : c
         const mangled = (c) => c.url.endsWith('#issuecomment-1') && served.mangle === 'head' ? { ...c, body: '=' + c.body.slice(1) }
-          : c.url.endsWith('#issuecomment-1') && served.mangle === 'tail' ? { ...c, body: c.body.slice(0, -1) } : marker(c)
+          : c.url.endsWith('#issuecomment-1') && served.mangle === 'tail' ? { ...c, body: c.body.replace(/(.)(\n*)$/s, '$2') }
+          : served.mangle === 'newline' ? { ...c, body: c.body.replace(/\n$/, '') } : marker(c)
         out = { comments: at.map((i) => mangled(issue.comments[served.batchSwap ? (i + 1) % issue.comments.length : i])), error: '' }
       } else if (label === 'verify') {
         const v = served.verify || {}
+        // The report's tickets (#971), read as the prompt says, by the real tools/retro_record.py on the
+        // served issue's body, so a case that serves a body in either shape proves what Verify returns of it.
+        const issue = served.issue === undefined ? issueWith([...QUESTIONS, CONFIRM]) : served.issue
+        const tickets = readTickets(issue ? issue.body : '', DATE)
         const head = v.head || HEAD
         const record = served.agentRecord || readRecord(head, served.recordComments || RECORD_MERGE)
         out = {
@@ -348,7 +394,7 @@ function stub(env, scriptArgs, served) {
             { issue: 301, task: 'issue-301', outcome: 'partial', complete: false, mergeSha: sha('2'), outstanding: 'box 3' },
             { issue: 302, task: 'issue-302', outcome: 'failed', complete: false, mergeSha: '', outstanding: '' },
           ],
-          claimed: ['claim/ws2-hosting/2.9'],
+          claimed: tickets.claimed, steps: tickets.steps,
           record,
           // The landing's state (#661): an open pull request by default; served.verify.landing, the
           // fields of a merged one's report over it, as the merged-PR check returns them.
@@ -1127,6 +1173,22 @@ try {
     if (!/`[^`]*tools\/ticket_shape\.py[^`]*`/.test(fp)) fail('#320: the applier that files a follow-up is not told to check its shape with tools/ticket_shape.py')
     const create = (/`cd [^`]*gh issue create[^`]*FOLLOW-UP[^`]*`|`cd [^`]*gh issue create --title "<its title>"[^`]*`/.exec(fp) || [''])[0]
     if (!create || /--parent/.test(create)) fail(`#320: the follow-up is filed ${create ? 'as a sub-issue' : 'by no gh issue create'}: ${create}`)
+    // #973: the Apply filer's bodies, the applier's <role> filled in as it fills it, carry only the
+    // ticket template's headings, and tools/ticket_shape.py prints no heading note on them; and the
+    // workstream tickets an applier writes are asked for those headings and no other.
+    if (!followUps.length) fail('#973: Apply wrote no follow-up body, so its headings went unread')
+    for (const f of followUps) {
+      const off = offTemplate(f.body.replace('<role>', 'integrator'), 'needs-triage')
+      if (off.length) fail(`#973: Apply's follow-up for Q${f.q} is off the ticket template: ${off.join(' | ')}`)
+    }
+    const applierPrompts = calls.filter((c) => c.label.startsWith('apply:')).map((c) => c.prompt)
+    if (!applierPrompts.length) fail('#973: no applier prompt was rendered, so its workstream tickets went unread')
+    for (const p of applierPrompts) {
+      const ws = (/^Workstream tickets: [^\n]*/m.exec(p) || [''])[0]
+      const heads = [...ws.matchAll(/`(## [^`]+)`/g)].map((m) => m[1].slice(3))
+      for (const h of ['What to build', 'Acceptance criteria']) if (!heads.includes(h)) fail(`#973: the applier's workstream tickets are not asked for a "## ${h}" section: ${ws.slice(0, 200)}`)
+      for (const h of heads) if (!TICKET_SET.includes(h)) fail(`#973: the applier's workstream tickets are asked for "## ${h}", outside the ticket's set`)
+    }
     // Q91's shape: #62's boxes removed, the changed paragraphs posted as a diff first (#968).
     const e2 = units.flatMap((u) => u.edits || []).filter((e) => e.q === 2)
     if (e2.length !== 1 || e2[0].target !== 62 || e2[0].removeBoxes.join('|') !== `${BOX2}|${BOX3}`) fail(`#320 Q91 shape: the edit sent is ${JSON.stringify(e2)}`)
@@ -1234,6 +1296,20 @@ try {
     const listed = await execute(newRepo(), { date: DATE }, { applyTickets: [OLD] })
     if (!/^- #455\b/m.test(listed.result.handover.text)) fail('#481: an earlier night\'s Apply ticket is not listed on a morning that filed none')
     if (!/gh issue list --state open --limit 500 --json number,title,body,url,state,author /.test(listed.prompt('followups'))) fail('#481: the follow-ups reader is not told to list the open issues for the Apply tickets')
+    // #966: the index's hasTable, run by jq on the program the prompt gives, is true for a record in
+    // the five-column table and for one in the four-column table of the records before it, and false
+    // for a record with none; a false one is never read further, so its rows would never be filed.
+    const jqOf = /comments = `[^`]*\| jq '([^']+)'`/.exec(listed.prompt('followups'))
+    if (!jqOf) fail('#966: the follow-ups reader\'s prompt gives no jq program for the comments\' index')
+    else {
+      const pages = [[REC966, REC443, { ...REC443, html_url: `${R443}0`, body: `Findings: none.\n\nReviewed ${sha('e')} against ${sha('f')}: merge` }].map((c) => ({ ...c, html_url: c.html_url }))]
+      const jqRun = spawnSync('jq', [jqOf[1]], { input: JSON.stringify(pages), encoding: 'utf8' })
+      if (jqRun.error || jqRun.status !== 0) fail(`#966: jq could not run the index program: ${jqRun.error ? jqRun.error.message : jqRun.stderr}`)
+      else {
+        const got = JSON.parse(jqRun.stdout).map((e) => e.hasTable)
+        if (JSON.stringify(got) !== '[true,true,false]') fail(`#966: the index's hasTable reads ${JSON.stringify(got)} for a five-column record, a four-column one and one with no table, expected [true,true,false]`)
+      }
+    }
   }
 
   // 12. Forbidden commands. Every command a prompt asks an agent to run is a backtick span; across
@@ -1334,9 +1410,16 @@ try {
       if (!f.body.startsWith('**Raised by:** #287')) fail(`follow-ups: the body of ${JSON.stringify(f.title)} does not open with the Raised-by line: ${JSON.stringify(f.body.split('\n')[0])}`)
       if (!f.body.includes(R287[2])) fail(`follow-ups: the body of ${JSON.stringify(f.title)} does not link the record ${R287[2]}`)
     }
-    if (sent[0] && !sent[0].body.includes(R287[0])) fail('follow-ups: the first row\'s body does not name the earliest record that carried it')
-    if (sent[0] && !sent[0].body.includes('76704c5:.github/workflows/ci.yml lines 321-326 | tools/scripts')) fail('follow-ups: the escaped bar in the Where cell was not read back')
-    if (sent[1] && !sent[1].body.includes(`first carried by ${R287[2]}`)) fail('follow-ups: "this record" was not read as the record the table is in')
+    // The row's cells as followUpsOf reads them; the body no longer repeats them (#972), so they are
+    // held here: the escaped bar read back, the earliest record kept, "this record" read as its link.
+    {
+      const src = fs.readFileSync(scriptPath, 'utf8')
+      const read = (/^\/\/ -+ follow-ups, read here\n([\s\S]*?)\n\/\/ -+ /m.exec(src) || [])[1]
+      const rows = read ? new Function(`${read}\nreturn followUpsOf`)()(rec287(2, 'merge', FOLLOW_UPS_287).body, R287[2]) : []
+      if (!rows[0] || rows[0].where !== '76704c5:.github/workflows/ci.yml lines 321-326 | tools/scripts') fail(`follow-ups: the escaped bar in the Where cell was not read back: ${JSON.stringify(rows[0])}`)
+      if (!rows[0] || rows[0].firstCarried !== R287[0]) fail('follow-ups: the first row does not name the earliest record that carried it')
+      if (!rows[1] || rows[1].firstCarried !== R287[2]) fail('follow-ups: "this record" was not read as the record the table is in')
+    }
     const fp = first.prompt('followups-file')
     const spans = [...fp.matchAll(/`([^`\n]+)`/g)].map((m) => m[1])
     if (!spans.some((x) => /gh issue create\b/.test(x) && /--label <its label>/.test(x))) fail('follow-ups: the filer prompt asks for no gh issue create with each follow-up\'s own label')
@@ -1395,8 +1478,30 @@ try {
       if (!s || s.status !== 0) fail(`#479: ${JSON.stringify(f.title)} fails tools/ticket_shape.py under ${f.label}: ${s ? [...s.failures, s.last].join('; ') : 'never checked'}`)
     }
     if ((env.filed || []).length !== 3) fail(`#479: ${(env.filed || []).length} of #443's three follow-ups were filed`)
+    // #966: a four-column row files with no Fails on line; a five-column row's body carries its
+    // sentence, and still passes tools/ticket_shape.py under its label.
+    if (sent.some((f) => /^Fails on:/m.test(f.body))) fail('#966: a row of #443\'s four-column record files with a Fails on line, though the record names none')
+    const env966 = newRepo()
+    const run966 = await execute(env966, { date: DATE }, { followUps: FU966 })
+    const sent966 = jsonAfter(run966.prompt('followups-file'), 'FOLLOW-UPS') || []
+    for (const [title, failsOn] of [[FINDING_TAB, FAILS_TAB.replace('\\|', '|')], [FINDING_DOCS, FAILS_DOCS]]) {
+      const f = sent966.find((x) => x.title === title)
+      if (!f || !f.body.split('\n').includes(`Fails on: ${failsOn}`)) fail(`#966: the row ${JSON.stringify(title)} files a body without its line "Fails on: ${failsOn}":\n${f ? f.body : 'not sent'}`)
+      const shaped = (env966.shaped || []).find((x) => x.title === title)
+      if (!shaped || shaped.status !== 0) fail(`#966: ${JSON.stringify(title)} fails tools/ticket_shape.py: ${shaped ? [...shaped.failures, shaped.last].join('; ') : 'never checked'}`)
+    }
+    // #973: every body the follow-up filer sent, of a four-column record and a five-column one, under
+    // each label it is filed with, carries only the ticket template's headings, and tools/ticket_shape.py
+    // prints no heading note on it.
+    for (const f of [...sent, ...sent966]) {
+      const off = offTemplate(f.body, f.label)
+      if (off.length) fail(`#973: the follow-up ${JSON.stringify(f.title)} (${f.label}) is off the ticket template: ${off.join(' | ')}`)
+    }
     const ho = run443.result.handover.text
-    if (!ho.includes(FINDING_NOPATH) || !/names no repository path/.test(ho)) fail(`#479: the hand-over does not say why the pathless follow-up is ready-for-human:\n${ho}`)
+    // The why is the body's "Filed ready-for-human" line, asserted above; the hand-over lists the
+    // ticket by number and title only (#972), under its own heading.
+    const human = ho.split(/^### /m).find((s) => s.startsWith('Follow-ups filed ready-for-human\n')) || ''
+    if (!human.split('\n').some((l) => new RegExp(`^- #\\d+ from #443: ${FINDING_NOPATH}$`).test(l))) fail(`#479: the hand-over does not list the pathless follow-up under "Follow-ups filed ready-for-human":\n${ho}`)
 
     // Paths of two owners: #287's first row names the integrator's ci.yml and ws1-infra's tools/scripts
     // (a directory written without its slash, read as that directory, as ticket_shape reads it).
@@ -1451,6 +1556,61 @@ try {
       let theirs = null
       try { theirs = JSON.parse(r.stdout) } catch { fail(`#479: ticket_shape's owner_of did not run: ${r.stderr}`) }
       if (theirs) probes.forEach((p, i) => { const mine = port.ownerOfPath(rules, p); if (mine !== theirs[i]) fail(`#479: ${p} is ${mine}'s by morning.js and ${theirs[i]}'s by tools/ticket_shape.py`) })
+    }
+  }
+
+  // 17b2. A follow-up carries its finding once (#972). The finding is the ticket's title, so the body
+  //       the filer writes from a five-column row holds the Raised-by line filedAs reads, the Touches
+  //       line, the row's Fails on sentence once beside the record sentence, and one box, and never
+  //       the title again; a rerun's filedAs still finds each ticket it filed. The hand-over's three
+  //       follow-up lists print "- #<n> from #<pr>: <title>" a line, with no URL and no finding text.
+  checks++
+  {
+    const RECORD_SENTENCE = 'The record lists it under Follow-ups; this issue is that ticket.'
+    const BOX = "- [ ] Fixed, or declined with the reason in this issue's Answer."
+    const times = (hay, needle) => hay.split(needle).length - 1
+    const env = newRepo()
+    const run966 = await execute(env, { date: DATE }, { followUps: FU966 })
+    const sent = jsonAfter(run966.prompt('followups-file'), 'FOLLOW-UPS') || []
+    for (const [title, failsOn] of [[FINDING_TAB, FAILS_TAB.replace('\\|', '|')], [FINDING_DOCS, FAILS_DOCS]]) {
+      const f = sent.find((x) => x.title === title)
+      if (!f) { fail(`#972: the row ${JSON.stringify(title)} was not sent to the filer`); continue }
+      const lines = f.body.split('\n')
+      const build = (/^## What to build\n([\s\S]*?)^## Acceptance criteria$/m.exec(f.body) || [])[1] || ''
+      const wrong = [
+        ...(lines[0] === `**Raised by:** #966, from its review record ${R966}` ? [] : ['its first line is not the Raised-by line']),
+        ...(lines.some((l) => /^\*\*Touches:\*\* `[^`]+`/.test(l)) ? [] : ['it has no Touches line']),
+        ...(times(f.body, failsOn) === 1 && times(build, failsOn) === 1 ? [] : [`it carries the Fails on sentence ${times(f.body, failsOn)} times, ${times(build, failsOn)} under What to build`]),
+        ...(times(f.body, RECORD_SENTENCE) === 1 && times(build, RECORD_SENTENCE) === 1 ? [] : [`it carries the record sentence ${times(f.body, RECORD_SENTENCE)} times`]),
+        ...(f.body.toLowerCase().includes(title.toLowerCase()) ? ['it repeats the title'] : []),
+        ...(JSON.stringify(lines.filter((l) => /^\s*- \[[ xX]\]/.test(l))) === JSON.stringify([BOX]) ? [] : ['its boxes are not the one box']),
+      ]
+      if (wrong.length) fail(`#972: the body of ${JSON.stringify(title)}: ${wrong.join('; ')}:\n${f.body}`)
+    }
+    // filedAs still matches the ticket it files: a rerun on the same checkout files nothing again.
+    const again966 = await execute(env, { date: DATE }, { followUps: FU966 })
+    const already966 = ((again966.result.followUps || {}).already || []).map((f) => f.title).sort()
+    if (again966.labels.includes('followups-file') || JSON.stringify(already966) !== JSON.stringify([FINDING_TAB, FINDING_DOCS].sort())) fail(`#972: a rerun did not find the tickets it filed: already ${JSON.stringify(already966)}`)
+
+    // The three lists. #443's three rows file, one ready-for-human; a rerun beside #966 finds #443's
+    // three already filed and files #966's two.
+    const envH = newRepo()
+    const first = await execute(envH, { date: DATE }, { followUps: FU443 })
+    const second = await execute(envH, { date: DATE }, { followUps: { prs: [...FU443.prs, ...FU966.prs], filed: [] } })
+    const numberOf = (t) => ((envH.filed || []).find((i) => i.title === t) || {}).number
+    const LISTS = [
+      [first, 'Follow-ups filed', [[443, FINDING_DDB], [443, FINDING_DEADLINE], [443, FINDING_NOPATH]]],
+      [first, 'Follow-ups filed ready-for-human', [[443, FINDING_NOPATH]]],
+      [second, 'Follow-ups already filed', [[443, FINDING_DDB], [443, FINDING_DEADLINE], [443, FINDING_NOPATH]]],
+      [second, 'Follow-ups filed', [[966, FINDING_TAB], [966, FINDING_DOCS]]],
+    ]
+    for (const [r, heading, rows] of LISTS) {
+      const section = r.result.handover.text.split(/^### /m).find((s) => s.startsWith(`${heading}\n`))
+      if (!section) { fail(`#972: the hand-over has no "### ${heading}":\n${r.result.handover.text}`); continue }
+      const got = section.split('\n').filter((l) => l.startsWith('- '))
+      const want = rows.map(([pr, t]) => `- #${numberOf(t)} from #${pr}: ${t}`)
+      if (JSON.stringify(got.slice().sort()) !== JSON.stringify(want.slice().sort())) fail(`#972: "### ${heading}" lists ${JSON.stringify(got)}, expected ${JSON.stringify(want)}`)
+      if (/https?:\/\//.test(section) || [FAILS_TAB, FAILS_DOCS, 'names no repository path'].some((x) => section.includes(x))) fail(`#972: "### ${heading}" carries a URL or finding text:\n${section}`)
     }
   }
 
@@ -1690,7 +1850,7 @@ try {
   {
     const mine = fs.readFileSync(scriptPath, 'utf8')
     const theirs = fs.readFileSync(path.join(here, 'review-queue.js'), 'utf8')
-    for (const name of ['FOLLOW_UP_HEAD', 'THIS_RECORD', 'PY_LINE_BREAK', 'PY_SPACE', 'PY_STRIP', 'RECORD', 'REPOSITORY_ACCOUNTS', 'sameFinding']) {
+    for (const name of ['FOLLOW_UP_HEAD', 'FOLLOW_UP_HEAD_FOUR', 'THIS_RECORD', 'PY_LINE_BREAK', 'PY_SPACE', 'PY_STRIP', 'RECORD', 'REPOSITORY_ACCOUNTS', 'sameFinding']) {
       const line = (src) => (new RegExp(`^const ${name} = .*$`, 'm').exec(src) || [''])[0]
       if (!line(mine) || line(mine) !== line(theirs)) fail(`the grammar: morning.js's ${name} is ${JSON.stringify(line(mine))}, review-queue.js's ${JSON.stringify(line(theirs))}`)
     }
@@ -1801,15 +1961,15 @@ try {
     else {
       const canary = 'x'.repeat(300) + 'BODY-CANARY-' + 'z'.repeat(5000)
       const fromGh = JSON.stringify({ number: ISSUE, comments: [
-        { author: { login: 'adammedford' }, createdAt: 'a', url: 'u1', body: 'Confirm Q1 to Q3.\n\n' + canary },
-        { author: { login: 'adammedford' }, createdAt: 'b', url: 'u2', body: '## Questions: #1, issue-1, T\r\n\n' + canary },
+        { author: { login: 'adammedford' }, createdAt: 'a', url: 'u1', body: 'Confirm Q1 to Q3.\n\n' + canary + '\n' },
+        { author: { login: 'adammedford' }, createdAt: 'b', url: 'u2', body: '## Questions: #1, issue-1, T\r\n\n' + canary + '\n\n' },
         { author: { login: 'adammedford' }, createdAt: 'c', url: 'u3', body: 'é'.repeat(300) + canary },
       ] })
       const r = spawnSync('jq', ['-c', jqOf[1]], { input: fromGh, encoding: 'utf8' })
       if (r.error || r.status !== 0) fail(`the comments index jq did not run (jq is needed for this check): ${r.error ? r.error.message : r.stderr}`)
       else {
         const out = JSON.parse(r.stdout)
-        const fields = ['author', 'bytes', 'createdAt', 'head', 'url']
+        const fields = ['author', 'bytes', 'createdAt', 'head', 'tail', 'url']
         if (out.number !== ISSUE || out.comments.length !== 3) fail(`the comments index jq returned ${r.stdout.slice(0, 200)}`)
         for (const c of out.comments) {
           if (Object.keys(c).sort().join() !== fields.join()) fail(`the comments index returns ${Object.keys(c).sort().join()}, not ${fields.join()}`)
@@ -1817,6 +1977,7 @@ try {
           if (typeof c.bytes !== 'number' || c.bytes < 5000) fail(`the comments index gives a size of ${c.bytes} for a body over 5000 bytes`)
         }
         if (out.comments[2].bytes !== Buffer.byteLength('é'.repeat(300) + canary)) fail(`the comments index counts ${out.comments[2].bytes} bytes, not the body's UTF-8 bytes`)
+        if (out.comments.map((c) => c.tail).join() !== '1,2,0') fail(`the comments index counts the trailing newlines of ${JSON.stringify(out.comments.map((c) => c.tail))}, not 1,2,0`)
         if (!out.comments[1].head.startsWith('## Questions: #1, issue-1, T\r')) fail('the comments index trims or rewrites the head the readers judge')
       }
     }
@@ -1902,6 +2063,11 @@ try {
     if (!head.result.refusals.some((x) => /#issuecomment-1 was not returned .*: its first characters differ from the index/.test(x))) fail(`a body with the same bytes and another head: not refused: ${JSON.stringify(head.result.refusals)}`)
     const tail = await execute(newRepo(), { date: DATE }, { mangle: 'tail' })
     if (!tail.result.refusals.some((x) => /#issuecomment-1 was not returned .*: \d+ bytes returned, \d+ in the index/.test(x))) fail(`a body with the same head and another length: not refused: ${JSON.stringify(tail.result.refusals)}`)
+    // A reader that drops one trailing newline (#1071, #1084): the index counts the newlines a body ends in
+    // and the script gives the body them back, with no re-read. A body that differs elsewhere is still refused.
+    const withNewlines = issueWith([...QUESTIONS, { ...CONFIRM, body: CONFIRM.body + '\n\n' }])
+    const lost = await execute(newRepo(), { date: DATE }, { issue: withNewlines, mangle: 'newline' })
+    if (lost.result.refusals.length || lost.labels.some((l) => /-retry\d+$/.test(l))) fail(`a reader that drops a trailing newline: refused or re-read: ${JSON.stringify(lost.result.refusals)} ${lost.labels.join(', ')}`)
     if (always.labels.includes('classify') || APPLIERS(always.labels).length) fail(`a body changed on every read: Apply ran: ${always.labels.join(', ')}`)
     if (/PHASE FILE|OUTPUT FILE/.test(cp)) fail('the comments reader writes a file, so a rerun could reuse stale comments')
     const stopped = await execute(newRepo(), { date: DATE }, { verify: { outcome: 'stop', step: 3, reason: 'dirty' } })
@@ -2384,13 +2550,21 @@ try {
       const port = portOf(src)
       const rules = port.ownershipRules(OWNERSHIP_MD)
       const direct = (pr, url, body, k) => { const f = port.followUpsOf(body, url)[k - 1]; return port.followUpBody(pr, url, f, port.placeOf(rules, f.where)) }
-      const CASES = [[443, R443, REC443.body, 1], [443, R443, REC443.body, 2], [443, R443, REC443.body, 3], [287, R287[2], rec287(2, 'merge', FOLLOW_UPS_287).body, 1], [287, R287[2], rec287(2, 'merge', FOLLOW_UPS_287).body, 2]]
+      const CASES = [[443, R443, REC443.body, 1], [443, R443, REC443.body, 2], [443, R443, REC443.body, 3], [287, R287[2], rec287(2, 'merge', FOLLOW_UPS_287).body, 1], [287, R287[2], rec287(2, 'merge', FOLLOW_UPS_287).body, 2], [966, R966, REC966.body, 1], [966, R966, REC966.body, 2]]
 
       // The output is the direct result, byte for byte, for every row of both records.
       for (const [pr, url, body, k] of CASES) {
         const r = run([pr, url, recordFile(body), k])
         const want = direct(pr, url, body, k)
         if (r.status !== 0 || r.stdout !== want) fail(`#643: row ${k} of #${pr}'s record: exit ${r.status}, ${r.status === 0 ? 'the output is not followUpBody\'s direct result' : r.stderr}:\n${JSON.stringify(r.stdout)}\n${JSON.stringify(want)}`)
+        // #973: the printed body, under the label its stderr names, carries only the ticket
+        // template's headings, and tools/ticket_shape.py prints no heading note on it.
+        const label = (/, label (\S+?)(:|$)/m.exec(r.stderr) || [])[1]
+        if (!label) fail(`#973: row ${k} of #${pr}'s record names no label on stderr: ${r.stderr}`)
+        else {
+          const off = offTemplate(r.stdout, label)
+          if (off.length) fail(`#973: the body follow_up_body.mjs prints for row ${k} of #${pr}'s record is off the ticket template: ${off.join(' | ')}`)
+        }
       }
       // A body from stdin is the same body.
       const piped = run([443, R443, '-', 2], { input: REC443.body })
@@ -2405,17 +2579,36 @@ try {
         '',
         '## What to build',
         '',
-        `The review of #443 carried this finding rather than holding on it (Standards axis), first carried by ${R443}: ${FINDING_DEADLINE}, at tests/Platform.Identity.Tests/AccessTokenSourceTests.cs; \`tests/Platform.Identity.Tests/BackchannelTimeoutTests.cs:41\`. The record lists it under "## Follow-ups", which names no open ticket for it; this issue is that ticket.`,
+        'The record lists it under Follow-ups; this issue is that ticket.',
         '',
         '## Acceptance criteria',
         '',
-        `- [ ] ${FINDING_DEADLINE}: fixed, or declined with the reason in this issue's Answer.`,
+        "- [ ] Fixed, or declined with the reason in this issue's Answer.",
       ].join('\n')
       const hand = run([443, R443, recordFile(REC443.body), 2])
       if (hand.stdout !== BODY_443_2) fail(`#643: row 2 of #443's record is not the body written out by hand:\n${hand.stdout}`)
       if (!/label needs-triage/.test(hand.stderr)) fail(`#643: row 2's stderr does not name its label needs-triage: ${hand.stderr}`)
       const nopath = run([443, R443, recordFile(REC443.body), 3])
       if (!/label ready-for-human: the finding names no repository path/.test(nopath.stderr)) fail(`#643: row 3, which names no path, is not named ready-for-human with why: ${nopath.stderr}`)
+      // #966: a five-column row's body, written out by hand, carries its Fails on sentence, the
+      // escaped pipe read back as a pipe.
+      const BODY_966_1 = [
+        `**Raised by:** #966, from its review record ${R966}`,
+        '**Owner:** integrator',
+        '**Touches:** `tools/review_record.py`',
+        '',
+        '## What to build',
+        '',
+        `Fails on: ${FAILS_TAB.replace('\\|', '|')}`,
+        '',
+        'The record lists it under Follow-ups; this issue is that ticket.',
+        '',
+        '## Acceptance criteria',
+        '',
+        "- [ ] Fixed, or declined with the reason in this issue's Answer.",
+      ].join('\n')
+      const five = run([966, R966, recordFile(REC966.body), 1])
+      if (five.status !== 0 || five.stdout !== BODY_966_1) fail(`#966: row 1 of a five-column record is not the body written out by hand, with its Fails on sentence: exit ${five.status}: ${five.stderr}\n${five.stdout}`)
 
       // Exits nonzero with a message and no body.
       const NO_TABLE = `## Review\n\nFindings: none.\n\nReviewed ${sha('e')} against ${sha('f')}: merge`
@@ -2462,7 +2655,7 @@ try {
       // The command runs the script beside it: a mutation of each function changes what it prints. The
       // copy sits in a checkout's layout, OWNERSHIP.md two folders up, as the command reads it.
       const MUTANTS = [
-        ['followUpsOf', /^const followUpsOf = [\s\S]*?\n}\n/m, (fn) => fn.replace('axis: cells[1]', 'axis: cells[2]')],
+        ['followUpsOf', /^const followUpsOf = [\s\S]*?\n}\n/m, (fn) => fn.replace('where: cells[2]', 'where: cells[1]')],
         ['placeOf', /^const placeOf = [\s\S]*?\n}\n/m, (fn) => fn.replace("label: 'needs-triage'", "label: 'ready-for-agent'")],
         ['followUpBody', /^const followUpBody = [\s\S]*?\n\]\.join\('\\n'\)\n/m, (fn) => fn.replace("'## What to build'", "'## What to do'")],
       ]
@@ -3031,6 +3224,38 @@ try {
     if (!AFTER_NIGHT.comments.some((c) => c.body.startsWith(`## Morning ${DATE}`)) || a1.labels.includes('handover-read')) fail(`#969 After: the night's Morning comment was read as an earlier After comment: ${a1.labels.join(', ')}`)
     // The cleanup reads its rows through a Morning delta to the whole comment it extends.
     if (!/"## Morning <date> \(delta\)"/.test(a1.prompt('after'))) fail('#969: the cleanup is not told how a "## Morning <date> (delta)" comment extends the rows\' source')
+  }
+
+  // 15b. The report's tickets (#971): Verify reads the Overnight body with tools/retro_record.py report, and the
+  //      hand-over lists the claimed branches and the morning steps it gives, from a body that opens with the
+  //      `## Tickets` table and from one of the earlier shape (its Claimed branches to merge and Morning steps
+  //      sections, cut down from Overnight 2026-11-03's, #736). The two name different branches and steps, so a
+  //      hand-over that kept one shape's values, or a constant, fails one of them.
+  checks++
+  {
+    const TABLE_BODY = `${BODY}\n## Tickets\n\n| Ticket | Title | Lane | Outcome | Branch | Head | Morning step |\n| --- | --- | --- | --- | --- | --- | --- |\n| #300 | First ticket | integrator | integrated | task/issue-300-first | 1111111 | none |\n| #301 | Second ticket | integrator | integrated (partial) | task/issue-301-second | 2222222 | tick box 3 after the landing |\n| #810 | Worked elsewhere | ws2-hosting | claimed | task/issue-810-table-claim | 8108108 | lands after this pull request; none conflict |\n\n## Exceptions\n\nnone\n`
+    const EARLIER_BODY = `${BODY}\n## Integrated\n\n| Task | Issue | Merge | What landed |\n| --- | --- | --- | --- |\n| issue-300 | #300 | 1111111 | the first ticket |\n\n## Claimed branches to merge\n\n- #531 (\`task/issue-531-earlier-claim\` b9419dc): none conflict.\n\n## Morning steps\n\n1. Answer the questions with one Confirm comment on this issue.\n2. Close #305 once the landing is merged.\n`
+    for (const [shape, body, claimed, steps, absent] of [
+      ['table', TABLE_BODY, ['#810 task/issue-810-table-claim at 8108108: lands after this pull request; none conflict'], ['#301: tick box 3 after the landing', '#810: lands after this pull request; none conflict'], 'task/issue-531-earlier-claim'],
+      ['earlier', EARLIER_BODY, ['#531 (\'task/issue-531-earlier-claim\' b9419dc): none conflict.'], ['Answer the questions with one Confirm comment on this issue.', 'Close #305 once the landing is merged.'], 'task/issue-810-table-claim'],
+    ]) {
+      const r = await execute(newRepo(), { date: DATE }, { issue: issueWith([...QUESTIONS, CONFIRM], body) })
+      const t = r.result.handover.text
+      const under = (title) => (new RegExp(`### ${title}\\n\\n([\\s\\S]*?)(?:\\n\\n###|$)`).exec(t) || [])[1] || ''
+      const gotClaimed = under('Claimed branches needing their own pull requests')
+      const gotSteps = under('Morning steps the report gives')
+      for (const c of claimed) if (!gotClaimed.includes(`- ${c}`)) fail(`#971: the ${shape}-shape report's claimed branch ${JSON.stringify(c)} is not in the hand-over:\n${gotClaimed}`)
+      for (const s of steps) if (!gotSteps.includes(`- ${s}`)) fail(`#971: the ${shape}-shape report's morning step ${JSON.stringify(s)} is not in the hand-over:\n${gotSteps}`)
+      if (t.includes(absent)) fail(`#971: the ${shape}-shape hand-over names ${absent}, which only the other shape's report gives`)
+      const vp = r.prompt('verify')
+      if (!vp.includes(`python3 -I ${r.result.runLog.split('/.scratch/')[0]}/tools/retro_record.py report `) || !vp.includes(`--title "Overnight ${DATE}"`)) fail('#971: the Verify prompt does not read the report\'s tickets with tools/retro_record.py report --title')
+      if (!vp.includes('claimed is its tickets.claimed and steps its tickets.steps')) fail('#971: the Verify prompt does not take claimed and steps from the reader')
+      // A row the reader could not read is in neither list, so the prompt makes it a finding (CODING_STANDARDS.md, "A check fails closed").
+      if (!vp.includes('Each line of its tickets.unread is a table row the reader could not read') || !vp.includes('add it to findings as "report row not read: <the line>"')) fail('#971: the Verify prompt drops the rows the reader could not read instead of naming them in findings')
+      // The house rules let an agent write only the OUTPUT FILE and PHASE FILE lines' paths, so the saved body is one.
+      const saved = (/> (\S+\/report-body\.md)`/.exec(vp) || [])[1]
+      if (!saved || !new RegExp(`^OUTPUT FILE: ${saved.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'm').test(vp)) fail(`#971: the Verify prompt saves the report body to ${saved || 'no file'}, which no OUTPUT FILE line names, so its house rules forbid the write`)
+    }
   }
 
   // 16. Every agent call passes a schema and every stub's return satisfies it.

@@ -86,6 +86,7 @@ const stated = (test, failed, total, project = 'tests/Platform.Registry.Tests') 
 const row = (result, failed = result === 'reproduced' ? 1 : 0, total = 10) => ({ result, failed, total })
 
 // behave: { nominations: { [n]: [...] }, mutate: { [test]: row | 'throw' | 'null' }, verdict: 'merge' | 'hold',
+//           boxes: { [n]: the verdict's boxes, one per acceptance box (#967) },
 //           range: { [n]: what the range agent reports }, earlier: { [n]: the verdict's earlierFindings },
 //           followUps: { [n]: the verdict's followUps, each carried finding with the ticket it names },
 //           gh: a stubbed GitHub (ghStub below) }
@@ -205,7 +206,7 @@ function run(scriptArgs, served, behave = {}) {
       if (b === 'null') return null
       return { test, broken: `broke what ${test} guards`, failingNames: [], why: b.result === 'could-not-run' ? 'the project did not build' : '', ...b }
     }
-    if (kind === 'verdict') return { verdict: behave.verdict || 'merge', findings: [], claims: [], outstanding: ['nothing'], summary: 's', earlierFindings: (behave.earlier || {})[n] || [], caughtAccepted: (behave.caught || {})[n] || [], followUps: (behave.followUps || {})[n] || [], changeRequests: (behave.changeRequests || {})[n] || [] }
+    if (kind === 'verdict') return { verdict: behave.verdict || 'merge', findings: [], claims: [], outstanding: ['nothing'], summary: 's', boxes: (behave.boxes || {})[n] || [], earlierFindings: (behave.earlier || {})[n] || [], caughtAccepted: (behave.caught || {})[n] || [], followUps: (behave.followUps || {})[n] || [], changeRequests: (behave.changeRequests || {})[n] || [] }
     if (kind === 'post') {
       const m = /^BEGIN COMMENT\n([\s\S]*)\nEND COMMENT$/m.exec(prompt)
       const body = m ? m[1] : null
@@ -395,8 +396,12 @@ try {
   const tie = (result.prs || [])[0] || {}
   if (tie.verdict !== 'hold') fail(`PR 76 with a hold and a merge at one instant: verdict ${tie.verdict}, expected hold`)
 
-  // The mutations a run posted for one pull request: its comment's table rows, as cells.
-  const TABLE_HEAD = '| Test | What was broken | Failed of total | Result | Log file |'
+  // The mutations a run posted for one pull request: its comment's table rows (#967's four columns),
+  // each as [test cell, what was broken, failed of total, result, log], the test cell the test with its
+  // catch as the Broken cell names them, and a row whose Broken cell is not in that form as its cells.
+  const TABLE_HEAD = '| Broken | Failed of total | Result | Log |'
+  // The five-column table the records before #967 carry, which a check serves as an earlier record.
+  const TABLE_HEAD_FIVE = '| Test | What was broken | Failed of total | Result | Log file |'
   const tableOf = (body) => {
     const lines = (body || '').split('\n')
     const at = lines.indexOf(TABLE_HEAD)
@@ -404,10 +409,14 @@ try {
     const rows = []
     for (const l of lines.slice(at + 2)) {
       if (!l.startsWith('|')) break
-      rows.push(l.slice(1, -1).split(' | ').map((c) => c.trim()))
+      const cells = l.slice(1, -1).split(' | ').map((c) => c.trim())
+      const m = /^`([^`]+)`( \(caught by [^`]*?\))?: (.*)$/.exec(cells[0])
+      rows.push(m && cells.length === 4 ? [m[1] + (m[2] || ''), m[3], ...cells.slice(1)] : cells)
     }
     return rows
   }
+  // The line under the table that gives the why of a row that did not reproduce.
+  const whyOf = (body, test) => (body || '').split('\n').find((l) => l.startsWith(`- \`${test}\` `)) || ''
   const resultOf = (n, result) => (result.prs || []).find((x) => x.number === n) || {}
   const commentOf = (env, n) => (env.posted.find((p) => p.n === n) || {}).body || ''
 
@@ -427,7 +436,7 @@ try {
       if (!m) fail(`PR 201: no mutation row for ${t}, whose agent died`)
       else if (m.result !== 'could-not-run' || !m.why) fail(`PR 201: ${t}'s row is ${JSON.stringify(m)}, expected could-not-run with why`)
       const cells = (tableOf(commentOf(env, 201)) || []).find((c) => c[0] === t)
-      if (!cells || !/^could-not-run: \S/.test(cells[3])) fail(`PR 201: the comment's table has no could-not-run row with why for ${t}`)
+      if (!cells || cells[3] !== 'could not run' || !/^- `[^`]+` could not run: \S/.test(whyOf(commentOf(env, 201), t))) fail(`PR 201: the comment's table has no could-not-run row with why for ${t}`)
     }
     if (r.verdict !== 'merge') fail(`PR 201: verdict ${r.verdict}; a could-not-run on candidates nobody suspected must not hold`)
   }
@@ -515,7 +524,7 @@ try {
     const body = commentOf(env, n)
     if (body.split('\n').pop() !== `Reviewed ${HOLDS[n].head} against ${FORK}: ${want}`) fail(`PR ${n} with ${what}: the record does not say ${want}`)
     const rows = tableOf(body)
-    if (!rows || rows.length !== 1 || rows[0].length !== 5) fail(`PR ${n} with ${what}: the comment's mutations table is ${JSON.stringify(rows)}, expected one row of five cells under ${TABLE_HEAD}`)
+    if (!rows || rows.length !== 1 || rows[0].length !== 5) fail(`PR ${n} with ${what}: the comment's mutations table is ${JSON.stringify(rows)}, expected one row of four cells, its Broken cell naming the test, under ${TABLE_HEAD}`)
     else if (!/^mutation-1\.txt$|\/mutation-1\.txt$/.test(rows[0][4])) fail(`PR ${n} with ${what}: log file cell ${rows[0][4]}`)
   }
   {
@@ -524,7 +533,7 @@ try {
     const m = (resultOf(206, result).mutations || [])[0] || {}
     if (m.countsMatched !== true) fail(`PR 206: a stated 4 of 153 reproduced as 4 of 153 has countsMatched ${m.countsMatched}`)
     const cells = (tableOf(commentOf(env, 206)) || [])[0] || []
-    if (cells[2] !== '4 of 153' || !/counts match/.test(cells[3] || '')) fail(`PR 206: the row reads ${JSON.stringify(cells)}, expected 4 of 153 and a result saying the counts match`)
+    if (cells[2] !== '4 of 153, as stated' || cells[3] !== 'reproduced') fail(`PR 206: the row reads ${JSON.stringify(cells)}, expected "4 of 153, as stated" and reproduced`)
     env = run({ prs: [206] }, HOLDS, { mutate: { Said: row('reproduced', 3, 153) } })
     result = await execute(env)
     const off = (resultOf(206, result).mutations || [])[0] || {}
@@ -852,7 +861,8 @@ try {
 
   // A Node companion prints no test names, only its checks' fail() messages (#905): on #798 a stated
   // row 'overnight_tests.mjs check 39', red only on check 39's own messages, read did-not-fail, and
-  // the verdict's acceptance could not answer it. A row of any kind on an .mjs project is a caught row:
+  // the verdict's acceptance could not answer it. A row on a Node companion, identified by its .mjs
+  // project or by the .mjs file its cell names, is a caught row unless it names the whole file:
   // accepted, it reproduces and merges; not accepted, it reads did-not-fail and holds. A stated row on
   // another project, red only on other tests, still reads did-not-fail whatever the verdict accepts,
   // and the verdict prompt says how to judge the messages: the rule for a row red on another check's
@@ -1212,7 +1222,7 @@ try {
     const DOCKER = 'MockApiDockerfileTests.The_build_stage_opens_the_published_tree_after_publish_and_before_the_final_stage'
     const STORAGE = 'WebStorageTests.Empty_storage_passes_the_check'
     const LIB_BREAK = 'tools/check.sh users_of(): added `[ "$name" = lib.sh ] \\| return 2`, so the run ends early'
-    const table = (rows) => ['## Mutations', '', TABLE_HEAD, '| --- | --- | --- | --- | --- |',
+    const table = (rows) => ['## Mutations', '', TABLE_HEAD_FIVE, '| --- | --- | --- | --- | --- |',
       ...rows.map(([t, broken, counts, result]) => `| ${t} | ${broken} | ${counts} | ${result} | /log/mutation.txt |`)].join('\n')
     const record = (url, at, head, verdict, rows) => ({ author_association: 'OWNER', created_at: at, html_url: url,
       body: `## Review\n\nHead ${head}.\n\n${table(rows)}\n\nNot mutated, cut by the cap of 3: Other.\n\n## Outstanding\n\n- Nothing.\n\nReviewed ${head} against ${FORK}: ${verdict}` })
@@ -1307,12 +1317,12 @@ try {
       if (!/A caught row is a held or candidate break the project caught through other tests/.test(env.prompts['verdict:287'] || '')) fail('the verdict prompt does not tell the agent how to judge a caught row')
       if (!/stayed green, the result is reproduced all the same/.test((env.mutations.find((m) => m.test === LIB2) || {}).prompt || '')) fail('the held mutation prompt does not say a break caught by another test is reproduced')
       if (!/failingNames: the tests it named as failing, each whole as the runner printed it/.test((env.mutations.find((m) => m.test === LIB2) || {}).prompt || '')) fail('the mutation prompt does not ask for each failing name whole as the runner printed it (#695)')
-      const cellLine = commentOf(env, 287).split('\n').find((l) => l.startsWith(`| ${LIB2} (caught by `)) || ''
+      const cellLine = commentOf(env, 287).split('\n').find((l) => l.startsWith(`| \`${LIB2}\` (caught by `)) || ''
       if (!cellLine.includes(CATCHER)) fail(`PR 287's shape with the held ${LIB2} caught: no table row reads "${LIB2} (caught by ...)"`)
       // A later review on a new head, the caught record now the latest: LIB2 is answered and not mutated
       // again. Its row is the cell the script wrote above, so the round trip reads what a record carries.
       const LATER = { author_association: 'OWNER', created_at: '2026-10-22T10:00:00Z', html_url: 'https://github.com/o/r/pull/287#issuecomment-3',
-        body: `## Review\n\nHead ${H3}.\n\n${table([[LIB1, LIB_BREAK, '3 of 71', 'did-not-fail: it stayed green']])}\n${cellLine}\n\n## Outstanding\n\n- Nothing.\n\nReviewed ${H3} against ${FORK}: hold` }
+        body: `## Review\n\nHead ${H3}.\n\n## Mutations\n\n${TABLE_HEAD}\n| --- | --- | --- | --- |\n| \`${LIB1}\`: ${LIB_BREAK} | 3 of 71 | not reproduced | /log/mutation.txt |\n${cellLine}\n\n## Outstanding\n\n- Nothing.\n\nReviewed ${H3} against ${FORK}: hold` }
       const NEXT = { 287: { ...SHAPE[287], head: sha('4'), commits: [sha('4')], comments: [OLDER, HELD, LATER] } }
       env = run({ prs: [287] }, NEXT, { range: { 287: { ...range[287], from: H3 } } })
       result = await execute(env)
@@ -1326,7 +1336,7 @@ try {
       const WITH_CATCHER = { 287: { ...SHAPE[287], candidates: [...SHAPE[287].candidates, lib(CATCHER)] } }
       env = run({ prs: [287], maxMutationsPerPr: 9 }, WITH_CATCHER, { range, mutate: BARE, caught: { 287: [LIB2] } })
       await execute(env)
-      const bareLine = commentOf(env, 287).split('\n').find((l) => l.startsWith(`| ${LIB2} (caught by ${CATCHER}) |`)) || ''
+      const bareLine = commentOf(env, 287).split('\n').find((l) => l.startsWith(`| \`${LIB2}\` (caught by ${CATCHER}): `)) || ''
       if (!bareLine) fail(`PR 287's shape with the held ${LIB2} caught by the bare-named ${CATCHER}: no table row reads "${LIB2} (caught by ${CATCHER})"`)
       const LATER_BARE = { ...LATER, body: LATER.body.replace(cellLine, bareLine) }
       const unchanged = { 287: { ...range[287], from: H3, changedFiles: ['tests/Platform.Registry.Tests/ReviewFixed.cs'], since: [] } }
@@ -1626,15 +1636,16 @@ try {
     const R2 = 'https://github.com/adammedford/spa-platform/pull/287#issuecomment-6342205384'
     const rec = (url, head, at, extra = '') => ({ author_association: 'OWNER', created_at: at, html_url: url, body: `## Review\n\n${extra}Reviewed ${head} against ${F287}: hold` })
     const CARRIED = [
-      { axis: 'Spec', title: 'deploy.sh builds the gateway image without --pull', where: 'tools/scripts/deploy.sh', ticket: '#288', firstCarried: R1 },
-      { axis: 'Standards', title: 'logs_tests.py and cell_doubles_tests.py run in no CI job', where: '.github/workflows/ci.yml lines 321-326 | tools/scripts', ticket: '', firstCarried: R1 },
-      { axis: 'Spec', title: 'The provisional #244 Q9 answer disagrees with end-app-sessions.md', where: '#244 Q9; docs/runbooks/end-app-sessions.md', ticket: '', firstCarried: R2 },
+      { axis: 'Spec', title: 'deploy.sh builds the gateway image without --pull', where: 'tools/scripts/deploy.sh', failsOn: 'A base image retagged upstream is built from the stale local copy.', ticket: '#288', firstCarried: R1 },
+      { axis: 'Standards', title: 'logs_tests.py and cell_doubles_tests.py run in no CI job', where: '.github/workflows/ci.yml lines 321-326 | tools/scripts', failsOn: 'A change that breaks logs.py | cell_doubles.py merges with CI green.', ticket: '', firstCarried: R1 },
+      { axis: 'Spec', title: 'The provisional #244 Q9 answer disagrees with end-app-sessions.md', where: '#244 Q9; docs/runbooks/end-app-sessions.md', failsOn: 'An operator ending sessions by the runbook leaves the refresh token live.', ticket: '', firstCarried: R2 },
     ]
     const served = (comments) => ({ 287: pr(287, ['.github/workflows/ci.yml'], { head: H287, forkPoint: F287, commits: [H287], comments }) })
     const tableOf = (body) => {
       const lines = body.split('\n')
-      const at = lines.indexOf('| Finding | Axis | Where | First carried by |')
+      const at = lines.indexOf('| Finding | Axis | Where | First carried by | Fails on |')
       if (at < 0) return null
+      if (lines[at + 1] !== '| --- | --- | --- | --- | --- |') return null
       const rows = []
       for (const l of lines.slice(at + 2)) {
         if (!l.startsWith('|')) break
@@ -1647,19 +1658,19 @@ try {
     result = await execute(env)
     const r = resultOf(287, result)
     const want = [
-      { axis: 'Standards', title: CARRIED[1].title, where: CARRIED[1].where, firstCarried: R1 },
-      { axis: 'Spec', title: CARRIED[2].title, where: CARRIED[2].where, firstCarried: R2 },
+      { axis: 'Standards', title: CARRIED[1].title, where: CARRIED[1].where, firstCarried: R1, failsOn: CARRIED[1].failsOn },
+      { axis: 'Spec', title: CARRIED[2].title, where: CARRIED[2].where, firstCarried: R2, failsOn: CARRIED[2].failsOn },
     ]
     if (JSON.stringify(r.followUps) !== JSON.stringify(want)) fail(`PR 287: followUps ${JSON.stringify(r.followUps)}, expected the two carried findings that name no open ticket, ${JSON.stringify(want)}`)
     const body = commentOf(env, 287)
     const lines = body.split('\n')
     const t = tableOf(body)
-    if (!t) fail('PR 287: the comment carries no follow-ups table')
+    if (!t) fail('PR 287: the comment carries no follow-ups table under the five-column header `| Finding | Axis | Where | First carried by | Fails on |` and its five-cell separator (#966)')
     else {
       const head = lines.indexOf('## Follow-ups')
       if (!(lines.indexOf('## Spec') < head && head < t.at && t.at < lines.indexOf('## Mutations'))) fail('PR 287: the follow-ups table does not end the findings: it must sit under "## Follow-ups", after "## Spec" and before "## Mutations"')
       const rows = JSON.stringify(t.rows)
-      const wantRows = JSON.stringify(want.map((f) => [f.title, f.axis, f.where, f.firstCarried]))
+      const wantRows = JSON.stringify(want.map((f) => [f.title, f.axis, f.where, f.firstCarried, f.failsOn]))
       if (rows !== wantRows) fail(`PR 287: the follow-ups table reads back as ${rows}, expected ${wantRows}`)
     }
     if (lines[lines.length - 1] !== `Reviewed ${H287} against ${F287}: merge`) fail(`PR 287: the comment's last line is ${JSON.stringify(lines[lines.length - 1])}, not the record`)
@@ -1688,6 +1699,35 @@ try {
     const kept = (resultOf(287, result).followUps || []).map((f) => f.title)
     if (JSON.stringify(kept) !== JSON.stringify([CARRIED[1].title, CARRIED[2].title])) fail(`PR 287 with tickets "none" and "-": followUps ${JSON.stringify(kept)}, expected both findings kept and the one #288 owns dropped`)
     if (!/followUps/.test(env.prompts['verdict:287'] || '') || !/no open ticket/.test(env.prompts['verdict:287'] || '')) fail('PR 287: the verdict prompt does not ask for followUps naming no open ticket')
+
+    // Fails on (#966): the verdict prompt asks for the one sentence naming the input or state on
+    // which the finding gives the wrong result, and for the note rule: a carried finding with none is
+    // a note under the axis that found it, not a row, and files nothing. A followUp the verdict
+    // returns with an empty failsOn is written so, whatever the prompt said: it is no row of the
+    // table and no followUp of the result, and it is not lost, since its axis's section names it.
+    const vp = env.prompts['verdict:287'] || ''
+    if (!/failsOn is the input or state on which the finding gives the wrong result, in one sentence/.test(vp)) fail('PR 287: the verdict prompt does not ask for each followUp\'s failsOn, the input or state on which it gives the wrong result, in one sentence (#966)')
+    if (!/cannot name one is not a follow-up: write it in findings under the axis that found it, as a note, and leave it out of followUps; it files nothing/.test(vp)) fail('PR 287: the verdict prompt does not state the note rule for a carried finding with no input it fails on (#966)')
+    if (!vp.includes('"## Follow-ups" table (five columns: Finding, Axis, Where, First carried by, Fails on)')) fail('PR 287: the verdict prompt does not name the five-column follow-ups table (#966)')
+    const NOTE = { axis: 'Standards', title: 'The helper reads as a second copy of the parser', where: 'tools/x.py:9', failsOn: ' ', ticket: '', firstCarried: '' }
+    env = run({ prs: [287] }, served(EARLIER), { followUps: { 287: [CARRIED[1], NOTE, { ...CARRIED[2], failsOn: '' }] } })
+    result = await execute(env)
+    const noted = resultOf(287, result).followUps || []
+    if (JSON.stringify(noted.map((f) => f.title)) !== JSON.stringify([CARRIED[1].title])) fail(`PR 287 with two carried findings naming no input they fail on: followUps ${JSON.stringify(noted.map((f) => f.title))}, expected only the one with a Fails on (#966)`)
+    const nb = commentOf(env, 287)
+    const nlines = nb.split('\n')
+    const nt = tableOf(nb)
+    if (!nt || nt.rows.length !== 1 || nt.rows[0][0] !== CARRIED[1].title) fail(`PR 287 with notes: the table rows are ${JSON.stringify(nt && nt.rows)}, expected the one row with a Fails on`)
+    const section = (name) => nlines.slice(nlines.indexOf(name), nlines.indexOf(name === '## Standards' ? '## Spec' : "The author's claims:"))
+    const noteLine = (f) => `- Note: **${f.title}** at ${f.where}. It names no input or state on which it gives the wrong result, so it is no follow-up row and files nothing (#966).`
+    if (!section('## Standards').includes(noteLine(NOTE))) fail(`PR 287 with notes: the Standards section does not carry ${JSON.stringify(noteLine(NOTE))}:\n${section('## Standards').join('\n')}`)
+    if (!section('## Spec').includes(noteLine(CARRIED[2]))) fail(`PR 287 with notes: the Spec section does not carry ${JSON.stringify(noteLine(CARRIED[2]))}:\n${section('## Spec').join('\n')}`)
+    if (section('## Standards').includes('- None.')) fail('PR 287 with notes: the Standards section says "- None." above the note it carries')
+    if (nlines.some((l) => l.startsWith('- Note:') && l.includes(CARRIED[1].title))) fail('PR 287 with notes: the finding with a Fails on is written as a note as well as a row')
+    // An owned finding with no Fails on is neither row nor note: its ticket owns it.
+    env = run({ prs: [287] }, served(EARLIER), { followUps: { 287: [{ ...CARRIED[0], failsOn: '' }] } })
+    result = await execute(env)
+    if (commentOf(env, 287).split('\n').some((l) => l.startsWith('- Note:'))) fail('PR 287: a carried finding #288 owns, with no Fails on, is written as a note; its ticket owns it')
   }
   // A description whose stated head is not the head (#294): #287's description still named ed8d063
   // after a rebuild. The inventory reports each sha the description states as the head; the script
@@ -1844,7 +1884,8 @@ try {
   // land.sh against every row, and this runs the script end to end on every row, one pull request
   // each with its commits as one-parent commits. A row naming tickets stops its pull request at stage
   // closes naming exactly those, in order, with no other agent run; a row of the owner/repo#n form
-  // stops it naming that form and asking for Closes #n; a row naming none is reviewed to its verdict.
+  // or a GitHub issue URL (#806) stops it naming that form and asking for Closes #n; a row naming
+  // none is reviewed to its verdict.
   checks++
   {
     const table = path.join(here, 'fixtures', 'closing-references.json')
@@ -2080,7 +2121,7 @@ try {
   const HUMAN796 = { author_association: 'OWNER', created_at: '2026-11-04T09:00:00Z', html_url: U796('h'), body: 'Rebased onto main; please review again.' }
   const APPROVAL796 = { state: 'APPROVED', author_association: 'OWNER', submitted_at: '2026-11-04T09:30:00Z', html_url: 'https://github.com/adammedford/spa-platform/pull/796#pullrequestreview-1', body: `Reviewed ${OLD796[0]} against ${F796}: merge` }
   const SERVED796 = { 796: pr(796, ['.claude/workflows/review-queue.js'], { head: H796, forkPoint: F796, commits: [H796], comments: [HUMAN796, ...RECORDS796], reviews: [APPROVAL796] }) }
-  const CARRIED796 = RECORDS796.flatMap((_, i) => ['a', 'b'].map((x) => ({ axis: x === 'a' ? 'Standards' : 'Spec', title: `Follow-up ${i}${x} carried by record ${i}`, where: x === 'a' ? `src/a${i}.cs` : `docs/b${i}.md`, ticket: '', firstCarried: '' })))
+  const CARRIED796 = RECORDS796.flatMap((_, i) => ['a', 'b'].map((x) => ({ axis: x === 'a' ? 'Standards' : 'Spec', title: `Follow-up ${i}${x} carried by record ${i}`, where: x === 'a' ? `src/a${i}.cs` : `docs/b${i}.md`, failsOn: `Input ${i}${x} gives the wrong result.`, ticket: '', firstCarried: '' })))
   const HELD796 = RECORDS796.flatMap((_, i) => [`Held${i}a`, `Held${i}b`])
   checks++
   {
@@ -2093,7 +2134,7 @@ try {
     const bodies = env.calls.filter((c) => /^inventory:796:body:/.test(c))
     if (bodies.length !== 6) fail(`#796's shape: ${bodies.length} body agent(s) ran (${bodies.join(', ')}), expected one per record comment, 6, and none for the human's comment or the approval`)
     if (JSON.stringify(r.earlierRecords) !== JSON.stringify(RECORDS796.map((x) => x.html_url))) fail(`#796's shape: recordsOf read ${JSON.stringify(r.earlierRecords)}, expected the six records ${JSON.stringify(RECORDS796.map((x) => x.html_url))}`)
-    const want = CARRIED796.map((f, k) => ({ axis: f.axis, title: f.title, where: f.where, firstCarried: RECORDS796[Math.floor(k / 2)].html_url }))
+    const want = CARRIED796.map((f, k) => ({ axis: f.axis, title: f.title, where: f.where, firstCarried: RECORDS796[Math.floor(k / 2)].html_url, failsOn: f.failsOn }))
     if (JSON.stringify(r.followUps) !== JSON.stringify(want)) fail(`#796's shape: followUpsOf gave ${JSON.stringify(r.followUps.map((f) => f.firstCarried))}, expected each of the twelve rows first carried by its own record`)
     const mutated = env.mutations.filter((m) => m.n === 796).map((m) => m.test)
     const missing = HELD796.filter((t) => !mutated.includes(t))
@@ -2158,7 +2199,7 @@ try {
       const r = resultOf(796, result)
       if (r.outcome !== 'recorded') fail(`a body returned ${what}: outcome ${r.outcome} at ${JSON.stringify(r.stage)}, expected recorded`)
       if ((r.earlierRecords || []).length !== RECORDS796.length) fail(`a body returned ${what}: ${(r.earlierRecords || []).length} earlier record(s) read, expected ${RECORDS796.length}`)
-      const want = CARRIED796.map((f, k) => ({ axis: f.axis, title: f.title, where: f.where, firstCarried: RECORDS796[Math.floor(k / 2)].html_url }))
+      const want = CARRIED796.map((f, k) => ({ axis: f.axis, title: f.title, where: f.where, firstCarried: RECORDS796[Math.floor(k / 2)].html_url, failsOn: f.failsOn }))
       if (JSON.stringify(r.followUps) !== JSON.stringify(want)) fail(`a body returned ${what}: followUpsOf gave ${(r.followUps || []).length} row(s), expected the twelve each record carries`)
       const mutated = env.mutations.filter((m) => m.n === 796).map((m) => m.test)
       const missing = HELD796.filter((t) => !mutated.includes(t))
@@ -2166,6 +2207,83 @@ try {
     }
     const source = fs.readFileSync(scriptPath, 'utf8')
     if (!source.includes('const TRAILING_SPACE = /[ \\t\\r\\n]+$/')) fail('#1030: the script\'s TRAILING_SPACE is not /[ \\t\\r\\n]+$/, the class the inventory\'s jq sub("[ \\t\\r\\n]+$"; "") strips')
+  }
+
+  // The record's compact shape (#967). The verdict prompt asks for the Spec table of three columns,
+  // one row per acceptance box, the Mutations table of four, the one-word result set, and, after a
+  // hold, a link to the held record with only what changed since it. A record built from two boxes
+  // and one mutation is under 3 KB, and tools/review_record.py reads its record line and its
+  // follow-up row as before. A record of this shape that holds on a row is read back by the next
+  // review, which mutates that test again as held, with the break the row named.
+  checks++
+  {
+    const SPEC_HEAD = '| Box | Verdict | Evidence |'
+    const MUT_HEAD = '| Broken | Failed of total | Result | Log |'
+    const BOXES = [
+      { box: '`review-queue_tests.mjs` proves the record prompt asks for the Spec table with those three columns', verdict: 'met', evidence: 'review-queue_tests.mjs: the record\'s compact shape', note: '' },
+      { box: 'The fenced example reads as quoted above.', verdict: 'not met', evidence: 'docs/agents/review.md:142', note: 'the example still shows the Spec section as prose' },
+    ]
+    const FOLLOW = [{ axis: 'Standards', title: 'A comment names the old table', where: 'a.js:1', failsOn: 'reading the comment beside the four-column table', ticket: '', firstCarried: '' }]
+    const H7 = sha('7')
+    const ONE = { 967: pr(967, ['tests/Platform.Registry.Tests/One.cs'], { head: H7, commits: [H7], candidates: [cand('One')] }) }
+    env = run({ prs: [967] }, ONE, { boxes: { 967: BOXES }, followUps: { 967: FOLLOW } })
+    result = await execute(env)
+    const p = env.prompts['verdict:967'] || ''
+    for (const want of [SPEC_HEAD, MUT_HEAD, 'one row per acceptance box', 'one word of reproduced, not reproduced, could not run']) if (!p.includes(want)) fail(`#967: the verdict prompt does not ask for ${JSON.stringify(want)}`)
+    const body = commentOf(env, 967)
+    const lines = body.split('\n')
+    const bytes = Buffer.byteLength(body, 'utf8')
+    if (!body || bytes >= 3072) fail(`#967: a record of two boxes and one mutation is ${bytes} bytes, expected under 3 KB`)
+    const at = lines.indexOf(SPEC_HEAD)
+    if (at < 0 || at < lines.indexOf('## Spec') || at > lines.indexOf('## Mutations')) fail(`#967: no Spec table under "## Spec":\n${body}`)
+    else {
+      const want = ['| `review-queue_tests.mjs` proves the record prompt asks for the ... | met | review-queue_tests.mjs: the record\'s compact shape |',
+        '| The fenced example reads as quoted above. | not met | docs/agents/review.md:142 |']
+      if (JSON.stringify(lines.slice(at + 2, at + 4)) !== JSON.stringify(want)) fail(`#967: the Spec table's rows are ${JSON.stringify(lines.slice(at + 2, at + 4))}, expected ${JSON.stringify(want)}`)
+      if (lines[at + 4] !== '') fail(`#967: the Spec table has a third row ${JSON.stringify(lines[at + 4])} for two boxes`)
+      if (!lines.includes('- The fenced example reads as quoted above. (not met): the example still shows the Spec section as prose')) fail('#967: the box whose verdict needs more than a pointer has no prose line under the table')
+      if (lines.filter((l) => l.startsWith('- `review-queue_tests.mjs` proves')).length) fail('#967: a box whose pointer is enough has a prose line')
+    }
+    const mt = lines.indexOf(MUT_HEAD)
+    const mrow = mt < 0 ? '' : lines[mt + 2]
+    if (!/^\| `One`: broke what One guards \| 1 of 10 \| reproduced \| \S*\/mutation-1\.txt \|$/.test(mrow) || (lines[mt + 3] || '').startsWith('|')) fail(`#967: the Mutations table's row is ${JSON.stringify(mrow)}, expected the break, the counts, one word and the log`)
+    if (body.split('mutation-1.txt').length !== 2) fail('#967: the record prints the log path more than once')
+    const entry = { author_association: 'OWNER', created_at: '2026-11-05T01:00:00Z', html_url: 'https://github.com/o/r/pull/967#issuecomment-9', body }
+    let out = ''
+    try {
+      out = execFileSync('python3', ['-I', path.join(top, 'tools', 'review_record.py'), H7, '--follow-ups'], { input: JSON.stringify({ comments: [[entry]], reviews: [[]] }), encoding: 'utf8', stdio: ['pipe', 'pipe', 'ignore'] })
+    } catch (e) {
+      if (e.code === 'ENOENT') throw new Error('python3 is required to run tools/review_record.py')
+      fail(`#967: tools/review_record.py exited ${e.status} on the record, expected it to clear the head`)
+    }
+    const read = `${entry.html_url}\nA comment names the old table\treading the comment beside the four-column table\n`
+    if (out && out !== read) fail(`#967: tools/review_record.py printed ${JSON.stringify(out)}, expected ${JSON.stringify(read)}`)
+
+    // A did-not-fail row in this shape is read back: the next review on a new head mutates it as held.
+    env = run({ prs: [967] }, ONE, { mutate: { One: row('did-not-fail', 0, 10) } })
+    await execute(env)
+    const held = commentOf(env, 967)
+    const heldRow = (held.split('\n').find((l) => l.startsWith('| `One`')) || '').split(' | ')
+    if (heldRow[2] !== 'not reproduced') fail(`#967: the did-not-fail row reads ${JSON.stringify(heldRow)}, expected the result "not reproduced"`)
+    const H8 = sha('8')
+    const back = { author_association: 'OWNER', created_at: '2026-11-05T02:00:00Z', html_url: 'https://github.com/o/r/pull/967#issuecomment-10', body: held }
+    env = run({ prs: [967] }, { 967: { ...ONE[967], head: H8, commits: [H8], comments: [back] } })
+    await execute(env)
+    const again = env.mutations.find((m) => m.test === 'One') || { prompt: '' }
+    if (!again.prompt.includes(`The review record ${back.html_url} held because this test did not fail with this broken: broke what One guards.`)) fail(`#967: a held row of the four-column table was not mutated again as held with its break:\n${again.prompt.slice(0, 600)}`)
+
+    // After a hold: the section links the held record and states only what changed since it.
+    const EARLIER = [{ finding: 'the cap is off by one', held: true, answered: true, how: 'src/Fixed.cs now stops at the cap' },
+      { finding: 'an ADR index row', held: false, answered: false, how: 'RESTATED: the range touches no ADR, as the held record said' }]
+    env = run({ prs: [207] }, DELTA('hold'), { range: RANGE, earlier: { 207: EARLIER } })
+    await execute(env)
+    const hp = env.prompts['verdict:207'] || ''
+    if (!hp.includes('how states only what changed since the held record, in one sentence; never restate its finding or its evidence, which the record links')) fail('#967: the verdict prompt does not ask for the link-and-delta rule after a hold')
+    const hl = commentOf(env, 207).split('\n')
+    const top967 = hl.indexOf('## The earlier hold')
+    if (top967 < 0 || !(hl[top967 + 2] || '').includes(OLD_RECORD('hold').html_url)) fail(`#967: the earlier hold section does not link the held record: ${JSON.stringify(hl.slice(top967, top967 + 5))}`)
+    if (!hl.includes('- Answered: the cap is off by one. src/Fixed.cs now stops at the cap') || !hl.includes('- Still open: an ADR index row.')) fail(`#967: the earlier hold section is ${JSON.stringify(hl.slice(top967, top967 + 6))}, expected each answered finding with what changed and each open one by name`)
+    if (hl.some((l) => l.includes('RESTATED'))) fail('#967: the earlier hold section restates an unanswered finding\'s evidence')
   }
 
   // The launch in whenToUse (#522): /review-queue shows meta and then a launch by name, which runs a

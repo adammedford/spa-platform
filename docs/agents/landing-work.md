@@ -363,8 +363,8 @@ node .claude/workflows/confirm_draft.mjs .scratch/overnight/log/confirm-<date>.m
 It prints the questions the draft covers, those it overrides, those answered no and those left
 open, then one verdict line. It exits 0 when every question is confirmed and none is answered no by
 an override, 1 when a question is left open, an override opens "no", the draft names a number no
-questions comment yields or does not begin `Confirm`, and 2 when it cannot judge, such as on an
-issue that already has a `Confirm` comment. `--json` prints the sort as JSON. It reads the parser
+questions comment yields, does not begin `Confirm`, or a `## Questions:` comment could not be
+read, and 2 when it cannot judge, such as on an issue that already has a `Confirm` comment. `--json` prints the sort as JSON. It reads the parser
 out of `.claude/workflows/morning.js`, so it runs the code the morning runs, and needs no agent.
 The morning workflow's `confirmFile` argument is the full check, with an agent reading the issue;
 its verdict fails only on a number no questions comment yields.

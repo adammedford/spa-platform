@@ -41,7 +41,8 @@
 # When the comment holding the clearing record ends its findings with a `## Follow-ups` table that
 # has a row, the review carried a finding rather than holding on it, and docs/agents/review.md ->
 # "Landing or holding" has the merge body record it as an `Outstanding:` line. So the reader is run
-# with --follow-ups, which prints each row's Finding after the URL, and a merge body with no line
+# with --follow-ups, which prints each row's Finding after the URL (and its Fails on after a tab,
+# which is cut off here; #966), and a merge body with no line
 # beginning `Outstanding:` is then refused before the merge, naming the rows (#521). A record with
 # no such row is not checked, and nor is an --unreviewed landing, which reads no record.
 # Each such row also names, before the merge, whether an issue has filed it (#573): the morning
@@ -54,8 +55,8 @@
 # closes a ticket on (#578), names a ticket some non-merge commit between the base and that head
 # names in its message, as `#n` or as `issue-n`, because the merge closes each one (#566). A refusal
 # names each #n no commit names, and --unreviewed does not lift it. A keyword before `owner/repo#n`,
-# GitHub's form for another repository's ticket, is refused outright, because the check cannot tell
-# whether it names a ticket here; the remedy is `Closes #n`.
+# GitHub's form for another repository's ticket, or before a GitHub issue URL (#806), is refused
+# outright, because the check cannot tell whether it names a ticket here; the remedy is `Closes #n`.
 #
 # It merges only a body that cites each decision it owes (#530). A closing reference that names a
 # change request decided `ADR: no` closes a request whose why lives nowhere but the merge body, so
@@ -258,6 +259,8 @@ full_sha='^[0123456789abcdef]{40}$'
 # take a read of this repository's name, so the form is refused before anything is read, failing
 # closed (CODING_STANDARDS.md -> "A check fails closed"): the refusal asks for `Closes #n`, the
 # form docs/agents/landing-work.md gives, and nothing here closes another repository's ticket.
+# GitHub issue URLs after the keyword are refused on the same basis (#806); a URL must not
+# bypass the check simply because the local #n reader does not recognize it.
 # bash's =~ finds one match, so a line is read from its right end, each match's prefix
 # becoming the next line to read, and the numbers are put back in the line's order. `#n` and
 # `issue-n` are matched in a message only where no digit follows, so #35 is not found inside #352
@@ -277,13 +280,14 @@ caller_lc_all="${LC_ALL-}"
 LC_ALL=C
 keyword='([Cc][Ll][Oo][Ss][Ee]([Ss]|[Dd])?|[Ff][Ii][Xx]([Ee][Ss]|[Ee][Dd])?|[Rr][Ee][Ss][Oo][Ll][Vv][Ee]([Ss]|[Dd])?)'
 # In each match, group 1 is what comes before the keyword, groups 2 to 5 the keyword and its
-# endings, and group 6 the ticket: `n` of `#n`, or the whole `owner/repo#n`.
+# endings, and group 6 the ticket: `n` of `#n`, the whole `owner/repo#n`, or a GitHub issue URL.
 closing="^(.*[^[:alnum:]_])?${keyword}:?[[:space:]]*#([0-9]+)([^0-9].*)?\$"
-other_repository="^(.*[^[:alnum:]_])?${keyword}:?[[:space:]]*([^[:space:]#/]+/[^[:space:]#/]+#[0-9]+)"
+issue_url='[Hh][Tt][Tt][Pp][Ss]?://([Ww][Ww][Ww][.])?[Gg][Ii][Tt][Hh][Uu][Bb][.][Cc][Oo][Mm]/[^[:space:]/#]+/[^[:space:]/#]+/[Ii][Ss][Ss][Uu][Ee][Ss]/[0-9]+'
+other_repository="^(.*[^[:alnum:]_])?${keyword}:?[[:space:]]*([^[:space:]#/]+/[^[:space:]#/]+#[0-9]+|${issue_url})"
 closes=""
 while IFS= read -r line; do
   if [[ $line =~ $other_repository ]]; then
-    die "the description of #$pr closes ${BASH_REMATCH[6]}, the owner/repo#n form, which this check cannot read against the commits here, so it does not merge. Write Closes #n for a ticket of this repository (docs/agents/landing-work.md -> Land it); a ticket of another repository is not closed from here."
+    die "the description of #$pr closes ${BASH_REMATCH[6]}, the owner/repo#n form or a GitHub issue URL, which this check cannot read against the commits here, so it does not merge. Write Closes #n for a ticket of this repository (docs/agents/landing-work.md -> Land it); a ticket of another repository is not closed from here."
   fi
   in_line=""
   while [[ $line =~ $closing ]]; do
@@ -344,10 +348,10 @@ else
   # The reader's --pr form lists the pull request's comments and reviews itself, every page of each
   # (#488), and judges the head passed with --head: the one this script pinned above, not whatever
   # a second read would report. It prints the clearing record's URL on its first line and, with
-  # --follow-ups, the Finding of each row of that record's `## Follow-ups` table on the lines after
-  # it (#521); or it says on standard error, above the line below, why nothing clears the head
-  # (status 1) or why it could not read the records (status 2: a gh call failed, or what came back
-  # was not GitHub's shape).
+  # --follow-ups, one line for each row of that record's `## Follow-ups` table on the lines after it
+  # (#521), the row's Finding, a tab and its Fails on (#966); or it says on standard error, above the
+  # line below, why nothing clears the head (status 1) or why it could not read the records (status
+  # 2: a gh call failed, or what came back was not GitHub's shape).
   echo "--- reading the review records of #$pr at $head"
   status=0
   read_out="$(python3 -I "$here/review_record.py" --pr "$pr" --head "$head" --follow-ups)" || status=$?
@@ -359,6 +363,16 @@ else
   record="${read_out%%"$newline"*}"
   follow_ups=""
   [ "$read_out" = "$record" ] || follow_ups="${read_out#*"$newline"}"
+  # A row is named below by its Finding, the title the morning files it under, so each line is cut
+  # at its first tab, which the reader prints only as that separator (#966).
+  if [ -n "$follow_ups" ]; then
+    findings=""
+    tab="$(printf '\t')"
+    while IFS= read -r line; do
+      findings="$findings${line%%"$tab"*}$newline"
+    done <<< "$follow_ups"
+    follow_ups="${findings%"$newline"}"
+  fi
   trailer="Reviewed: $head $record"
 fi
 

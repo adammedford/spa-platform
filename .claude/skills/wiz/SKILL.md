@@ -75,8 +75,9 @@ on `docker-credential-desktop`. Its header says what it does, and `tools/wiz_pre
 holds it to cases. Sourced, it moves to the main checkout's top level (rule 8), exports the profile
 and Region of `tools/aws-project.env`, puts the per-user Docker Desktop on `PATH`, sets the
 owner-only file mask, names the record `R` and the bundle `E` (rule 6) and makes the bundle's
-directory once git confirms it is ignored, and defines `shown`, `captured` and `spactl`, the last a
-function so `SPACTL` stays unset (Q80). Never copy its commands into a call or into this file.
+directory once git confirms it is ignored, and defines `shown`, `captured`, `spactl`, a function so
+`SPACTL` stays unset (Q80), and `sitting_browser`, which D0 and D2 drive. Never copy its commands
+into a call or into this file.
 
 The record and bundle are named after the sitting's pinned date, never the clock's: a sitting that
 crossed midnight UTC once moved both to the next day mid-sitting, and a test run did nothing.
@@ -200,13 +201,16 @@ Then ask for the confirm on launch of `deploy.sh`, naming the shape it will appl
 change, 1 to destroy` from a standing gateway, `1 to add, 2 to change, 1 to destroy` from the
 sample image, the one replacement being the task definition as its new revision. Run it in the
 background (it builds both images for ARM64, pushes by digest, applies, waits for steady state and
-asserts the running digest), and watch its output for `waiting through`: `deploy.sh` then waits for
-each new task to report the registry revision on `/readyz`, through the tunnel. Start `tunnel.sh`
-in the background at that line, so its hop goes through the new task, and then:
+asserts the running digest, then waits for each new task to report the registry revision on
+`/readyz`), and start no tunnel while it runs: its readiness wait opens a tunnel of its own and
+closes it when the wait ends (#1008). Once `deploy.sh` prints its pass line, start `tunnel.sh` in
+the background, so its hop goes through a task of the new deployment, for `verify-tunnel.sh
+/healthz` and the human's browser; a `tunnel.sh` still running from before is stopped first, since
+its hop was a task the deployment replaced:
 
 ```bash
-shown tools/scripts/deploy.sh                    # in the background; start the tunnel at "waiting through"
-tools/scripts/tunnel.sh                          # in the background, at that line
+shown tools/scripts/deploy.sh                    # in the background; no tunnel while it runs
+tools/scripts/tunnel.sh                          # in the background, after deploy.sh's pass line
 shown tools/scripts/verify-tunnel.sh /healthz
 ```
 
@@ -533,8 +537,9 @@ deployment order from the first root that is absent:
 5. `shown tools/scripts/seed.sh`, with #236's Q107 capture in its order: the commit; the names only
    of the `AWS_*` variables set; the count of `[spa-platform]` sections in `~/.aws/credentials`;
    seed's whole output to its pass line; `exit=`. Post it on #236 and cite it from #242 (Q103).
-6. `deploy.sh` as C1 runs it, from the sample image, then `verify-tunnel.sh /healthz`. Post both on
-   #242: this is the second deployment #63's Q79 asks for, and the suite is not run again.
+6. `deploy.sh` as C1 runs it, from the sample image, with no tunnel while it runs; after its pass
+   line, `tunnel.sh` in the background, then `verify-tunnel.sh /healthz`. Post both on #242: this
+   is the second deployment #63's Q79 asks for, and the suite is not run again.
 
 **C4, the gate tags.** For each gate, list the range's merges and their `Reviewed:` lines as
 `docs/agents/landing-work.md` → Gates shows, name any merge no record clears, and draft the tag
@@ -585,18 +590,34 @@ closed, so both are in the tree when D runs.
 **Failure, and the way out.** A row that fails, or that the class reports `not proved:`, is posted
 as such with the reason (rule 4), and wiz then asks whether to go on to the next step or straight
 to D10. Every stop, rule 7's included, offers D10 before the sitting ends: the two-task cell costs
-about $0.10 an hour (#347 Q10), and teardown the same day is the practice. A declined D10 is
-recorded as "not run: declined", keeps D2's copy of `terraform.tfvars`, and the sitting ends naming
-where it is.
+about $0.10 an hour (#347 Q10), and teardown the same day is the practice. A stop before D2's end
+runs `shown sitting_browser stop` first. A declined D10 is recorded as "not run: declined", keeps
+D2's copy of `terraform.tfvars`, and the sitting ends naming where it is.
 
 **D0, the fresh deploy and the live login (#348 Q22).** The root is absent (Stage 0). Fetch and
 fast-forward first (rule 8) and name the commit: D0 deploys the commit `main` is on, which is the
 one #348 Q34 tags, and its CI run must be green. Then N's steps 1 to 6 from the first root that is
 absent, with `terraform.tfvars` in its Phase 1 shape: N step 3's rewrite, which
 `tools/scripts/platform-tfvars.sh` (#470) does, and no G6 key. N's posts for the identity and apps
-roots, seed and the deploy go where N sends them; D0's own post is the one below. With the tunnel up
-and `verify-tunnel.sh /healthz` passing, the human opens `https://app1.spa-poc.test:8443/` in a
-browser, logs in as the test user, sees the app, and keeps that tab: D2 reloads it. Then:
+roots, seed and the deploy go where N sends them; D0's own post is the one below. Once N step 6's
+tunnel, started after `deploy.sh`'s pass line, is up and `verify-tunnel.sh /healthz` passes, the
+sitting browser starts, and D0's live login is its own. In D the human opens no browser; each
+`sitting_browser` call is shown and approved under rule 1 like any other, until #1028 says
+otherwise. `start` runs in a background call of its own, and every later command finds it by the
+socket in the bundle, once its ready line has printed:
+
+```bash
+export SPA_E2E_STACK=deployed; shown sitting_browser start     # in the background; its ready line says stack=deployed
+```
+
+```bash
+shown sitting_browser login main --app app1                    # keep profile main: D2 reloads it
+shown sitting_browser marker main
+```
+
+A ready line that does not say `stack=deployed`, or a login line that is not `signed-in`, is a
+failed D0: the switch unset starts the local stack, and that login would prove nothing about the
+cell. Then:
 
 ```bash
 git rev-parse HEAD
@@ -608,9 +629,9 @@ shown aws ecs describe-tasks --cluster spa-poc --tasks "$TASK" \
 
 Post `## D0` on #348 (#348 Q34, #361 Q9): the deployed commit, its CI run's URL and conclusion, both
 image digests (the same ones `deploy.sh`'s pass line names), the task id, the task definition
-revision, and that the live login reached the app, said as what the page showed and never as the
-session's name. A CI run that is not green, or a digest that differs from `deploy.sh`'s pass line,
-is a failed D0, and D does not go on.
+revision, and the `signed-in` and `marker` lines as what the page showed. A CI run that is not
+green, a digest that differs from `deploy.sh`'s pass line, or a `signed-in` line whose `instance=`
+is not the one task's id, is a failed D0, and D does not go on.
 
 **D2, the cutover (row 2, F14; #348 Q32, #361 Q7 and Q11).** First the copy D10 restores, in the
 bundle, then the block:
@@ -633,24 +654,47 @@ shown terraform -chdir=infra/envs/poc/platform show "$PWD/$E/cutover.tfplan"
 ```
 
 Read the plan under D's rule-2 clause: exit 2, one `must be replaced`, the gateway task definition,
-and otherwise creates and in-place updates. Name the counts and the one replacement when asking for
-the confirm, and apply the saved plan:
+and otherwise creates and in-place updates. Then the baseline:
+
+```bash
+shown sitting_browser clear-provider main
+shown sitting_browser reload main
+```
+
+Anything but `signed-in` stops the sitting (rule 7) before any apply: D0's session is gone, so no
+sign-out could be attributed to the cutover. Name the counts and the one replacement when asking for
+the confirm. On the confirm, set any earlier attempt's log aside, start the watch in a background
+call of its own, and once its first line has printed apply the saved plan (the apply does not wait
+for the roll):
+
+```bash
+[ ! -e "$E/browser.log" ] || mv "$E/browser.log" "$E/browser.log.$$"
+```
+
+```bash
+shown sitting_browser watch main --every 10s --clear-provider --relogin    # in the background, until unwatch
+```
 
 ```bash
 shown terraform -chdir=infra/envs/poc/platform apply -input=false "$PWD/$E/cutover.tfplan"     # on the confirm, D's rule-2 clause
 ```
 
-Through the roll, the count is the browser's and nothing else's: the human reloads the D0 tab
-every 10 seconds; wiz records the UTC time of each reload that answers with a login prompt, the human
-logs in again each time, and the count of those prompts is the row's sign-outs. A reload that fails
-while the tunnel is down is missing coverage, never a sign-out. The gateway's log lines go into the
+Through the roll, the count is the sitting browser's and nothing else's. Each tick clears the
+provider's cookies, since a live provider session answers the gateway's challenge with no prompt
+(#1012), reloads, and writes one observation line to `"$E/browser.log"`; on `login-prompt` it logs in
+again. A sign-out is a `login-prompt` line with a `signed-in` line since the previous prompt, so a
+prompt repeated after a failed login is one sign-out (#1025 Q3). `tunnel-down`, `timeout`, `other` and
+`not-found` lines are missing coverage, never a sign-out and never a stop. A `watch` call that exits
+before `unwatch` has ended, and the `failed` line it printed is not in the log: run `unwatch`, run
+the watch line again with the log left where it is, and post the interval as missing coverage. The gateway's log lines go into the
 bundle uncounted (`tools/scripts/logs.sh` into `"$E/row2.log"`), because a navigation the shell gate
 challenges is a redirect and not a 401 (`GLOSSARY.md` → Shell gate), so the log could count what
 the browser never saw. The tunnel's hop is an old task, which the roll drains (#348 Q20): once
 `describe-tasks` lists a new task RUNNING, stop `tunnel.sh`, note the UTC time, start it again in
 the background (it picks a running task and prints `through task <id>`: keep that id, D4 needs it),
 run `verify-tunnel.sh /healthz`, and note the time it passed; the interval between the two times is
-the gap, posted as missing coverage. Then convergence:
+the gap, posted as missing coverage, and any `tunnel-down` line outside it is named as further
+missing coverage. Then convergence:
 
 ```bash
 shown aws ecs wait services-stable --cluster spa-poc --services gateway
@@ -665,15 +709,32 @@ each task's `/readyz` answered at the registry's revision, is convergence; the `
 the two task ids, comma-separated, as `deploy.sh`'s own wait passes them (`cell-common.sh`
 `wait_for_revision`), and the revision is the one D0's `deploy.sh` read from the live registry,
 which the cutover does not change. A `services-stable` that times out, or a wait that returns
-naming a task that never answered, is a failed row. After convergence the human reloads the tab once
-more and logs in: that login is #348 Q32's post-convergence login, and "carries into row 3" means
-row 3 runs on this converged cell with no further apply; row 3's own login is #358's.
+naming a task that never answered, is a failed row. After convergence the watch ends, its count is
+read, and the sitting browser makes the login. `/bff/login` discards the profile's session first, and
+the cleared provider makes it fill the form:
+
+```bash
+shown sitting_browser unwatch main
+shown awk '$1=="login-prompt" && !p {n++; p=1} $1=="signed-in" {p=0} END {print n+0}' "$E/browser.log"
+shown grep -E '^(login-prompt|tunnel-down|timeout|other|not-found) ' "$E/browser.log"
+shown sitting_browser clear-provider main
+shown sitting_browser login main --app app1
+shown sitting_browser session main
+shown sitting_browser stop
+```
+
+A `signed-in` line at the revision `spactl wait` named, and `session` answering `http=200`, is #348
+Q32's post-convergence login, and "carries into row 3" means row 3 runs on this converged cell with
+no further apply; row 3's own login is #358's. Rows 3 to 10 bring their own browsers, so nothing after
+D2 uses the sitting browser.
 
 Post `## D2, row 2` on #348: the plan's counts and its one replacement address, the apply's exit,
-the sign-outs observed with their times, the tunnel gap as missing coverage, the two task ids with
-their zones, the readiness wait's lines, the post-convergence login, and the bundle files
-(`terraform.tfvars.phase1`, `cutover.tfplan`, `row2.log`) by SHA-256. The row passes when a
-sign-out occurred and the post-convergence login succeeded.
+the baseline's line, the sign-outs observed with the watch's lines that were not `signed-in` quoted
+as they read, the tunnel gap as missing coverage, the two task ids with their zones, the readiness
+wait's lines, the post-convergence login's lines, and the bundle files (`terraform.tfvars.phase1`,
+`cutover.tfplan`, `row2.log`, `browser.log`, and each file under `browser-pages/` when an `other`
+wrote one) by SHA-256. The row passes when a sign-out occurred and the post-convergence login
+succeeded.
 
 **D1, the configuration as decided (row 1; #348 Q24).** Reads only, each a `describe`, `get` or
 `list`, through `shown`; never `get-parameter` or `get-parameters`, which return the ring's values
@@ -759,10 +820,14 @@ mutation the summary does not name stops the sitting:
   row, the service replaces the task; read the two tasks again before D5 and name the new id.
 - **D6 (row 6, F1; #348 Q29).** The class drives for up to 40 minutes while the operator deploys:
   start the row's `dotnet test` in the background first, then `deploy.sh` on the same commit as C1
-  runs it (confirm on launch, C1's shape: the one replacement is the task definition), and restart
-  `tunnel.sh` at `waiting through` through a new task, its gap recorded as missing coverage and the
-  new hop's id kept. The class reads the old and new task ids and both image digests from ECS and
-  posts nothing itself; `deploy.sh`'s wait names both new task ids, and those go into the post.
+  runs it (confirm on launch, C1's shape: the one replacement is the task definition), with no
+  tunnel started while it runs. Once `deploy.sh` prints its pass line, restart `tunnel.sh` through a
+  new task as D2 does: stop it, note the UTC time, start it again in the background (keep the id it
+  prints after `through task`), run `verify-tunnel.sh /healthz`, and note the time it passed. The
+  old hop's task drains during the roll, so requests through it fail before the stop; the gap is
+  recorded as missing coverage and the new hop's id kept. The class reads the old and new task ids
+  and both image digests from ECS and posts nothing itself; `deploy.sh`'s wait names both new task
+  ids, and those go into the post.
 - **D7 (row 7; #348 Q31).** The class onboards app 3 with #212's F-07 flow (the apps root's plan
   and apply of app 3's three creates, `spactl release publish`, `app add`, `wait` on both tasks) and
   offboards it after the row, failed or not. Show C3's step 1 addresses as the mutations, and the

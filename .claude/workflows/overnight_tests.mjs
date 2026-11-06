@@ -813,7 +813,8 @@ const HOUSE_CREATE = 'gh issue create` only for a change request, after the sear
 // 18b. A Touches: none ticket is foreground work (#480): #402, #404 and #405, each "Apply Qn of Overnight <date> to
 //      #m", stayed open from 2026-10-25 and #404 and #405 were grilled again on 2026-10-28, though no lane can make a
 //      tracker edit and the answer was already confirmed. Collect gives it the status foreground; the run gives it no
-//      lane, no Route agent and no grill agent, and the report lists it under its own Foreground section.
+//      lane, no Route agent and no grill agent, and the report lists it as a "carried (foreground)" row of its
+//      Tickets table whose Morning step names the issue it edits (#971 retired the Foreground section).
 {
   const id = FOREGROUND_T.id
   const report = allPrompts.find((x) => x.label === 'report')
@@ -823,8 +824,8 @@ const HOUSE_CREATE = 'gh issue create` only for a change request, after the sear
   if (!(result.foreground || []).includes(id)) fail(`${id} is not in the run's foreground`)
   if ((result.needsHuman || []).includes(id) || (result.skipped || []).includes(id)) fail(`${id} is foreground, yet the run reports it needs-human or skipped`)
   if (!summary || !(summary.foreground || []).some((f) => f.id === id && f.issue === FOREGROUND_T.issue && f.title === FOREGROUND_T.title)) fail(`the report's results do not list ${id} (#${FOREGROUND_T.issue}) with its title as foreground`)
-  if (!report || !report.prompt.includes('- Foreground (#480): every entry of the run results\' "foreground"') || !report.prompt.includes('under a "## Foreground" heading')) fail('the report prompt does not name the Foreground section')
-  if (!report || !report.prompt.includes('the issue it edits')) fail('the report prompt does not give each foreground ticket its target issue')
+  if (!report || !report.prompt.includes('- Foreground (#480): every entry of the run results\' "foreground"') || !report.prompt.includes('Each is a row of the Tickets table, "carried (foreground)", whose Morning step names the issue it edits')) fail('the report prompt does not give each foreground ticket a carried (foreground) row of the Tickets table')
+  if (!report || !report.prompt.includes('A foreground ticket\'s step names the issue it edits (#480): "edit #<m> in a foreground session"')) fail('the report prompt does not give each foreground ticket its target issue')
   const FG_RULE = '`**Touches:** none` line, whatever its label -> "foreground"'
   for (const c of allPrompts.filter((x) => x.label === 'collect')) if (!c.prompt.includes(FG_RULE)) fail('the collect prompt does not give a Touches: none ticket the status foreground')
 }
@@ -845,7 +846,7 @@ const HOUSE_CREATE = 'gh issue create` only for a change request, after the sear
   const REPORT_CREATE = 'gh issue create --title "Overnight '
   const top = path.resolve(here, '..', '..')
   const bodyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'overnight-tests-shape-'))
-  const body = (extra) => `**Owner:** integrator\n**Plan row:** I-9\n\n**What to build:** the row's What, citing \`contracts/pipeline.md\`, and its Done when.\n## Acceptance\n- [ ] the companion passes\n${extra}`
+  const body = (extra) => `**Owner:** integrator\n**Plan row:** I-9\n\n## What to build\n\nThe row's What, citing \`contracts/pipeline.md\`, and its Done when.\n\n## Acceptance criteria\n\n- [ ] the companion passes\n${extra}`
   fs.writeFileSync(path.join(bodyDir, 'good.md'), body(''))
   fs.writeFileSync(path.join(bodyDir, 'bad.md'), body('**Session:** foreground\n'))
   const shapeOf = (cmd, file, blockers) => {
@@ -1149,23 +1150,52 @@ for (const c of allPrompts.filter((x) => x.label.startsWith('review:'))) {
 // 29. The report checks each claimed branch's open pull request against the run branch the night before (#628): on
 //     2026-10-29 PR #492, listed under "Claimed branches to merge", landed first and changed the files the run's lanes
 //     changed, so the landing PR #529 was CONFLICTING with main, ran no CI, and the morning stopped at step 7 until the
-//     back-merge 55d0be0. The report's "Claimed branches to merge" item runs `git merge-tree --write-tree` of the run
-//     branch against each open pull request's head and lists the conflicting files, and the Morning steps take their
-//     landing order from that item rather than always landing the run's pull request first.
+//     back-merge 55d0be0. The report runs `git merge-tree --write-tree` of the run branch against each open pull
+//     request's head and lists the conflicting files, and the morning takes its landing order from that check rather
+//     than always landing the run's pull request first. Since #971 the check is the Tickets item's, a claimed row's
+//     Morning step carries the order, and the morning paragraph lands the claimed branches in that order.
 {
   const MERGE_TREE = `\`git -C ${fixture.args.repo} merge-tree --write-tree overnight/${fixture.args.date} <its head>\``
-  const ORDER = 'merge the claimed branches in their own PRs, in the order "Claimed branches to merge" gives'
+  const ORDER = 'The claimed branches land in their own pull requests, in the order the claimed rows\' Morning steps give'
   const reports = allPrompts.filter((c) => c.label === 'report')
   if (!reports.length) fail('#628: no report prompt was rendered, so the claimed-branches check read nothing')
   for (const c of reports) {
-    const item = c.prompt.split('\n').find((l) => l.includes('Claimed branches to merge (')) || ''
-    if (!item.includes(MERGE_TREE)) fail(`#628: the report's "Claimed branches to merge" item does not run ${MERGE_TREE} against each open pull request it names`)
-    if (!item.includes('list every file that conflicts') || !item.includes('back-merges main before its review')) fail('#628: the report\'s "Claimed branches to merge" item does not list the conflicting files and say which pull request lands first and which back-merges main')
+    const item = c.prompt.split('\n').find((l) => l.startsWith('   - Tickets (#971)')) || ''
+    if (!item.includes(MERGE_TREE)) fail(`#628: the report's Tickets item does not run ${MERGE_TREE} against each open pull request a claimed row names`)
+    if (!item.includes('the conflicting files going under Exceptions') || !item.includes('back-merges main before its review')) fail('#628: the report\'s Tickets item does not list the conflicting files and say which pull request lands first and which back-merges main')
     // A merge-tree that could not run (first line not a tree id; a missing head exits 1, as a conflict does) must not
     // read as a clean merge (CODING_STANDARDS.md, "A check fails closed").
-    if (!item.includes('first line is not a tree id') || !item.includes('never "none conflict"')) fail('#628: the report\'s "Claimed branches to merge" item lets a merge-tree that failed to run read as "none conflict"')
-    const morning = c.prompt.split('\n').find((l) => l.includes('- Morning steps: ')) || ''
-    if (!morning.includes(ORDER)) fail('#628: the report\'s Morning steps do not take the landing order from "Claimed branches to merge"')
+    if (!item.includes('first line is not a tree id') || !item.includes('never "none conflict"')) fail('#628: the report\'s Tickets item lets a merge-tree that failed to run read as "none conflict"')
+    const morning = c.prompt.split('\n').find((l) => l.startsWith('   - The morning (#971)')) || ''
+    if (!morning.includes(ORDER)) fail('#628: the report\'s morning paragraph does not take the landing order from the claimed rows\' Morning steps')
+  }
+}
+
+// 29b. The report is one ticket table (#971). An Overnight body was about 23 KB, because its Integrated, Claimed
+//      branches to merge, Morning steps and Foreground sections each walked the night's tickets again in prose, so
+//      one ticket's state was written three or four times. The report prompt asks for one `## Tickets` table with
+//      the seven columns tools/retro_record.py reads, first among the sections, the outcomes it reads, an
+//      `## Exceptions` section, the sections the table cannot hold kept, and none of the four removed headings.
+{
+  const COLUMNS = '| Ticket | Title | Lane | Outcome | Branch | Head | Morning step |'
+  const reports = allPrompts.filter((c) => c.label === 'report')
+  if (!reports.length) fail('#971: no report prompt was rendered, so the ticket-table check read nothing')
+  for (const c of reports) {
+    const p = c.prompt
+    const item = p.split('\n').find((l) => l.startsWith('   - Tickets (#971)')) || ''
+    if (!item.includes('under the heading `## Tickets`') || !item.includes(`with the header "${COLUMNS}"`)) fail(`#971: the report prompt does not ask for the ## Tickets table with the header ${COLUMNS}`)
+    if (!item.includes('One row per ticket the run touched')) fail('#971: the report prompt\'s Tickets table is not one row per ticket the run touched')
+    if (!item.includes('Outcome one of integrated, claimed, failed, grilled or carried')) fail('#971: the report prompt\'s Tickets table does not name the five outcomes')
+    if (!item.includes('python3 -I tools/retro_record.py report <body file>')) fail('#971: the report prompt does not name the reader the morning and the retro read the table with')
+    const sections = p.split('\n').filter((l) => /^ {3}- /.test(l))
+    const at = (start) => sections.findIndex((l) => l.startsWith(start))
+    if (!(at('   - one line: N integrated') >= 0 && at('   - Tickets (#971)') === at('   - one line: N integrated') + 1)) fail('#971: the Tickets table is not the body\'s first section, after its two opening lines')
+    if (!p.includes('   - Exceptions (#971): under the heading `## Exceptions`, one paragraph for each ticket whose row needs more than its cells') || !p.includes('opening with its #<issue>')) fail('#971: the report prompt does not give a row that needs more than its cells a paragraph under ## Exceptions naming its number')
+    for (const [start, heading] of [['   - Decisions taken overnight:', ''], ['   - Change requests (', ''], ['   - Closing check (#629)', '`### Closing check`'], ['   - Findings:', '`## Findings`']]) {
+      if (at(start) < 0) fail(`#971: the report prompt lost its kept section ${start.trim()}`)
+      else if (heading && !sections[at(start)].includes(heading)) fail(`#971: the report prompt's ${start.trim()} section is not headed ${heading}`)
+    }
+    for (const gone of ['## Integrated', '## Claimed branches to merge', '## Morning steps', '## Foreground', '   - Integrated:', 'Claimed branches to merge (', '   - Morning steps:', '"## Foreground" heading']) if (p.includes(gone)) fail(`#971: the report prompt still asks for the removed section ${JSON.stringify(gone)}`)
   }
 }
 
@@ -2238,6 +2268,44 @@ const forkOf = (prompt) => (/Otherwise fork from [^:]+: forkSha = (\S+?)\. Take 
     if (!none.report.includes(OLD_REPORT)) fail('#965: the report prompt, no standing answer, no longer runs from the partial\'s choice straight to the steering change as before')
     for (const [name, p] of [['grill', none.grill], ['report', none.report]]) for (const w of NONE_OF) if (p.includes(w)) fail(`#965: the ${name} prompt with no standing answer names ${JSON.stringify(w)}`)
     if (granted.grill.includes('Under each question write the line "Answer: yes, pre-accepted')) fail('#965: the granted grill prompt still writes the pre-accepted line under each question')
+  }
+}
+
+// 47. The run's filer writes the ticket template's headings (#973). NEW TICKETS wrote a bold "**What to build:**"
+//     line and "## Acceptance", which tools/ticket_shape.py notes as outside the ticket's set since #970. The body
+//     template each collect prompt gives is filled in and run through the real check: its `##` headings are the
+//     set the ticket names, `## What to build` and `## Acceptance criteria` among them, it writes no bold What line,
+//     and the check passes it under ready-for-human printing no heading note and no derived-owner note (the template
+//     has no Touches line, so its Owner line is the owner). The integrate step's acceptance reader, which pulls the
+//     acceptance list out of a partial's issue body, reads a `## Acceptance criteria` section, which is now the
+//     heading every filer writes, and stops at the next heading.
+{
+  const SET = ['Parent', 'What to build', 'Acceptance criteria', 'Blocked by']
+  const top = path.resolve(here, '..', '..')
+  const collects = allPrompts.filter((x) => x.label === 'collect')
+  if (!collects.length) fail('#973: no collect prompt was rendered, so the NEW TICKETS template went unread')
+  for (const c of collects) {
+    const start = c.prompt.indexOf('  1. Write its body to')
+    const end = c.prompt.indexOf('\n  2. Check its shape', start)
+    if (start < 0 || end < 0) { fail('#973: NEW TICKETS carries no body template between its steps 1 and 2'); continue }
+    const template = c.prompt.slice(start, end).split('\n').slice(1).map((l) => l.replace(/^ {2}/, ''))
+    const body = template.join('\n').replace('<role>', 'integrator').replace('<id>', 'I-9') + '\n'
+    const heads = template.filter((l) => /^## /.test(l)).map((l) => l.slice(3).trim())
+    for (const h of heads) if (!SET.includes(h)) fail(`#973: the NEW TICKETS template writes "## ${h}", outside the ticket's set ${SET.join(', ')}`)
+    for (const h of ['What to build', 'Acceptance criteria']) if (!heads.includes(h)) fail(`#973: the NEW TICKETS template writes no "## ${h}" heading`)
+    if (template.some((l) => /^\*\*What to build:\*\*/.test(l))) fail('#973: the NEW TICKETS template still writes a bold "**What to build:**" line')
+    const r = spawnSync('python3', ['-I', 'tools/ticket_shape.py', '-'], { cwd: top, encoding: 'utf8', input: JSON.stringify({ number: 0, body, labels: [{ name: 'ready-for-human' }], subIssuesSummary: { total: 0 }, blockedBy: { nodes: [] } }) })
+    const notes = String(r.stdout || '').split('\n').filter((l) => /^ticket-shape: note: (heading|derived-owner):/.test(l))
+    if (r.status !== 0) fail(`#973: the filled-in NEW TICKETS template fails tools/ticket_shape.py: exit ${r.status}, ${(r.stdout + r.stderr).trim()}`)
+    if (notes.length) fail(`#973: tools/ticket_shape.py notes the filled-in NEW TICKETS template: ${notes.join(' | ')}`)
+  }
+  const src = fs.readFileSync(scriptPath, 'utf8')
+  const reader = (/acceptance list alone: [^\n]*?\| awk '([^']*)'/.exec(src) || [])[1]
+  if (!reader) fail('#973: the integrate prompt carries no awk reader of the acceptance list')
+  else {
+    const issueBody = '## What to build\n\nx\n\n## Acceptance criteria\n\n- [ ] F-01 passes\n- [x] F-02 passes\n\n## Blocked by\n\n- [ ] not a box of the list\n'
+    const r = spawnSync('awk', [reader], { encoding: 'utf8', input: issueBody })
+    if (r.status !== 0 || !r.stdout.includes('- [ ] F-01 passes') || r.stdout.includes('not a box of the list')) fail(`#973: the acceptance reader awk '${reader}' does not read the "## Acceptance criteria" section alone: exit ${r.status}, ${JSON.stringify(r.stdout)}`)
   }
 }
 

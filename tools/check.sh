@@ -114,8 +114,9 @@
 # check does offline, so an offline push is not held up on it; --full passes it --fail-unchecked and
 # fails, as it fails a tool that is not on PATH, because the full check is what a lane and the
 # overnight integrate gate run, and there a pass over a ticket it could not read would let
-# 2026-10-22's open-box "Merge task" through whenever gh is signed out (#894). Only python3 is a
-# tool it needs.
+# 2026-10-22's open-box "Merge task" through whenever gh is signed out (#894). A full landing that
+# names a plan row needs the complete list of open issues, so without it the check fails in the hook
+# too (#871). Only python3 is a tool it needs.
 #
 # Not called a gate: GLOSSARY.md reserves Gate for the platform's checkpoint ladder.
 #
@@ -411,9 +412,10 @@ fi
 # two review rounds, two rebuilds of the run branch and a force-push; on main it could not have been
 # corrected at all (#296). tools/landing_subjects.py says what it judges and what it leaves; this
 # hands it the same range as the part-row merges, and, the same way, no base is no check: the
-# hook says so, and the full check has already failed at A-05. Its own exit 2, a range it could not
-# read, fails here as surely as a held merge. Under --full a ticket it could not read fails it too
-# (#894), and the hook's offline push still passes; the header says why.
+# hook says so, and the full check has already failed at A-05. Its own exit 2, a range or a list of
+# open issues it could not read completely (#871), fails here as surely as a held merge. Under
+# --full a ticket it could not read fails it too (#894), and the hook's offline push still passes;
+# the header says why.
 if command -v python3 > /dev/null; then
   if [ -n "$base" ]; then
     landing_unread=""

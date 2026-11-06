@@ -135,7 +135,8 @@ GH_TIMELINE = (
 CLOSE_IN_MORNING = "every acceptance box is ticked; close it in the morning"
 # Why a ticket whose Touches line says `none` gets no lane, no Route and no grill (#480): it is a
 # tracker edit, such as "Apply Qn of Overnight <date> to #m", whose answer is already confirmed.
-# overnight.js says it alike, and its report lists the ticket under "## Foreground".
+# overnight.js says it alike, and its report gives the ticket a "carried (foreground)" row of its
+# "## Tickets" table (#971).
 FOREGROUND = "**Touches:** none, a tracker edit no lane can make; work it in the foreground"
 # The statuses a dependant may wait on and still be ready: a ticket a lane runs first tonight, and
 # one with nothing left to build, which the workflow settles as met before any lane starts.

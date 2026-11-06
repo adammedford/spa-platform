@@ -41,7 +41,7 @@ contracts rows naming it, cited by path. In practice:
 | The interfaces and the stage order | `contracts/`, `docs/plan/02-contracts.md` |
 | A test id the row names (`F-`, `N-`, `P-`, `A-`) | `docs/plan/04-tests.md`, `contracts/test-ids.md` |
 | An evidence id (`S-`, `R-`, `T-`) | `docs/plan/07-evidence.md` |
-| A decision the task was handed | the change requests blocking the ticket, with their decision comments; a decision given in a session, posted on the ticket under `docs/agents/tracker-policy.md` → "A decision Adam gives in a session"; an archived request under `contracts/changes/`; `docs/adr/` |
+| A decision the task was handed | the change requests blocking the ticket, with decision comments authored by `@adammedford` under `docs/agents/tracker-policy.md`; a decision given in a session, posted on the ticket under `docs/agents/tracker-policy.md` → "A decision Adam gives in a session"; an archived request under `contracts/changes/`; `docs/adr/` |
 
 The pull request body is the author's claim, not the spec. Check it against the diff and say which
 claims you verified and how. When it closes a change request whose decision comment says
@@ -99,7 +99,9 @@ Merge when nothing found is a defect: the spec is met, no assertion is unfailabl
 claims, and the diff stayed in its owner's paths. Record the rest as an `Outstanding:` line in the
 merge body, which `docs/agents/landing-work.md` requires anyway, and end the review comment's
 findings with each carried finding that names no open ticket, in the `## Follow-ups` table the
-review-queue workflow writes. The morning run files each row as an issue of its own while the pull
+review-queue workflow writes, whose `Fails on` cell names the input or state on which the finding
+gives the wrong result; a finding with no such input is a note under its axis, not a row, and files
+nothing. The morning run files each row as an issue of its own while the pull
 request is still open (#292, #514); a row still unfiled when `tools/land.sh` merges is named by its
 `land:` warning (#573), and is filed by hand with the finding as the title and the body
 `node .claude/workflows/follow_up_body.mjs <pr> <record-url> <record.md> <row>` prints, whose
@@ -142,6 +144,12 @@ gh pr comment <n> --body-file - <<'EOF'
 ## Standards
 ...
 ## Spec
+| Box | Verdict | Evidence |
+| --- | --- | --- |
+...
+## Mutations
+| Broken | Failed of total | Result | Log |
+| --- | --- | --- | --- |
 ...
 
 Reviewed <40-hex head> against <40-hex base>: merge

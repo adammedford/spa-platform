@@ -447,6 +447,41 @@ try {
     if ((refusedRun.result.tickets || []).map((t) => t.noun).join() !== 'noun-1') fail(`a ticket the check refused: tickets ${JSON.stringify((refusedRun.result.tickets || []).map((t) => t.noun))}, expected noun-1 alone`)
   }
 
+  // 19b. The ticket template's headings (#973). The File prompt's body shape wrote a bold
+  //      "**What to build:**" line and "## Acceptance", which tools/ticket_shape.py notes as outside
+  //      the ticket's set since #970. The `##` headings its step 4 names are the set the ticket names,
+  //      `## What to build` and `## Acceptance criteria` among them, and no bold What line; a body
+  //      written in that shape passes tools/ticket_shape.py under ready-for-agent with no heading
+  //      note and no derived-owner note (it has no Touches line, so its Owner line is the owner),
+  //      and passes the body-check the prompt runs on it.
+  checks++
+  {
+    const SET = ['Parent', 'What to build', 'Acceptance criteria', 'Blocked by']
+    const run = await execute(newRepo(), { date: DATE }, { index: indexFor(THREE) })
+    const fp = (run.calls.find((c) => c.label === 'file') || {}).prompt || ''
+    const start = fp.indexOf("4. Each ticket's body")
+    const step = start < 0 ? '' : fp.slice(start, fp.indexOf('body-check', start))
+    if (!step) fail('#973: the File prompt carries no step 4 giving each ticket\'s body shape')
+    const spans = [...step.matchAll(/`([^`\n]+)`/g)].map((m) => m[1])
+    const heads = spans.filter((s) => /^## /.test(s)).map((s) => s.slice(3).trim())
+    for (const h of heads) if (!SET.includes(h)) fail(`#973: the File prompt's body shape writes "## ${h}", outside the ticket's set ${SET.join(', ')}`)
+    for (const h of ['What to build', 'Acceptance criteria']) if (!heads.includes(h)) fail(`#973: the File prompt's body shape writes no "## ${h}" heading`)
+    if (spans.some((s) => /^\*\*What to build:\*\*/.test(s))) fail('#973: the File prompt\'s body shape still writes a bold "**What to build:**" line')
+    const lines = []
+    for (const s of spans) {
+      if (/^\*\*Owner:\*\*/.test(s)) lines.push('**Owner:** integrator')
+      else if (/^\*\*Plan row:\*\*/.test(s)) lines.push(s)
+      else if (/^## /.test(s)) lines.push('', s, '', s === '## Acceptance criteria' ? "- [ ] no lane's log in a later run's record shows the repair" : 'The evidence `/x/log/a.txt:3`, quoted, and its cost.')
+    }
+    const body = lines.join('\n') + '\n'
+    const shape = spawnSync('python3', ['-I', path.join(top, 'tools', 'ticket_shape.py'), '-'], { cwd: top, encoding: 'utf8', input: JSON.stringify({ number: 0, body, labels: [{ name: 'ready-for-agent' }], subIssuesSummary: { total: 0 }, blockedBy: { nodes: [] } }) })
+    const notes = String(shape.stdout || '').split('\n').filter((l) => /^ticket-shape: note: (heading|derived-owner):/.test(l))
+    if (shape.status !== 0) fail(`#973: a body in the File prompt's shape fails tools/ticket_shape.py: exit ${shape.status}, ${(shape.stdout + shape.stderr).trim()}\n${body}`)
+    if (notes.length) fail(`#973: tools/ticket_shape.py notes a body in the File prompt's shape: ${notes.join(' | ')}`)
+    const checked = spawnSync('python3', ['-I', path.join(top, 'tools', 'retro_record.py'), 'body-check'], { cwd: top, encoding: 'utf8', input: body })
+    if (checked.status !== 0) fail(`#973: a body in the File prompt's shape fails retro_record.py body-check: exit ${checked.status}, ${(checked.stdout + checked.stderr).trim()}`)
+  }
+
   // 20. The refusal count (#315): Gather runs tools/retro_refusals.py for the night, its line reaches
   //     the File prompt verbatim for the parent issue and the return, the parent's "cannot see"
   //     paragraph no longer counts tool-call counts among what it cannot see, and a transcripts root
@@ -518,6 +553,38 @@ try {
     if (!fpBroken.includes(`\nretro-refusals: ${BROKEN}: unreadable: lines that do not parse in agent-b1.jsonl (1); no count is given\n`)) fail('a launch with a transcript line that does not parse: its unreadable line does not reach the File prompt')
     if (!fpBroken.includes(`\n${LINE}\n`)) fail('beside an unreadable launch, the counted run\'s line does not reach the File prompt')
     if ((broken.result.refusals || []).filter((l) => l.includes(`${BROKEN}: unreadable:`)).length !== 1) fail(`the return does not carry the unreadable line once: ${JSON.stringify(broken.result.refusals)}`)
+  }
+
+  // 21. The report's tickets (#971): the Gather prompt carries the reader's tickets in the index's report, and the
+  //     integration unit reads the report's parts by the shape the real reader gives: a body that opens with the
+  //     `## Tickets` table sends it to the rows that need it, each by number and outcome, and a body of the earlier
+  //     shape to its Failed, Partial and Needs-you sections. The two bodies' tickets differ, so a unit that kept one
+  //     shape's text, or a constant, fails one of them.
+  checks++
+  {
+    const ticketsOf = (body) => {
+      const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'retro-report-')), 'body.md')
+      made.push(path.dirname(file))
+      fs.writeFileSync(file, body)
+      return JSON.parse(execFileSync('python3', ['-I', READER, 'report', file, '--title', `Overnight ${DATE}`], { encoding: 'utf8' }))
+    }
+    const TABLE = `Standing answer: granted.\n\n## Tickets\n\n| Ticket | Title | Lane | Outcome | Branch | Head | Morning step |\n| --- | --- | --- | --- | --- | --- | --- |\n| #901 | Landed whole | ws1-infra | integrated | task/a | 1111111 | none |\n| #902 | Landed in part | ws3-identity | integrated (partial) | task/b | 2222222 | tick box 2 |\n| #903 | Went red | ws6-verification | failed | task/c | 3333333 | retry |\n| #904 | Waits on Adam | integrator | carried (needs you) | none | none | answer Q3 |\n\n## Exceptions\n\n#903: two count tests.\n`
+    const EARLIER = 'Standing answer: granted.\n\n## Integrated\n\n| Task | Issue | Merge | What landed |\n| --- | --- | --- | --- |\n| issue-901 | #901 | 1111111 | x |\n\n## Partial (Outstanding)\n\n- #902: box 2.\n\n## Failed\n\n- #903 red.\n\n## Needs you\n\n- #904.\n'
+    const unitFor = async (body) => {
+      const read = ticketsOf(body)
+      const index = { ...indexFor(THREE), night: { date: DATE, issue: 226, shape: 'issues', base: sha('b'), integrationBranch: `overnight/${DATE}` }, report: { source: `https://github.com/adammedford/spa-platform/issues/226`, date: read.date, kind: read.kind, sections: read.sections, tickets: read.tickets } }
+      const r = await execute(newRepo(), { date: DATE }, { index })
+      return { unit: (r.calls.find((c) => c.label === 'lane:integration') || {}).prompt || '', gather: (r.calls.find((c) => c.label === 'gather') || {}).prompt || '' }
+    }
+    const table = await unitFor(TABLE)
+    const ROWS = 'the report\'s ## Tickets rows that need more than integrated: #902 (integrated (partial)), #903 (failed), #904 (carried (needs you)), with their ## Exceptions paragraphs'
+    if (!table.unit.includes(ROWS)) fail(`#971: the table-shape integration unit does not read the rows that need it:\n${(/Read the serialized[^\n]*/.exec(table.unit) || [''])[0]}`)
+    if (table.unit.includes('#901 (')) fail('#971: the table-shape integration unit reads a row that landed whole')
+    const earlier = await unitFor(EARLIER)
+    if (!earlier.unit.includes('the report\'s Failed, Partial and Needs-you sections')) fail('#971: the earlier-shape integration unit does not read the Failed, Partial and Needs-you sections')
+    if (earlier.unit.includes('## Tickets rows')) fail('#971: the earlier-shape integration unit reads ## Tickets rows its report does not have')
+    if (!table.gather.includes('tickets is its tickets, verbatim')) fail('#971: the Gather prompt does not carry the reader\'s tickets into the index\'s report')
+    if (!table.gather.includes('report.tickets.rows')) fail('#971: the Gather prompt does not take the lanes from the report\'s ticket rows')
   }
 
   if (env.thrown && env.thrown.length) fail(`a lane thunk threw: ${env.thrown[0]}`)
