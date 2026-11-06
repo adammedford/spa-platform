@@ -9,9 +9,12 @@ namespace Gateway.E2ETests.Deployed;
 /// SPA), against a recorded runner standing in for Terraform, the AWS CLI and spactl, and a stand-in for
 /// the tunnel: the apps root's plan with the onboarding definition, run with <c>-detailed-exitcode</c>,
 /// is read before it is applied and applied only when it adds the app's own resources; spactl, run as
-/// the project's profile, publishes the release, adds the app and waits for the revision; the app then
-/// answers through the tunnel with a login at its own client; the gateway's task is the same one
-/// before and after; and the clean-up takes the app out of the registry before its client and secret go.
+/// the project's profile, publishes the release, adds the app and waits for the revision on every
+/// running task; the app then answers through the tunnel with a login at its own client; the gateway's
+/// running tasks are the same set before and after; and the clean-up takes the app out of the registry,
+/// and waits on every running task, before its client and secret go. A service that is not steady is
+/// refused before any plan (#873): one recording per guard, each with that guard's defect alone, so
+/// removing the guard lets the onboarding reach Terraform.
 /// </summary>
 public sealed class CellOnboardingTests : IDisposable
 {
@@ -22,6 +25,9 @@ public sealed class CellOnboardingTests : IDisposable
     private static readonly Dictionary<string, string> Project = new() { ["AWS_PROFILE"] = "onboarding-tests-project", ["AWS_REGION"] = "us-east-1" };
 
     private static readonly RunningTask Gateway = new("0a1b2c3d4e5f", "spa-platform-poc:4", new DateTimeOffset(2026, 10, 21, 2, 0, 0, TimeSpan.Zero));
+
+    /// <summary>The second task of a two-task service, which is a cell's steady state when its <c>multi_task</c> is on (infra/modules/cell/ecs.tf).</summary>
+    private static readonly RunningTask Other = new("9f8e7d6c5b4a", "spa-platform-poc:4", new DateTimeOffset(2026, 10, 21, 2, 1, 0, TimeSpan.Zero));
 
     private static readonly string Example = File.ReadAllText(Path.Combine(FixtureFiles.RepositoryRoot, "contracts", "infra-outputs.example.json"));
 
@@ -64,7 +70,7 @@ public sealed class CellOnboardingTests : IDisposable
         Onboarded onboarded = await Onboarding(runner, tunnel).OnboardAsync("app3", TestContext.Current.CancellationToken);
 
         Assert.Equal(
-            ["aws s3", "aws ecs", "aws ecs", "terraform plan", "terraform show", "terraform apply", "terraform output", "spactl release", "spactl app", "aws s3", "spactl wait", "aws ecs", "aws ecs"],
+            ["aws s3", "aws ecs", "aws ecs", "aws ecs", "terraform plan", "terraform show", "terraform apply", "terraform output", "spactl release", "spactl app", "aws s3", "spactl wait", "aws ecs", "aws ecs"],
             runner.Calls.Select(call => $"{call.Program} {Verb(call)}"));
 
         string[] plan = Call(runner, "terraform", "plan");
@@ -95,6 +101,7 @@ public sealed class CellOnboardingTests : IDisposable
 
         string[] wait = Call(runner, "spactl", "wait");
         Assert.Equal(["wait", "--url", "https://app1.spa-poc.test:9443/", "--revision", "8"], wait[..5]);
+        Assert.Equal(Gateway.TaskId, Option(wait, "--instances"));
         Assert.Equal(8, onboarded.Revision);
 
         // After the wait, app 3's host answered a login navigation through the tunnel, sending it to the provider with app 3's own client.
@@ -104,7 +111,7 @@ public sealed class CellOnboardingTests : IDisposable
         Assert.Equal("navigate", login.FetchMode);
 
         // The same task throughout, read before the plan and after the app answered.
-        Assert.Equal(Gateway, onboarded.Gateway);
+        Assert.Equal(Gateway, Assert.Single(onboarded.Tasks));
         Assert.Equal(2, cellState.TasksDescribed);
     }
 
@@ -165,7 +172,7 @@ public sealed class CellOnboardingTests : IDisposable
     {
         // No restart, no new task definition, no deployment (04-tests F-07, tier D).
         RunningTask after = new(taskId, revision, Gateway.StartedAt);
-        CellState cellState = new() { Tasks = [Gateway, after] };
+        CellState cellState = new() { Tasks = [[Gateway], [after]] };
         RecordedRunner runner = RecordedRunner.WithExits(command =>
         {
             if (command.Program == "spactl" && command.Arguments[0] == "app")
@@ -296,10 +303,11 @@ public sealed class CellOnboardingTests : IDisposable
         await Onboarding(runner, new Tunnel(runner)).OffboardAsync("app3", TestContext.Current.CancellationToken);
 
         Assert.Equal(
-            ["aws s3", "spactl app", "aws s3", "spactl wait", "terraform plan", "terraform show", "terraform apply"],
+            ["aws ecs", "aws ecs", "aws s3", "spactl app", "aws s3", "spactl wait", "terraform plan", "terraform show", "terraform apply"],
             runner.Calls.Select(call => $"{call.Program} {Verb(call)}"));
         Assert.Equal(["app", "remove", "app3"], Call(runner, "spactl", "app")[..3]);
         Assert.Equal("9", Option(Call(runner, "spactl", "wait"), "--revision"));
+        Assert.Equal(Gateway.TaskId, Option(Call(runner, "spactl", "wait"), "--instances"));
         Assert.Contains("-detailed-exitcode", Call(runner, "terraform", "plan"));
         Assert.DoesNotContain(Call(runner, "terraform", "plan"), argument => argument.Contains("definition_dirs", StringComparison.Ordinal));
         Assert.All(runner.Commands.Where(command => command.Program is "spactl" or "terraform"), command => Assert.Equal(Project, command.Environment));
@@ -328,7 +336,275 @@ public sealed class CellOnboardingTests : IDisposable
         Assert.DoesNotContain(runner.Calls, call => call.Program == "terraform" && call.Arguments[1] == "apply");
     }
 
+    [Fact]
+    public async Task A_steady_two_task_service_onboards_waiting_for_the_revision_on_both_tasks()
+    {
+        // One load-balanced read shows the revision on whichever task answered (#358's Answer); the other may still serve the snapshot before it.
+        CellState cellState = new() { Tasks = [[Gateway, Other]] };
+        RecordedRunner runner = OnboardingRunner(cellState);
+
+        Onboarded onboarded = await Onboarding(runner, new Tunnel(runner)).OnboardAsync("app3", TestContext.Current.CancellationToken);
+
+        string[] wait = Call(runner, "spactl", "wait");
+        Assert.Equal("8", Option(wait, "--revision"));
+        Assert.Equal([Gateway.TaskId, Other.TaskId], Option(wait, "--instances").Split(',').Order(StringComparer.Ordinal));
+        Assert.True(onboarded.Tasks.SetEquals([Gateway, Other]), $"the onboarding reports {string.Join("; ", onboarded.Tasks)}");
+    }
+
+    [Fact]
+    public async Task A_steady_two_task_service_is_taken_off_waiting_for_the_removal_revision_on_both_tasks_before_anything_is_destroyed()
+    {
+        CellState cellState = new() { Tasks = [[Gateway, Other]] };
+        cellState.Add("app3");
+        RecordedRunner runner = OffboardingRunner(cellState);
+
+        await Onboarding(runner, new Tunnel(runner)).OffboardAsync("app3", TestContext.Current.CancellationToken);
+
+        string[] wait = Call(runner, "spactl", "wait");
+        Assert.Equal("9", Option(wait, "--revision")); // 8 named the app; 9 is the revision that removed it.
+        Assert.Equal([Gateway.TaskId, Other.TaskId], Option(wait, "--instances").Split(',').Order(StringComparer.Ordinal));
+
+        int Index(Func<(string Program, string[] Arguments), bool> match) => runner.Calls.FindIndex(call => match(call));
+        int listed = Index(call => call.Program == "aws" && call.Arguments[1] == "list-tasks");
+        int removed = Index(call => call.Program == "spactl" && call.Arguments[0] == "app");
+        int waited = Index(call => call.Program == "spactl" && call.Arguments[0] == "wait");
+        int applied = Index(call => call.Program == "terraform" && call.Arguments[1] == "apply");
+        Assert.True(listed >= 0 && listed < removed && removed < waited && waited < applied, $"the running set read at {listed}, the removal at {removed}, the wait at {waited}, the apply at {applied}");
+    }
+
+    [Fact]
+    public async Task A_removal_revision_a_task_never_reports_leaves_the_client_and_secret_alone()
+    {
+        // The other task may still serve a snapshot that names the secret (#1071 Q51), so the wait's failure stops the clean-up.
+        CellState cellState = new() { Tasks = [[Gateway, Other]] };
+        cellState.Add("app3");
+        RecordedRunner runner = RecordedRunner.WithExits(command => command.Program == "spactl" && command.Arguments[0] == "wait"
+            ? new CommandResult(1, "")
+            : OffboardingAnswer(cellState, command));
+
+        await Assert.ThrowsAsync<CommandFailedException>(() => Onboarding(runner, new Tunnel(runner)).OffboardAsync("app3", TestContext.Current.CancellationToken));
+
+        Assert.DoesNotContain(runner.Calls, call => call.Program == "terraform");
+    }
+
+    [Fact]
+    public async Task A_clean_up_with_no_running_task_to_wait_on_leaves_the_registry_alone()
+    {
+        // As wait_for_revision refuses it (tools/scripts/cell-common.sh): no wait could finish, so the removal would leave the app half taken off.
+        CellState cellState = new() { Tasks = [[]] };
+        cellState.Add("app3");
+        RecordedRunner runner = OffboardingRunner(cellState);
+
+        InvalidOperationException refused = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => Onboarding(runner, new Tunnel(runner)).OffboardAsync("app3", TestContext.Current.CancellationToken));
+
+        Assert.Contains("no running task", refused.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(runner.Calls, call => call.Program is "spactl" or "terraform");
+    }
+
+    [Fact]
+    public async Task A_clean_up_with_no_running_task_and_nothing_to_wait_for_still_destroys_what_is_left()
+    {
+        // The app never reached the registry, so no snapshot can name its secret and there is no revision to wait on.
+        RecordedRunner runner = OffboardingRunner(new CellState { Tasks = [[]] });
+
+        await Onboarding(runner, new Tunnel(runner)).OffboardAsync("app3", TestContext.Current.CancellationToken);
+
+        Assert.Contains(runner.Calls, call => call.Program == "terraform" && call.Arguments[1] == "apply");
+    }
+
+    [Theory]
+    [InlineData("IN_PROGRESS")]
+    [InlineData("FAILED")]
+    [InlineData(null)]
+    public async Task A_primary_rollout_that_has_not_completed_is_refused_before_any_plan(string? rollout)
+    {
+        // services-stable returned while rolloutState was still IN_PROGRESS (#467), so the count alone does not show it.
+        InvalidOperationException refused = await RefusedBeforeAnyPlanAsync(new CellState
+        {
+            Tasks = [[Gateway, Other]],
+            Service = Service(Deployment("PRIMARY", rollout, 2, 2)),
+        });
+
+        Assert.Contains("not COMPLETED", refused.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Two_deployments_are_refused_before_any_plan()
+    {
+        InvalidOperationException refused = await RefusedBeforeAnyPlanAsync(new CellState
+        {
+            Tasks = [[Gateway, Other]],
+            Service = Service(Deployment("PRIMARY", "COMPLETED", 2, 2), Deployment("ACTIVE", "COMPLETED", 0, 0)),
+        });
+
+        Assert.Contains("2 deployments", refused.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_service_ecs_does_not_find_is_refused_before_any_plan()
+    {
+        // The answer holds failures beside services (https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_DescribeServices.html); no service to read must not pass for a steady one.
+        InvalidOperationException refused = await RefusedBeforeAnyPlanAsync(new CellState
+        {
+            Tasks = [[Gateway, Other]],
+            Service = """{"services":[],"failures":[{"reason":"MISSING"}]}""",
+        });
+
+        Assert.Contains("0 deployments", refused.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task One_deployment_that_is_not_the_primary_is_refused_before_any_plan()
+    {
+        InvalidOperationException refused = await RefusedBeforeAnyPlanAsync(new CellState
+        {
+            Tasks = [[Gateway, Other]],
+            Service = Service(Deployment("ACTIVE", "COMPLETED", 2, 2)),
+        });
+
+        Assert.Contains("not COMPLETED", refused.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_primary_running_below_its_desired_count_is_refused_before_any_plan()
+    {
+        // Two tasks are listed, so only the deployment's own count shows this one.
+        InvalidOperationException refused = await RefusedBeforeAnyPlanAsync(new CellState
+        {
+            Tasks = [[Gateway, Other]],
+            Service = Service(Deployment("PRIMARY", "COMPLETED", 1, 2)),
+        });
+
+        Assert.Contains("1 of 2", refused.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(3)]
+    public async Task Listed_tasks_that_do_not_number_the_desired_count_are_refused_before_any_plan(int listed)
+    {
+        // The deployment's own counts are right, so only the list shows this one.
+        RunningTask[] tasks = [Gateway, Other, new("c0ffee00c0ff", Gateway.Revision, Gateway.StartedAt)];
+        InvalidOperationException refused = await RefusedBeforeAnyPlanAsync(new CellState
+        {
+            Tasks = [tasks[..listed]],
+            Service = Service(Deployment("PRIMARY", "COMPLETED", 2, 2)),
+        });
+
+        Assert.Contains($"{listed} RUNNING", refused.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_service_steady_at_no_tasks_is_refused_before_any_plan()
+    {
+        // Every count agrees at zero, and spactl wait refuses an empty --instances after the apply.
+        InvalidOperationException refused = await RefusedBeforeAnyPlanAsync(new CellState
+        {
+            Tasks = [[]],
+            Service = Service(Deployment("PRIMARY", "COMPLETED", 0, 0)),
+        });
+
+        Assert.Contains("no running task", refused.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("replaced")]
+    [InlineData("restarted")]
+    [InlineData("redefined")]
+    [InlineData("gone")]
+    [InlineData("added")]
+    public async Task A_change_to_either_of_two_tasks_during_the_onboarding_fails_it_naming_both_sets(string change)
+    {
+        // 04-tests F-07, tier D, read per running task (#873): no restart, no new task definition, no deployment.
+        RunningTask stranger = new("c0ffee00c0ff", Other.Revision, Other.StartedAt);
+        RunningTask[] after = change switch
+        {
+            "replaced" => [Gateway, stranger],
+            "restarted" => [Gateway, Other with { StartedAt = Other.StartedAt.AddMinutes(1) }],
+            "redefined" => [Gateway, Other with { Revision = "spa-platform-poc:5" }],
+            "gone" => [Gateway],
+            "added" => [Gateway, Other, stranger],
+            _ => throw new ArgumentOutOfRangeException(nameof(change), change, "not a row of this theory"),
+        };
+        CellState cellState = new() { Tasks = [[Gateway, Other], after] };
+        RecordedRunner runner = OnboardingRunner(cellState);
+
+        InvalidOperationException refused = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => Onboarding(runner, new Tunnel(runner)).OnboardAsync("app3", TestContext.Current.CancellationToken));
+
+        Assert.Contains("F-07", refused.Message, StringComparison.Ordinal);
+        Assert.All(new[] { Gateway, Other }.Concat(after), task => Assert.Contains(task.ToString(), refused.Message, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task The_same_two_tasks_listed_in_the_other_order_after_the_onboarding_pass()
+    {
+        // The page for list-tasks names no order for taskArns: https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_ListTasks.html
+        CellState cellState = new() { Tasks = [[Gateway, Other], [Other, Gateway]] };
+        RecordedRunner runner = OnboardingRunner(cellState);
+
+        Onboarded onboarded = await Onboarding(runner, new Tunnel(runner)).OnboardAsync("app3", TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, cellState.TasksDescribed);
+        Assert.Equal(2, onboarded.Tasks.Count);
+    }
+
     public void Dispose() => Directory.Delete(scratch, recursive: true);
+
+    /// <summary>Onboarding's runner: spactl's add changes the registry, and the plan shows the app's own resources.</summary>
+    private static RecordedRunner OnboardingRunner(CellState cellState) => RecordedRunner.WithExits(command =>
+    {
+        if (command.Program == "spactl" && command.Arguments[0] == "app")
+        {
+            cellState.Add("app3");
+        }
+
+        return cellState.Answer(command, App3Resources.Select(address => (address, "create")).ToArray());
+    });
+
+    /// <summary>The clean-up's runner: spactl's remove changes the registry, and the plan destroys the app's own resources.</summary>
+    private static RecordedRunner OffboardingRunner(CellState cellState) => RecordedRunner.WithExits(command => OffboardingAnswer(cellState, command));
+
+    private static CommandResult OffboardingAnswer(CellState cellState, Command command) => command.Program == "spactl" && command.Arguments[1] == "remove"
+        ? cellState.Removed("app3")
+        : cellState.Answer(command, App3Resources.Select(address => (address, "delete")).ToArray());
+
+    /// <summary>
+    /// The onboarding of a service with one defect, refused before Terraform or spactl ran. The plan
+    /// would show the app's own resources, so a guard removed lets the recording go on to the apply and
+    /// the test fails, rather than a later refusal answering for it.
+    /// </summary>
+    private async Task<InvalidOperationException> RefusedBeforeAnyPlanAsync(CellState cellState)
+    {
+        RecordedRunner runner = OnboardingRunner(cellState);
+
+        InvalidOperationException refused = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => Onboarding(runner, new Tunnel(runner)).OnboardAsync("app3", TestContext.Current.CancellationToken));
+
+        Assert.DoesNotContain(runner.Calls, call => call.Program is "terraform" or "spactl");
+        Assert.Contains("wait", refused.Message, StringComparison.OrdinalIgnoreCase);
+        return refused;
+    }
+
+    /// <summary><c>ecs describe-services</c>'s answer for the service with these deployments.</summary>
+    private static string Service(params JsonObject[] deployments) => new JsonObject
+    {
+        ["services"] = new JsonArray(new JsonObject { ["serviceName"] = "gateway", ["deployments"] = new JsonArray(deployments) }),
+        ["failures"] = new JsonArray(),
+    }.ToJsonString();
+
+    /// <summary>A deployment as <c>describe-services</c> gives it (https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_Deployment.html); a null rollout state is one ECS left out.</summary>
+    private static JsonObject Deployment(string status, string? rollout, int running, int desired)
+    {
+        JsonObject deployment = new() { ["status"] = status, ["runningCount"] = running, ["desiredCount"] = desired };
+        if (rollout is not null)
+        {
+            deployment["rolloutState"] = rollout;
+        }
+
+        return deployment;
+    }
 
     private CellOnboarding Onboarding(RecordedRunner runner, Tunnel tunnel)
     {
@@ -383,15 +659,19 @@ public sealed class CellOnboardingTests : IDisposable
 
     /// <summary>
     /// The cell as the runner answers for it: the live registry, which spactl's add and remove change,
-    /// the gateway's running task, the apps root's plan with its detailed exit, and its client outputs.
+    /// the gateway service's deployments and running tasks, the apps root's plan with its detailed exit,
+    /// and its client outputs.
     /// </summary>
     private sealed class CellState
     {
         private readonly List<string> apps = ["app1", "app2"];
         private long revision = 7;
 
-        /// <summary>The task each describe answers, in turn; the last one answers every later describe.</summary>
-        public IReadOnlyList<RunningTask> Tasks { get; init; } = [Gateway];
+        /// <summary>The running set each read answers, in turn; the last one answers every later read.</summary>
+        public IReadOnlyList<RunningTask[]> Tasks { get; init; } = [[Gateway]];
+
+        /// <summary><c>describe-services</c>'s answer, when it is not the steady one the first set gives.</summary>
+        public string? Service { get; init; }
 
         /// <summary>The plan's exit when it is not the changes' own: 1 is Terraform's error.</summary>
         public int? PlanExit { get; init; }
@@ -422,7 +702,11 @@ public sealed class CellOnboardingTests : IDisposable
                     ["revision"] = revision,
                     ["apps"] = new JsonArray([.. apps.Select(app => (JsonNode)new JsonObject { ["appId"] = app, ["release"] = "r" })]),
                 }.ToJsonString()),
-                ("aws", "ecs") when arguments[1] == "list-tasks" => Ok($$"""{"taskArns":["arn:aws:ecs:us-east-1:111122223333:task/spa-poc/{{Current.TaskId}}"]}"""),
+                ("aws", "ecs") when arguments[1] == "describe-services" => Ok(Service ?? CellOnboardingTests.Service(Deployment("PRIMARY", "COMPLETED", Tasks[0].Length, Tasks[0].Length))),
+                ("aws", "ecs") when arguments[1] == "list-tasks" => Ok(new JsonObject
+                {
+                    ["taskArns"] = new JsonArray([.. Current.Select(task => (JsonNode)$"arn:aws:ecs:us-east-1:111122223333:task/spa-poc/{task.TaskId}")]),
+                }.ToJsonString()),
                 ("aws", "ecs") => Ok(Describe()),
                 // https://developer.hashicorp.com/terraform/cli/commands/plan#detailed-exitcode: 0 no changes, 1 error, 2 changes present.
                 ("terraform", _) when arguments[1] == "plan" => new CommandResult(PlanExit ?? (changes.Length > 0 ? 2 : 0), ""),
@@ -435,13 +719,24 @@ public sealed class CellOnboardingTests : IDisposable
             };
         }
 
-        private RunningTask Current => Tasks[Math.Min(TasksDescribed, Tasks.Count - 1)];
+        private RunningTask[] Current => Tasks[Math.Min(TasksDescribed, Tasks.Count - 1)];
 
         private string Describe()
         {
-            RunningTask task = Current;
+            RunningTask[] tasks = Current;
             TasksDescribed++;
-            return $$"""{"tasks":[{"taskArn":"arn:aws:ecs:us-east-1:111122223333:task/spa-poc/{{task.TaskId}}","taskDefinitionArn":"arn:aws:ecs:us-east-1:111122223333:task-definition/{{task.Revision}}","startedAt":"{{task.StartedAt:O}}","lastStatus":"RUNNING"}],"failures":[]}""";
+            return new JsonObject
+            {
+                ["tasks"] = new JsonArray([.. tasks.Select(task => (JsonNode)new JsonObject
+                {
+                    ["taskArn"] = $"arn:aws:ecs:us-east-1:111122223333:task/spa-poc/{task.TaskId}",
+                    ["taskDefinitionArn"] = $"arn:aws:ecs:us-east-1:111122223333:task-definition/{task.Revision}",
+                    ["startedAt"] = task.StartedAt.ToString("O", System.Globalization.CultureInfo.InvariantCulture),
+                    ["lastStatus"] = "RUNNING",
+                    ["desiredStatus"] = "RUNNING",
+                })]),
+                ["failures"] = new JsonArray(),
+            }.ToJsonString();
         }
 
         private static CommandResult Ok(string output) => new(0, output);

@@ -9,9 +9,11 @@ namespace Gateway.E2ETests.Functional;
 /// F-07 in a real browser (docs/plan/04-tests.md, tier D), the third-SPA scenario: onboard app 3 while
 /// apps 1 and 2 are in use, on the stack <see cref="StackSwitch"/> chooses (#212). On the cell the
 /// clauses only AWS can show are asserted too: the apps root's plan with the onboarding definition,
-/// read before it was applied, adds app 3's own resources alone, and the gateway's one task keeps its
-/// id, start and task definition revision throughout. The clauses only the harness can show (the same
-/// service provider, the provider's authorization count) are asserted on the local stack alone.
+/// read before it was applied, adds app 3's own resources alone, and every running task keeps its id,
+/// start and task definition revision throughout: F-07's "the task id, start time and task definition
+/// are unchanged" read per running task (#873), so the row reads the same on one task and on two. The
+/// clauses only the harness can show (the same service provider, the provider's authorization count)
+/// are asserted on the local stack alone.
 /// </summary>
 public sealed class OnboardingTests
 {
@@ -24,7 +26,7 @@ public sealed class OnboardingTests
         HarnessApp app2 = stack.App("app2");
         IServiceProvider? services = (stack as LocalStack)?.Harness.Services;
         DeployedStack? cell = stack as DeployedStack;
-        RunningTask? before = cell is null ? null : await cell.Aws.RunningTaskAsync(TestContext.Current.CancellationToken);
+        IReadOnlySet<RunningTask>? before = cell is null ? null : await cell.Aws.RunningTasksAsync(TestContext.Current.CancellationToken);
 
         // Apps 1 and 2 in use in one browser.
         await user.SignInAsync(app1);
@@ -79,8 +81,8 @@ public sealed class OnboardingTests
                     TerraformPlan.PerAppAddresses(root, "app3").Select(address => new PlannedChange(address, "create")),
                     cell.LastOnboarding!.Planned.OrderBy(change => change.Address, StringComparer.Ordinal));
 
-                // The same task: no restart, no new task definition, no deployment.
-                Assert.Equal(before, await cell.Aws.RunningTaskAsync(TestContext.Current.CancellationToken));
+                // The same tasks: no restart, no new task definition, no deployment.
+                CellOnboarding.RequireUnchanged(before!, await cell.Aws.RunningTasksAsync(TestContext.Current.CancellationToken), "app 3 was onboarded and used");
             }
         }
         catch (Exception failure)

@@ -42,7 +42,7 @@ public sealed class Cell
     /// <summary>The ECS cluster the gateway's service runs in.</summary>
     public string Cluster { get; }
 
-    /// <summary>The gateway's ECS service, whose one task F-07 holds unchanged across an onboarding (#212).</summary>
+    /// <summary>The gateway's ECS service, whose running tasks F-07 holds unchanged across an onboarding (#212, #873).</summary>
     public string Service { get; }
 
     /// <summary>The managed-login domain, host only.</summary>

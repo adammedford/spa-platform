@@ -10,7 +10,7 @@ namespace Gateway.E2ETests.Stack;
 /// <summary>
 /// What the deployed stack reads from AWS while it runs (#209): a test user's password from Parameter
 /// Store, the gateway's log lines from CloudWatch Logs, the live registry from the bucket, and the
-/// gateway service's running task from ECS (F-07, #212). Each goes through the AWS CLI v2, the tool
+/// gateway service's running tasks and rollout from ECS (F-07, #212, #873). Each goes through the AWS CLI v2, the tool
 /// <c>tools/scripts/</c> already reach the cell with (docs/dependencies.md), because the project's
 /// profile signs in with <c>login_session</c>, which the CLI resolves on its own and the .NET SDK
 /// resolves only through the AWSSDK.Signin assembly (#206), and the CLI needs no package here. Every
@@ -133,48 +133,88 @@ public sealed partial class CellAws(Cell cell, ICommandRunner runner)
     }
 
     /// <summary>
-    /// The gateway service's one running task (F-07: "the task id, start time and task definition are
-    /// unchanged"). A task the service is draining has desired status STOPPED and is not listed
-    /// (https://docs.aws.amazon.com/cli/latest/reference/ecs/list-tasks.html); while a deployment runs
-    /// two tasks are, and that is refused, since before and after would then not be one task's.
+    /// The gateway service's running tasks, as a set (F-07: "the task id, start time and task definition
+    /// are unchanged", read per running task, #873). A task the service is draining has desired status
+    /// STOPPED and is not listed (https://docs.aws.amazon.com/cli/latest/reference/ecs/list-tasks.html),
+    /// and one still starting is listed and is not running yet, so it is left out. How many there should
+    /// be is <see cref="ServiceRolloutAsync"/>'s to say: two are a two-task cell's steady state
+    /// (infra/modules/cell/ecs.tf, <c>desired_count</c>), and this read refuses no count.
     /// </summary>
-    public async Task<RunningTask> RunningTaskAsync(CancellationToken ct)
+    public async Task<IReadOnlySet<RunningTask>> RunningTasksAsync(CancellationToken ct) =>
+        (await new ContinuityEcs(cell, runner).ListedAsync(ct))
+            .Where(task => task.LastStatus == "RUNNING")
+            .Select(task => new RunningTask(
+                task.Id,
+                task.Revision ?? throw new InvalidOperationException($"ECS gave running task {task.Id} no taskDefinitionArn, which F-07 compares."),
+                task.StartedAt ?? throw new InvalidOperationException($"ECS gave running task {task.Id} no startedAt, which F-07 compares.")))
+            .ToHashSet();
+
+    /// <summary>
+    /// The gateway service's deployments as <c>describe-services</c> gives them, the reads
+    /// tools/scripts/cell-common.sh makes. The waiter <c>services-stable</c> does not read
+    /// <c>rolloutState</c> and returned while it was still IN_PROGRESS (#467), so this reads the field
+    /// itself (https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_Deployment.html). An answer
+    /// with no service in it, only <c>failures</c>
+    /// (https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_DescribeServices.html), reads as no deployments.
+    /// </summary>
+    public async Task<ServiceRollout> ServiceRolloutAsync(CancellationToken ct)
     {
-        string listed = await runner.RunAsync("aws",
-            ["ecs", "list-tasks", "--cluster", cell.Cluster, "--service-name", cell.Service, "--desired-status", "RUNNING", "--output", "json", "--region", cell.Region], ct);
-        string[] arns;
-        using (JsonDocument list = JsonDocument.Parse(listed))
-        {
-            arns = [.. list.RootElement.GetProperty("taskArns").EnumerateArray().Select(arn => arn.GetString()!)];
-        }
-
-        if (arns.Length != 1)
-        {
-            throw new InvalidOperationException($"the service {cell.Service} in {cell.Cluster} has {arns.Length} running tasks, not one: wait for it to be steady and run again.");
-        }
-
-        // https://docs.aws.amazon.com/cli/latest/reference/ecs/describe-tasks.html; the CLI v2 prints
-        // timestamps in ISO 8601 (https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-files.html#cli-config-cli_timestamp_format).
         string described = await runner.RunAsync("aws",
-            ["ecs", "describe-tasks", "--cluster", cell.Cluster, "--tasks", arns[0], "--output", "json", "--region", cell.Region], ct);
-        using JsonDocument tasks = JsonDocument.Parse(described);
-        JsonElement task = tasks.RootElement.GetProperty("tasks").EnumerateArray().Single();
-        return new RunningTask(
-            AfterLast(task.GetProperty("taskArn").GetString()!, '/'),
-            AfterLast(task.GetProperty("taskDefinitionArn").GetString()!, '/'),
-            DateTimeOffset.Parse(task.GetProperty("startedAt").GetString()!, CultureInfo.InvariantCulture));
+            ["ecs", "describe-services", "--cluster", cell.Cluster, "--services", cell.Service, "--output", "json", "--region", cell.Region], ct);
+        using JsonDocument answer = JsonDocument.Parse(described);
+        JsonElement[] deployments = [.. answer.RootElement.GetProperty("services").EnumerateArray().SelectMany(service => service.GetProperty("deployments").EnumerateArray())];
+        JsonElement[] primary = [.. deployments.Where(deployment => deployment.GetProperty("status").GetString() == "PRIMARY")];
+        return primary is [JsonElement found]
+            ? new ServiceRollout(
+                deployments.Length,
+                found.TryGetProperty("rolloutState", out JsonElement rollout) ? rollout.GetString() : null,
+                found.GetProperty("runningCount").GetInt32(),
+                found.GetProperty("desiredCount").GetInt32())
+            : new ServiceRollout(deployments.Length, null, 0, 0);
     }
-
-    /// <summary>The part of an ARN that names the thing without the account: a task's id, a task definition's family:revision.</summary>
-    private static string AfterLast(string arn, char separator) => arn[(arn.LastIndexOf(separator) + 1)..];
 
     /// <summary>A twelve-digit run, which is how an account id appears in an AWS error.</summary>
     [GeneratedRegex("[0-9]{12}", RegexOptions.None, RegexTimeout.Milliseconds)]
     internal static partial Regex AccountId();
 }
 
-/// <summary>The gateway's task as F-07 compares it before and after an onboarding: its id, its task definition as family:revision, and when it started. No account id.</summary>
+/// <summary>A gateway task as F-07 compares it, per running task, before and after an onboarding: its id, its task definition as family:revision, and when it started. No account id.</summary>
 public sealed record RunningTask(string TaskId, string Revision, DateTimeOffset StartedAt);
+
+/// <summary>The gateway service's deployment count and its PRIMARY deployment's rollout state, running count and desired count; a null state and zero counts when it has no PRIMARY.</summary>
+public sealed record ServiceRollout(int Deployments, string? PrimaryRollout, int PrimaryRunning, int PrimaryDesired)
+{
+    /// <summary>
+    /// Why a service with this rollout and this many running tasks listed is not steady, or null when
+    /// it is. "Exactly one task" used to double as this check and on a two-task service no longer can
+    /// (#873). Each clause has a defect only it sees: one deployment with the wrong state, a deployment
+    /// count, the deployment's own counts, the list against them, and a service steady at nothing.
+    /// </summary>
+    public string? Unsteady(int listedRunning)
+    {
+        if (Deployments != 1)
+        {
+            return $"it has {Deployments} deployments, not one";
+        }
+
+        if (PrimaryRollout != "COMPLETED")
+        {
+            return $"its primary deployment's rollout is {PrimaryRollout ?? "absent"}, not COMPLETED";
+        }
+
+        if (PrimaryRunning != PrimaryDesired)
+        {
+            return $"its primary deployment runs {PrimaryRunning} of {PrimaryDesired} desired tasks";
+        }
+
+        if (listedRunning != PrimaryDesired)
+        {
+            return $"{listedRunning} RUNNING tasks are listed and its primary deployment desires {PrimaryDesired}";
+        }
+
+        return listedRunning == 0 ? "it has no running task" : null;
+    }
+}
 
 /// <summary>The live registry's revision and the ids of the apps in it.</summary>
 public sealed record LiveRegistry(long Revision, IReadOnlyList<string> AppIds);
