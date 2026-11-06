@@ -349,12 +349,13 @@ function stub(env, scriptArgs, served) {
         const issue = served.issue === undefined ? issueWith([...QUESTIONS, CONFIRM]) : served.issue
         const indexed = (issue ? issue.comments : []).map((c) => ({ author: c.author, createdAt: c.createdAt, url: c.url, bytes: Buffer.byteLength(c.body), tail: /\n*$/.exec(c.body)[0].length, head: c.body.slice(0, 200) }))
         out = { issue: { number: served.commentsIssue || (issue ? issue.number : 0), comments: indexed }, error: served.commentsError || '' }
-      } else if (label === 'handover-read') {
+      } else if (/^handover-read(-retry\d+)?$/.test(label)) {
         // The earlier hand-overs' reader (#969): the comments its prompt's jq names, verbatim.
-        // served.handoverMangle: a reader that drops each body's last character, as a changed read would.
+        // served.handoverMangle: a reader that drops each body's last character, as a changed read would;
+        // 'newline': one that drops one trailing newline and nothing else (#1084).
         const issue = served.issue === undefined ? issueWith([...QUESTIONS, CONFIRM]) : served.issue
         const at = /\.comments\[([\d,]+)\]/.exec(prompt)[1].split(',').map(Number)
-        out = { comments: at.map((i) => issue.comments[i]).map((c) => served.handoverMangle ? { ...c, body: c.body.slice(0, -1) } : c), error: '' }
+        out = { comments: at.map((i) => issue.comments[i]).map((c) => served.handoverMangle === 'newline' ? { ...c, body: c.body.replace(/\n$/, '') } : served.handoverMangle ? { ...c, body: c.body.slice(0, -1) } : c), error: '' }
       } else if (label.startsWith('comments-batch:')) {
         // A batch reader: the comments its prompt's jq names, verbatim. served.batchSwap: a reader
         // that returns another comment than the one named.
@@ -3090,7 +3091,7 @@ try {
     for (const said of ['24,000-byte', 'BATCH_BYTES', 'read alone', 'no total cap', 'not a hard bound']) if (!header.includes(said)) fail(`#661 Q24: the Agent budget header does not say "${said}":\n${header}`)
     if (!/^const BATCH_BYTES = 24000$/m.test(src)) fail('#661 Q24: BATCH_BYTES is not the 24,000 bytes the header states')
     if (!/already merged/.test(header)) fail('#661 Q24: the Agent budget header does not give the merged path\'s budget')
-    const core = merged.labels.filter((l) => !l.startsWith('comments-batch:') && l !== 'handover-read')
+    const core = merged.labels.filter((l) => !l.startsWith('comments-batch:') && !l.startsWith('handover-read'))
     if (core.length > 10 || merged.result.agents !== merged.labels.length) fail(`#661 Q24: a merged run took ${core.length} agents besides the body readers, and counts ${merged.result.agents} of ${merged.labels.length}: ${merged.labels.join(', ')}`)
   }
 
@@ -3201,6 +3202,11 @@ try {
     const bent = await execute(newRepo(), { date: DATE }, { issue: withEarlier(comment(97, W1, '2026-10-21T09:00:00Z')), ...RED, handoverMangle: true })
     if (bent.result.handover.mode !== 'whole' || posted(bent, 'handover') !== bent.result.handover.text) fail(`#969: a changed read of the earlier hand-over was diffed against: mode ${bent.result.handover.mode}`)
     if (!bent.result.refusals.some((x) => /earlier hand-over/.test(x) && /posted whole/.test(x))) fail(`#969: a failed read of the earlier hand-over is not named: ${JSON.stringify(bent.result.refusals)}`)
+    if (!bent.result.handover.text.includes('the earlier hand-over was not read as the index shows it')) fail('#969: the hand-over does not name the failed read of the earlier hand-over')
+    if (!bent.labels.includes('handover-read-retry2') || bent.labels.includes('handover-read-retry3')) fail(`#969: a changed read of the earlier hand-over was not re-read exactly twice: ${bent.labels.join(', ')}`)
+    // A reader that drops one trailing newline is given it back, as Apply's are (#1084): no re-read, no refusal.
+    const lostLine = await execute(newRepo(), { date: DATE }, { issue: withEarlier(comment(97, W1 + '\n', '2026-10-21T09:00:00Z')), ...RED, handoverMangle: 'newline' })
+    if (lostLine.result.handover.mode === 'whole' || lostLine.result.refusals.some((x) => /earlier hand-over/.test(x)) || lostLine.labels.some((l) => /^handover-read-retry/.test(l))) fail(`#969: a reader that drops a trailing newline of the earlier hand-over was refused or re-read: mode ${lostLine.result.handover.mode}, ${lostLine.labels.join(', ')}`)
 
     // 28b. The After pass, against an earlier "## After <date>": the same rules.
     const a1 = await afterRun({ after: { ci: 'red' } })
@@ -3220,6 +3226,10 @@ try {
     const s2 = await afterRun({ landed: [1], issue: afterWith(comment(97, S1, '2026-10-22T09:00:00Z')) })
     if (!s2.labels.includes('after-handover') || jsonAfter(s2.prompt('after-handover'), 'POST') !== false || afterText(s2) !== '' || s2.result.handover.posted || s2.result.handover.mode !== 'identical' || s2.result.issueClosed !== true) fail(`#969 After: an identical comment on a night that closes: ${s2.labels.join(', ')}; POST ${jsonAfter(s2.prompt('after-handover'), 'POST')}; ${JSON.stringify({ ...s2.result.handover, text: undefined })}, closed ${s2.result.issueClosed}`)
     if (jsonAfter(s1.prompt('after-handover'), 'POST') !== true) fail('#969 After: a whole After comment is not sent with POST: true')
+    // A failed read keeps the issue open, and the After comment names it: it is judged before the close.
+    const a4 = await afterRun({ landed: [1], issue: afterWith(comment(97, S1, '2026-10-22T09:00:00Z')), handoverMangle: true })
+    if (a4.result.close !== false || a4.result.issueClosed || jsonAfter(a4.prompt('after-handover'), 'CLOSE') === true) fail(`#969 After: a failed read of the earlier After comment still closed the issue: ${JSON.stringify({ close: a4.result.close, issueClosed: a4.result.issueClosed })}`)
+    if (!afterText(a4).includes('the earlier hand-over was not read as the index shows it') || /refused nothing/.test(afterText(a4))) fail(`#969 After: the After comment does not name the failed read:\n${afterText(a4)}`)
     // The Morning comment of the same night is not an earlier After comment.
     if (!AFTER_NIGHT.comments.some((c) => c.body.startsWith(`## Morning ${DATE}`)) || a1.labels.includes('handover-read')) fail(`#969 After: the night's Morning comment was read as an earlier After comment: ${a1.labels.join(', ')}`)
     // The cleanup reads its rows through a Morning delta to the whole comment it extends.

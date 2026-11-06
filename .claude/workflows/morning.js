@@ -73,7 +73,8 @@ export const meta = {
 // first step is the lookup, then Apply's 1 comments index, the body readers, 1 classifier and at
 // most maxParallel appliers in the same bounded grouping, and 1 agent for the After comment and the
 // close, none when the comment is identical and the issue stays open: seven at the default, besides
-// the body readers and their re-reads.
+// the body readers and their re-reads, and the reader of the night's earlier After comments and its
+// re-reads when there are any (#969).
 //
 // A second hand-over on one night (#969). A pass run twice posted its whole hand-over twice: #799
 // carries a "## Morning 2026-11-04" of 46 KB and a second of 42 KB, and 15 comments across the tracker
@@ -1969,7 +1970,8 @@ const handoverPost = (text, earlier) => {
 // The night's earlier hand-overs, found in Apply's index of the comments (index: null when it was not
 // read): Adam's comments whose first line is heading exactly, or heading with " (delta)" (CODING_STANDARDS.md
 // -> "An authorisation is read from its author"). The latest whole one, and the latest delta when one
-// follows it, are read by one reader and checked against the index as Apply's readers' bodies are.
+// follows it, are read by one reader and checked against the index as Apply's readers' bodies are: a
+// body's trailing newlines given back, and one still changed read again alone, READ_RETRIES times.
 // Returns {earlier, failed, note}: failed names a read that did not come back as the index shows it.
 const earlierHandovers = async (issue, index, heading) => {
   if (!index) return { earlier: null, failed: 'Apply\'s index of the comments was not read', note: '' }
@@ -1988,15 +1990,34 @@ const earlierHandovers = async (issue, index, heading) => {
   const why = !r ? 'the reader returned nothing'
     : r.error ? r.error
       : got.map((c) => c.url).join(' ') !== urls.join(' ') ? `the reader returned ${got.map((c) => c.url).join(', ') || 'no comment'}`
-        : read.map((i, j) => bodyFault(got[j], index[i])).filter(Boolean).join('; ')
+        : ''
   if (why) return { earlier: null, failed: `${urls.join(' and ')}: ${why}`, note: '' }
-  return { earlier: { whole: got[0], latest: got[got.length - 1] }, failed: '', note: '' }
+  const bodies = []
+  const bad = []
+  for (let j = 0; j < read.length; j++) {
+    let c = restoreTail(got[j], index[read[j]])
+    let fault = bodyFault(c, index[read[j]])
+    for (let tries = 1; fault && tries <= READ_RETRIES; tries++) {
+      const again = await run(batchPrompt(issue, [read[j]], 'for the hand-over (#969). You read; the script compares this pass\'s hand-over with them.') + RETRY_NOTE, { label: `handover-read-retry${tries}`, phase: 'Hand-over', schema: COMMENTS_BATCH })
+      const rc = again && !again.error && (again.comments || []).length === 1 && again.comments[0].url === urls[j] ? again.comments[0] : null
+      if (rc) { c = restoreTail(rc, index[read[j]]); fault = bodyFault(c, index[read[j]]) }
+    }
+    if (fault) bad.push(`${urls[j]} after ${READ_RETRIES} re-reads: ${fault}`)
+    bodies.push(c)
+  }
+  if (bad.length) return { earlier: null, failed: bad.join('; '), note: '' }
+  return { earlier: { whole: bodies[0], latest: bodies[bodies.length - 1] }, failed: '', note: '' }
 }
-// The earlier hand-overs read and the post decided, for either pass: a read that failed is named in
-// refusals, and the hand-over is then posted whole.
-const decideHandover = async (issue, index, heading, text, refusals) => {
+// The earlier hand-overs read, for either pass: before the pass judges its close and writes its text, so
+// a read that failed is a refusal like any other, which keeps an After pass's issue open and is named in
+// the hand-over (docs/agents/landing-work.md, the after pass).
+const readHandovers = async (issue, index, heading, refusals) => {
   const prior = await earlierHandovers(issue, index, heading)
   if (prior.failed) refusals.push(`the earlier hand-over was not read as the index shows it (${prior.failed}), so this one was posted whole`)
+  return prior
+}
+// The post decided: a read that failed posts the hand-over whole.
+const decideHandover = (text, prior) => {
   const post = handoverPost(text, prior.earlier)
   const note = post.note || prior.note || (prior.failed ? 'the earlier hand-over was not read, so this one was posted whole' : '')
   if (note) log(`hand-over: ${note}`)
@@ -2249,13 +2270,14 @@ if (AFTER) {
   const { reuse, reused } = reuser(a.phaseFiles)
   const ap = await applyAnswers({ date: look.date, issue: look.issue, gate: evidence ? 'the landed head\'s review record or CI does not clear it (see Refusals)' : '', refusals, reuse, after: true })
   const { settled, unsettled } = settleOf(look.date, ap)
-  const close = refusals.length === 0 && unsettled.length === 0
   // Then the hand-over and the close (Q25 to Q27).
   phase('Hand-over')
+  const prior = await readHandovers(look.issue, ap.index, `## After ${look.date}`, refusals)
+  const close = refusals.length === 0 && unsettled.length === 0
   const text = afterText({ date: look.date, issue: look.issue, after: a, apply: ap.apply, skipped: ap.skipped, refusals, settled, unsettled, close })
   log(text)
   // An identical After comment is not posted (#969): its agent runs only to post, or to close.
-  const post = await decideHandover(look.issue, ap.index, `## After ${look.date}`, text, refusals)
+  const post = decideHandover(text, prior)
   const same = post.mode === 'identical'
   const skip = same && !close
   const h = skip ? null : await run(afterHandoverPrompt(look.date, look.issue, post.body, close, same ? post.url : ''), { label: 'after-handover', phase: 'Hand-over', schema: AFTER_HANDED })
@@ -2413,11 +2435,12 @@ followUps.window.line = windowLineOf(followUps.window)
 if (!complete) refusals.push(`the follow-ups coverage is incomplete, so the checkpoint stays at ${win.since || 'none'} and the next morning reads the span again; the Follow-ups window line names what was not read or not processed`)
 
 phase('Hand-over')
+const prior = await readHandovers(ISSUE, commentsIndex, `## Morning ${DATE}`, refusals)
 const text = handoverText({ date: DATE, issue: ISSUE, verify: v, verdict, refusals, apply, skipped: applySkipped, replay: rep, followUps, refresh, applyTickets })
 log(text)
 // The first hand-over of the night is posted whole, a later one as its delta, and one identical to the
 // latest earlier hand-over not at all (#969).
-const post = await decideHandover(ISSUE, commentsIndex, `## Morning ${DATE}`, text, refusals)
+const post = decideHandover(text, prior)
 const handed = post.mode === 'identical' ? null : await run(handoverPrompt(DATE, ISSUE, post.body), { label: 'handover', phase: 'Hand-over', schema: HANDED })
 if (handed && handed.reason) refusals.push(`the hand-over was not posted: ${handed.reason}`)
 return {
