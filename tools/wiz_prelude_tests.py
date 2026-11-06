@@ -20,7 +20,7 @@ git reads no configuration of the machine's.
 **The skill's text.** The third class reads the wiz skill's two files from this checkout and holds
 that no line of the prelude's commands is copied into them, so the file stays the one copy.
 
-Checkout inputs: .claude/skills/wiz/*.md .gitignore
+Checkout inputs: .claude/skills/wiz/*.md .gitignore tests/e2e/Program.cs
 """
 from __future__ import annotations
 
@@ -116,6 +116,20 @@ class PinnedDate(Sitting):
                          ["spa-platform", "us-east-2", str(self.dir / "home" / ".docker" / "bin"), "0077",
                           "function", "function", "function", "unset"])
 
+    def test_sitting_browser_runs_the_e2e_project_on_the_sittings_bundle(self) -> None:
+        day = utc_day(-1)
+        self.pin(day + "\n")
+        # dotnet is a function here, so the case reads the words the prelude passes and starts nothing.
+        done = self.bash(SOURCE + ' && dotnet() { printf "%s\\n" "$@"; } && sitting_browser login main --app app1')
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(done.stdout.splitlines(),
+                         ["run", "--project", "tests/e2e", "--", "sitting-browser", "--bundle",
+                          f".scratch/sitting/log/{day}", "login", "main", "--app", "app1"])
+        # The two words are the entry point's constants: a rename there has to fail here.
+        entry_point = (ROOT / "tests" / "e2e" / "Program.cs").read_text()
+        self.assertIn('SittingBrowserCommand = "sitting-browser"', entry_point)
+        self.assertIn('BundleOption = "--bundle"', entry_point)
+
     def test_a_call_from_a_subdirectory_runs_at_the_top_level(self) -> None:
         self.pin(utc_day(-1) + "\n")
         (self.repo / "infra").mkdir()
@@ -182,7 +196,7 @@ class SkillHoldsNoCopy(unittest.TestCase):
     # The commands a hand copy of the old block carried, written out here rather than read from the
     # prelude, so a copy is caught even when the prelude changes.
     SIGNATURES = ("date -u", ".docker/bin", "umask 077;", "aws-project.env && set +a", "shown() {", "captured() {",
-                  "spactl() {", "wiz_redact.py --stream; echo", "git check-ignore -q \"$E/x\"")
+                  "spactl() {", "sitting_browser() {", "wiz_redact.py --stream; echo", "git check-ignore -q \"$E/x\"")
 
     def skill_lines(self) -> list[tuple[str, int, str]]:
         return [(path.name, n, line) for path in SKILL_FILES
