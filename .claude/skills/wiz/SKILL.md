@@ -590,9 +590,11 @@ closed, so both are in the tree when D runs.
 **Failure, and the way out.** A row that fails, or that the class reports `not proved:`, is posted
 as such with the reason (rule 4), and wiz then asks whether to go on to the next step or straight
 to D10. Every stop, rule 7's included, offers D10 before the sitting ends: the two-task cell costs
-about $0.10 an hour (#347 Q10), and teardown the same day is the practice. A stop before D2's end
-runs `shown sitting_browser stop` first. A declined D10 is recorded as "not run: declined", keeps
-D2's copy of `terraform.tfvars`, and the sitting ends naming where it is.
+about $0.10 an hour (#347 Q10), and teardown the same day is the practice. A stop after D0's `start`
+and before D2's end runs `shown sitting_browser stop` first, and D2's count before it once D2's watch
+has started; a failed D2 does the same before its post, whichever way the human then answers (D2 has
+the fences). A declined D10 is recorded as "not run: declined", keeps D2's copy of
+`terraform.tfvars`, and the sitting ends naming where it is.
 
 **D0, the fresh deploy and the live login (#348 Q22).** The root is absent (Stage 0). Fetch and
 fast-forward first (rule 8) and name the commit: D0 deploys the commit `main` is on, which is the
@@ -708,33 +710,46 @@ Two tasks RUNNING in two zones on the new revision, and `spactl wait --instances
 each task's `/readyz` answered at the registry's revision, is convergence; the `--instances` ids are
 the two task ids, comma-separated, as `deploy.sh`'s own wait passes them (`cell-common.sh`
 `wait_for_revision`), and the revision is the one D0's `deploy.sh` read from the live registry,
-which the cutover does not change. A `services-stable` that times out, or a wait that returns
-naming a task that never answered, is a failed row. After convergence the watch ends, its count is
-read, and the sitting browser makes the login. `/bff/login` discards the profile's session first, and
-the cleared provider makes it fill the form:
+which the cutover does not change. A `services-stable` that times out, a wait that returns naming a
+task that never answered, or an apply that exits non-zero, which has no roll to wait for, is a failed
+row. Every way out of D2 once the watch has started, convergence, a failed row or a stop, ends the
+watch and reads its count:
 
 ```bash
 shown sitting_browser unwatch main
 shown awk '$1=="login-prompt" && !p {n++; p=1} $1=="signed-in" {p=0} END {print n+0}' "$E/browser.log"
 shown grep -E '^(login-prompt|tunnel-down|timeout|other|not-found) ' "$E/browser.log"
+```
+
+After convergence, and only then, the sitting browser makes the login. `/bff/login` discards the
+profile's session first, and the cleared provider makes it fill the form:
+
+```bash
 shown sitting_browser clear-provider main
 shown sitting_browser login main --app app1
 shown sitting_browser session main
-shown sitting_browser stop
 ```
 
 A `signed-in` line at the revision `spactl wait` named, and `session` answering `http=200`, is #348
 Q32's post-convergence login, and "carries into row 3" means row 3 runs on this converged cell with
 no further apply; row 3's own login is #358's. Rows 3 to 10 bring their own browsers, so nothing after
-D2 uses the sitting browser.
+D2 uses the sitting browser, and every way out of D2 closes it:
+
+```bash
+shown sitting_browser stop
+```
+
+A failed row or a stop does this before its post and before wiz asks what next: a watch left running
+would write `browser.log` through D3 onward, and a same-day attempt's `start` would answer
+`refused reason=running`, a failed D0.
 
 Post `## D2, row 2` on #348: the plan's counts and its one replacement address, the apply's exit,
 the baseline's line, the sign-outs observed with the watch's lines that were not `signed-in` quoted
 as they read, the tunnel gap as missing coverage, the two task ids with their zones, the readiness
 wait's lines, the post-convergence login's lines, and the bundle files (`terraform.tfvars.phase1`,
 `cutover.tfplan`, `row2.log`, `browser.log`, and each file under `browser-pages/` when an `other`
-wrote one) by SHA-256. The row passes when a sign-out occurred and the post-convergence login
-succeeded.
+wrote one) by SHA-256. A failed row posts as much of this as it reached, the count and the watch's
+lines included. The row passes when a sign-out occurred and the post-convergence login succeeded.
 
 **D1, the configuration as decided (row 1; #348 Q24).** Reads only, each a `describe`, `get` or
 `list`, through `shown`; never `get-parameter` or `get-parameters`, which return the ring's values
