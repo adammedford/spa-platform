@@ -6,7 +6,8 @@ description: Walk a sitting in the platform project. Reads preflight, the tracke
 # /wiz: a sitting in the platform project
 
 Tracked in the repository since #135; #468 rewrote sitting C as the sittings of 2026-10-27 ran it,
-#361 added sitting D, the G6 continuity run of #348, and #547 added W, the runbook walks of #244.
+#361 added sitting D, the G6 continuity run of #348, #547 added W, the runbook walks of #244, and
+#1095 added the remote route.
 Sittings A and B are done; they, and the H items that no longer fire, are in `a-and-b.md` beside
 this file, for a cell that needs the read pass again.
 
@@ -32,7 +33,9 @@ rows and their questions) and #358 (the deployed continuity class).
    the terminal through the stream mode below; every post through the post mode. If a line cannot
    be redacted with confidence, leave it out and say so. The one exception is `a-and-b.md`'s A2,
    which prints the login URL, carrying the client id, to the terminal only, because the human has
-   to open it; it goes into the record and never into a post.
+   to open it; it goes into the record and never into a post. The code from `aws login --remote` is
+   typed only in the human's ssh window, and is never asked for, printed or posted by the agent
+   (#1090 Q2).
 4. **Evidence goes to the ticket it serves**, as a comment headed by the stage, carrying the
    commit, the command, its exit code and its key lines. A failed or skipped stage posts "failed"
    or "not run" with the reason, never a sentence that would read the same on success. Each post
@@ -55,7 +58,8 @@ rows and their questions) and #358 (the deployed continuity class).
    destroys or replaces beyond rule 2's one, a stage's exit code or a read's values are not what
    its ticket expects (an exit of 0 reporting an unhealthy target or another image is a failed
    stage), or AWS answers `AccessDenied` where it did not before (ask about the spend limit: AWS
-   Settings → Billing, per `docs/agents/aws-rules.md`).
+   Settings → Billing, per `docs/agents/aws-rules.md`). An expired token and a lost `claude` are
+   stops too, each as "The remote route" says.
 8. **Run from the main checkout on `main`, up to date with `origin/main`**, so the scripts are the
    landed ones; never commit, switch or rebase there (`tools/main_checkout_guard.py`). Adam lands
    pull requests mid-sitting: fetch and fast-forward again before a deploy, and name the commit.
@@ -114,6 +118,52 @@ and the script wrote nothing: post nothing, stop and name the cause (rule 7). On
 exit post nothing and say the redaction failed. On exit 0, read the result once as a reviewer
 would; the script catches shapes, not meaning.
 
+### The remote route
+
+The session runs on the mini in VS Code with `/remote-control` on, and the phone app drives it, so
+its prompts and confirms are answered there. Ssh over Tailscale is a separate shell for what must
+not enter the chat: it cannot attach to this session or answer its prompts (#1090 Q3, Q4). #1090's
+Q3, Q6, Q7, Q11 and Q14 read here as its "Decided in a session" comment corrects them.
+
+- **Renewal (#1090 Q2, Q13).** Stage 0 asks for a fresh `aws login --remote --profile spa-platform`
+  in the human's own ssh window before its preflight, and waits for the report. When AWS later
+  reports an expired token, stop, name that command, and read again on the report. The stage has
+  not failed until that read comes back. The token's lifetime is unknown, so this can come at any
+  step.
+- **Plans (#1090 Q7).** Rule 2's confirm in the app is led by a short list of the plan's resource
+  addresses and actions, which summarises the plan and does not replace it:
+
+  ```bash
+  terraform -chdir=<root> show -json <plan> | python3 -I -c 'import json,sys; [print(",".join(c["change"]["actions"]), c["address"]) for c in json.load(sys.stdin).get("resource_changes", []) if c["change"]["actions"] != ["no-op"]]' | tee -a "$R"
+  ```
+
+  `show -json` writes sensitive values in the clear, so its output goes into this filter and nowhere
+  else, and the line runs bare, never under `shown`. Where rule 2 stops, or a plan holds secrets,
+  the human reads it with `terraform -chdir=<root> show <plan>` in an ssh login, and it never enters
+  the chat. "Holds secrets" means in its text: the apps root's saved file carries client secrets
+  (rule 6), and Terraform prints them as `(sensitive value)`, so C3's and N's `shown` plans stay as
+  they are. How the app renders a long plan is unproved (#1094): one hard to read there goes to ssh
+  too.
+- **A lost `claude` (#1090 Q14).** A rule 7 stop that offers D10 from a new session. The human
+  starts it over ssh inside `screen` with `/remote-control` on, after typing `security
+  unlock-keychain ~/Library/Keychains/login.keychain-db` in that shell, without which its `gh` calls
+  answer 401; the unlock does not carry to a new login, and its password stays in that shell as the
+  code does (#1094). The new session's first check is `gh api user`. This route has not been run
+  (#1094), nor is it known what a killed `claude` does to the tunnel and the sitting browser, its
+  background calls, so read both before relying on either.
+- **AWS Settings (#1090 Q9).** H2's close path and the spend-limit checks may use the phone's
+  browser; wiz names the step and waits for the report. That page has not been tried on a phone
+  (#1094).
+- **What a remote sitting cannot do (#1094).** The human cannot see the page, and that is accepted:
+  the observation lines stand in for it, a page that came back as `other` is read under
+  `browser-pages/` over ssh, and no screenshot is added. Anything only an eye would catch stays
+  uncovered.
+- **What needs the screen (#1090 Q1, Q5, Q6).** A reboot's FileVault unlock (`fdesetup authrestart`
+  for a planned one), and the one trust step, already done on this machine. A live login session on
+  the mini with VS Code open is a precondition; the screen may lock. The tunnel listens on the
+  mini's loopback, where the phone cannot reach it, so a step in a human's own tab is at the screen
+  too: C1's browser, and W's browser binding until #1026 moves it.
+
 ## Stage 0: where things stand
 
 Ask first whether this is a `--dry-run` (list every command, run nothing, post nothing), so the
@@ -124,10 +174,14 @@ first prelude, and name the date it prints:
 bash "$(git rev-parse --path-format=absolute --git-common-dir)/../tools/wiz_prelude.sh" --pin
 ```
 
-Then, each line after the prelude:
+Then ask for the renewal (the remote route) and wait for the report. Stage 0 does not ask where the
+human is: its three checks hold wherever that is (#1090 Q11), and they live here, with
+`tools/preflight.sh` unchanged (Q12). Then, each line after the prelude:
 
 ```bash
-tools/preflight.sh                       # must end ready; it compares the account with the pin; read its Container engine row
+shown security find-certificate -c "SPA Platform poc Local CA" /Library/Keychains/System.keychain   # exit=0, or stop: the CA is not in the System keychain
+pmset -g | awk '$1=="sleep" {s=$2; print} END {exit (s=="" || s!=0)}' | tee -a "$R"; echo "sleep exit=${PIPESTATUS[1]}"   # 0, or stop: system sleep is on
+tools/preflight.sh | awk '{print} /Container engine/ {ok=($1=="ok")} END {exit !ok}' | tee -a "$R"; echo "preflight exit=${PIPESTATUS[0]} engine exit=${PIPESTATUS[1]}"   # preflight 0: it ended ready and the account is the pin; engine 0, or stop: the Container engine row is not ok
 git fetch origin --tags && git status --short --branch   # on main, no tracked change
 git merge --ff-only --quiet origin/main  # a call of its own: the guard admits exactly this form, --quiet allowed
 for n in 63 242 236 244 348; do
@@ -139,6 +193,12 @@ shown aws ecs describe-services --cluster spa-poc --services gateway \
   --query 'services[0].{status:status,desired:desiredCount,running:runningCount,taskDefinition:taskDefinition}'
 shown aws ecr describe-images --repository-name spa-poc/gateway --query 'length(imageDetails)'
 ```
+
+Each miss among the three is a rule 7 stop naming its cause. The CA's trust step is at the screen,
+and `tools/scripts/certs.sh trust` adds nothing while the login keychain's copy verifies (#1094 step
+1). A sleeping mini takes the session with it. preflight reports a stopped engine as `later` and
+still ends ready, which is why the row is read here; Docker Desktop's engine needs the live login
+session (#1090 Q6).
 
 The open boxes are what this sitting can still tick; a box already ticked is not a blocker. An open
 `blocked_by` edge names a ticket whose work gates a row (#63 waits on #242 for P-05 alone, Q78); say
@@ -153,8 +213,8 @@ Offer C2 and C3 only when `tests/e2e/Stack/DeployedStack.cs` (#209) is on `main`
 with their tickets, and ask the human which to run.
 
 **Offering D.** Sitting D (#348) is offered only when every line below holds, and otherwise Stage 0
-names each missing piece (a tag not merged, each open edge by number and title, a standing root, a
-`Container engine` row not ok, each G6 key the file carries) and offers C instead:
+names each missing piece (a tag not merged, each open edge by number and title, a standing root,
+each G6 key the file carries) and offers C instead:
 
 ```bash
 git tag --merged origin/main | grep -x -E 'g3-deployed-slice|g4-negative-green|g5-phase-1-accepted'   # all three lines, or D is not offered
@@ -178,7 +238,6 @@ EOF
   that lacks them.
 - The platform root is absent: Stage 0's `describe-services` answers no service, or one with no
   running task and no deployment. D0 deploys from nothing, and a part-run D never resumes.
-- preflight's `Container engine` row is ok, as C needs it: D0 and D6 build images.
 - `infra/envs/poc/platform/terraform.tfvars` carries none of the G6 keys. The script prints the
   example's G6 keys (every key it names, set or commented out, beyond the Phase 1 eight) and the
   ones `terraform.tfvars` sets; a second list that is not empty is a G6 input, and D is not offered
@@ -205,7 +264,7 @@ asserts the running digest, then waits for each new task to report the registry 
 `/readyz`), and start no tunnel while it runs: its readiness wait opens a tunnel of its own and
 closes it when the wait ends (#1008). Once `deploy.sh` prints its pass line, start `tunnel.sh` in
 the background, so its hop goes through a task of the new deployment, for `verify-tunnel.sh
-/healthz` and the human's browser; a `tunnel.sh` still running from before is stopped first, since
+/healthz` and, at the screen, the human's browser; a `tunnel.sh` still running from before is stopped first, since
 its hop was a task the deployment replaced:
 
 ```bash
@@ -873,5 +932,5 @@ does not run for G6.
   table of the open ones from the issue's comments (question, recommendation, what it changes). The
   human writes and posts any comment that names them, or has a session post it at their word.
 - **H2, #90.** Print the three pre-checks and the close path (AWS Settings → View all projects →
-  the sample project → Close project); after the human reports it closed, `rm` the two local files
+  the sample project → Close project), which the phone's browser may take (the remote route); after the human reports it closed, `rm` the two local files
   with approval, run preflight, and draft the ADR-0017 clause into the log for the integrator.
