@@ -3223,6 +3223,8 @@ try {
     // The Morning comment of the same night is not an earlier After comment.
     if (!AFTER_NIGHT.comments.some((c) => c.body.startsWith(`## Morning ${DATE}`)) || a1.labels.includes('handover-read')) fail(`#969 After: the night's Morning comment was read as an earlier After comment: ${a1.labels.join(', ')}`)
     // The cleanup reads its rows through a Morning delta to the whole comment it extends.
+    // Every delta is taken against the whole comment, so an older delta's copy of a section is stale.
+    if (!a1.prompt('after').includes('read only the latest delta: a section it gives whole from it, a section it names unchanged from that comment, and none it names removed')) fail('#969: the cleanup is not told to read only the latest delta')
     if (!/"## Morning <date> \(delta\)"/.test(a1.prompt('after'))) fail('#969: the cleanup is not told how a "## Morning <date> (delta)" comment extends the rows\' source')
   }
 
