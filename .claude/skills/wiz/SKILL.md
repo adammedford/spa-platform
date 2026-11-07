@@ -218,9 +218,9 @@ keychain's certificates by the SHA-256 of `.certs/spa-platform-poc-ca.pem`, not 
 also finds an older authority left there by `certs.sh --new-ca`, and `security verify-cert` also
 passes through the login keychain's copy (#1140). An older one beside the current one is listed and
 passes. The CA's trust step is at the screen, and `tools/scripts/certs.sh trust` adds nothing while
-the login keychain's copy verifies (#1094 step 1). A sleeping mini takes the session with it. preflight reports a stopped engine as `later` and
-still ends ready, which is why the row is read here; Docker Desktop's engine needs the live login
-session (#1090 Q6).
+the login keychain's copy verifies (#1094 step 1). A sleeping mini takes the session with it.
+preflight reports a stopped engine as `later` and still ends ready, which is why the row is read
+here; Docker Desktop's engine needs the live login session (#1090 Q6).
 
 The open boxes are what this sitting can still tick; a box already ticked is not a blocker. An open
 `blocked_by` edge names a ticket whose work gates a row (#63 waits on #242 for P-05 alone, Q78); say
