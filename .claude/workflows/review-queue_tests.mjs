@@ -2325,6 +2325,43 @@ try {
     }
   }
 
+  // What costs a body agent (#1074): the inventory's flag, not a record line. RECORD_TEST finds the
+  // record's text anywhere in a body, so a repository account's sentence quoting a record is flagged,
+  // costs an agent of its own, and reads as no record; that agent dying fails the review as a record's
+  // would, since nothing can tell the two apart before the body is read. meta's Inventory detail is
+  // what a launch shows, so it is held to saying the same; an APPROVED review's flag costs nothing,
+  // which #796's shape above proves.
+  checks++
+  {
+    const OLD1074 = sha('c')
+    const quoting = (onReview) => {
+      const entry = {
+        author_association: 'OWNER', created_at: '2026-11-04T08:00:00Z',
+        html_url: `https://github.com/adammedford/spa-platform/pull/796#${onReview ? 'pullrequestreview' : 'issuecomment'}-1074`,
+        body: `The last record read Reviewed ${OLD1074} against ${F796}: hold, and that head is gone.`,
+      }
+      return onReview ? { ...entry, state: 'COMMENTED', submitted_at: entry.created_at } : entry
+    }
+    const served = (entry, onReview) => ({ 796: { ...SERVED796[796], ...(onReview ? { reviews: [APPROVAL796, entry] } : { comments: [HUMAN796, ...RECORDS796, entry] }) } })
+    for (const onReview of [false, true]) {
+      const where = onReview ? 'review' : 'comment'
+      const entry = quoting(onReview)
+      env = run({ prs: [796], maxMutationsPerPr: 20 }, served(entry, onReview), { followUps: { 796: CARRIED796 } })
+      let r = resultOf(796, await execute(env))
+      const bodies = env.calls.filter((c) => /^inventory:796:body:/.test(c))
+      if (bodies.length !== 7 || !bodies.some((c) => (env.prompts[c] || '').includes(entry.html_url))) fail(`a ${where} quoting a record: ${bodies.length} body agent(s) ran, expected seven, one of them for it`)
+      if (r.outcome !== 'recorded') fail(`a ${where} quoting a record: outcome ${r.outcome} at ${JSON.stringify(r.stage)}, expected recorded`)
+      if (JSON.stringify(r.earlierRecords) !== JSON.stringify(RECORDS796.map((x) => x.html_url))) fail(`a ${where} quoting a record: earlier records ${JSON.stringify(r.earlierRecords)}, expected the six alone, since it holds no record line`)
+      env = run({ prs: [796], maxMutationsPerPr: 20 }, served(entry, onReview), { followUps: { 796: CARRIED796 }, bodies: { [entry.html_url]: 'null' } })
+      r = resultOf(796, await execute(env))
+      if (r.outcome !== 'failed' || !String(r.stage).includes(entry.html_url)) fail(`a ${where} quoting a record, its body agent dead: outcome ${r.outcome} at ${JSON.stringify(r.stage)}, expected failed naming its URL`)
+    }
+    const meta = loadMeta()
+    const inventory = (meta && meta.phases.find((ph) => ph.title === 'Inventory')) || {}
+    for (const w of ['COMMENTED review', 'repository account', 'flags']) if (!String(inventory.detail).includes(w)) fail(`meta's Inventory detail does not name ${JSON.stringify(w)} of what costs a body agent`)
+    if (String(inventory.detail).includes('carries a record line')) fail('meta\'s Inventory detail says a body agent runs per record line; it runs per flagged body')
+  }
+
   // The record's compact shape (#967). The verdict prompt asks for the Spec table of three columns,
   // one row per acceptance box, the Mutations table of four, the one-word result set, and, after a
   // hold, a link to the held record with only what changed since it. A record built from two boxes
