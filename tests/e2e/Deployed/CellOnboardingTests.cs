@@ -334,6 +334,7 @@ public sealed class CellOnboardingTests : IDisposable
 
         Assert.Contains("aws_ssm_parameter.client_secret[\"app1\"] delete", refused.Message, StringComparison.Ordinal);
         Assert.DoesNotContain(runner.Calls, call => call.Program == "terraform" && call.Arguments[1] == "apply");
+        Assert.DoesNotContain(runner.Calls, call => call.Program == "spactl"); // A plan that is refused waits on nothing first (#1141).
     }
 
     [Fact]
