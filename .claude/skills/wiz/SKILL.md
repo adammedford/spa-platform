@@ -134,12 +134,13 @@ Q3, Q6, Q7, Q11 and Q14 read here as its "Decided in a session" comment corrects
   addresses and actions, which summarises the plan and does not replace it:
 
   ```bash
-  terraform -chdir=<root> show -json <plan> | python3 -I -c 'import json,sys; p=json.load(sys.stdin); p["planned_values"]; [print(",".join(c["change"]["actions"]), c["address"]) for c in p.get("resource_changes", []) if c["change"]["actions"] != ["no-op"]]' | tee -a "$R"; echo "plan list show exit=${PIPESTATUS[0]} filter exit=${PIPESTATUS[1]}" | tee -a "$R"   # both 0, or stop: the plan was not read
+  terraform -chdir=<root> show -json <plan> | python3 -I -c 'import json,sys; p=json.load(sys.stdin); p["planned_values"]; p.get("errored") and sys.exit(2); [print(",".join(c["change"]["actions"]), c["address"]) for c in p.get("resource_changes", []) if c["change"]["actions"] != ["no-op"]]' | tee -a "$R"; echo "plan list show exit=${PIPESTATUS[0]} filter exit=${PIPESTATUS[1]}" | tee -a "$R"   # both 0, or stop: no whole plan was read
   ```
 
-  A wrong path, a terraform error, or a state file where the plan should be (`show -json` reads either,
-  and only a plan has `planned_values`) prints no rows, as a plan with no changes does. So no rows are
-  an empty list only under `show exit=0 filter exit=0`, and any other verdict is a rule 7 stop (#1137).
+  A wrong path, a terraform error, a state file where the plan should be (`show -json` reads either,
+  and only a plan has `planned_values`) or the file a failed `plan` saved (terraform sets its `errored`,
+  and the filter exits 2) prints no rows, as a plan with no changes does. So no rows are an empty list
+  only under `show exit=0 filter exit=0`, and any other verdict is a rule 7 stop (#1137).
   `show -json` writes sensitive values in the clear, so its output goes into this filter and nowhere
   else, and the line runs bare, never under `shown`. Where rule 2 stops, or a plan holds secrets,
   the human reads it with `terraform -chdir=<root> show <plan>` in an ssh login, and it never enters

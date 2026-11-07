@@ -36,9 +36,9 @@ a double of terraform, runs the list over a refresh-only plan's shape, and reads
 them: the blocks do not themselves say that the list leads the confirm or that a declined one cleans up.
 
 **The list's verdict (#1137).** A failed read prints no rows, as a plan with no changes does, so the list
-ends on a verdict line. The same class runs the line against doubles that fail, print what is not JSON
-and print a state file's keys, each of which must name the failure, and against a plan with no changes,
-which must not.
+ends on a verdict line. The same class runs the line against doubles that fail, print what is not JSON,
+print a state file's keys and print a plan terraform marked errored, each of which must name the failure,
+and against a plan with no changes, which must not.
 
 Checkout inputs: .claude/skills/wiz/*.md .gitignore tests/e2e/Program.cs tests/e2e/SittingBrowser/Observations.cs tests/e2e/SittingBrowser/ObservationLine.cs tests/e2e/SittingBrowser/SittingBrowser.cs tests/e2e/SittingBrowser/SittingCommand.cs
 """
@@ -502,6 +502,15 @@ class SkillSavesThePlansItsConfirmsRead(Sitting):
         self.assertEqual(done.stdout.splitlines(), ["plan list show exit=0 filter exit=1"], done.stderr)
         for where in (done.stdout, done.stderr, record):
             self.assertNotIn("canary-secret", where)
+
+    def test_a_plan_terraform_marked_errored_fails_and_lists_none_of_its_partial_changes(self) -> None:
+        # terraform 1.16 saves the file of a plan that failed, with these keys, and show -json reads it with exit 0.
+        plan = {"planned_values": {}, "errored": True, "complete": False, "resource_changes": [
+            {"address": "aws_a.b", "change": {"actions": ["create"]}},
+        ]}
+        done, record = self.run_list(f"terraform() {{ printf '%s' '{json.dumps(plan)}'; }}")
+        self.assertEqual(done.stdout.splitlines(), ["plan list show exit=0 filter exit=2"], done.stderr)
+        self.assertEqual(record.splitlines(), ["plan list show exit=0 filter exit=2"])
 
     def test_a_read_plan_lists_its_changes_and_the_record_holds_them_with_the_verdict(self) -> None:
         plan = {"planned_values": {}, "resource_changes": [
