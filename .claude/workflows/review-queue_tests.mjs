@@ -181,13 +181,14 @@ function run(scriptArgs, served, behave = {}) {
     }
     if (kind === 'inventory' && opts.label.split(':')[2] === 'body') {
       // A body agent (#1018): the one comment or review its label names by id, its body as gh serves
-      // it, or what behave.bodies says of its URL: 'null' or 'throw' for an agent that dies, a
-      // function of the body for the body it returns instead, or { error } for a gh it cannot reach,
-      // with the whole body beside it when whole is true.
+      // it, or what behave.bodies says of its URL: 'null' for an agent that dies returning nothing,
+      // { throws } for one that dies throwing that value, whose message the harness wrote and so need
+      // not name the URL (#1076), a function of the body for the body it returns instead, or { error }
+      // for a gh it cannot reach, with the whole body beside it when whole is true.
       const e = byId.get(Number(opts.label.split(':')[3]))
       if (!e) throw new Error(`a body agent for an id the inventory never gave: ${opts.label}`)
       const b = (behave.bodies || {})[e.html_url]
-      if (b === 'throw') throw new Error(`the body agent for ${e.html_url} died`)
+      if (b && b.throws !== undefined) throw b.throws
       if (b === 'null') return null
       // gh answers from the endpoint the prompt names (#1073), whatever the label says. An id of the
       // other list, or a review id under another pull request's number, is a 404 on GitHub: read live
@@ -2210,6 +2211,32 @@ try {
       const after = env.calls.filter((c) => !c.startsWith('inventory:') && c !== 'launch')
       if (after.length || env.posted.length) fail(`a body ${what}: ${after.join(', ') || 'nothing'} ran after the inventory and ${env.posted.length} comment(s) were posted, expected none`)
       if (r.recordUrl || r.verdict) fail(`a body ${what}: verdict ${JSON.stringify(r.verdict)} with record ${JSON.stringify(r.recordUrl)}, expected none`)
+    }
+  }
+
+  // A body agent that throws fails the review at the inventory like one that returns nothing, with a
+  // stage naming the body's URL beside the first line of what was thrown (#1076). The review of #1021
+  // read the message as the harness's own, which need not name the URL, so these name none. Without
+  // the script's catch, the strict parallel() stub carries the throw to review()'s catch, whose stage
+  // names no body, which is how each case goes red here.
+  checks++
+  {
+    const target = RECORDS796[3].html_url
+    const cases = {
+      'an Error': { thrown: new Error('the agent was killed\n    at agent (harness.js:1:1)'), says: 'the agent was killed', hides: 'harness.js' },
+      'a bare string': { thrown: 'budget exhausted', says: 'budget exhausted' },
+    }
+    for (const [what, { thrown, says, hides }] of Object.entries(cases)) {
+      env = run({ prs: [796], maxMutationsPerPr: 20 }, SERVED796, { followUps: { 796: CARRIED796 }, bodies: { [target]: { throws: thrown } } })
+      result = await execute(env)
+      const r = resultOf(796, result)
+      const stage = String(r.stage)
+      if (r.outcome !== 'failed' || !stage.startsWith('inventory: ') || !stage.includes(target)) fail(`a body agent throwing ${what}: outcome ${r.outcome} at ${JSON.stringify(r.stage)}, expected failed at the inventory naming ${target}`)
+      if (!stage.includes(says)) fail(`a body agent throwing ${what}: stage ${JSON.stringify(r.stage)}, expected it to carry ${JSON.stringify(says)}`)
+      if (hides && stage.includes(hides)) fail(`a body agent throwing ${what}: stage ${JSON.stringify(r.stage)} carries more than the first line`)
+      const after = env.calls.filter((c) => !c.startsWith('inventory:') && c !== 'launch')
+      if (after.length || env.posted.length) fail(`a body agent throwing ${what}: ${after.join(', ') || 'nothing'} ran after the inventory and ${env.posted.length} comment(s) were posted, expected none`)
+      if (r.recordUrl || r.verdict) fail(`a body agent throwing ${what}: verdict ${JSON.stringify(r.verdict)} with record ${JSON.stringify(r.recordUrl)}, expected none`)
     }
   }
 

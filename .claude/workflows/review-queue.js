@@ -1228,11 +1228,12 @@ const blank = (n) => ({
   followUps: [], changeRequests: [],
 })
 const failed = (res, stage) => ({ ...res, outcome: 'failed', stage, verdict: '', recordUrl: '' })
+const thrownReason = (e) => String((e && e.message) || e).split('\n')[0]
 const review = async (n) => {
   const res = blank(n)
   const at = { stage: 'inventory' }
   try { return await reviewOne(n, res, at) } catch (e) {
-    const why = `${at.stage}: ${String((e && e.message) || e).split('\n')[0]}`
+    const why = `${at.stage}: ${thrownReason(e)}`
     log(`#${n}: failed at ${why}`)
     return failed(res, why)
   }
@@ -1241,10 +1242,12 @@ const review = async (n) => {
 // repository let in whose inventory entry RECORD_TEST flags, read by an agent of its own and written
 // into its entry, so a flagged body holding no record line costs an agent and reads as no record. Any
 // other entry keeps no body, and recordsIn passes over it as before. A body is taken only whole: one whose code points are fewer or
-// more than the inventory counted, or whose agent returned nothing or an error, is the reason
-// returned, naming its URL, so the review fails at the inventory and never reads a record with fewer
-// rows. null when every body came back whole. Both counts leave out the whitespace at the body's end,
-// which no parser reads and a returned value can lose: on 2026-11-05 one of #796's body agents
+// more than the inventory counted, or whose agent returned nothing or an error, or threw, is the
+// reason returned, naming its URL, so the review fails at the inventory and never reads a record with
+// fewer rows. A throw is caught per agent because what was thrown need not name the body, and past
+// here only review()'s catch sees it, whose stage names none, or the Workflow tool's parallel(), which
+// makes it a null and drops the reason (#1076). null when every body came back whole. Both counts
+// leave out the whitespace at the body's end, which no parser reads and a returned value can lose: on 2026-11-05 one of #796's body agents
 // returned a record without its final newline, which its file kept (#1030).
 const TRAILING_SPACE = /[ \t\r\n]+$/
 const codePoints = (s) => Array.from(s.replace(TRAILING_SPACE, '')).length
@@ -1256,7 +1259,9 @@ const readBodies = async (n, inv) => {
   for (const { e } of wanted) {
     if (!Number.isInteger(e.id) || e.id <= 0 || !Number.isInteger(e.length) || e.length < 0) return `${e.html_url} has no id or length to read its body by`
   }
-  const got = await parallel(wanted.map(({ e, review }) => () => run(bodyPrompt(n, e, review), { label: `inventory:${n}:body:${e.id}`, phase: 'Inventory', schema: BODY })))
+  const got = await parallel(wanted.map(({ e, review }) => async () => {
+    try { return await run(bodyPrompt(n, e, review), { label: `inventory:${n}:body:${e.id}`, phase: 'Inventory', schema: BODY }) } catch (err) { return { body: '', error: `its agent threw: ${thrownReason(err)}` } }
+  }))
   for (const [i, { e }] of wanted.entries()) {
     const b = got[i]
     if (!b || typeof b.body !== 'string') return `the body agent for ${e.html_url} returned nothing`
