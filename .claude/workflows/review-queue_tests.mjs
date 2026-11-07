@@ -864,7 +864,8 @@ try {
   // the verdict's acceptance could not answer it. A row on a Node companion, identified by its .mjs
   // project, its own .mjs file or the .mjs file its cell names, is a caught row unless the classifier's
   // wholeFile holds, which takes a file on the row as well as a cell naming that file (#1069): accepted,
-  // it reproduces and merges; not accepted, it reads did-not-fail and holds. A stated row on another project, red only on other tests, still reads did-not-fail whatever the
+  // it reproduces and merges; not accepted, it reads did-not-fail and holds. A stated row on another
+  // project, red only on other tests, still reads did-not-fail whatever the
   // verdict accepts, and the verdict prompt says how to judge the messages: the rule for a row red on
   // another check's message is scoped to a row on an .mjs file, as the classifier reads it (#938), and
   // keeps a held or candidate row's #684/#689 catch (#936). Each such row's line names the cell to
@@ -919,7 +920,8 @@ try {
   // overnight_tests.mjs the directory as its project, which overrode its candidate's, so the row was
   // neither the whole file nor an .mjs row, and red on the companion's own messages it held. Named by
   // its path or basename, with a same-test candidate giving it that file, it is the whole file and
-  // merges unaccepted; scoped to a check it is a caught row the verdict answers. A Terraform file and a .py companion with a directory project hold as before.
+  // merges unaccepted; scoped to a check it is a caught row the verdict answers. A Terraform file and
+  // a .py companion with a directory project hold as before.
   checks++
   {
     const MJS = '.claude/workflows/overnight_tests.mjs'
