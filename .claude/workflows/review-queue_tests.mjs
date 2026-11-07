@@ -167,6 +167,8 @@ function run(scriptArgs, served, behave = {}) {
     if (killed === 'throw') throw new Error(`the agent ${opts.label} was killed`)
     if (killed === 'null') return null
     for (const m of prompt.matchAll(/^OUTPUT FILE: (\S+)$/gm)) {
+      // behave.unwritten: `<label>:<file name>`, an OUTPUT FILE that agent returns without writing (#1092).
+      if ((behave.unwritten || []).includes(`${opts.label}:${path.basename(m[1])}`)) continue
       fs.mkdirSync(path.dirname(m[1]), { recursive: true })
       fs.writeFileSync(m[1], `${opts.label}\n`)
     }
@@ -227,19 +229,26 @@ function run(scriptArgs, served, behave = {}) {
       if (b === 'null') return null
       return { test, broken: `broke what ${test} guards`, failingNames: [], why: b.result === 'could-not-run' ? 'the project did not build' : '', ...b }
     }
-    if (kind === 'verdict') return { verdict: behave.verdict || 'merge', findings: [], claims: [], outstanding: ['nothing'], summary: 's', boxes: (behave.boxes || {})[n] || [], earlierFindings: (behave.earlier || {})[n] || [], caughtAccepted: (behave.caught || {})[n] || [], followUps: (behave.followUps || {})[n] || [], changeRequests: (behave.changeRequests || {})[n] || [] }
+    if (kind === 'verdict') return { verdict: behave.verdict || 'merge', findings: (behave.findings || {})[n] || [], claims: [], outstanding: ['nothing'], summary: 's', boxes: (behave.boxes || {})[n] || [], earlierFindings: (behave.earlier || {})[n] || [], caughtAccepted: (behave.caught || {})[n] || [], followUps: (behave.followUps || {})[n] || [], changeRequests: (behave.changeRequests || {})[n] || [] }
     if (kind === 'post') {
       const m = /^BEGIN COMMENT\n([\s\S]*)\nEND COMMENT$/m.exec(prompt)
       const body = m ? m[1] : null
       const file = (/^OUTPUT FILE: (\S+)$/m.exec(prompt) || [])[1]
       // Step 1 of the post prompt: the body goes to the log before gh is reached.
       if (file && body !== null) fs.writeFileSync(file, body)
+      // And the verdict the script received, in place of whatever an earlier review left (#1092). The
+      // prompt names the file; verdictFile is empty when the agent did not write it.
+      const given = /^BEGIN VERDICT\n([\s\S]*?)\nEND VERDICT$/m.exec(prompt)
+      const verdictAt = (/^OUTPUT FILE: (\S+\/verdict\.json)$/m.exec(prompt) || [])[1]
+      const wrote = given && verdictAt && !(behave.unwritten || []).includes(`${opts.label}:verdict.json`)
+      if (wrote) fs.writeFileSync(verdictAt, given[1])
+      const verdictFile = wrote ? verdictAt : ''
       const gh = behave.gh
       if (!gh) {
         posted.push({ n: Number(n), body })
-        return { posted: true, url: `https://github.com/o/r/pull/${n}#issuecomment-1`, headNow: served[n].head, unreachable: false, bodyFile: file }
+        return { posted: true, url: `https://github.com/o/r/pull/${n}#issuecomment-1`, headNow: served[n].head, unreachable: false, bodyFile: file, verdictFile }
       }
-      return gh.post(Number(n), prompt, body, file, posted, served[n])
+      return { ...gh.post(Number(n), prompt, body, file, posted, served[n]), verdictFile }
     }
     throw new Error(`unexpected agent label ${opts.label}`)
   }
@@ -2572,6 +2581,64 @@ try {
     if (top967 < 0 || !(hl[top967 + 2] || '').includes(OLD_RECORD('hold').html_url)) fail(`#967: the earlier hold section does not link the held record: ${JSON.stringify(hl.slice(top967, top967 + 5))}`)
     if (!hl.includes('- Answered: the cap is off by one. src/Fixed.cs now stops at the cap') || !hl.includes('- Still open: an ADR index row.')) fail(`#967: the earlier hold section is ${JSON.stringify(hl.slice(top967, top967 + 6))}, expected each answered finding with what changed and each open one by name`)
     if (hl.some((l) => l.includes('RESTATED'))) fail('#967: the earlier hold section restates an unanswered finding\'s evidence')
+  }
+
+  // An earlier review's verdict.json is never read as this run's (#1092). On #1085's third review the
+  // verdict agent returned its verdict and wrote no file, so verdict.json stayed the review written
+  // earlier that day, in the log directory same-date runs share: a finding already answered, and a
+  // hold where the agent had returned merge. The script has no filesystem, so the post agent writes
+  // the verdict the script received, replacing what is there, and the file names its head and date.
+  checks++
+  {
+    const LOGDIR = (e) => `${e.repo}/.scratch/review-queue/log/2026-10-21/pr-101`
+    const EARLIER = 'the finding an earlier review held on'
+    const seeded = async (behave) => {
+      const e = run({ prs: [101], skipRecorded: false }, PRS, behave)
+      fs.mkdirSync(LOGDIR(e), { recursive: true })
+      fs.writeFileSync(`${LOGDIR(e)}/verdict.json`, JSON.stringify({ verdict: 'hold', findings: [{ title: EARLIER }] }))
+      return { e, ret: await execute(e) }
+    }
+    const fileOf = (e) => (fs.existsSync(`${LOGDIR(e)}/verdict.json`) ? fs.readFileSync(`${LOGDIR(e)}/verdict.json`, 'utf8') : '')
+    const parsed = (e) => { const text = fileOf(e); try { return JSON.parse(text) } catch { fail(`#1092: verdict.json is not JSON after the run: ${JSON.stringify(text.slice(0, 60))}`); return {} } }
+    const ONE = { axis: 'Spec', title: 'this review found it', where: 'a.md', severity: 'low', status: 'verified', checked: 'read it' }
+    // The verdict agent returns merge and writes nothing, with an earlier review's hold in the file.
+    {
+      const { e, ret } = await seeded({ verdict: 'merge', unwritten: ['verdict:101:verdict.json'], findings: { 101: [ONE] } })
+      const text = fileOf(e)
+      const v = parsed(e)
+      if (text.includes(EARLIER)) fail('#1092: a verdict agent that wrote no file left the earlier review\'s verdict.json to be read as this run\'s')
+      if (v.verdict !== 'merge') fail(`#1092: verdict.json says ${v.verdict}; the agent returned merge`)
+      if (!(v.findings || []).some((f) => f.title === ONE.title)) fail('#1092: verdict.json does not carry the finding the verdict agent returned')
+      if (v.head !== sha('1') || v.base !== FORK || v.date !== '2026-10-21') fail(`#1092: verdict.json names head ${v.head}, base ${v.base}, date ${v.date}; a repair session compares them with the summary line`)
+      if (/not this run's/.test((ret.summary || [])[0] || '')) fail(`#1092: a written verdict.json is reported as not this run's: ${ret.summary[0]}`)
+      const postP = e.prompts['post:101'] || ''
+      if (!postP.includes(`OUTPUT FILE: ${LOGDIR(e)}/verdict.json`) || !postP.includes(`rm -f ${LOGDIR(e)}/verdict.json`)) fail('#1092: the post prompt does not have its agent replace verdict.json')
+      if ((e.prompts['verdict:101'] || '').includes('/verdict.json')) fail('#1092: the verdict prompt still asks its agent for verdict.json, a write nothing checks')
+    }
+    // As the agent returned it: the script's own findings stay out, as "Repairing findings" says.
+    {
+      const stale = { ...PRS[101], statedHeads: [{ sha: 'ed8d063', quote: 'head `ed8d063`.' }] }
+      const e = run({ prs: [101], skipRecorded: false }, { 101: stale }, { findings: { 101: [ONE] } })
+      const ret = await execute(e)
+      const v = parsed(e)
+      if (resultOf(101, ret).findings.verified.length !== 2) fail(`#1092: the stale head's finding did not reach the return: ${resultOf(101, ret).findings.verified.length} verified`)
+      if ((v.findings || []).length !== 1 || v.findings[0].title !== ONE.title) fail(`#1092: verdict.json holds other than the agent's findings: ${JSON.stringify((v.findings || []).map((f) => f.title))}`)
+    }
+    // A post agent that returns without writing it: the earlier file stands, and the summary says so.
+    {
+      const { e, ret } = await seeded({ unwritten: ['verdict:101:verdict.json', 'post:101:verdict.json'] })
+      const line = (ret.summary || [])[0] || ''
+      if (!fileOf(e).includes(EARLIER)) fail('#1092: the check\'s post agent wrote the file it was told to leave')
+      if (!/verdict\.json is not this run's/.test(line)) fail(`#1092: a verdict.json the post agent did not write is not reported in the summary line: ${line}`)
+      if (resultOf(101, ret).outcome !== 'recorded') fail(`#1092: an unwritten verdict.json stopped the record: ${resultOf(101, ret).outcome}`)
+    }
+    // A post agent that dies: nobody knows which file stands, and the stage says so.
+    {
+      for (const how of ['null', 'throw']) {
+        const { ret } = await seeded({ kill: { 'post:101': how } })
+        if (!/verdict\.json may be an earlier review's/.test(resultOf(101, ret).stage || '')) fail(`#1092: a post agent killed (${how}) leaves a stage that does not say verdict.json may be an earlier review's: ${resultOf(101, ret).stage}`)
+      }
+    }
   }
 
   // The launch in whenToUse (#522): /review-queue shows meta and then a launch by name, which runs a
