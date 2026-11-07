@@ -799,7 +799,7 @@ shown sitting_browser stop
 A failed row or a stop runs this fence, and once the watch has started the count's fence before it,
 before its post and before wiz asks what next: a watch left running would write `browser.log` through
 D3 onward, and a same-day attempt's `start` would answer `refused reason=running`, a failed D0. A stop
-before the watch has started, at the plan's read, the baseline or the confirm, runs this fence alone:
+before the watch has started, at the G6 block, the plan's read, the baseline or the confirm, runs this fence alone:
 until the confirm's `mv` sets it aside, a `browser.log` in the bundle is an earlier attempt's, and its
 count is not this attempt's.
 
@@ -809,9 +809,10 @@ as they read, the tunnel gap as missing coverage, the two task ids with their zo
 wait's lines, the post-convergence login's lines, and the bundle files (`terraform.tfvars.phase1`,
 `cutover.tfplan`, `row2.log`, `browser.log`, and each file under `browser-pages/` when an `other`
 wrote one) by SHA-256. A failed row or a stop posts as much of this as it reached: once the watch has
-started, the count and the watch's lines included; before that, no count, no watch's lines and no
-`browser.log` among the files, and the post says the watch never started. The row passes when a
-sign-out occurred and the post-convergence login succeeded.
+started, the count and the watch's lines included; before that, no count and no watch's lines, among
+the files no `browser.log` or `row2.log` and under `browser-pages/` only what this attempt wrote, since
+an earlier attempt's stay in the bundle, and the post says the watch never started. The row passes
+when a sign-out occurred and the post-convergence login succeeded.
 
 **D1, the configuration as decided (row 1; #348 Q24).** Reads only, each a `describe`, `get` or
 `list`, through `shown`; never `get-parameter` or `get-parameters`, which return the ring's values
