@@ -86,9 +86,10 @@ export const meta = {
 // the whole comment it extends, each changed section whole, each unchanged one as "### <title>
 // (unchanged)", each one gone as "### <title> (removed)". Every delta extends the whole comment, never
 // another delta, so a reader needs those two comments at most. A hand-over identical to the latest
-// earlier one, whole or delta, is not posted, and the return says so. A read that failed, a delta with
-// no whole comment before it, or a hand-over whose section titles repeat is posted whole, and the
-// first is named: posting it again costs bytes, losing it costs the hand-over.
+// earlier one, whole or delta, is not posted, whatever its section titles (#1132), and the return says
+// so. A read that failed, a delta with no whole comment before it, or any other hand-over whose section
+// titles repeat is posted whole, and the first is named: posting it again costs bytes, losing it costs
+// the hand-over.
 //
 // An already merged landing pull request (#661, from #706 Q21 to Q29). On 2026-10-30 Verify stopped
 // at step 6 because #620 had merged, and the hand-over said "Review record: none" and "CI: none" and
@@ -1957,6 +1958,9 @@ const sameText = (a, b) => String(a || '').replace(/\r\n/g, '\n').trim() === Str
 const handoverPost = (text, earlier) => {
   const whole = { mode: 'whole', body: text, extends: '', url: '', note: '' }
   if (!earlier) return whole
+  const identical = { mode: 'identical', body: '', extends: earlier.whole.url, url: earlier.latest.url, note: `this hand-over is identical to the latest earlier one, ${earlier.latest.url}, so nothing was posted` }
+  // Before the titles are read: the same text needs no diff, so a title that cannot be diffed does not post it again (#1132).
+  if (sameText(earlier.latest.body, text)) return identical
   const now = sectionsOf(text)
   const was = sectionsOf(earlier.whole.body)
   const titles = now.sections.map((x) => x.title)
@@ -1975,7 +1979,7 @@ const handoverPost = (text, earlier) => {
   for (const t of before.keys()) if (!titles.includes(t)) { changed++; L.push('', `### ${t}${REMOVED}`) }
   const body = L.join('\n')
   const latestIsWhole = earlier.latest.url === earlier.whole.url
-  if (latestIsWhole ? !changed : sameText(earlier.latest.body, body)) return { mode: 'identical', body: '', extends: earlier.whole.url, url: earlier.latest.url, note: `this hand-over is identical to the latest earlier one, ${earlier.latest.url}, so nothing was posted` }
+  if (latestIsWhole ? !changed : sameText(earlier.latest.body, body)) return identical
   return { mode: 'delta', body, extends: earlier.whole.url, url: '', note: '' }
 }
 // The night's earlier hand-overs, found in Apply's index of the comments (index: null when it was not

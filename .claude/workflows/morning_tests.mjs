@@ -3251,6 +3251,33 @@ try {
     const envTwice = newRepo()
     const twice = await execute(envTwice, { date: DATE }, { issue: withEarlier(comment(97, into(envTwice, W1).replace('\n\n### Replay\n', '\n\n### main\n\n- twice\n\n### Replay\n'), '2026-10-21T09:00:00Z')) })
     if (twice.result.handover.mode !== 'whole' || posted(twice, 'handover') !== twice.result.handover.text || !/repeats/.test(twice.result.handover.note)) fail(`#969: an earlier hand-over with a repeated title was diffed: mode ${twice.result.handover.mode}, note ${twice.result.handover.note}`)
+    // ...but one identical to the latest earlier hand-over needs no diff, so its titles do not matter (#1132):
+    // nothing is posted, and the note does not say posted whole. A failing job's name carries the title
+    // into the text this pass writes, and the same pass with another job's name changes one line of it.
+    for (const [label, title] of [['a repeated title', 'Replay'], ['a title reading as a delta\'s mark', 'Old findings (unchanged)']]) {
+      const jobs = (name) => ({ verify: { ci: 'red', failingJobs: [`${name}\n\n### ${title}\n\n- again`] } })
+      const envOwn = newRepo()
+      const own = await execute(envOwn, { date: DATE }, jobs('.NET build and test'))
+      const T = own.result.handover.text
+      const heldTitles = T.split('\n').filter((l) => l.startsWith('### ')).map((l) => l.slice(4))
+      if (!heldTitles.includes(title) || (title === 'Replay' && new Set(heldTitles).size === heldTitles.length)) fail(`#1132 ${label}: the fixture's hand-over does not hold it: ${heldTitles.join(', ')}`)
+      const envSame = newRepo()
+      const same = await execute(envSame, { date: DATE }, { issue: withEarlier(comment(97, into(envSame, T, envOwn), '2026-10-21T09:00:00Z')), ...jobs('.NET build and test') })
+      if (same.labels.includes('handover') || same.result.handover.posted || same.result.handover.mode !== 'identical' || same.result.handover.url !== at97) fail(`#1132 ${label}: an identical hand-over was decided ${same.result.handover.mode}: ${same.labels.join(', ')}; url ${same.result.handover.url}`)
+      if (!/identical/.test(same.result.handover.note) || /posted whole/.test(same.result.handover.note)) fail(`#1132 ${label}: the identical hand-over's note reads: ${same.result.handover.note}`)
+      // Changed, the titles still hold it to whole, and the note says why.
+      const envMoved = newRepo()
+      const moved = await execute(envMoved, { date: DATE }, { issue: withEarlier(comment(97, into(envMoved, T, envOwn), '2026-10-21T09:00:00Z')), ...jobs('Another job') })
+      if (moved.result.handover.mode !== 'whole' || posted(moved, 'handover') !== moved.result.handover.text || !/repeats or reads as a delta's mark/.test(moved.result.handover.note)) fail(`#1132 ${label}: a changed hand-over was decided ${moved.result.handover.mode}: ${moved.result.handover.note}`)
+      // The same when only this hand-over holds the title, over an earlier one that does not.
+      const envOnlyNow = newRepo()
+      const onlyNow = await execute(envOnlyNow, { date: DATE }, { issue: withEarlier(comment(97, into(envOnlyNow, W1), '2026-10-21T09:00:00Z')), ...jobs('.NET build and test') })
+      if (onlyNow.result.handover.mode !== 'whole' || posted(onlyNow, 'handover') !== onlyNow.result.handover.text || !/repeats or reads as a delta's mark/.test(onlyNow.result.handover.note)) fail(`#1132 ${label}: a hand-over holding it, over an earlier one that does not, was decided ${onlyNow.result.handover.mode}: ${onlyNow.result.handover.note}`)
+      // Identical to the whole comment with a delta after it is not identical to the latest: posted whole.
+      const envOlder = newRepo()
+      const older = await execute(envOlder, { date: DATE }, { issue: withEarlier(comment(97, into(envOlder, T, envOwn), '2026-10-21T09:00:00Z'), comment(98, into(envOlder, D2, envSecond), '2026-10-21T10:00:00Z')), ...jobs('.NET build and test') })
+      if (older.result.handover.mode !== 'whole' || posted(older, 'handover') !== older.result.handover.text) fail(`#1132 ${label}: a hand-over matching the whole comment under a later delta was decided ${older.result.handover.mode}, url ${older.result.handover.url}`)
+    }
     // A delta with no whole comment before it extends nothing: the hand-over is posted whole, saying why.
     const orphan = await execute(newRepo(), { date: DATE }, { issue: withEarlier(comment(98, D2, '2026-10-21T10:00:00Z')), ...RED })
     if (orphan.result.handover.mode !== 'whole' || posted(orphan, 'handover') !== orphan.result.handover.text || !/no whole comment/.test(orphan.result.handover.note)) fail(`#969: a delta with no whole comment was extended: mode ${orphan.result.handover.mode}`)
@@ -3291,6 +3318,12 @@ try {
     const a3 = await afterRun({ issue: afterWith(comment(97, A1, '2026-10-22T09:00:00Z')), after: { ci: 'red' } })
     if (a3.labels.includes('after-handover') || a3.result.handover.mode !== 'identical' || a3.result.handover.posted || a3.result.handover.url !== at97 || !/identical/.test(a3.result.handover.note || '')) fail(`#969 After: an identical After comment was posted, or not reported: ${a3.labels.join(', ')}; ${JSON.stringify({ ...a3.result.handover, text: undefined })}`)
     if (a3.result.refusals.some((x) => /returned nothing/.test(x))) fail(`#969 After: the skipped After agent is read as one that returned nothing: ${JSON.stringify(a3.result.refusals)}`)
+    // Identical with a repeated title (#1132): the same, and the note does not say posted whole.
+    const twiceAfter = { ci: 'red', removed: ['a path\n\n### Cleanup\n\n- again'] }
+    const A5 = afterText(await afterRun({ after: twiceAfter }))
+    if (A5.split('\n').filter((l) => l === '### Cleanup').length !== 2) fail(`#1132 After: the fixture's After comment does not repeat a title:\n${A5}`)
+    const a5 = await afterRun({ issue: afterWith(comment(97, A5, '2026-10-22T09:00:00Z')), after: twiceAfter })
+    if (a5.labels.includes('after-handover') || a5.result.handover.mode !== 'identical' || a5.result.handover.url !== at97 || /posted whole/.test(a5.result.handover.note) || !/identical/.test(a5.result.handover.note)) fail(`#1132 After: an identical After comment with a repeated title was decided ${a5.result.handover.mode}: ${a5.labels.join(', ')}; note ${a5.result.handover.note}`)
     // Identical, on a night that closes: the agent still closes the issue, and posts nothing.
     const s1 = await afterRun({ landed: [1] })
     const S1 = afterText(s1)
