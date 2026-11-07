@@ -134,7 +134,7 @@ Q3, Q6, Q7, Q11 and Q14 read here as its "Decided in a session" comment corrects
   addresses and actions, which summarises the plan and does not replace it:
 
   ```bash
-  terraform -chdir=<root> show -json <plan> | python3 -I -c 'import json,sys; p=json.load(sys.stdin); p["planned_values"]; p.get("errored") and sys.exit(2); [print(",".join(c["change"]["actions"]), c["address"]) for c in p.get("resource_changes", []) if c["change"]["actions"] != ["no-op"]]' | tee -a "$R"; echo "plan list show exit=${PIPESTATUS[0]} filter exit=${PIPESTATUS[1]}" | tee -a "$R"   # both 0, or stop: no whole plan was read
+  filter='import json,sys; p=json.load(sys.stdin); p["planned_values"]; p.get("errored") and sys.exit(2); [print(",".join(c["change"]["actions"]), c["address"]) for c in p.get("resource_changes", []) if c["change"]["actions"] != ["no-op"]]'; echo "\$ terraform -chdir=<root> show -json <plan> | python3 -I -c '$filter'" >> "$R"; terraform -chdir=<root> show -json <plan> | python3 -I -c "$filter" | tee -a "$R"; echo "plan list show exit=${PIPESTATUS[0]} filter exit=${PIPESTATUS[1]}" | tee -a "$R"   # both 0, or stop: no whole plan was read
   ```
 
   A wrong path, a terraform error, a state file where the plan should be (`show -json` reads either,
@@ -142,9 +142,9 @@ Q3, Q6, Q7, Q11 and Q14 read here as its "Decided in a session" comment corrects
   and the filter exits 2) prints no rows, as a plan with no changes does. So no rows are an empty list
   only under `show exit=0 filter exit=0`, and any other verdict is a rule 7 stop (#1137).
   `show -json` writes sensitive values in the clear, so its output goes into this filter and nowhere
-  else, and the line runs bare, never under `shown`. Where rule 2 stops, or a plan holds secrets,
-  the human reads it with `terraform -chdir=<root> show <plan>` in an ssh login, and it never enters
-  the chat. "Holds secrets" means in its text: the apps root's saved file carries client secrets
+  else, and the line runs bare, never under `shown`, with its command echoed into `"$R"` (#1139).
+  Where rule 2 stops, or a plan holds secrets, the human reads it with
+  `terraform -chdir=<root> show <plan>` in an ssh login, and it never enters the chat. "Holds secrets" means in its text: the apps root's saved file carries client secrets
   (rule 6), and Terraform prints them as `(sensitive value)`, so C3's and N's `shown` plans stay as
   they are. How the app renders a long plan is unproved (#1094): one hard to read there goes to ssh
   too. A plan a confirm rests on is saved, so this line has its `<plan>`: C3's, N's saved plan, secret
@@ -198,8 +198,8 @@ human is: its three checks hold wherever that is (#1090 Q11), and they live here
 
 ```bash
 shown security find-certificate -c "SPA Platform poc Local CA" /Library/Keychains/System.keychain   # exit=0, or stop: the CA is not in the System keychain
-pmset -g | awk '$1=="sleep" {s=$2; print} END {exit (s=="" || s!=0)}' | tee -a "$R"; echo "sleep exit=${PIPESTATUS[1]}"   # 0, or stop: system sleep is on
-tools/preflight.sh | awk '{print} /Container engine/ {ok=($1=="ok")} END {exit !ok}' | tee -a "$R"; echo "preflight exit=${PIPESTATUS[0]} engine exit=${PIPESTATUS[1]}"   # preflight 0: it ended ready and the account is the pin; engine 0, or stop: the Container engine row is not ok
+filter='$1=="sleep" {s=$2; print} END {exit (s=="" || s!=0)}'; echo "\$ pmset -g | awk '$filter'" >> "$R"; pmset -g | awk "$filter" | tee -a "$R"; echo "sleep exit=${PIPESTATUS[1]}" | tee -a "$R"   # 0, or stop: system sleep is on
+filter='{print} /Container engine/ {ok=($1=="ok")} END {exit !ok}'; echo "\$ tools/preflight.sh | awk '$filter'" >> "$R"; tools/preflight.sh | awk "$filter" | tee -a "$R"; echo "preflight exit=${PIPESTATUS[0]} engine exit=${PIPESTATUS[1]}" | tee -a "$R"   # preflight 0: it ended ready and the account is the pin; engine 0, or stop: the Container engine row is not ok
 git fetch origin --tags && git status --short --branch   # on main, no tracked change
 git merge --ff-only --quiet origin/main  # a call of its own: the guard admits exactly this form, --quiet allowed
 for n in 63 242 236 244 348; do

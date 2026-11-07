@@ -30,6 +30,11 @@ and runs the skill's own two lines over it through the prelude.
 `SkillCountsTheWatchsLines` runs the confirm's own block and then the two lines over what it leaves:
 a count of 0, an earlier attempt's log kept whole, and a log as private as the one the watch creates.
 
+**Stage 0's lines in the record (#1139).** `SkillRecordsStage0sLines` runs the skill's `pmset` and
+preflight lines as written, against doubles, and reads the record for each line's command, output and
+verdict; the plan list's cases read its first record line the same way. Rule 6 says the record holds
+every command and every output, and a bare pipeline keeps that only by echoing itself.
+
 **The plans a confirm reads (#1136).** The route's plan list reads a saved file, and N's plans saved
 none. `SkillSavesThePlansItsConfirmsRead` runs N's two blocks and the list through the prelude against
 a double of terraform, runs the list over a refresh-only plan's shape, and reads the prose that joins
@@ -401,7 +406,7 @@ class SkillSavesThePlansItsConfirmsRead(Sitting):
     def plan_list(self) -> str:
         """The route's plan list, the one line of it in the skill."""
         listed = [line.strip() for line in self.text.splitlines()
-                  if line.strip().startswith("terraform -chdir=<root> show -json <plan>")]
+                  if "; terraform -chdir=<root> show -json <plan> | python3" in line]
         self.assertEqual(len(listed), 1, f"SKILL.md should hold one plan list: {listed}")
         return listed[0]
 
@@ -493,7 +498,7 @@ class SkillSavesThePlansItsConfirmsRead(Sitting):
     def test_a_failed_show_prints_no_rows_and_a_verdict_naming_it(self) -> None:
         done, record = self.run_list("terraform() { echo 'Error: no such file' >&2; return 3; }")
         self.assertEqual(done.stdout.splitlines(), ["plan list show exit=3 filter exit=1"], done.stderr)
-        self.assertEqual(record.splitlines(), ["plan list show exit=3 filter exit=1"])
+        self.assertEqual(record.splitlines()[1:], ["plan list show exit=3 filter exit=1"])
 
     def test_output_that_is_not_json_is_the_filters_failure(self) -> None:
         done, _ = self.run_list("terraform() { echo 'not json'; }")
@@ -514,7 +519,7 @@ class SkillSavesThePlansItsConfirmsRead(Sitting):
         ]}
         done, record = self.run_list(f"terraform() {{ printf '%s' '{json.dumps(plan)}'; }}")
         self.assertEqual(done.stdout.splitlines(), ["plan list show exit=0 filter exit=2"], done.stderr)
-        self.assertEqual(record.splitlines(), ["plan list show exit=0 filter exit=2"])
+        self.assertEqual(record.splitlines()[1:], ["plan list show exit=0 filter exit=2"])
 
     def test_a_read_plan_lists_its_changes_and_the_record_holds_them_with_the_verdict(self) -> None:
         plan = {"planned_values": {}, "resource_changes": [
@@ -523,7 +528,19 @@ class SkillSavesThePlansItsConfirmsRead(Sitting):
         ]}
         done, record = self.run_list(f"terraform() {{ printf '%s' '{json.dumps(plan)}'; }}")
         self.assertEqual(done.stdout.splitlines(), ["delete,create aws_a.b", self.VERDICT_READ], done.stderr)
-        self.assertEqual(record.splitlines(), ["delete,create aws_a.b", self.VERDICT_READ])
+        self.assertEqual(record.splitlines()[1:], ["delete,create aws_a.b", self.VERDICT_READ])
+
+    def test_the_record_opens_on_the_command_as_it_ran_and_the_chat_is_not_given_it(self) -> None:
+        plan = {"planned_values": {}, "resource_changes": []}
+        self.pin(utc_day(-1) + "\n")
+        line = self.plan_list().replace("<root>", "infra/envs/poc/apps").replace("<plan>", '"$P/n.tfplan"')
+        double = f"P=/private/dir\nterraform() {{ echo \"$*\" >&2; printf '%s' '{json.dumps(plan)}'; }}"
+        done = self.bash(f"{SOURCE}\n{double}\n{line}\n")
+        record = (self.repo / PIN).with_name(f"{utc_day(-1)}.log").read_text().splitlines()
+        self.assertEqual(done.stdout.splitlines(), [self.VERDICT_READ], done.stderr)
+        self.assertRegex(record[0], r"^\$ terraform -chdir=infra/envs/poc/apps show -json /private/dir/n\.tfplan "
+                                    r"\| python3 -I -c 'import json,sys; .*'$")
+        self.assertIn("-chdir=infra/envs/poc/apps show -json /private/dir/n.tfplan", done.stderr)
 
     def test_a_plan_with_no_changes_is_an_empty_list_under_a_passing_verdict(self) -> None:
         plan = {"planned_values": {}, "resource_changes": [{"address": "aws_kept.same", "change": {"actions": ["no-op"]}}]}
@@ -534,6 +551,74 @@ class SkillSavesThePlansItsConfirmsRead(Sitting):
         self.assertIn("# both 0, or stop:", self.plan_list())
         route = " ".join(self.between("- **Plans (#1090 Q7).**", "- **A lost `claude`").split())
         self.assertIn("any other verdict is a rule 7 stop (#1137)", route)
+
+
+class SkillRecordsStage0sLines(Sitting):
+    """Rule 6's record holds Stage 0's two pipelines and their verdicts, as it holds a `shown` line's (#1139).
+
+    Run as the skill holds them, under the prelude, against doubles of what they read, so no case
+    depends on this machine's sleep setting or its preflight.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.skill = SKILL_FILES[0].read_text().splitlines()
+        self.pin(utc_day(-1) + "\n")
+
+    def run_line(self, marker: str, double: str = "") -> tuple[subprocess.CompletedProcess, list[str]]:
+        """The one skill line naming the pipeline; what it did and the record's lines."""
+        found = [line for line in self.skill if marker in line]
+        self.assertEqual(len(found), 1, f"SKILL.md should hold one line with {marker!r}: {found}")
+        done = self.bash(f"{SOURCE}\n{double}\n{found[0]}\n")
+        return done, (self.repo / PIN).with_name(f"{utc_day(-1)}.log").read_text().splitlines()
+
+    def pmset(self, row: str) -> tuple[subprocess.CompletedProcess, list[str]]:
+        double = f"pmset() {{ printf '%s\\n' 'Currently in use:' '{row}' ' hibernatemode 3'; }}"
+        return self.run_line("; pmset -g | awk", double)
+
+    def preflight(self, row: str, code: int) -> tuple[subprocess.CompletedProcess, list[str]]:
+        script = self.repo / "tools" / "preflight.sh"
+        script.write_text(f"#!/bin/bash\nprintf '%s\\n' 'ok    AWS account' '{row}'\nexit {code}\n")
+        script.chmod(0o755)
+        return self.run_line("; tools/preflight.sh | awk")
+
+    def test_the_sleep_line_records_its_command_its_row_and_its_verdict(self) -> None:
+        done, record = self.pmset(" sleep                0 (sleep prevented by Claude)")
+        self.assertEqual(done.stdout.splitlines(), [" sleep                0 (sleep prevented by Claude)", "sleep exit=0"],
+                         done.stderr)
+        self.assertEqual(len(record), 3, record)
+        self.assertRegex(record[0], r"""^\$ pmset -g \| awk '\$1=="sleep" \{.*\}'$""")
+        self.assertEqual(record[1:], [" sleep                0 (sleep prevented by Claude)", "sleep exit=0"])
+
+    def test_system_sleep_on_is_a_failing_verdict_in_the_record(self) -> None:
+        done, record = self.pmset(" sleep                1")
+        self.assertEqual(done.stdout.splitlines()[-1], "sleep exit=1", done.stderr)
+        self.assertEqual(record[-1], "sleep exit=1")
+
+    def test_no_sleep_row_is_a_failing_verdict_in_the_record(self) -> None:
+        done, record = self.pmset(" standby              1")
+        self.assertEqual(done.stdout.splitlines(), ["sleep exit=1"], done.stderr)
+        self.assertEqual(record[1:], ["sleep exit=1"])
+
+    def test_the_preflight_line_records_its_command_its_rows_and_its_verdict(self) -> None:
+        row = "ok    Container engine  docker server 29"
+        done, record = self.preflight(row, 0)
+        self.assertEqual(done.stdout.splitlines(), ["ok    AWS account", row, "preflight exit=0 engine exit=0"], done.stderr)
+        self.assertEqual(len(record), 4, record)
+        self.assertRegex(record[0], r"""^\$ tools/preflight\.sh \| awk '\{print\} /Container engine/ .*'$""")
+        self.assertEqual(record[1:], ["ok    AWS account", row, "preflight exit=0 engine exit=0"])
+
+    def test_the_preflight_verdict_keeps_each_exit_apart_in_the_record(self) -> None:
+        done, record = self.preflight("later Container engine  no engine", 3)
+        self.assertEqual(done.stdout.splitlines()[-1], "preflight exit=3 engine exit=1", done.stderr)
+        self.assertEqual(record[-1], "preflight exit=3 engine exit=1")
+
+    def test_the_awk_program_recorded_is_the_one_that_ran(self) -> None:
+        # The recorded text comes from the variable the pipeline runs, so a double of awk can compare them.
+        double = ("awk() { echo \"$1\" >&2; command awk \"$1\"; }\n"
+                  "pmset() { echo ' sleep 0'; }")
+        done, record = self.run_line("; pmset -g | awk", double)
+        self.assertEqual(record[0], f"$ pmset -g | awk '{done.stderr.strip()}'")
 
 
 class SkillGivesEachSittingItsOwnWayOutOfALostClaude(unittest.TestCase):
