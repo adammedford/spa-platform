@@ -20,13 +20,20 @@ git reads no configuration of the machine's.
 **The skill's text.** The third class reads the wiz skill's two files from this checkout and holds
 that no line of the prelude's commands is copied into them, so the file stays the one copy.
 
-Checkout inputs: .claude/skills/wiz/*.md .gitignore tests/e2e/Program.cs
+**Row 2's number (#1088).** D2's `awk` and `grep` count the sitting browser's lines and the skill
+writes the tokens they match by hand, so renaming a token left them printing 0 sign-outs on a roll
+that signed the browser out, and the row read as failed. The fourth class reads the tokens, the log's
+name and the watch's flags from tests/e2e/SittingBrowser/, builds a log out of those tokens, and runs
+the skill's own two lines over it through the prelude.
+
+Checkout inputs: .claude/skills/wiz/*.md .gitignore tests/e2e/Program.cs tests/e2e/SittingBrowser/Observations.cs tests/e2e/SittingBrowser/ObservationLine.cs tests/e2e/SittingBrowser/SittingBrowser.cs tests/e2e/SittingBrowser/SittingCommand.cs
 """
 from __future__ import annotations
 
 import datetime
 import os
 import pathlib
+import re
 import shutil
 import subprocess
 import tempfile
@@ -41,6 +48,7 @@ COPIED = (".gitignore", "tools/wiz_prelude.sh", "tools/aws-project.env", "tools/
 SKILL_FILES = (ROOT / ".claude" / "skills" / "wiz" / "SKILL.md", ROOT / ".claude" / "skills" / "wiz" / "a-and-b.md")
 PIN = ".scratch/sitting/log/date"
 SOURCE = ". tools/wiz_prelude.sh"
+SITTING_BROWSER = ROOT / "tests" / "e2e" / "SittingBrowser"
 
 
 def utc_day(offset: int = 0) -> str:
@@ -217,6 +225,78 @@ class SkillHoldsNoCopy(unittest.TestCase):
         for name, n, line in self.skill_lines():
             for code in commands:
                 self.assertNotIn(code, line, f"{name}:{n} copies the prelude")
+
+
+class SkillCountsTheWatchsLines(Sitting):
+    """D2's lines decide row 2's number, so they are run over a log made of the source's own tokens (#1088)."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        source = (SITTING_BROWSER / "Observations.cs").read_text()
+        self.tokens = dict(re.findall(r'public const string (\w+Token) = "([^"]+)";', source))
+        listed = re.search(r"NavigationTokens = \[([^\]]*)\]", source)
+        self.assertIsNotNone(listed, "Observations.cs has no NavigationTokens list")
+        self.navigation = [self.tokens[name.strip()] for name in listed.group(1).split(",")]
+        browser = (SITTING_BROWSER / "SittingBrowser.cs").read_text()
+        self.watch_log = re.search(r'WatchLog = "([^"]+)"', browser).group(1)
+        self.skill = SKILL_FILES[0].read_text().splitlines()
+
+    def skill_line(self, start: str, end: str = "") -> str:
+        found = [line for line in self.skill if line.startswith(start) and line.endswith(end)]
+        self.assertEqual(len(found), 1, f"SKILL.md should hold one line starting {start!r}, ending {end!r}: {found}")
+        return found[0]
+
+    def run_over_log(self, tool: str, tokens: list[str]) -> tuple[list[str], list[str]]:
+        """The skill's line for the tool, run through the prelude; the log it read and what it printed."""
+        line = self.skill_line(f"shown {tool} ", f'"$E/{self.watch_log}"')
+        day = utc_day(-1)
+        self.pin(day + "\n")
+        bundle = self.repo / ".scratch" / "sitting" / "log" / day
+        bundle.mkdir(parents=True, exist_ok=True)
+        lines = [f"{token:<{self.token_width()}} 2026-11-07T00:00:{n:02}Z main app=app1 revision=7 instance=i-1"
+                 for n, token in enumerate(tokens)]
+        (bundle / self.watch_log).write_text("".join(item + "\n" for item in lines))
+        done = self.bash(f"{SOURCE} && {line}")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        return lines, done.stdout.splitlines()
+
+    @staticmethod
+    def token_width() -> int:
+        return int(re.search(r"TokenWidth = (\d+);", (SITTING_BROWSER / "ObservationLine.cs").read_text()).group(1))
+
+    def test_the_awk_counts_a_repeated_prompt_once_and_nothing_else_as_a_sign_out(self) -> None:
+        signed_in, prompt = self.tokens["SignedInToken"], self.tokens["LoginPromptToken"]
+        others = [token for token in self.navigation if token not in (signed_in, prompt)]
+        # Two sign-outs: a prompt repeated after a failed login is one (#1025 Q3), and every other
+        # token in between is missing coverage, which neither counts nor ends a sign-out.
+        _, printed = self.run_over_log("awk", [signed_in, prompt, prompt, *others, prompt, signed_in, *others, prompt])
+        self.assertEqual(printed, ["2", "exit=0"])
+
+    def test_the_grep_prints_every_navigation_line_but_signed_in(self) -> None:
+        signed_in = self.tokens["SignedInToken"]
+        self.assertIn(signed_in, self.navigation)
+        lines, printed = self.run_over_log("grep", self.navigation)
+        self.assertEqual(printed, [line for line in lines if not line.startswith(signed_in + " ")] + ["exit=0"])
+
+    def test_a_line_starts_with_its_token_then_a_space_as_both_read_it(self) -> None:
+        source = (SITTING_BROWSER / "ObservationLine.cs").read_text()
+        self.assertIn("line.Append(token.PadRight(TokenWidth)).Append(' ')", source)
+
+    def test_the_watch_and_unwatch_lines_use_the_commands_verbs_and_flags(self) -> None:
+        source = (SITTING_BROWSER / "SittingCommand.cs").read_text()
+        verbs = dict(re.findall(r'public const string (Watch|Unwatch) = "([^"]+)";', source))
+        self.skill_line(f"shown sitting_browser {verbs['Unwatch']} ")
+        watch = self.skill_line(f"shown sitting_browser {verbs['Watch']} ").split(" # ")[0]
+        flags = re.findall(r"--[a-z-]+", watch)
+        # Without these two the watch neither clears a provider session that hides a sign-out (#1012)
+        # nor logs in again after one, so the count reads low.
+        for needed in ("--clear-provider", "--relogin"):
+            self.assertIn(needed, flags)
+        allowed = re.search(r"\bWatch => \(\[([^\]]*)\]", source)
+        self.assertIsNotNone(allowed, "SittingCommand.cs has no shape for watch")
+        for flag in flags:
+            self.assertIn(f'"{flag}"', allowed.group(1), f"watch refuses {flag}")
+            self.assertRegex(source, rf'options\.(ContainsKey|GetValueOrDefault)\("{flag}"\)', f"watch ignores {flag}")
 
 
 if __name__ == "__main__":
