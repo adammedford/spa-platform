@@ -1462,11 +1462,16 @@ const utf8Bytes = (s) => { let n = 0; for (const ch of String(s)) { const cp = c
 // the body ends in (tail) and the body is given exactly that many; every other byte is still held.
 const restoreTail = (c, ix) => c && ix && typeof ix.tail === 'number' && typeof c.body === 'string'
   ? { ...c, body: c.body.replace(/\n+$/, '') + '\n'.repeat(ix.tail) } : c
-const bodyFault = (c, ix) => {
+// The body held to the index is the restored one, and a count in the refusal names what the reader returned
+// (#1097): a diagnosis reads that number (#1084), and 262 returned that restores to 261 is no "262, 262".
+const bodyFault = (c, ix, returned) => {
   if (!c || !ix) return 'the index has no such comment'
   const body = String(c.body || '')
   const bytes = utf8Bytes(body)
-  if (bytes !== ix.bytes) return `${bytes} bytes returned, ${ix.bytes} in the index`
+  if (bytes !== ix.bytes) {
+    const got = utf8Bytes(String(returned.body || ''))
+    return `${got} bytes returned, ${got === bytes ? '' : `${bytes} with its trailing newlines set to the index's ${ix.tail}, `}${ix.bytes} in the index`
+  }
   if (Array.from(body).slice(0, HEAD_CHARS).join('') !== String(ix.head || '')) return 'its first characters differ from the index'
   return ''
 }
@@ -1996,11 +2001,11 @@ const earlierHandovers = async (issue, index, heading) => {
   const bad = []
   for (let j = 0; j < read.length; j++) {
     let c = restoreTail(got[j], index[read[j]])
-    let fault = bodyFault(c, index[read[j]])
+    let fault = bodyFault(c, index[read[j]], got[j])
     for (let tries = 1; fault && tries <= READ_RETRIES; tries++) {
       const again = await run(batchPrompt(issue, [read[j]], 'for the hand-over (#969). You read; the script compares this pass\'s hand-over with them.') + RETRY_NOTE, { label: `handover-read-retry${tries}`, phase: 'Hand-over', schema: COMMENTS_BATCH })
       const rc = again && !again.error && (again.comments || []).length === 1 && again.comments[0].url === urls[j] ? again.comments[0] : null
-      if (rc) { c = restoreTail(rc, index[read[j]]); fault = bodyFault(c, index[read[j]]) }
+      if (rc) { c = restoreTail(rc, index[read[j]]); fault = bodyFault(c, index[read[j]], rc) }
     }
     if (fault) bad.push(`${urls[j]} after ${READ_RETRIES} re-reads: ${fault}`)
     bodies.push(c)
@@ -2074,11 +2079,11 @@ const applyAnswers = async ({ date, issue, gate, refusals, reuse, after = false 
       // still differs is named, never sorted.
       for (let j = 0; j < b.at.length; j++) {
         let c = restoreTail(g.comments[j], index[b.at[j]])
-        let why = bodyFault(c, index[b.at[j]])
+        let why = bodyFault(c, index[b.at[j]], g.comments[j])
         for (let tries = 1; why && tries <= READ_RETRIES; tries++) {
           const r = await run(batchPrompt(issue, [b.at[j]]) + RETRY_NOTE, { label: `comments-batch:${k + 1}-retry${tries}`, phase: 'Apply', schema: COMMENTS_BATCH })
           const rc = r && !r.error && (r.comments || []).length === 1 && r.comments[0].url === b.urls[j] ? r.comments[0] : null
-          if (rc) { c = restoreTail(rc, index[b.at[j]]); why = bodyFault(c, index[b.at[j]]) }
+          if (rc) { c = restoreTail(rc, index[b.at[j]]); why = bodyFault(c, index[b.at[j]], rc) }
         }
         if (why) bad.push(`${b.urls[j]} was not returned as the index shows it after ${READ_RETRIES} re-reads: ${why}`)
         else comments.push(c)

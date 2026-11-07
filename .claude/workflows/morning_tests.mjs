@@ -354,12 +354,14 @@ function stub(env, scriptArgs, served) {
         // served.handoverMangle: a reader that drops each body's last character, as a changed read would;
         // 'newline': one that drops one trailing newline and nothing else (#1084); 'reread-newline': one
         // whose first read rewrites a body's first character, which no restore clears, and whose re-read
-        // drops one trailing newline and nothing else (#1096).
+        // drops one trailing newline and nothing else (#1096); 'cut-newline': one that drops a body's last
+        // character before its newlines and one of those newlines, on every read (#1097).
         const issue = served.issue === undefined ? issueWith([...QUESTIONS, CONFIRM]) : served.issue
         const at = /\.comments\[([\d,]+)\]/.exec(prompt)[1].split(',').map(Number)
         const retried = /-retry\d+$/.test(label)
         const dropNewline = served.handoverMangle === 'newline' || (served.handoverMangle === 'reread-newline' && retried)
-        const bend = (c) => dropNewline ? { ...c, body: c.body.replace(/\n$/, '') }
+        const bend = (c) => served.handoverMangle === 'cut-newline' ? { ...c, body: c.body.replace(/[^\n](\n*)\n$/, '$1') }
+          : dropNewline ? { ...c, body: c.body.replace(/\n$/, '') }
           : served.handoverMangle === 'reread-newline' ? { ...c, body: '=' + c.body.slice(1) }
             : served.handoverMangle ? { ...c, body: c.body.slice(0, -1) } : c
         out = { comments: at.map((i) => issue.comments[i]).map(bend), error: '' }
@@ -374,11 +376,15 @@ function stub(env, scriptArgs, served) {
         // rewrites its first character (same bytes, another head), 'tail' drops its last non-newline
         // character, past the head. 'newline' drops one trailing newline from every body, as the reader did on #1071 (#1084).
         // 'reread-newline' drops the marker on the first read, as 'first' does, and one trailing newline
-        // on a re-read and nothing else (#1096).
+        // on a re-read and nothing else (#1096). 'cut-newline' and 'refill' change comment 1 on every read so
+        // that what the reader returned and what the restore makes of it differ (#1097): 'cut-newline' drops its
+        // last character before its newlines and one of those newlines, 'refill' swaps that character for a newline.
         const retried = /-retry\d+$/.test(label)
         const marker = (c) => (served.mangle === 'always' || ((served.mangle === 'first' || served.mangle === 'reread-newline') && !retried)) ? { ...c, body: c.body.replace(/\*\*Q\d+\.\*\* /, '') } : c
         const mangled = (c) => c.url.endsWith('#issuecomment-1') && served.mangle === 'head' ? { ...c, body: '=' + c.body.slice(1) }
           : c.url.endsWith('#issuecomment-1') && served.mangle === 'tail' ? { ...c, body: c.body.replace(/(.)(\n*)$/s, '$2') }
+          : c.url.endsWith('#issuecomment-1') && served.mangle === 'cut-newline' ? { ...c, body: c.body.replace(/[^\n](\n*)\n$/, '$1') }
+          : c.url.endsWith('#issuecomment-1') && served.mangle === 'refill' ? { ...c, body: c.body.replace(/[^\n](\n*)$/, '$1\n') }
           : served.mangle === 'newline' || (served.mangle === 'reread-newline' && retried) ? { ...c, body: c.body.replace(/\n$/, '') } : marker(c)
         out = { comments: at.map((i) => mangled(issue.comments[served.batchSwap ? (i + 1) % issue.comments.length : i])), error: '' }
       } else if (label === 'verify') {
@@ -2074,6 +2080,22 @@ try {
     if (!head.result.refusals.some((x) => /#issuecomment-1 was not returned .*: its first characters differ from the index/.test(x))) fail(`a body with the same bytes and another head: not refused: ${JSON.stringify(head.result.refusals)}`)
     const tail = await execute(newRepo(), { date: DATE }, { mangle: 'tail' })
     if (!tail.result.refusals.some((x) => /#issuecomment-1 was not returned .*: \d+ bytes returned, \d+ in the index/.test(x))) fail(`a body with the same head and another length: not refused: ${JSON.stringify(tail.result.refusals)}`)
+    // The refusal's first count is what the reader returned, not what the restore made of it (#1097; #1084's
+    // diagnosis rested on that number). 260 returned of 262 with tail 2 restores to 261; a return of 262 that
+    // restores to 261 would otherwise read as 262 against 262. A fault no restore touched keeps the two-count
+    // form the 'tail' case above holds. The last read's fault is the one named, so a reader that answers no
+    // re-read names the first read's.
+    const sized = comment(1, `## Questions: ${cite(300)}, issue-300, First ticket\n\n**Q1.** Sized?\nRecommended: Yes.\n${PRE}\n\n`.padEnd(260, 'x') + '\n\n', '2026-10-21T06:00:00Z')
+    if (Buffer.byteLength(sized.body) !== 262 || !sized.body.endsWith('x\n\n')) fail(`#1097: the fixture is ${Buffer.byteLength(sized.body)} bytes, not 262 ending in two newlines`)
+    const sizedIssue = issueWith([sized, ...QUESTIONS.slice(1), CONFIRM])
+    for (const [why, served, count] of [
+      ['a re-read that returns 260 of 262', { mangle: 'cut-newline' }, `: 260 bytes returned, 261 with its trailing newlines set to the index\'s 2, 262 in the index`],
+      ['a first read that returns 260 of 262', { mangle: 'cut-newline', nothingFrom: ['comments-batch:1-retry1', 'comments-batch:1-retry2'] }, `: 260 bytes returned, 261 with its trailing newlines set to the index\'s 2, 262 in the index`],
+      ['a read that returns 262 of 262 and restores to 261', { mangle: 'refill' }, `: 262 bytes returned, 261 with its trailing newlines set to the index\'s 2, 262 in the index`],
+    ]) {
+      const r = await execute(newRepo(), { date: DATE }, { issue: sizedIssue, ...served })
+      if (!r.result.refusals.some((x) => x.includes(`${URL(ISSUE)}#issuecomment-1 was not returned`) && x.includes(count))) fail(`#1097: ${why}: the refusal does not read "${count}": ${JSON.stringify(r.result.refusals)}`)
+    }
     // A reader that drops one trailing newline (#1071, #1084): the index counts the newlines a body ends in
     // and the script gives the body them back, with no re-read. A body that differs elsewhere is still refused.
     const withNewlines = issueWith([...QUESTIONS, { ...CONFIRM, body: CONFIRM.body + '\n\n' }])
@@ -3223,6 +3245,17 @@ try {
     // A reader that drops one trailing newline is given it back, as Apply's are (#1084): no re-read, no refusal.
     const lostLine = await execute(newRepo(), { date: DATE }, { issue: withEarlier(comment(97, W1 + '\n', '2026-10-21T09:00:00Z')), ...RED, handoverMangle: 'newline' })
     if (lostLine.result.handover.mode === 'whole' || lostLine.result.refusals.some((x) => /earlier hand-over/.test(x)) || lostLine.labels.some((l) => /^handover-read-retry/.test(l))) fail(`#969: a reader that drops a trailing newline of the earlier hand-over was refused or re-read: mode ${lostLine.result.handover.mode}, ${lostLine.labels.join(', ')}`)
+    // The refusal counts what the reader returned, at both read sites here too (#1097).
+    const tailed = W1.replace(/\n*$/, '') + '\n\n'
+    const tailedBytes = Buffer.byteLength(tailed)
+    for (const [why, served] of [
+      ['a re-read', {}],
+      ['a first read', { nothingFrom: ['handover-read-retry1', 'handover-read-retry2'] }],
+    ]) {
+      const r = await execute(newRepo(), { date: DATE }, { issue: withEarlier(comment(97, tailed, '2026-10-21T09:00:00Z')), ...RED, handoverMangle: 'cut-newline', ...served })
+      const count = `: ${tailedBytes - 2} bytes returned, ${tailedBytes - 1} with its trailing newlines set to the index's 2, ${tailedBytes} in the index`
+      if (!r.result.refusals.some((x) => /earlier hand-over/.test(x) && x.includes(count))) fail(`#1097: ${why} of the earlier hand-over: the refusal does not read "${count}": ${JSON.stringify(r.result.refusals)}`)
+    }
     // The re-read's own restore (#1096): a first read with another fault, and a re-read that drops a trailing newline.
     const relostLine = await execute(newRepo(), { date: DATE }, { issue: withEarlier(comment(97, W1 + '\n', '2026-10-21T09:00:00Z')), ...RED, handoverMangle: 'reread-newline' })
     if (!relostLine.labels.includes('handover-read-retry1')) fail(`#969: the first read's fault sent the earlier hand-over to no re-read: ${relostLine.labels.join(', ')}`)
