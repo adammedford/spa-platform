@@ -219,8 +219,8 @@ public sealed class SessionCookies
     public override string ToString() => "[cookies]";
 }
 
-/// <summary>A gateway task as one <c>describe-tasks</c> read gives it.</summary>
-public sealed record EcsTaskState(string Id, string LastStatus, string DesiredStatus, DateTimeOffset? StartedAt, DateTimeOffset? StoppedAt, string? Digest)
+/// <summary>A gateway task as one <c>describe-tasks</c> read gives it; <see cref="Revision"/> is its task definition as family:revision.</summary>
+public sealed record EcsTaskState(string Id, string LastStatus, string DesiredStatus, DateTimeOffset? StartedAt, DateTimeOffset? StoppedAt, string? Digest, string? Revision)
 {
     public EcsTask Task => new(Id, StartedAt, StoppedAt, Digest);
 }
@@ -228,7 +228,8 @@ public sealed record EcsTaskState(string Id, string LastStatus, string DesiredSt
 /// <summary>
 /// What the continuity rows read and pull on ECS, through the AWS CLI: the gateway service's tasks
 /// with their states, timestamps and image digests (row 6, Q146), and row 4's <c>stop-task</c>
-/// (Q140, Q145), which drains (#348 Q21).
+/// (Q140, Q145), which drains (#348 Q21). <see cref="CellAws.RunningTasksAsync"/> reads the service's
+/// tasks through it (#873), so the two share one list and one describe.
 /// </summary>
 public sealed class ContinuityEcs(Cell cell, ICommandRunner runner)
 {
@@ -263,7 +264,8 @@ public sealed class ContinuityEcs(Cell cell, ICommandRunner runner)
             task.TryGetProperty("containers", out JsonElement containers)
                 ? containers.EnumerateArray().Where(c => c.GetProperty("name").GetString() == GatewayContainer)
                     .Select(c => c.TryGetProperty("imageDigest", out JsonElement digest) ? digest.GetString() : null).FirstOrDefault()
-                : null))];
+                : null,
+            task.TryGetProperty("taskDefinitionArn", out JsonElement definition) ? AfterLast(definition.GetString()!) : null))];
     }
 
     /// <summary>

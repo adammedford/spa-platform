@@ -5,8 +5,9 @@ using Gateway.TestHarness;
 namespace Gateway.E2ETests.Deployed;
 
 /// <summary>
-/// The deployed stack's two reads from AWS (#209), through the AWS CLI, against a recorded runner: a
-/// test user's password from Parameter Store, and the gateway's log lines from CloudWatch Logs.
+/// The deployed stack's reads from AWS (#209), through the AWS CLI, against a recorded runner: a test
+/// user's password from Parameter Store, the gateway's log lines from CloudWatch Logs, the live
+/// registry, and the gateway service's running tasks and deployments from ECS (#873).
 /// </summary>
 public sealed class CellAwsTests
 {
@@ -130,35 +131,104 @@ public sealed class CellAwsTests
             () => aws.ReleaseOfAsync("app3", TestContext.Current.CancellationToken))).Message, StringComparison.Ordinal);
     }
 
+    private const string TaskArnA = "arn:aws:ecs:us-east-1:111122223333:task/spa-poc/0a1b2c3d4e5f";
+    private const string TaskArnB = "arn:aws:ecs:us-east-1:111122223333:task/spa-poc/9f8e7d6c5b4a";
+    private const string TaskDefinitionArn = "arn:aws:ecs:us-east-1:111122223333:task-definition/spa-platform-poc:4";
+
+    private static string Described(string arn, string startedAt = "2026-10-21T02:00:00.123000+00:00") =>
+        $$"""{"taskArn":"{{arn}}","taskDefinitionArn":"{{TaskDefinitionArn}}","startedAt":"{{startedAt}}","lastStatus":"RUNNING","desiredStatus":"RUNNING"}""";
+
+    private static RecordedRunner Tasks(string[] arns, params string[] described) => new(arguments => arguments[1] == "list-tasks"
+        ? JsonSerializer.Serialize(new { taskArns = arns })
+        : $$"""{"tasks":[{{string.Join(',', described)}}],"failures":[]}""");
+
     [Fact]
-    public async Task The_running_task_is_the_services_one_running_task_by_id_revision_and_start_with_no_account_in_it()
+    public async Task The_running_tasks_are_the_services_set_by_id_revision_and_start_with_no_account_in_it()
     {
-        RecordedRunner runner = new(arguments => arguments[1] == "list-tasks"
-            ? """{"taskArns":["arn:aws:ecs:us-east-1:111122223333:task/spa-poc/0a1b2c3d4e5f"]}"""
-            : """{"tasks":[{"taskArn":"arn:aws:ecs:us-east-1:111122223333:task/spa-poc/0a1b2c3d4e5f","taskDefinitionArn":"arn:aws:ecs:us-east-1:111122223333:task-definition/spa-platform-poc:4","startedAt":"2026-10-21T02:00:00.123000+00:00","lastStatus":"RUNNING"}],"failures":[]}""");
+        // Two tasks are a two-task cell's steady state (infra/modules/cell/ecs.tf, desired_count), so the read does not refuse them (#873).
+        RecordedRunner runner = Tasks([TaskArnA, TaskArnB], Described(TaskArnA), Described(TaskArnB, "2026-10-21T02:01:00+00:00"));
         CellAws aws = new(Cell, runner);
 
-        RunningTask task = await aws.RunningTaskAsync(TestContext.Current.CancellationToken);
+        IReadOnlySet<RunningTask> tasks = await aws.RunningTasksAsync(TestContext.Current.CancellationToken);
 
-        Assert.Equal(new RunningTask("0a1b2c3d4e5f", "spa-platform-poc:4", new DateTimeOffset(2026, 10, 21, 2, 0, 0, 123, TimeSpan.Zero)), task);
-        Assert.DoesNotContain("111122223333", task.ToString(), StringComparison.Ordinal);
+        RunningTask[] expected =
+        [
+            new("0a1b2c3d4e5f", "spa-platform-poc:4", new DateTimeOffset(2026, 10, 21, 2, 0, 0, 123, TimeSpan.Zero)),
+            new("9f8e7d6c5b4a", "spa-platform-poc:4", new DateTimeOffset(2026, 10, 21, 2, 1, 0, TimeSpan.Zero)),
+        ];
+        Assert.True(tasks.SetEquals(expected), $"read {string.Join("; ", tasks)}");
+        Assert.All(tasks, task => Assert.DoesNotContain("111122223333", task.ToString(), StringComparison.Ordinal));
         Assert.Equal(
             [["ecs", "list-tasks", "--cluster", "spa-poc", "--service-name", "gateway", "--desired-status", "RUNNING", "--output", "json", "--region", "us-east-1"],
-             ["ecs", "describe-tasks", "--cluster", "spa-poc", "--tasks", "arn:aws:ecs:us-east-1:111122223333:task/spa-poc/0a1b2c3d4e5f", "--output", "json", "--region", "us-east-1"]],
+             ["ecs", "describe-tasks", "--cluster", "spa-poc", "--tasks", "0a1b2c3d4e5f", "9f8e7d6c5b4a", "--output", "json", "--region", "us-east-1"]],
             runner.Calls.Select(call => call.Arguments));
     }
 
-    [Theory]
-    [InlineData("""{"taskArns":[]}""", "0")]
-    [InlineData("""{"taskArns":["arn:aws:ecs:us-east-1:111122223333:task/spa-poc/a","arn:aws:ecs:us-east-1:111122223333:task/spa-poc/b"]}""", "2")]
-    public async Task A_service_without_exactly_one_running_task_is_refused_since_its_identity_is_then_no_one_tasks(string listed, string count)
+    [Fact]
+    public async Task One_running_task_is_a_set_of_one()
     {
-        // During a deployment the old and the new task both run (#207), and before and after would then compare two different things.
-        CellAws aws = new(Cell, new RecordedRunner(_ => listed));
+        IReadOnlySet<RunningTask> tasks = await new CellAws(Cell, Tasks([TaskArnA], Described(TaskArnA))).RunningTasksAsync(TestContext.Current.CancellationToken);
 
-        InvalidOperationException refused = await Assert.ThrowsAsync<InvalidOperationException>(() => aws.RunningTaskAsync(TestContext.Current.CancellationToken));
-        Assert.Contains($"{count} running tasks", refused.Message, StringComparison.Ordinal);
+        Assert.Equal(new RunningTask("0a1b2c3d4e5f", "spa-platform-poc:4", new DateTimeOffset(2026, 10, 21, 2, 0, 0, 123, TimeSpan.Zero)), Assert.Single(tasks));
+    }
+
+    [Fact]
+    public async Task No_running_task_is_the_empty_set_and_the_read_refuses_nothing()
+    {
+        // What an empty set means is the caller's: the onboarding's steadiness and the clean-up's wait each refuse it.
+        RecordedRunner runner = Tasks([]);
+
+        Assert.Empty(await new CellAws(Cell, runner).RunningTasksAsync(TestContext.Current.CancellationToken));
+        Assert.Single(runner.Calls);
+    }
+
+    [Fact]
+    public async Task A_task_not_yet_running_is_not_in_the_set()
+    {
+        // list-tasks --desired-status RUNNING lists pending tasks too, which have no startedAt: https://docs.aws.amazon.com/cli/latest/reference/ecs/list-tasks.html
+        string pending = $$"""{"taskArn":"{{TaskArnB}}","taskDefinitionArn":"{{TaskDefinitionArn}}","lastStatus":"PENDING","desiredStatus":"RUNNING"}""";
+
+        IReadOnlySet<RunningTask> tasks = await new CellAws(Cell, Tasks([TaskArnA, TaskArnB], Described(TaskArnA), pending)).RunningTasksAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal("0a1b2c3d4e5f", Assert.Single(tasks).TaskId);
+    }
+
+    [Theory]
+    [InlineData("startedAt", """{"taskArn":"arn:aws:ecs:us-east-1:111122223333:task/spa-poc/a","taskDefinitionArn":"arn:aws:ecs:us-east-1:111122223333:task-definition/spa-platform-poc:4","lastStatus":"RUNNING","desiredStatus":"RUNNING"}""")]
+    [InlineData("taskDefinitionArn", """{"taskArn":"arn:aws:ecs:us-east-1:111122223333:task/spa-poc/a","startedAt":"2026-10-21T02:00:00+00:00","lastStatus":"RUNNING","desiredStatus":"RUNNING"}""")]
+    public async Task A_running_task_missing_what_F07_compares_is_refused_rather_than_compared_on_less(string missing, string described)
+    {
+        CellAws aws = new(Cell, Tasks(["arn:aws:ecs:us-east-1:111122223333:task/spa-poc/a"], described));
+
+        InvalidOperationException refused = await Assert.ThrowsAsync<InvalidOperationException>(() => aws.RunningTasksAsync(TestContext.Current.CancellationToken));
+
+        Assert.Contains(missing, refused.Message, StringComparison.Ordinal);
         Assert.DoesNotContain("111122223333", refused.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task The_services_rollout_is_read_from_its_primary_deployment_wherever_ecs_lists_it()
+    {
+        // tools/scripts/cell-common.sh reads the same fields, for the reason #467 gives.
+        RecordedRunner runner = new(_ => """
+            {"services":[{"deployments":[
+              {"status":"ACTIVE","rolloutState":"IN_PROGRESS","runningCount":5,"desiredCount":6},
+              {"status":"PRIMARY","rolloutState":"COMPLETED","runningCount":1,"desiredCount":2}]}],"failures":[]}
+            """);
+
+        ServiceRollout rollout = await new CellAws(Cell, runner).ServiceRolloutAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(new ServiceRollout(2, "COMPLETED", 1, 2), rollout);
+        (string program, string[] arguments) = Assert.Single(runner.Calls);
+        Assert.Equal("aws", program);
+        Assert.Equal(["ecs", "describe-services", "--cluster", "spa-poc", "--services", "gateway", "--output", "json", "--region", "us-east-1"], arguments);
+    }
+
+    [Fact]
+    public void A_rollout_steady_at_its_desired_count_with_that_many_tasks_listed_says_nothing()
+    {
+        // The recordings in CellOnboardingTests each hold one defect; this is the input none of them holds.
+        Assert.Null(new ServiceRollout(1, "COMPLETED", 2, 2).Unsteady(2));
     }
 
     [Fact]

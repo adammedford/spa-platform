@@ -10,12 +10,15 @@ namespace Gateway.E2ETests.Stack;
 /// steps of docs/plan/05-infrastructure-and-cost.md -> Onboarding a third SPA: the apps root's plan
 /// with the onboarding definition, read before it is applied and applied only when it adds that app's
 /// own resources and nothing else; <c>spactl release publish</c> and <c>spactl app add</c>;
-/// <c>spactl wait</c> for the revision that names the app; and the app answering through the tunnel
-/// with a login at its own client. The gateway's running task is read before the plan and after the
-/// app answers, and must be the same task on the same task definition revision (04-tests F-07, tier
-/// D: no restart, no new task definition, no deployment). Terraform and spactl run as the project's
-/// profile (<see cref="AwsProject"/>), whatever profile the shell had. <see cref="OffboardAsync"/>
-/// undoes it, so a second sitting plans the same onboarding again.
+/// <c>spactl wait</c> for the revision that names the app, on every running task; and the app
+/// answering through the tunnel with a login at its own client. The service's running tasks are read
+/// before the plan and after the app answers, and must be the same set, each by task id, task
+/// definition revision and start, in whatever order ECS lists them. That is how this class reads F-07's
+/// tier D clause, "the task id, start time and task definition are unchanged" (docs/plan/04-tests.md):
+/// per running task, which says the same thing on any number of them, no restart, no new task
+/// definition, no deployment (#873), and a one-task service is a set of one. Terraform and spactl run
+/// as the project's profile (<see cref="AwsProject"/>), whatever profile the shell had.
+/// <see cref="OffboardAsync"/> undoes it, so a second sitting plans the same onboarding again.
 ///
 /// <para>The onboarding definition is planned through the root's <c>definition_dirs</c> variable, as
 /// its own P-02 test plans it (infra/envs/poc/apps/tests/root.tftest.hcl), rather than copied into
@@ -51,7 +54,7 @@ public sealed class CellOnboarding(Cell cell, CellAws aws, ICommandRunner runner
 
         RequireInitialised();
         string[] expected = PerAppAddresses(appId);
-        RunningTask before = await aws.RunningTaskAsync(ct);
+        IReadOnlySet<RunningTask> before = await SteadyTasksAsync(ct);
         string work = PrivateDirectory();
         try
         {
@@ -86,16 +89,11 @@ public sealed class CellOnboarding(Cell cell, CellAws aws, ICommandRunner runner
                 throw new InvalidOperationException($"spactl app add returned and the live registry names no {appId}.");
             }
 
-            await WaitAsync(registry.Revision, ct);
+            await WaitAsync(registry.Revision, before, ct);
             HarnessApp app = cell.App(appId, client["clientId"]!.GetValue<string>());
             await AnswersAsync(app, ct);
 
-            RunningTask after = await aws.RunningTaskAsync(ct);
-            if (after != before)
-            {
-                throw new InvalidOperationException(
-                    $"the gateway's task changed while {appId} was onboarded, which F-07 says it must not: before {before}, after {after}.");
-            }
+            RequireUnchanged(before, await aws.RunningTasksAsync(ct), appId + " was onboarded");
 
             return new Onboarded(app, planned, registry.Revision, before);
         }
@@ -106,9 +104,27 @@ public sealed class CellOnboarding(Cell cell, CellAws aws, ICommandRunner runner
     }
 
     /// <summary>
+    /// F-07's no-restart rule, read per running task: the two sets hold the same tasks, each by id,
+    /// task definition revision and start, in any order (docs/plan/04-tests.md; #873).
+    /// </summary>
+    public static void RequireUnchanged(IReadOnlySet<RunningTask> before, IReadOnlySet<RunningTask> after, string during)
+    {
+        if (!before.SetEquals(after))
+        {
+            throw new InvalidOperationException(
+                $"the gateway's tasks changed while {during}, which F-07 says they must not: before {string.Join("; ", before)}, after {string.Join("; ", after)}.");
+        }
+    }
+
+    /// <summary>
     /// Takes the app off the cell, whatever part of <see cref="OnboardAsync"/> ran: out of the registry
-    /// first, and only once the gateway serves that revision, the client, branding style and secret,
-    /// so no snapshot names a secret that is gone. The apps root's plan without the onboarding
+    /// first, and only once every running task serves that revision, the client, branding style and
+    /// secret, so no snapshot on either task names a secret that is gone (#873). The running tasks are
+    /// read before the registry changes. No running task to wait on is refused there, as
+    /// <c>wait_for_revision</c> in tools/scripts/cell-common.sh refuses it, since no wait could finish
+    /// and the app would be left half taken off. A service mid-roll is not refused, as the onboarding
+    /// refuses it: a clean-up that stopped there would leave the secret live, and a task replaced under
+    /// the wait fails the wait before anything is destroyed. The apps root's plan without the onboarding
     /// definition is applied only when it destroys that app's resources and nothing else. The release
     /// stays in the bucket, since a release is written once (ADR-0009); teardown empties the bucket.
     /// </summary>
@@ -116,10 +132,17 @@ public sealed class CellOnboarding(Cell cell, CellAws aws, ICommandRunner runner
     {
         // Before the registry changes, so a root that cannot destroy the app's resources leaves the app served rather than half taken off.
         RequireInitialised();
+        IReadOnlySet<RunningTask> serving = await aws.RunningTasksAsync(ct);
         if ((await aws.LiveRegistryAsync(ct)).AppIds.Contains(appId))
         {
+            if (serving.Count == 0)
+            {
+                throw new InvalidOperationException(
+                    $"the service {cell.Service} in {cell.Cluster} has no running task to wait for, so {appId} stays in the registry: wait for a task to run and take it off again.");
+            }
+
             await SpactlAsync(["app", "remove", appId, "--config", setup.PlatformConfig, "--outputs", setup.OutputsPath], ct);
-            await WaitAsync((await aws.LiveRegistryAsync(ct)).Revision, ct);
+            await WaitAsync((await aws.LiveRegistryAsync(ct)).Revision, serving, ct);
         }
 
         string[] owned = PerAppAddresses(appId);
@@ -141,6 +164,20 @@ public sealed class CellOnboarding(Cell cell, CellAws aws, ICommandRunner runner
         {
             Directory.Delete(work, recursive: true);
         }
+    }
+
+    /// <summary>
+    /// The running tasks of a service that is steady, read before any plan: "exactly one task" used to
+    /// say no deployment was in flight, and on a two-task service it cannot (#873). A cell mid-roll is
+    /// refused, not failed, as a roll would otherwise pass for an onboarding's restart or fail as one.
+    /// </summary>
+    private async Task<IReadOnlySet<RunningTask>> SteadyTasksAsync(CancellationToken ct)
+    {
+        ServiceRollout rollout = await aws.ServiceRolloutAsync(ct);
+        IReadOnlySet<RunningTask> tasks = await aws.RunningTasksAsync(ct);
+        return rollout.Unsteady(tasks.Count) is { } why
+            ? throw new InvalidOperationException($"the service {cell.Service} in {cell.Cluster} is not steady, since {why}: wait for it to be steady and run again.")
+            : tasks;
     }
 
     /// <summary>The root's own definitions directory and the onboarding one, in the form root.tftest.hcl's P-02 run gives them.</summary>
@@ -221,8 +258,15 @@ public sealed class CellOnboarding(Cell cell, CellAws aws, ICommandRunner runner
     private async Task<string> SpactlAsync(string[] arguments, CancellationToken ct) =>
         (await runner.RunAsync(new Command(setup.Spactl[0], [.. setup.Spactl.Skip(1), .. arguments]) { Environment = setup.Project }, ct)).Output;
 
-    private Task<string> WaitAsync(long revision, CancellationToken ct) =>
-        SpactlAsync(["wait", "--url", setup.ReadyOrigin.ToString(), "--revision", revision.ToString(CultureInfo.InvariantCulture), "--timeout", WaitSeconds], ct);
+    /// <summary>
+    /// <c>spactl wait</c> until every one of these tasks has answered at the revision or later, as
+    /// <c>wait_for_revision</c> in tools/scripts/cell-common.sh does: one load-balanced <c>/readyz</c>
+    /// shows the revision on whichever task answered, and it names a cell's instance by its ECS task id
+    /// (contracts/pipeline.md).
+    /// </summary>
+    private Task<string> WaitAsync(long revision, IReadOnlySet<RunningTask> tasks, CancellationToken ct) =>
+        SpactlAsync(["wait", "--url", setup.ReadyOrigin.ToString(), "--revision", revision.ToString(CultureInfo.InvariantCulture),
+                     "--instances", string.Join(',', tasks.Select(task => task.TaskId)), "--timeout", WaitSeconds], ct);
 
     /// <summary>A new directory outside the repository that only this user can open.</summary>
     private static string PrivateDirectory()
@@ -253,5 +297,5 @@ public sealed record OnboardingSetup(
     IReadOnlyDictionary<string, string> Project,
     Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> Tunnel);
 
-/// <summary>An onboarded app, the plan read before it was applied, the registry revision that named it, and the gateway task that served throughout.</summary>
-public sealed record Onboarded(HarnessApp App, IReadOnlyList<PlannedChange> Planned, long Revision, RunningTask Gateway);
+/// <summary>An onboarded app, the plan read before it was applied, the registry revision that named it, and the gateway tasks that served throughout.</summary>
+public sealed record Onboarded(HarnessApp App, IReadOnlyList<PlannedChange> Planned, long Revision, IReadOnlySet<RunningTask> Tasks);
