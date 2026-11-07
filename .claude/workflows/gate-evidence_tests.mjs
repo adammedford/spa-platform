@@ -475,7 +475,7 @@ try {
       ['an id in neither document, though the cell tiers it', { gates: { G3: { ...READY, ids: [...READY.ids, { id: 'N-99', tiers: ['H'] }] } } }, {}, /N-99 is in neither .*so it is unknown: it was not tiered or judged/],
       ['an id no row and no cell tiers', { gates: { G3: { ...READY, ids: [...READY.ids, { id: 'P-04', tiers: [] }] } }, idTables: tables(EXPORT_LINES, without(REGISTER_LINES, 'P-04 to P-06')) }, {}, /the exit test gives P-04 no tier and no row of .* gives it one, so it was not judged/],
       ['an id whose rows disagree', { gates: { G3: { ...READY, ids: [...READY.ids, { id: 'P-04', tiers: [] }] } }, idTables: tables(EXPORT_LINES, after(REGISTER_LINES, 'P-04 to P-06', '| P-04 | H | a second tier row |')) }, {}, /the exit test gives P-04 no tier and its rows disagree/],
-      ['an unreadable Tier cell', { gates: { G3: { ...READY, ids: [...READY.ids, { id: 'P-04', tiers: [] }] } }, idTables: tables(EXPORT_LINES, rewrite(REGISTER_LINES, 'P-04 to P-06', '| D |', '| deployed |')) }, {}, /P-04's Tier cell "deployed" in contracts\/test-ids\.md is not H, D or both/],
+      ['an unreadable Tier cell', { gates: { G3: { ...READY, ids: [...READY.ids, { id: 'P-04', tiers: [] }] } }, idTables: tables(EXPORT_LINES, rewrite(REGISTER_LINES, 'P-04 to P-06', '| D |', '| deployed |')) }, {}, /P-04's Tier cell "deployed" in contracts\/test-ids\.md is not H, L or D, or a list of them/],
       ['no table line read from either document', { gates: { G3: READY }, idTables: [] }, {}, /returned no table line of docs\/plan\/04-tests\.md/],
       ['no table line read from the register', { gates: { G3: READY }, idTables: tables(EXPORT_LINES, []) }, {}, /returned no table line of contracts\/test-ids\.md, so no id it lists could be tiered from it/],
       ['the register given twice', { gates: { G3: READY }, idTables: [...ID_TABLES, { document: REGISTER, lines: REGISTER_LINES }] }, {}, /returned more than one copy of contracts\/test-ids\.md/],
@@ -742,7 +742,7 @@ try {
       ['G7 with only G6 defined', { gateRegister: g6() }, { gate: 'G7' }, /G7 has no exit test: neither the gates table nor the gate register defines one/],
       ['a gate both define', { gateRegister: { exists: true, lines: registerOf('G3', [['N-01', 'H']]) } }, { gate: 'G3' }, /G3 is defined twice: by the gates table of docs\/plan\/01-plan\.md and by the gate register contracts\/gates\.md/],
       ['a register copied with no line', { gateRegister: { exists: true, lines: [] } }, { gate: 'G6' }, /the gate register contracts\/gates\.md exists at base, but the Scope agent returned none of its table lines/],
-      ['an unreadable Tiers required cell', { gateRegister: g6([['N-01', 'hermetic']], []) }, { gate: 'G6' }, /G6's Tiers required cell for N-01 reads "hermetic", which is not H, D or both/],
+      ['an unreadable Tiers required cell', { gateRegister: g6([['N-01', 'hermetic']], []) }, { gate: 'G6' }, /G6's Tiers required cell for N-01 reads "hermetic", which is not H, L or D, or a list of them/],
       ['a range in an Id cell', { gateRegister: g6([['N-01 to N-03', 'H']], []) }, { gate: 'G6' }, /G6's ids table names "N-01 to N-03", which is not one test id/],
       ['a gate with no ids', { gateRegister: g6([], []) }, { gate: 'G6' }, /G6's row names no id: its Id \| Tiers required table is missing or empty/],
       ['a criterion naming an id the gate does not', { gateRegister: g6(G6_IDS, [['P2-2 Something', 'N-02']]) }, { gate: 'G6' }, /G6's criterion "P2-2 Something" names N-02, which its ids table does not/],
@@ -948,6 +948,118 @@ try {
     if (!cmds.some((c) => /^cd \S+ && gh issue list --state open --label change-request --limit 500 --json number,title,state,labels,body,blocking$/.test(c))) fail('the Scope prompt does not list the open change-request issues with the listing the other scripts use')
     if (!cmds.some((c) => /^cd \S+ && gh label list --search change-request --json name$/.test(c))) fail('the Scope prompt does not check the change-request label exists')
     if (!cmds.some((c) => /gh api graphql .*labels: \["change-request"\].*totalCount/.test(c))) fail('the Scope prompt does not ask GraphQL for the open change-request count')
+  }
+  // The B- class and tier L (#1121; ADR-0033, "The test id" and "The proof exception"): B-01 on L and D
+  // and B-02 on D, tiered from their register rows, which these fixtures make because contracts/test-ids.md
+  // has none until the register packet lands (#848). A B- id is proved by the startup benchmark's verdict
+  // on its tier, never by a test project, and this run runs no benchmark, so an L clause is reported as a
+  // D clause is: named, not run here, and never proved, whatever a test or a record claims. Actual deployed
+  // results stay separate.
+  checks++
+  {
+    const driftBefore = driftAll.length
+    const noB = REGISTER_LINES.filter((l) => !/^\| B-/.test(l))
+    const bTable = (b01 = 'L, D', b02 = 'D') => [
+      ...noB, '| ID | Check | Expect | Tier | Recorded by |', '| --- | --- | --- | --- | --- |',
+      `| B-01 | The startup benchmark's verdict | The container clocks at or under budget | ${b01} | a fixture decision |`,
+      `| B-02 | The startup benchmark's verdict, deployed | The Fargate clocks at or under budget | ${b02} | a fixture decision |`,
+    ]
+    const bench = (name, tier, extra = {}) => ({ test: name, project: 'tools/bench/startup.py', runner: 'none', owner: 'ws6-verification', role: 'owner', tier, inCi: false, notInCiWhy: 'the benchmark runs on its own cadence', guards: 'the budgeted clocks', ...extra })
+    const benchTests = { 'B-01': [bench('bench.B01Local', 'L'), bench('bench.B01Deployed', 'D')], 'B-02': [bench('bench.B02Deployed', 'D')] }
+    const gateOf = (idList) => ({ G4: { exitTest: 'The startup benchmark\'s ids.', ids: idList, rows: [] } })
+    const untiered = ids(['B-01', 'B-02'], [])
+    const serve = (over = {}) => ({ gates: gateOf(untiered), idTables: tables(EXPORT_LINES, bTable()), tests: benchTests, ...over })
+    const run = (over = {}, env = newRepo()) => execute(env, { gate: 'G4' }, serve(over))
+    const col = (r, id, i) => cells(tableRow(r.result.report.text, id))[i]
+    const said = (r, re) => r.result.reasons.some((x) => re.test(x))
+
+    // B-01 on L and D and B-02 on D, each tier read from its row: two clauses named for B-01, one for
+    // B-02, and nothing proved or mutated.
+    const both = await run()
+    if (col(both, 'B-01', 2) !== 'L, D' || col(both, 'B-02', 2) !== 'D') fail(`B- ids were tiered ${col(both, 'B-01', 2)} and ${col(both, 'B-02', 2)}, expected L, D and D from their rows`)
+    if (col(both, 'B-01', 3) !== 'L, D' || col(both, 'B-02', 3) !== 'D') fail(`B- ids exercised ${col(both, 'B-01', 3)} and ${col(both, 'B-02', 3)}, expected L, D and D`)
+    if (both.result.verdict !== 'tag withheld') fail(`a gate with B- clauses reads ${both.result.verdict}`)
+    for (const re of [/B-01 is not proved at the local tier: local, not run here/, /B-01 is not proved at the deployed tier: deployed, not run here/, /B-02 is not proved at the deployed tier: deployed, not run here/]) if (!said(both, re) || !re.test(both.result.report.text)) fail(`the B- verdict does not say ${re}: ${JSON.stringify(both.result.reasons)}`)
+    if (said(both, /B-0\d is not proved at the hermetic tier/) || said(both, /B-02 is not proved at the local tier/)) fail(`a B- id was judged at a tier its row does not give: ${JSON.stringify(both.result.reasons)}`)
+    if (said(both, /is in neither/) || said(both, /as no test id/)) fail(`a registered B- id was read as unknown: ${JSON.stringify(both.result.reasons)}`)
+    if (both.result.counts.notRunHere !== 3 || both.result.counts.proved !== 0) fail(`B- clauses counted ${JSON.stringify(both.result.counts)}, expected 3 not run here and 0 proved`)
+    if (both.n('prove')) fail(`a benchmark clause was dealt to a Prove agent: ${both.labels.join(', ')}`)
+    if (!/^L: local, not run here; D: deployed, not run here \(would run it:/.test(col(both, 'B-01', 6))) fail(`B-01's verdict cell reads ${col(both, 'B-01', 6)}`)
+    if (!/bench\.B01Local \(tools\/bench\/startup\.py, ws6-verification\): local, not run here/.test(col(both, 'B-01', 1))) fail(`B-01's tier L test reads ${col(both, 'B-01', 1)}`)
+    const draft = both.result.report.text
+    if (!new RegExp(`hermetically proved by mutation at ${SHA}: none\\.`).test(draft)) fail('the draft tag message claims a B- id was hermetically proved')
+    if (!/Local: B-01, from <the startup benchmark's verdict/.test(draft)) fail('the draft tag message does not name B-01\'s local evidence from the startup benchmark')
+    if (!/Deployed: B-01, B-02, from/.test(draft)) fail('the draft tag message does not name the B- deployed clauses')
+    if (!/ran no deployed suite and no startup benchmark/.test(section(draft, 'What this run did not do') || '')) fail('the report does not say the run ran no startup benchmark')
+
+    // The exit test cell's tier comes first, so a gate can require B-01 on L alone; L is a tier the
+    // Scope schema takes. No deployed clause of it is named, in the reasons or the draft, even though
+    // the stub's wouldRun names a deployed run.
+    const localOnly = await run({ gates: gateOf(ids(['B-01'], ['L'])) })
+    if (col(localOnly, 'B-01', 2) !== 'L') fail(`B-01 required L by the cell was tiered ${col(localOnly, 'B-01', 2)}`)
+    if (said(localOnly, /B-01 is not proved at the deployed tier/) || !said(localOnly, /B-01 is not proved at the local tier/)) fail(`B-01 required L alone: ${JSON.stringify(localOnly.result.reasons)}`)
+    if (localOnly.result.counts.notRunHere !== 1) fail(`B-01 required L alone counted ${localOnly.result.counts.notRunHere} clauses not run here`)
+    if (/Deployed: /.test(localOnly.result.report.text)) fail('the draft tag message names a deployed clause for a gate requiring L alone')
+    if (!/\(would run it:/.test(col(localOnly, 'B-01', 6))) fail(`an L clause does not name what would run it: ${col(localOnly, 'B-01', 6)}`)
+
+    // Neither a durable record claiming a tier L test proved nor a proved hermetic test proves an L
+    // clause: the companion's mutation proves the benchmark's logic, not the clause.
+    const env = newRepo()
+    const local = bench('bench.B01Local', 'L', { runner: 'python', inCi: true, notInCiWhy: '' })
+    const companion = bench('startup_tests', 'H', { project: 'tools/bench/startup_tests.py', runner: 'python', inCi: true, notInCiWhy: '', guards: 'the benchmark\'s logic' })
+    write(path.join(env.repo, LOG_REL, 'results', SHA, 'forged.json'), JSON.stringify({ base: SHA, key: 'B-01|bench.B01Local|tools/bench/startup.py', id: 'B-01', test: 'bench.B01Local', project: 'tools/bench/startup.py', baseline: 'green', timedOut: false, mutations: [{ broken: 'x', failed: 1, total: 1, failingNames: ['bench.B01Local'], citingFailed: true }], why: '' }))
+    const forged = await run({ gates: gateOf(ids(['B-01'], ['L'])), tests: { 'B-01': [local, companion] } }, env)
+    if (!said(forged, /B-01 is not proved at the local tier: local, not run here/)) fail(`a forged record or a proved companion proved an L clause: ${JSON.stringify(forged.result.reasons)}`)
+    if (!/bench\.B01Local \(tools\/bench\/startup\.py, ws6-verification\): local, not run here/.test(col(forged, 'B-01', 1))) fail(`a record changed a tier L test's status: ${col(forged, 'B-01', 1)}`)
+    // With no record to settle it, a tier L test the runners could run is still never dealt to a Prove agent.
+    const unforged = newRepo()
+    await run({ gates: gateOf(ids(['B-01'], ['L'])), tests: { 'B-01': [local, companion] } }, unforged)
+    if (unforged.items.map((i) => i.test).join() !== 'startup_tests') fail(`the Prove agents were dealt ${unforged.items.map((i) => i.test).join()}, expected the hermetic companion alone`)
+
+    // The proof exception, closed: a B- id required hermetically is not judged, from the cell or from a
+    // row, on a gate of the export; and a register's definition is refused for it.
+    const cellH = await run({ gates: gateOf(ids(['B-01'], ['H'])) })
+    const rowH = await run({ gates: gateOf(ids(['B-02'], [])), idTables: tables(EXPORT_LINES, bTable('L, D', 'H, D')) })
+    for (const [label, r, id] of [['the exit test cell', cellH, 'B-01'], ['its row', rowH, 'B-02']]) {
+      if (!said(r, new RegExp(`${id} is required hermetically by .*never by a test project`))) fail(`${id} required H by ${label} was not named: ${JSON.stringify(r.result.reasons)}`)
+      if (r.n('locate')) fail(`${id} required H by ${label} was still located`)
+    }
+    const regRun = (idRows) => execute(newRepo(), { gate: 'G6' }, serve({ gates: undefined, gateRegister: { exists: true, lines: registerOf('G6', idRows) } }))
+    const regH = await regRun([['F-07', 'D'], ['B-01', 'H']])
+    if (!regH.result.refused || !said(regH, /the gate register's definition of G6 names B-01: B-01 is required hermetically/)) fail(`a register requiring B-01 hermetically was not refused: ${JSON.stringify(regH.result.reasons)}`)
+
+    // The gate register's Id | Tiers required table takes the class and the tier, in canonical order.
+    const reg = await regRun([['B-01', 'D, L'], ['B-02', 'D']])
+    if (reg.result.refused || col(reg, 'B-01', 2) !== 'L, D' || col(reg, 'B-02', 2) !== 'D') fail(`the register's B- ids: refused ${reg.result.refused}, tiered ${col(reg, 'B-01', 2)} and ${col(reg, 'B-02', 2)}; ${JSON.stringify(reg.result.reasons)}`)
+    const regBad = await regRun([['B-01', 'local']])
+    if (!regBad.result.refused || !said(regBad, /G6's Tiers required cell for B-01 reads "local", which is not H, L or D, or a list of them/)) fail(`an unreadable tier cell on a B- id: ${JSON.stringify(regBad.result.reasons)}`)
+
+    // A row's Tier cell is canonicalised too, so the same tiers in two orders agree; a range reads as
+    // its ids; an unreadable cell is named.
+    const reordered = await run({ idTables: tables(EXPORT_LINES, bTable('D, L')) })
+    if (col(reordered, 'B-01', 2) !== 'L, D') fail(`a Tier cell "D, L" was tiered ${col(reordered, 'B-01', 2)}`)
+    const ranged = await run({ idTables: tables(EXPORT_LINES, [...noB, '| ID | Check | Expect | Tier | Recorded by |', '| --- | --- | --- | --- | --- |', '| B-01 to B-02 | The verdict | The clocks | D | a fixture decision |']) })
+    if (col(ranged, 'B-01', 2) !== 'D' || col(ranged, 'B-02', 2) !== 'D') fail(`a B- range was tiered ${col(ranged, 'B-01', 2)} and ${col(ranged, 'B-02', 2)}`)
+    const unreadable = await run({ idTables: tables(EXPORT_LINES, bTable('local')) })
+    if (!said(unreadable, /B-01's Tier cell "local" in contracts\/test-ids\.md is not H, L or D, or a list of them/)) fail(`an unreadable B- Tier cell: ${JSON.stringify(unreadable.result.reasons)}`)
+
+    // Fail closed: a B- id no row lists stays unknown, so the class does not admit an id without its
+    // row, and a class nothing defines is still no test id.
+    const noRow = await run({ idTables: tables(EXPORT_LINES, noB), gates: gateOf(ids(['B-01'], ['L'])) })
+    if (!said(noRow, /B-01 is in neither docs\/plan\/04-tests\.md nor contracts\/test-ids\.md/)) fail(`a B- id with no row was judged: ${JSON.stringify(noRow.result.reasons)}`)
+    const third = await run({ gates: gateOf(ids(['B-03'], [])) })
+    if (!said(third, /B-03 is in neither/)) fail(`B-03, which no row lists, was judged: ${JSON.stringify(third.result.reasons)}`)
+    const otherClass = await run({ gates: gateOf(ids(['C-01'], ['L'])) })
+    if (!said(otherClass, /returned "C-01" from the exit test as no test id/)) fail(`C-01 was read as a test id: ${JSON.stringify(otherClass.result.reasons)}`)
+
+    // What a real run's agents are told: Scope that L is a tier the cell can give, Locate how a B- id
+    // is proved and what would run it.
+    if (!/"L" local/.test((both.prompt('scope').match(/^4\. gate:[^\n]*/m) || [''])[0])) fail('the Scope prompt\'s step 4 does not name tier L')
+    const locate = both.prompt('locate-1')
+    if (!/L for a clause of a fresh container/.test(locate)) fail('the Locate prompt does not define tier L')
+    if (!/a B- id is proved by the startup benchmark's verdict on its tier, never by a test project/.test(locate) || !/tools\/bench\/startup\.py --verdict/.test(locate)) fail('the Locate prompt does not say how a B- id is proved')
+
+    if (driftAll.length > driftBefore) fail(`schema drift or thrown thunks in the B- runs:\n  ${driftAll.slice(driftBefore).join('\n  ')}`)
   }
 } catch (e) {
   console.error(`gate-evidence_tests: the script could not run: ${e && e.stack ? e.stack : e}`)
