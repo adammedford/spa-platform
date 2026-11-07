@@ -145,11 +145,20 @@ export const meta = {
 // agent's, verified and suspected, are in <logDir>/pr-<n>/verdict.json. The script's own, the head
 // comparison's and the later dates' (#525 below), are never there, since the verdict agent is told not
 // to repeat them: they lead the comment's Spec findings, in <logDir>/pr-<n>/comment.md and the posted
-// record. A pull request reaches verdict.json only by reaching its verdict stage: one skipped for a
+// record. A pull request reaches verdict.json only by reaching its post stage: one skipped for a
 // record already on its head has none from the run, and its findings are in the record its summary
-// line names; one failed before its verdict, at the stage its summary line names, has none, and no
-// findings to repair, only a run to repeat. One failed at posting has its
-// verdict.json, and comment.md when the post agent wrote it.
+// line names; one failed before or at its verdict, at the stage its summary line names, has none, and
+// no findings to repair, only a run to repeat. One failed at posting has its verdict.json, and
+// comment.md, unless its stage says the post agent died.
+//
+// Whose verdict.json it is (#1092). Same-date runs share a log directory, so the file a run does not
+// write is an earlier review's, and on #1085's third review a verdict agent returned its verdict
+// without writing one: the file stayed the review written earlier that day, holding a finding already
+// answered and a hold where the agent had returned merge. The script has no filesystem, so the verdict agent is no longer
+// asked for the file, and the post agent, which runs on every verdict, replaces it with the verdict as
+// the script received it, before any of the script's own findings join it. It names its head, base and
+// date, and the post agent's return says it wrote it; when that return does not, the summary line says
+// the file is not this run's. So a file found after a stage that wrote none is told by that stage.
 //
 // A date later than the run's (#525). A description and its commits are a dated record of what was
 // verified, and a date later than the review's own cannot be true when the review reads it (#507's
@@ -552,9 +561,9 @@ const POST = {
   type: 'object',
   properties: {
     posted: { type: 'boolean' }, url: { type: 'string' }, headNow: { type: 'string' },
-    unreachable: { type: 'boolean' }, bodyFile: { type: 'string' },
+    unreachable: { type: 'boolean' }, bodyFile: { type: 'string' }, verdictFile: { type: 'string' },
   },
-  required: ['posted', 'url', 'headNow', 'unreachable', 'bodyFile'],
+  required: ['posted', 'url', 'headNow', 'unreachable', 'bodyFile', 'verdictFile'],
 }
 // The open queue, as the queue agent lists it from gh: every open pull request whose base is main.
 const QUEUE = {
@@ -712,8 +721,6 @@ const verdictPrompt = (n, inv, mut, d, stale = []) => `Decide the review of pull
 
 ${HOUSE}
 
-OUTPUT FILE: ${DIR(n)}/verdict.json
-
 ${AXIS_GUIDE} Its "The bar for a finding" and "Landing or holding" decide.
 
 Read ${DIR(n)}/inventory.json, ${DIR(n)}/standards.json and ${DIR(n)}/spec.json.
@@ -726,7 +733,7 @@ ${d ? deltaBrief(d) + (d.verdict === 'hold' ? ' Put each of the held record\'s f
 verdict is hold when a verified finding shows the change does not do what it says, or a test that proves it cannot fail: a did-not-fail row, or a stated or held mutation that did not reproduce. A could-not-run on a stated, held or nominated mutation holds too; one on a candidate nobody suspected is reported and does not. A removed row is a held break whose target the range deleted, so it holds nothing by itself, but it answers the held test only if the deletion is sound: read the commit its why names, and it answers when the removed code could never run (say why) or the same check is still enforced elsewhere (say where), each as a verified finding; otherwise, or if you cannot show either, the held test is unanswered and the verdict is hold. A caught row is a held or candidate break the project caught through other tests while the named test stayed green (#684, #689). It answers the named test only when you verify, as a verified finding, that a test it names guards the break: for a held row, the break the held record named. For a candidate, you must also verify, as a verified finding, why the named test could not go red on that break: either the break lies outside what the named test guards, or the case the break reaches skips where the review runs. Then put the named test in caughtAccepted. A candidate that guards the break and stayed green proves nothing: leave it out. A caught row of any kind on a Node companion, a row whose project is an .mjs file or whose file or test cell's leading path is one, whatever project the inventory gives it (#938), is read another way, since such a companion prints no test names, only its checks' fail() messages (#905): read the named checks' source at the head, and when every message the row went red on is one of those checks' own fail() messages, say so as a verified finding and put the named test in caughtAccepted; the check for a candidate's green named test does not apply. On a Node companion, a stated or nominated row that went red on any message of another check is not answered by it: leave it out of caughtAccepted, and the verdict is hold. A held or candidate row there keeps its catch (#684, #689): one that went red on another check's message is answered only when you verify that the check whose fail() printed it guards the break (for a held row, the break the held record named) and, for a candidate, unlike a row red only on its own checks' messages, that its named check went red on its own fail() messages as well or why it could not go red on that break; then put the named test in caughtAccepted. In every other case leave the named test out of caughtAccepted, and the named test is unanswered and the verdict is hold. Otherwise merge. outstanding lists what stays for the merge body's Outstanding: line.
 followUps: every finding this review carries rather than holds on, whatever the verdict: a finding left standing for after the merge, and each outstanding entry that is a defect still to fix. Each: axis, title (one line; when an earlier record's "## Follow-ups" table (five columns: Finding, Axis, Where, First carried by, Fails on) lists the finding, its Finding cell verbatim), where, failsOn, ticket and firstCarried. failsOn is the input or state on which the finding gives the wrong result, in one sentence (#966): what a reader would run or set up to see it go wrong. A carried finding for which you cannot name one is not a follow-up: write it in findings under the axis that found it, as a note, and leave it out of followUps; it files nothing, and the script writes any followUp with an empty failsOn as such a note. ticket is the open issue that owns the fix, as "#<n>", checked with \`cd ${REPO} && gh issue view <n> --json state,title\` (it must be OPEN and its title or body must be about this fix; an issue the finding merely mentions does not own it), or "" when there is no open ticket for it, which you search for with \`cd ${REPO} && gh issue list --state open --search "<key words> in:title,body" --json number,title\`. firstCarried is the earliest of the records on this pull request that carried the same finding, by its URL: ${(() => { const urls = recordsIn(inv).map((r) => r.url).filter(Boolean); return urls.length ? `read ${urls.join(', ')} (oldest first)` : 'there is none, so it is ""' })()}; "" when none did. The script keeps those with ticket "" as the comment's follow-ups, which the morning run files while this pull request is still open; one still unfiled when it merges is named by tools/land.sh and filed by hand (#514, #573).
 ${heldChangeRoute(n, inv)}
-Write the result as JSON to the OUTPUT FILE, then return it.`
+Return the result. Write no file for it: the script hands what you return to the post agent, which writes verdict.json (#1092).`
 
 const mutationWorktree = (n, i) => `${WTROOT}/pr-${n}-mutation-${i}`
 const mutationLog = (n, i) => `${DIR(n)}/mutation-${i}.txt`
@@ -993,18 +1000,23 @@ const mutationHolds = (rows, cutHeld = []) => [...rows.flatMap((r) => {
 
 // The comments the inventory read, by URL: a record line in one of them is an earlier run's, and a
 // record line in any other comment on this pull request is this run's, posted before a resume.
-const postPrompt = (n, record, body, inv) => `Post one review comment on pull request #${n}, at most once.
+const postPrompt = (n, record, body, inv, returned) => `Post one review comment on pull request #${n}, at most once.
 
 ${HOUSE}
 
 OUTPUT FILE: ${DIR(n)}/comment.md
+OUTPUT FILE: ${DIR(n)}/verdict.json
 ${(inv.comments || []).map((c) => c && c.html_url).filter(Boolean).map((u) => `READ BY THE INVENTORY: ${u}`).join('\n')}
 
-1. Write the text between the line BEGIN COMMENT and the line END COMMENT below, exactly and without those two lines, to the OUTPUT FILE. bodyFile is that path.
+1. Write the text between the line BEGIN COMMENT and the line END COMMENT below, exactly and without those two lines, to ${DIR(n)}/comment.md. bodyFile is that path. Then replace the verdict file, whatever an earlier review left there: \`rm -f ${DIR(n)}/verdict.json\`, then write the text between the line BEGIN VERDICT and the line END VERDICT below, exactly and without those two lines, to ${DIR(n)}/verdict.json. verdictFile is that path, or "" if you could not write it. Go on to step 2 either way.
 2. headNow = \`cd ${REPO} && gh pr view ${n} --json headRefOid --jq .headRefOid\`.
 3. Read the pull request's comments (\`cd ${REPO} && gh api --paginate repos/{owner}/{repo}/issues/${n}/comments\`). Leave out every comment whose html_url is on a READ BY THE INVENTORY line above: those were there before this run, and a record in one of them never stops this post. If a remaining comment carries the line \`${record}\` on a line of its own, this run posted it before a resume: post nothing, set posted false and url to that comment's html_url.
 4. Otherwise post it: \`cd ${REPO} && gh pr comment ${n} --body-file ${DIR(n)}/comment.md\`; posted true, url the comment's URL it prints. Post it even if headNow differs from the head the record names: the record names the head that was read.
-5. If GitHub cannot be reached at any of steps 2 to 4, post nothing and retry nothing: unreachable true, posted false, url "", headNow as read or "". The OUTPUT FILE keeps the body.
+5. If GitHub cannot be reached at any of steps 2 to 4, post nothing and retry nothing: unreachable true, posted false, url "", headNow as read or "". comment.md keeps the body.
+
+BEGIN VERDICT
+${returned}
+END VERDICT
 
 BEGIN COMMENT
 ${body}
@@ -1367,6 +1379,9 @@ const reviewOne = async (n, res, at) => {
   const stale = [...staleHeadFindings(inv), ...laterDateFindings(inv)]
   const v = await run(verdictPrompt(n, inv, mut, d, stale), { label: `verdict:${n}`, phase: 'Verdict', schema: VERDICT })
   if (!v) return failed(res, 'verdict: the verdict agent returned nothing')
+  // verdict.json is the verdict as returned, taken before the script's own findings join it below, and
+  // names the review it is (#1092; the header's "Whose verdict.json it is").
+  const returned = JSON.stringify({ ...v, head: inv.head, base: inv.forkPoint, date: DATE }, null, 2)
   v.earlierFindings = v.earlierFindings || []
   v.boxes = (v.boxes || []).filter((b) => b && String(b.box || '').trim())
   v.changeRequests = (v.changeRequests || []).filter((c) => c && c.title)
@@ -1402,10 +1417,11 @@ const reviewOne = async (n, res, at) => {
     suspected: v.findings.filter((f) => f.status === 'suspected'),
   }
 
-  at.stage = 'post'
-  const post = await run(postPrompt(n, record, body, inv), { label: `post:${n}`, phase: 'Verdict', schema: POST })
+  at.stage = 'post, so verdict.json may be an earlier review\'s'
+  const post = await run(postPrompt(n, record, body, inv, returned), { label: `post:${n}`, phase: 'Verdict', schema: POST })
   res.commentFile = `${DIR(n)}/comment.md`
-  if (!post) return failed(res, 'post: the post agent returned nothing, so whether it posted is unknown; it was handed the body to write to ' + res.commentFile)
+  if (!post) return failed(res, 'post: the post agent returned nothing, so whether it posted is unknown; it was handed the body to write to ' + res.commentFile + ', and verdict.json may be an earlier review\'s')
+  if (post.verdictFile !== `${DIR(n)}/verdict.json`) res.verdictNotThisRun = true
   // Moved only on a head gh served that is not the one read; an unreachable gh served none.
   res.headMoved = /^[0-9a-f]{40}$/.test(post.headNow || '') && post.headNow !== inv.head
   if (res.headMoved) log(`#${n}: the head moved to ${post.headNow} during the run; the record names ${inv.head}. Run again for the new head.`)
@@ -1424,7 +1440,7 @@ const reviewOne = async (n, res, at) => {
 // record's URL, the verified findings and mutations counted, and the tests whose rows did not fail.
 const summaryLine = (r) => {
   const didNotFail = (r.mutations || []).filter((m) => m.result === 'did-not-fail').map((m) => m.test)
-  return `#${r.number} ${r.head || '(unread)'} ${r.verdict || '-'} (${r.outcome}${r.stage ? ': ' + r.stage : ''}) ${r.recordUrl || '(no record)'}: ${((r.findings || {}).verified || []).length} verified finding(s), ${(r.mutations || []).length} mutation(s), did-not-fail: ${didNotFail.join(', ') || 'none'}`
+  return `#${r.number} ${r.head || '(unread)'} ${r.verdict || '-'} (${r.outcome}${r.stage ? ': ' + r.stage : ''}) ${r.recordUrl || '(no record)'}: ${((r.findings || {}).verified || []).length} verified finding(s), ${(r.mutations || []).length} mutation(s), did-not-fail: ${didNotFail.join(', ') || 'none'}${r.verdictNotThisRun ? `; verdict.json is not this run's, so read the findings from its comment.md or record` : ''}`
 }
 
 // ---------------------------------------------------------------- the launch check
