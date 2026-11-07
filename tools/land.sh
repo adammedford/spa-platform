@@ -51,12 +51,13 @@
 # line, as .claude/workflows/morning.js's filedAs reads one) is printed as a `land:` warning that
 # says so; nothing is refused for it.
 #
-# It merges only a description whose every closing reference, `Closes #n` or any other form GitHub
-# closes a ticket on (#578), names a ticket some non-merge commit between the base and that head
+# It merges only a description whose every closing reference, `Closes #n` or any other keyword
+# GitHub documents (#578), names a ticket some non-merge commit between the base and that head
 # names in its message, as `#n` or as `issue-n`, because the merge closes each one (#566). A refusal
 # names each #n no commit names, and --unreviewed does not lift it. A keyword before `owner/repo#n`,
-# GitHub's form for another repository's ticket, or before a GitHub issue URL (#806), is refused
+# GitHub's form for another repository's ticket, or before a bare GitHub issue URL (#806), is refused
 # outright, because the check cannot tell whether it names a ticket here; the remedy is `Closes #n`.
+# GitHub also closes on forms this does not read, which the rule's comment below names (#1147).
 #
 # It merges only a body that cites each decision it owes (#530). A closing reference that names a
 # change request decided `ADR: no` closes a request whose why lives nowhere but the merge body, so
@@ -247,7 +248,7 @@ full_sha='^[0123456789abcdef]{40}$'
 # the table in the same commit, or one of the companions fails.
 #
 # The form docs/agents/landing-work.md -> "Land it" asks for, and .claude/workflows/morning.js
-# reads, is one `Closes #n` to a line. The check reads what GitHub reads (#578): any of its closing
+# reads, is one `Closes #n` to a line. The check reads what GitHub documents (#578): any of its closing
 # keywords (close, closes, closed, fix, fixes, fixed, resolve, resolves, resolved), in any case, an
 # optional colon after it, then `#n`, anywhere in a line and as many times to a line as it occurs,
 # https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/linking-a-pull-request-to-an-issue,
@@ -260,7 +261,17 @@ full_sha='^[0123456789abcdef]{40}$'
 # closed (CODING_STANDARDS.md -> "A check fails closed"): the refusal asks for `Closes #n`, the
 # form docs/agents/landing-work.md gives, and nothing here closes another repository's ticket.
 # GitHub issue URLs after the keyword are refused on the same basis (#806); a URL must not
-# bypass the check simply because the local #n reader does not recognize it.
+# bypass the check simply because the local #n reader does not recognize it. The closing-keywords
+# page cited above does not list a URL, and
+# https://docs.github.com/en/get-started/writing-on-github/working-with-advanced-formatting/autolinked-references-and-urls
+# lists one as a reference and says nothing of closing, so which shapes close is observed, not
+# documented, and GitHub can change it: #1053's Answer holds the table, read on 2026-11-07.
+# `https://github.com/owner/repo/issues/n` closed its ticket, as it did with a trailing `/` or a
+# `#fragment`, which the pattern reads because it does not anchor the URL's end. `http://`, `www.`
+# and no scheme closed nothing; the pattern still refuses the first two, because a needless refusal
+# costs a rewrite and a missed form merges a ticket no commit names. What GitHub closed on and this
+# does not read is the URL of a Markdown link, `[text](url)` or `[text][ref]`, the URL inside
+# `<url>` or `<a href>`, and `GH-n` (#1147).
 # bash's =~ finds one match, so a line is read from its right end, each match's prefix
 # becoming the next line to read, and the numbers are put back in the line's order. `#n` and
 # `issue-n` are matched in a message only where no digit follows, so #35 is not found inside #352

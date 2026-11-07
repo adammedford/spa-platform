@@ -1158,10 +1158,12 @@ const laterDateFindings = (inv) => {
 // letter, digit or underscore before it, then an optional colon, any whitespace, # and every digit
 // after it, anywhere in a line and as often as it occurs, each line read on its own. Whitespace is
 // POSIX's space class in the C locale, the set land.sh's [[:space:]] reads. A keyword before
-// owner/repo#n or a GitHub issue URL (#806) refuses the description whatever
+// owner/repo#n or a bare GitHub issue URL (#806) refuses the description whatever
 // else it holds, naming the form, as land.sh refuses it before it reads a commit; on the first line
-// holding one, the last on that line, which is the match land.sh's greedy prefix finds. Otherwise
-// each ticket is named unless #n, or issue-n with no letter, digit or underscore before it, appears
+// holding one, the last on that line, which is the match land.sh's greedy prefix finds. GitHub does
+// not document closing by URL: land.sh's comment cites its two pages, says which shapes were
+// observed to close (#1053), and names the forms GitHub closed on that neither copy reads (#1147).
+// Otherwise each ticket is named unless #n, or issue-n with no letter, digit or underscore before it, appears
 // with no digit after it in the message of a commit whose parent count is an integer below 2, as git
 // log --no-merges keeps; a commit with no parent count does not count, so the check fails closed.
 // The tickets are named in the description's order, once for each time they are written, as land.sh
