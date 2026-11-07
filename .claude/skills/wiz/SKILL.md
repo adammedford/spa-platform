@@ -651,7 +651,8 @@ as such with the reason (rule 4), and wiz then asks whether to go on to the next
 to D10. Every stop, rule 7's included, offers D10 before the sitting ends: the two-task cell costs
 about $0.10 an hour (#347 Q10), and teardown the same day is the practice. A stop after D0's `start`
 and before D2's end, and a failed D2 whichever way the human then answers, first ends any watch and
-closes the sitting browser, as D2 says. A declined D10 is recorded as "not run: declined", keeps
+closes the sitting browser, as D2 says, and a failed D2 with no convergence read says what the cell
+is before the question, as D2 says too. A declined D10 is recorded as "not run: declined", keeps
 D2's copy of `terraform.tfvars`, and the sitting ends naming where it is.
 
 **D0, the fresh deploy and the live login (#348 Q22).** The root is absent (Stage 0). Fetch and
@@ -814,6 +815,39 @@ the files no `browser.log` or `row2.log` and under `browser-pages/` only what th
 an earlier attempt's stay in the bundle, and the post says the watch never started. The row passes
 when a sign-out occurred and the post-convergence login succeeded.
 
+**A failed row with no convergence read (#1134).** An apply that exits non-zero, or a
+`services-stable` that times out, ends D2 on a cell nobody has read, and the apply does not wait for
+the roll. The service may be rolling to the new task definition, may have finished that roll, may
+have been rolled back by its circuit breaker (`infra/modules/cell/ecs.tf`), or may stand as D0 left
+it, when the apply stopped before reaching it. After the fences and before the post, read which:
+
+```bash
+shown aws ecs describe-services --cluster spa-poc --services gateway \
+  --query 'services[0].{desired:desiredCount,running:runningCount,deployments:deployments[].{status:status,rollout:rolloutState,desired:desiredCount,running:runningCount,revision:taskDefinition}}'
+```
+
+then the `list-tasks` and `describe-tasks` lines above. More than one deployment, or a `rollout` of
+`IN_PROGRESS`, is a roll under way. One settled deployment on a new revision has finished the roll,
+and no convergence has been read. One on D0's revision is rolled back when `desired` has reached the
+cutover's 2, and is as D0 left it when `desired` is still 1. A new task is a RUNNING one on a revision
+other than D0's. The post carries these reads and says whether the tunnel restart ran, with the id it
+kept, or that it did not. Asking what next, wiz first says, from those reads: which of the four the
+cell is; that "go on" takes D1 and D3 onward to that cell and not to one D2 has read as converged, so
+a read or a row can fail for that reason alone, and a pass says nothing of convergence; and whether
+D4 has an id, which is one `tunnel.sh` printed in D2 that still names a RUNNING task. "Go on" stays
+the human's answer, and wiz holds it to no wait. On it:
+
+- **The tunnel.** If the restart has not run, or the task its id names is no longer RUNNING, and a
+  new task is RUNNING, offer it now as above (rule 1), and keep the id; its times and id go into the
+  next step's post. With no new task it has nothing to go through yet: wiz says that D4 still has no
+  id from D2, and that D0's tunnel is up if the restart never stopped it and down if the hop it moved
+  to has gone. D0's id is not one for D4: a row 4 on D0's revision says nothing of the cutover.
+  `tunnel.sh` takes the first task it can reach, so mid-roll its id can name an old task that the roll
+  then drains: name that task's revision from `describe-tasks` when keeping the id.
+- **Each later step, D1 and D3 to D9.** Run the `describe-services` read above first, and open the
+  step's post with "D2 failed" and what that read showed. A read that has since settled makes no
+  row 2 pass and is no convergence: only D2's own block is that.
+
 **D1, the configuration as decided (row 1; #348 Q24).** Reads only, each a `describe`, `get` or
 `list`, through `shown`; never `get-parameter` or `get-parameters`, which return the ring's values
 (rule 3). First the handles, each into a variable:
@@ -870,7 +904,9 @@ task ids from D2.
 
 **D3 to D9, #358's class, one row per invocation (#361 Q8, #442 Q169).** Before D3, rebuild the
 configuration from the post-cutover task definition exactly as C2's first block does: D2 changed
-the environment, and row 7's onboarding reads it. Then the switches, in every call that runs a row:
+the environment, and row 7's onboarding reads it. After a failed D2 that block reads whatever
+revision the service names, which can be D0's: the post names it. Then the switches, in every call
+that runs a row:
 
 ```bash
 export SPA_E2E_STACK=deployed SPA_E2E_PLATFORM_CONFIG="$PWD/$E/platform-config.json" SPA_E2E_EVIDENCE="$PWD/$E/continuity"
@@ -895,7 +931,11 @@ mutation the summary does not name stops the sitting:
   name, with a drain, and refuses unless that variable is exactly one of the two RUNNING tasks. Set
   `SPA_TUNNEL_TASK=<the id tunnel.sh printed in D2>` in the call, say which task will be stopped,
   and the human's approval of the row's command is its rule-2 confirm, as C3 treats F-07. After the
-  row, the service replaces the task; read the two tasks again before D5 and name the new id.
+  row, the service replaces the task; read the two tasks again before D5 and name the new id. After
+  a failed D2 that kept no id, or one whose task is no longer RUNNING, run D2's restart first if a new
+  task is RUNNING, and use the id it prints; with none, say so when asking: the row then refuses and
+  stops nothing. Its evidence file then records not proved and names only the exception, so post it as
+  not proved with the refusal's line from the test's output. A refusal spends no attempt.
 - **D6 (row 6, F1; #348 Q29).** The class drives for up to 40 minutes while the operator deploys:
   start the row's `dotnet test` in the background first, then `deploy.sh` on the same commit as C1
   runs it (confirm on launch, C1's shape: the one replacement is the task definition), with no
