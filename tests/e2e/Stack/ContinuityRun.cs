@@ -249,13 +249,20 @@ public sealed class ContinuityEcs(Cell cell, ICommandRunner runner)
         return ids.Length == 0 ? [] : await DescribeAsync(ids, ct);
     }
 
-    /// <summary>The tasks by id, as <c>describe-tasks</c> gives them; the CLI v2 prints timestamps in ISO 8601.</summary>
+    /// <summary>
+    /// The tasks by id, as <c>describe-tasks</c> gives them; the CLI v2 prints timestamps in ISO 8601.
+    /// An id the answer holds no task for, which ECS reports under <c>failures</c>
+    /// (https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_DescribeTasks.html), refuses the read,
+    /// so no caller judges, waits on or counts fewer tasks than it asked about (#1142). A stopped task
+    /// stays describable for at least an hour, by that page, longer than row 6's 40-minute bound and
+    /// the five minutes of session calls that can follow it.
+    /// </summary>
     public async Task<IReadOnlyList<EcsTaskState>> DescribeAsync(IReadOnlyList<string> ids, CancellationToken ct)
     {
         string described = await runner.RunAsync("aws",
             ["ecs", "describe-tasks", "--cluster", cell.Cluster, "--tasks", .. ids, "--output", "json", "--region", cell.Region], ct);
         using JsonDocument tasks = JsonDocument.Parse(described);
-        return [.. tasks.RootElement.GetProperty("tasks").EnumerateArray().Select(task => new EcsTaskState(
+        EcsTaskState[] answered = [.. tasks.RootElement.GetProperty("tasks").EnumerateArray().Select(task => new EcsTaskState(
             AfterLast(task.GetProperty("taskArn").GetString()!),
             task.GetProperty("lastStatus").GetString() ?? "",
             task.GetProperty("desiredStatus").GetString() ?? "",
@@ -266,7 +273,21 @@ public sealed class ContinuityEcs(Cell cell, ICommandRunner runner)
                     .Select(c => c.TryGetProperty("imageDigest", out JsonElement digest) ? digest.GetString() : null).FirstOrDefault()
                 : null,
             task.TryGetProperty("taskDefinitionArn", out JsonElement definition) ? AfterLast(definition.GetString()!) : null))];
+        string[] unanswered = [.. ids.Except(answered.Select(task => task.Id), StringComparer.Ordinal)];
+        return unanswered.Length == 0
+            ? answered
+            : throw new InvalidOperationException(
+                $"describe-tasks answered for {answered.Length} of the {ids.Count} tasks asked about, so this read refuses rather than answer for fewer: {string.Join(", ", unanswered.Select(id => $"{id}: {FailureReason(tasks.RootElement, id)}"))}.");
     }
+
+    /// <summary>What <c>failures</c> says of a task, by id alone: its entry's ARN names the account.</summary>
+    private static string FailureReason(JsonElement answer, string id) =>
+        (answer.TryGetProperty("failures", out JsonElement failures)
+            ? failures.EnumerateArray()
+                .Where(failure => failure.TryGetProperty("arn", out JsonElement arn) && AfterLast(arn.GetString()!) == id)
+                .Select(failure => failure.TryGetProperty("reason", out JsonElement reason) ? reason.GetString() : null)
+                .FirstOrDefault()
+            : null) ?? "no failure reported";
 
     /// <summary>
     /// Row 4's lever (Q145): refuses unless the tunnel's task is exactly one of exactly two RUNNING

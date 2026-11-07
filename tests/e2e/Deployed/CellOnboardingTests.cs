@@ -403,6 +403,21 @@ public sealed class CellOnboardingTests : IDisposable
     }
 
     [Fact]
+    public async Task A_clean_up_whose_listed_task_ecs_answers_under_failures_leaves_the_registry_and_the_resources_alone()
+    {
+        // #1142: waiting on the one task answered would let the destroy run with the other never waited for.
+        CellState cellState = new() { Tasks = [[Gateway, Other]], AnsweredUnderFailures = new HashSet<string>(StringComparer.Ordinal) { Other.TaskId } };
+        cellState.Add("app3");
+        RecordedRunner runner = OffboardingRunner(cellState);
+
+        InvalidOperationException refused = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => Onboarding(runner, new Tunnel(runner)).OffboardAsync("app3", TestContext.Current.CancellationToken));
+
+        Assert.Contains(Other.TaskId, refused.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(runner.Calls, call => call.Program is "spactl" or "terraform");
+    }
+
+    [Fact]
     public async Task A_clean_up_with_no_running_task_and_nothing_to_wait_for_still_destroys_what_is_left()
     {
         // The app never reached the registry, so no snapshot can name its secret and there is no revision to wait on.
@@ -676,6 +691,9 @@ public sealed class CellOnboardingTests : IDisposable
         /// <summary>The plan's exit when it is not the changes' own: 1 is Terraform's error.</summary>
         public int? PlanExit { get; init; }
 
+        /// <summary>The listed tasks <c>describe-tasks</c> answers under <c>failures</c> rather than <c>tasks</c>.</summary>
+        public IReadOnlySet<string> AnsweredUnderFailures { get; init; } = new HashSet<string>(StringComparer.Ordinal);
+
         public int TasksDescribed { get; private set; }
 
         public void Add(string appId)
@@ -727,7 +745,7 @@ public sealed class CellOnboardingTests : IDisposable
             TasksDescribed++;
             return new JsonObject
             {
-                ["tasks"] = new JsonArray([.. tasks.Select(task => (JsonNode)new JsonObject
+                ["tasks"] = new JsonArray([.. tasks.Where(task => !AnsweredUnderFailures.Contains(task.TaskId)).Select(task => (JsonNode)new JsonObject
                 {
                     ["taskArn"] = $"arn:aws:ecs:us-east-1:111122223333:task/spa-poc/{task.TaskId}",
                     ["taskDefinitionArn"] = $"arn:aws:ecs:us-east-1:111122223333:task-definition/{task.Revision}",
@@ -735,7 +753,11 @@ public sealed class CellOnboardingTests : IDisposable
                     ["lastStatus"] = "RUNNING",
                     ["desiredStatus"] = "RUNNING",
                 })]),
-                ["failures"] = new JsonArray(),
+                ["failures"] = new JsonArray([.. tasks.Where(task => AnsweredUnderFailures.Contains(task.TaskId)).Select(task => (JsonNode)new JsonObject
+                {
+                    ["arn"] = $"arn:aws:ecs:us-east-1:111122223333:task/spa-poc/{task.TaskId}",
+                    ["reason"] = "MISSING",
+                })]),
             }.ToJsonString();
         }
 

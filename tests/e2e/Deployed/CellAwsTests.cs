@@ -207,6 +207,31 @@ public sealed class CellAwsTests
     }
 
     [Fact]
+    public async Task A_listed_task_ecs_answers_under_failures_refuses_the_read_naming_it_and_the_reason_with_no_account()
+    {
+        // https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_DescribeTasks.html: the answer holds failures beside tasks.
+        RecordedRunner runner = new(arguments => arguments[1] == "list-tasks"
+            ? JsonSerializer.Serialize(new { taskArns = new[] { TaskArnA, TaskArnB } })
+            : $$"""{"tasks":[{{Described(TaskArnA)}}],"failures":[{"arn":"{{TaskArnB}}","reason":"MISSING"}]}""");
+
+        InvalidOperationException refused = await Assert.ThrowsAsync<InvalidOperationException>(() => new CellAws(Cell, runner).RunningTasksAsync(TestContext.Current.CancellationToken));
+
+        Assert.Contains("9f8e7d6c5b4a: MISSING", refused.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("0a1b2c3d4e5f", refused.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("111122223333", refused.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_listed_task_the_answer_names_nowhere_refuses_the_read_as_one_under_failures_does()
+    {
+        // The comparison is against the ids asked for, so a shortfall refuses whatever failures holds.
+        InvalidOperationException refused = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => new CellAws(Cell, Tasks([TaskArnA, TaskArnB], Described(TaskArnA))).RunningTasksAsync(TestContext.Current.CancellationToken));
+
+        Assert.Contains("9f8e7d6c5b4a", refused.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task The_services_rollout_is_read_from_its_primary_deployment_wherever_ecs_lists_it()
     {
         // tools/scripts/cell-common.sh reads the same fields, for the reason #467 gives.

@@ -138,7 +138,9 @@ public sealed partial class CellAws(Cell cell, ICommandRunner runner)
     /// STOPPED and is not listed (https://docs.aws.amazon.com/cli/latest/reference/ecs/list-tasks.html),
     /// and one still starting is listed and is not running yet, so it is left out. How many there should
     /// be is <see cref="ServiceRolloutAsync"/>'s to say: two are a two-task cell's steady state
-    /// (infra/modules/cell/ecs.tf, <c>desired_count</c>), and this read refuses no count.
+    /// (infra/modules/cell/ecs.tf, <c>desired_count</c>), and this read refuses no count. A listed task
+    /// ECS gives no state for is refused by <see cref="ContinuityEcs.DescribeAsync"/> (#1142), since it
+    /// may be running and a set without it would be waited on as the whole service.
     /// </summary>
     public async Task<IReadOnlySet<RunningTask>> RunningTasksAsync(CancellationToken ct) =>
         (await new ContinuityEcs(cell, runner).ListedAsync(ct))
