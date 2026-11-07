@@ -133,7 +133,9 @@ function run(scriptArgs, served, behave = {}) {
   }
   // What one list's --jq in the inventory prompt strips before it counts (#1072): the stub projects
   // with the class the script asks jq to use, so it holds no copy of its own that could agree with
-  // one side while the other drifts. The prompt's \t, \r and \n mean the same in jq and in RegExp.
+  // one side while the other drifts. The prompt's \t, \r and \n mean the same in jq and in RegExp:
+  // a jq regex is a jq string read by Oniguruma (https://jqlang.org/manual/v1.7/#regular-expressions),
+  // so each is one character there as here. The companion does not call jq, so this rests on that.
   const jqTrim = (prompt, list) => {
     const m = new RegExp(`/${list} --jq '[^']*sub\\("([^"]+)"; ""\\)`).exec(prompt)
     if (!m) throw new Error(`the inventory prompt's ${list} --jq has no sub(...; "") to count a body's length by`)
