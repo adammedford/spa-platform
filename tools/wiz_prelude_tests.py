@@ -35,6 +35,11 @@ none. `SkillSavesThePlansItsConfirmsRead` runs N's two blocks and the list throu
 a double of terraform, runs the list over a refresh-only plan's shape, and reads the prose that joins
 them: the blocks do not themselves say that the list leads the confirm or that a declined one cleans up.
 
+**The list's verdict (#1137).** A failed read prints no rows, as a plan with no changes does, so the list
+ends on a verdict line. The same class runs the line against doubles that fail, print what is not JSON,
+print a state file's keys and print a plan terraform marked errored, each of which must name the failure,
+and against a plan with no changes, which must not.
+
 Checkout inputs: .claude/skills/wiz/*.md .gitignore tests/e2e/Program.cs tests/e2e/SittingBrowser/Observations.cs tests/e2e/SittingBrowser/ObservationLine.cs tests/e2e/SittingBrowser/SittingBrowser.cs tests/e2e/SittingBrowser/SittingCommand.cs
 """
 from __future__ import annotations
@@ -415,7 +420,7 @@ class SkillSavesThePlansItsConfirmsRead(Sitting):
         saved = self.saved_file(plan_block)
         plan_list = self.plan_list().replace("<root>", "infra/envs/poc/idp").replace("<plan>", f'"{saved}"')
         self.pin(utc_day(-1) + "\n")
-        changes = {"resource_changes": [
+        changes = {"planned_values": {}, "resource_changes": [
             {"address": "aws_cognito_user_pool.main", "change": {"actions": ["create"]}},
             {"address": "aws_kept.same", "change": {"actions": ["no-op"]}},
         ]}
@@ -458,17 +463,73 @@ class SkillSavesThePlansItsConfirmsRead(Sitting):
     def test_secret_rotations_list_reads_the_drift_where_a_refresh_only_plan_reports_its_moves(self) -> None:
         self.assertIn("with `resource_drift` in place of `resource_changes`", self.rotation_rule())
         # The shape of terraform 1.16's show -json on a refresh-only plan with one move: no resource_changes.
-        plan = {"resource_drift": [{"address": "aws_ssm_parameter.client_secret", "change": {"actions": ["update"]}}]}
+        plan = {"planned_values": {},
+                "resource_drift": [{"address": "aws_ssm_parameter.client_secret", "change": {"actions": ["update"]}}]}
         self.pin(utc_day(-1) + "\n")
         double = f"terraform() {{ printf '%s' '{json.dumps(plan)}'; }}\n"
         as_written = self.plan_list().replace("<root>", "infra/envs/poc/apps").replace("<plan>", "x")
         written = self.bash(f"{SOURCE}\n{double}{as_written}\n")
         self.assertEqual(written.returncode, 0, written.stderr)
-        self.assertEqual(written.stdout, "", "the line as written reads a refresh-only plan's moves")
+        self.assertEqual(written.stdout.splitlines(), [self.VERDICT_READ],
+                         "the line as written reads a refresh-only plan's moves")
         swapped = as_written.replace("resource_changes", "resource_drift")
         done = self.bash(f"{SOURCE}\n{double}{swapped}\n")
         self.assertEqual(done.returncode, 0, done.stderr)
-        self.assertEqual(done.stdout.splitlines(), ["update aws_ssm_parameter.client_secret"])
+        self.assertEqual(done.stdout.splitlines(), ["update aws_ssm_parameter.client_secret", self.VERDICT_READ])
+
+    VERDICT_READ = "plan list show exit=0 filter exit=0"
+
+    def run_list(self, double: str) -> tuple[subprocess.CompletedProcess, str]:
+        """The list as the skill holds it, against a double of terraform; what it did and the record's text."""
+        self.pin(utc_day(-1) + "\n")
+        line = self.plan_list().replace("<root>", "infra/envs/poc/apps").replace("<plan>", "x")
+        done = self.bash(f"{SOURCE}\n{double}\n{line}\n")
+        return done, (self.repo / PIN).with_name(f"{utc_day(-1)}.log").read_text()
+
+    def test_a_failed_show_prints_no_rows_and_a_verdict_naming_it(self) -> None:
+        done, record = self.run_list("terraform() { echo 'Error: no such file' >&2; return 3; }")
+        self.assertEqual(done.stdout.splitlines(), ["plan list show exit=3 filter exit=1"], done.stderr)
+        self.assertEqual(record.splitlines(), ["plan list show exit=3 filter exit=1"])
+
+    def test_output_that_is_not_json_is_the_filters_failure(self) -> None:
+        done, _ = self.run_list("terraform() { echo 'not json'; }")
+        self.assertEqual(done.stdout.splitlines(), ["plan list show exit=0 filter exit=1"], done.stderr)
+
+    def test_a_state_file_read_as_the_plan_fails_and_leaves_its_values_out_of_the_chat_and_the_record(self) -> None:
+        # The keys of terraform 1.16's show -json on a state file, which it reads as readily as a plan.
+        state = {"format_version": "1.0", "terraform_version": "1.16.5", "values": {"canary": "canary-secret"}}
+        done, record = self.run_list(f"terraform() {{ printf '%s' '{json.dumps(state)}'; }}")
+        self.assertEqual(done.stdout.splitlines(), ["plan list show exit=0 filter exit=1"], done.stderr)
+        for where in (done.stdout, done.stderr, record):
+            self.assertNotIn("canary-secret", where)
+
+    def test_a_plan_terraform_marked_errored_fails_and_lists_none_of_its_partial_changes(self) -> None:
+        # terraform 1.16 saves the file of a plan that failed, with these keys, and show -json reads it with exit 0.
+        plan = {"planned_values": {}, "errored": True, "complete": False, "resource_changes": [
+            {"address": "aws_a.b", "change": {"actions": ["create"]}},
+        ]}
+        done, record = self.run_list(f"terraform() {{ printf '%s' '{json.dumps(plan)}'; }}")
+        self.assertEqual(done.stdout.splitlines(), ["plan list show exit=0 filter exit=2"], done.stderr)
+        self.assertEqual(record.splitlines(), ["plan list show exit=0 filter exit=2"])
+
+    def test_a_read_plan_lists_its_changes_and_the_record_holds_them_with_the_verdict(self) -> None:
+        plan = {"planned_values": {}, "resource_changes": [
+            {"address": "aws_a.b", "change": {"actions": ["delete", "create"]}},
+            {"address": "aws_kept.same", "change": {"actions": ["no-op"]}},
+        ]}
+        done, record = self.run_list(f"terraform() {{ printf '%s' '{json.dumps(plan)}'; }}")
+        self.assertEqual(done.stdout.splitlines(), ["delete,create aws_a.b", self.VERDICT_READ], done.stderr)
+        self.assertEqual(record.splitlines(), ["delete,create aws_a.b", self.VERDICT_READ])
+
+    def test_a_plan_with_no_changes_is_an_empty_list_under_a_passing_verdict(self) -> None:
+        plan = {"planned_values": {}, "resource_changes": [{"address": "aws_kept.same", "change": {"actions": ["no-op"]}}]}
+        done, _ = self.run_list(f"terraform() {{ printf '%s' '{json.dumps(plan)}'; }}")
+        self.assertEqual(done.stdout.splitlines(), [self.VERDICT_READ], done.stderr)
+
+    def test_the_route_makes_any_other_verdict_a_stop(self) -> None:
+        self.assertIn("# both 0, or stop:", self.plan_list())
+        route = " ".join(self.between("- **Plans (#1090 Q7).**", "- **A lost `claude`").split())
+        self.assertIn("any other verdict is a rule 7 stop (#1137)", route)
 
 
 if __name__ == "__main__":
