@@ -3,7 +3,7 @@ export const meta = {
   description: 'Review every open pull request into main, or a named list, on the Standards and Spec axes, and post one comment per pull request ending in its review record',
   whenToUse: 'An integrator session, in the foreground, wants the open pull requests into main, or the ones it names, to carry a review record before tools/land.sh merges them; launched by scriptPath .claude/workflows/review-queue.js with args { repo, date, wt } and an optional prs list (the header comment has the full launch)',
   phases: [
-    { title: 'Inventory', detail: 'with no list, one queue agent lists the open pull requests into main; then one agent per pull request reads head, fork point, files, owner set, CI, citations and the comments and reviews already posted, and one agent per comment or review that carries a record line returns its body; they judge nothing. When the latest record names another head, one range agent says whether it is an ancestor and what the commits since it touch, or, for a rebuilt head, which new commits have the tree of an old one' },
+    { title: 'Inventory', detail: 'with no list, one queue agent lists the open pull requests into main; then one agent per pull request reads head, fork point, files, owner set, CI, citations and the comments and reviews already posted, and one agent per comment or COMMENTED review from a repository account whose body the inventory flags as holding the text of a record, a record line or a sentence quoting one, returns its body; they judge nothing. When the latest record names another head, one range agent says whether it is an ancestor and what the commits since it touch, or, for a rebuilt head, which new commits have the tree of an old one' },
     { title: 'Review', detail: 'two fresh agents per pull request, Standards and Spec, read the branch through origin and rebuild nothing' },
     { title: 'Mutate', detail: 'one agent per mutation, up to the cap, breaks what a test guards in a throwaway worktree, runs that test\'s project, and removes the worktree' },
     { title: 'Verdict', detail: 'one agent per pull request re-takes the severity of every finding the axes report and says merge or hold, held to the mutation rows; one comment is posted, its last line the record' },
@@ -51,9 +51,11 @@ export const meta = {
 // requests' pipelines (inventory, axes, mutations, verdict, post) overlap and one pull request's
 // mutations start while another is still under review. A run starts one launch agent (#687), then at
 // most one queue agent (none with a list), then per pull request one inventory, one body agent per
-// comment or review that carries a record line (#1018), one range agent when an earlier head carries
-// a record, two axes, up to maxMutationsPerPr mutations, one verdict and one post: 6 + the cap + the
-// records each, 9 + the records with the defaults, beside the run's launch and queue agents. The
+// flagged body, a comment or a COMMENTED review from an account of the repository whose body
+// RECORD_TEST flags (#1018, #1073), one range agent when an earlier head carries a record, two axes,
+// up to maxMutationsPerPr mutations, one verdict and one post: 6 + the cap + the flagged bodies each,
+// 9 + the flagged bodies with the defaults, beside the run's launch and queue agents. RECORD_TEST
+// also flags a sentence quoting a record, so the flagged bodies can outnumber the records. The
 // return's agents is the count that ran, beside the date, the base tip the run saw and the log
 // directory. A wide queue is kept under a session's guideline by naming pull requests or lowering the
 // cap.
@@ -389,9 +391,10 @@ const AXIS_GUIDE = `Read docs/agents/review.md (at origin/main) before anything 
 
 // ---------------------------------------------------------------- schemas
 // A comment or review as the inventory reports it: everything but its body, which is its length in
-// code points once its trailing whitespace is removed (#1030) and whether it carries a record line (#1018). On #796 six record comments of 11 to 21 KB
+// code points once its trailing whitespace is removed (#1030) and whether RECORD_TEST flags it, which
+// a record line and a sentence quoting one both earn (#1018). On #796 six record comments of 11 to 21 KB
 // outgrew what one agent would copy into one return, and it returned stand-ins for bodies 2 to 6, so
-// each record-bearing body comes back from an agent of its own (BODY below).
+// each flagged body readBodies wants comes back from an agent of its own (BODY below).
 const ENTRY = {
   type: 'object',
   properties: {
@@ -619,10 +622,10 @@ OUTPUT FILE: ${DIR(n)}/inventory.json
 6a. statedHeads: one entry per sha the body gives as this pull request's head, the head it says it describes ("head \`76704c5\`"): sha exactly as written, full or abbreviated, and quote, the sentence that gives it. Leave out the fork point, the base, a listed commit, and a sha the body names as an earlier head or as history ("the earlier head \`ed8d063\`"). [] when the body gives none. Do not compare it with the head: the script does.
 6c. description: the body exactly as gh serves it, byte for byte ("" when it is empty). commitMessages: one entry per commit of commits, in that order: sha, and message = \`git -C ${REPO} log -1 --format=%B <sha>\`, copied byte for byte, and parents = the number of shas \`git -C ${REPO} log -1 --format=%P <sha>\` prints (2 or more for a merge). Do not look for dates or Closes lines in them: the script does.
 6b. candidates: every candidate invariant test the diff adds or changes: each xUnit fact or theory (test = its class and method name, project = its test project's directory), each Terraform test file (project = its directory), each Python test companion (test and project = its path, and nothing added to the test). file: the repository path of the file the test is written in. guards: one sentence on what it guards. breaks: the source file it would take to break that, never the test itself.
-7. comments: one entry per line \`cd ${REPO} && gh api --paginate repos/{owner}/{repo}/issues/${n}/comments --jq '.[] | {id, author_association, html_url, created_at, length: (.body // "" | sub("[ \\t\\r\\n]+$"; "") | length), record: ((.body // "") | test("${RECORD_TEST}"))}'\` prints, its fields exactly as printed. reviews: the same for \`cd ${REPO} && gh api --paginate repos/{owner}/{repo}/pulls/${n}/reviews --jq '.[] | {id, state, author_association, html_url, submitted_at, length: (.body // "" | sub("[ \\t\\r\\n]+$"; "") | length), record: ((.body // "") | test("${RECORD_TEST}"))}'\`. Return no body: the script has each one that carries a record read by an agent of its own.
+7. comments: one entry per line \`cd ${REPO} && gh api --paginate repos/{owner}/{repo}/issues/${n}/comments --jq '.[] | {id, author_association, html_url, created_at, length: (.body // "" | sub("[ \\t\\r\\n]+$"; "") | length), record: ((.body // "") | test("${RECORD_TEST}"))}'\` prints, its fields exactly as printed. reviews: the same for \`cd ${REPO} && gh api --paginate repos/{owner}/{repo}/pulls/${n}/reviews --jq '.[] | {id, state, author_association, html_url, submitted_at, length: (.body // "" | sub("[ \\t\\r\\n]+$"; "") | length), record: ((.body // "") | test("${RECORD_TEST}"))}'\`. Return no body: the script has each one it needs read by an agent of its own.
 8. Write the whole result as JSON to the OUTPUT FILE, then return it. error is "" when nothing stopped you.`
 
-// One record-bearing comment's or review's body, read whole by an agent of its own (#1018).
+// One flagged comment's or review's body, read whole by an agent of its own (#1018).
 const bodyPrompt = (n, e, review) => `Read one ${review ? 'review' : 'comment'} on pull request #${n} and return its body whole. Read and report; judge nothing.
 
 ${HOUSE}
@@ -1235,9 +1238,9 @@ const review = async (n) => {
   }
 }
 // The bodies recordsIn reads (#1018): each comment, and each COMMENTED review, by an account the
-// repository let in whose inventory entry says it carries a record line, read by an agent of its own
-// and written into its entry. An entry the inventory flags as carrying none keeps no body, and
-// recordsIn passes over it as before. A body is taken only whole: one whose code points are fewer or
+// repository let in whose inventory entry RECORD_TEST flags, read by an agent of its own and written
+// into its entry, so a flagged body holding no record line costs an agent and reads as no record. Any
+// other entry keeps no body, and recordsIn passes over it as before. A body is taken only whole: one whose code points are fewer or
 // more than the inventory counted, or whose agent returned nothing or an error, is the reason
 // returned, naming its URL, so the review fails at the inventory and never reads a record with fewer
 // rows. null when every body came back whole. Both counts leave out the whitespace at the body's end,
