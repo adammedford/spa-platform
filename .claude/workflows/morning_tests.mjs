@@ -352,10 +352,17 @@ function stub(env, scriptArgs, served) {
       } else if (/^handover-read(-retry\d+)?$/.test(label)) {
         // The earlier hand-overs' reader (#969): the comments its prompt's jq names, verbatim.
         // served.handoverMangle: a reader that drops each body's last character, as a changed read would;
-        // 'newline': one that drops one trailing newline and nothing else (#1084).
+        // 'newline': one that drops one trailing newline and nothing else (#1084); 'reread-newline': one
+        // whose first read rewrites a body's first character, which no restore clears, and whose re-read
+        // drops one trailing newline and nothing else (#1096).
         const issue = served.issue === undefined ? issueWith([...QUESTIONS, CONFIRM]) : served.issue
         const at = /\.comments\[([\d,]+)\]/.exec(prompt)[1].split(',').map(Number)
-        out = { comments: at.map((i) => issue.comments[i]).map((c) => served.handoverMangle === 'newline' ? { ...c, body: c.body.replace(/\n$/, '') } : served.handoverMangle ? { ...c, body: c.body.slice(0, -1) } : c), error: '' }
+        const retried = /-retry\d+$/.test(label)
+        const dropNewline = served.handoverMangle === 'newline' || (served.handoverMangle === 'reread-newline' && retried)
+        const bend = (c) => dropNewline ? { ...c, body: c.body.replace(/\n$/, '') }
+          : served.handoverMangle === 'reread-newline' ? { ...c, body: '=' + c.body.slice(1) }
+            : served.handoverMangle ? { ...c, body: c.body.slice(0, -1) } : c
+        out = { comments: at.map((i) => issue.comments[i]).map(bend), error: '' }
       } else if (label.startsWith('comments-batch:')) {
         // A batch reader: the comments its prompt's jq names, verbatim. served.batchSwap: a reader
         // that returns another comment than the one named.
@@ -366,10 +373,13 @@ function stub(env, scriptArgs, served) {
         // 'tail' change comment 1 on every read so that only one of the index's two fields differs: 'head'
         // rewrites its first character (same bytes, another head), 'tail' drops its last non-newline
         // character, past the head. 'newline' drops one trailing newline from every body, as the reader did on #1071 (#1084).
-        const marker = (c) => (served.mangle === 'always' || (served.mangle === 'first' && !/-retry\d+$/.test(label))) ? { ...c, body: c.body.replace(/\*\*Q\d+\.\*\* /, '') } : c
+        // 'reread-newline' drops the marker on the first read, as 'first' does, and one trailing newline
+        // on a re-read and nothing else (#1096).
+        const retried = /-retry\d+$/.test(label)
+        const marker = (c) => (served.mangle === 'always' || ((served.mangle === 'first' || served.mangle === 'reread-newline') && !retried)) ? { ...c, body: c.body.replace(/\*\*Q\d+\.\*\* /, '') } : c
         const mangled = (c) => c.url.endsWith('#issuecomment-1') && served.mangle === 'head' ? { ...c, body: '=' + c.body.slice(1) }
           : c.url.endsWith('#issuecomment-1') && served.mangle === 'tail' ? { ...c, body: c.body.replace(/(.)(\n*)$/s, '$2') }
-          : served.mangle === 'newline' ? { ...c, body: c.body.replace(/\n$/, '') } : marker(c)
+          : served.mangle === 'newline' || (served.mangle === 'reread-newline' && retried) ? { ...c, body: c.body.replace(/\n$/, '') } : marker(c)
         out = { comments: at.map((i) => mangled(issue.comments[served.batchSwap ? (i + 1) % issue.comments.length : i])), error: '' }
       } else if (label === 'verify') {
         const v = served.verify || {}
@@ -2069,6 +2079,12 @@ try {
     const withNewlines = issueWith([...QUESTIONS, { ...CONFIRM, body: CONFIRM.body + '\n\n' }])
     const lost = await execute(newRepo(), { date: DATE }, { issue: withNewlines, mangle: 'newline' })
     if (lost.result.refusals.length || lost.labels.some((l) => /-retry\d+$/.test(l))) fail(`a reader that drops a trailing newline: refused or re-read: ${JSON.stringify(lost.result.refusals)} ${lost.labels.join(', ')}`)
+    // The re-read's own restore (#1096): a first read with another fault sends the comment to a re-read, and
+    // the re-read drops a trailing newline. It is given back there too, so the one re-read is enough.
+    if (!QUESTIONS[0].body.endsWith('\n')) fail('a re-read that drops a trailing newline: the fixture\'s first question comment ends in no newline')
+    const relost = await execute(newRepo(), { date: DATE }, { mangle: 'reread-newline' })
+    if (!relost.labels.includes('comments-batch:1-retry1')) fail(`a re-read that drops a trailing newline: the first read's fault sent nothing to a re-read: ${relost.labels.join(', ')}`)
+    if (relost.result.refusals.length || relost.labels.includes('comments-batch:1-retry2') || !relost.result.apply.answers[4]) fail(`a re-read that drops a trailing newline: refused or re-read again: ${JSON.stringify(relost.result.refusals)} ${relost.labels.join(', ')}`)
     if (always.labels.includes('classify') || APPLIERS(always.labels).length) fail(`a body changed on every read: Apply ran: ${always.labels.join(', ')}`)
     if (/PHASE FILE|OUTPUT FILE/.test(cp)) fail('the comments reader writes a file, so a rerun could reuse stale comments')
     const stopped = await execute(newRepo(), { date: DATE }, { verify: { outcome: 'stop', step: 3, reason: 'dirty' } })
@@ -3207,6 +3223,10 @@ try {
     // A reader that drops one trailing newline is given it back, as Apply's are (#1084): no re-read, no refusal.
     const lostLine = await execute(newRepo(), { date: DATE }, { issue: withEarlier(comment(97, W1 + '\n', '2026-10-21T09:00:00Z')), ...RED, handoverMangle: 'newline' })
     if (lostLine.result.handover.mode === 'whole' || lostLine.result.refusals.some((x) => /earlier hand-over/.test(x)) || lostLine.labels.some((l) => /^handover-read-retry/.test(l))) fail(`#969: a reader that drops a trailing newline of the earlier hand-over was refused or re-read: mode ${lostLine.result.handover.mode}, ${lostLine.labels.join(', ')}`)
+    // The re-read's own restore (#1096): a first read with another fault, and a re-read that drops a trailing newline.
+    const relostLine = await execute(newRepo(), { date: DATE }, { issue: withEarlier(comment(97, W1 + '\n', '2026-10-21T09:00:00Z')), ...RED, handoverMangle: 'reread-newline' })
+    if (!relostLine.labels.includes('handover-read-retry1')) fail(`#969: the first read's fault sent the earlier hand-over to no re-read: ${relostLine.labels.join(', ')}`)
+    if (relostLine.result.handover.mode === 'whole' || relostLine.result.refusals.some((x) => /earlier hand-over/.test(x)) || relostLine.labels.includes('handover-read-retry2')) fail(`#969: a re-read that drops a trailing newline of the earlier hand-over was refused or re-read again: mode ${relostLine.result.handover.mode}, ${relostLine.labels.join(', ')}`)
 
     // 28b. The After pass, against an earlier "## After <date>": the same rules.
     const a1 = await afterRun({ after: { ci: 'red' } })
