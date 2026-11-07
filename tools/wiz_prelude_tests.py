@@ -35,6 +35,12 @@ preflight lines as written, against doubles, and reads the record for each line'
 verdict; the plan list's cases read its first record line the same way. Rule 6 says the record holds
 every command and every output, and a bare pipeline keeps that only by echoing itself.
 
+**Which authority the System keychain holds (#1140).** A name matches an older authority left there by
+`certs.sh --new-ca`, and the login keychain's copy satisfies `security verify-cert`, so
+`SkillMatchesTheAuthorityByFingerprint` runs Stage 0's CA line against a double of `security` that keeps
+each keychain apart and the real openssl on certificates made for the case. The expected hashes come
+from the certificate's own bytes, not from the line's openssl and sed.
+
 **The plans a confirm reads (#1136).** The route's plan list reads a saved file, and N's plans saved
 none. `SkillSavesThePlansItsConfirmsRead` runs N's two blocks and the list through the prelude against
 a double of terraform, runs the list over a refresh-only plan's shape, and reads the prose that joins
@@ -54,11 +60,13 @@ Checkout inputs: .claude/skills/wiz/*.md .gitignore tests/e2e/Program.cs tests/e
 from __future__ import annotations
 
 import datetime
+import hashlib
 import json
 import os
 import pathlib
 import re
 import shutil
+import ssl
 import stat
 import subprocess
 import tempfile
@@ -619,6 +627,120 @@ class SkillRecordsStage0sLines(Sitting):
                   "pmset() { echo ' sleep 0'; }")
         done, record = self.run_line("; pmset -g | awk", double)
         self.assertEqual(record[0], f"$ pmset -g | awk '{done.stderr.strip()}'")
+
+
+class SkillMatchesTheAuthorityByFingerprint(Sitting):
+    """Stage 0 passes only on the current authority in the System keychain, not on its name (#1140)."""
+
+    SYSTEM = "/Library/Keychains/System.keychain"
+    LOGIN = "~/Library/Keychains/login.keychain-db"
+    CERT = ".certs/spa-platform-poc-ca.pem"
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        super().setUpClass()
+        made = pathlib.Path(tempfile.mkdtemp(prefix="wiz-ca-"))
+        cls.addClassCleanup(shutil.rmtree, made, True)
+        cls.pem = {}
+        cls.sha = {}
+        for label in ("current", "stale"):
+            subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
+                            "-subj", "/CN=SPA Platform poc Local CA", "-keyout", str(made / "k"),
+                            "-out", str(made / label)], capture_output=True, timeout=60, check=True)
+            cls.pem[label] = (made / label).read_text()
+            cls.sha[label] = hashlib.sha256(ssl.PEM_cert_to_DER_cert(cls.pem[label])).hexdigest().upper()
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.env["PATH"] = self.env["PATH"] + ":" + str(pathlib.Path(shutil.which("openssl")).parent)
+        self.pin(utc_day(-1) + "\n")
+        self.cert = self.repo / self.CERT
+        self.cert.parent.mkdir()
+        self.cert.write_text(self.pem["current"])
+
+    def double(self, system: tuple[str, ...], login: tuple[str, ...] = ()) -> str:
+        """`security find-certificate` as its manual has it: -a for every match, -Z for the hashes."""
+        rows = {self.SYSTEM: " ".join(self.sha[c] for c in system), self.LOGIN: " ".join(self.sha[c] for c in login)}
+        return f"""security() {{
+  local all="" hashes="" name="" keychain="" rows="" found="" hash
+  shift
+  while [ $# -gt 0 ]; do
+    case "$1" in -a) all=1 ;; -Z) hashes=1 ;; -c) name="$2"; shift ;; *) keychain="$1" ;; esac
+    shift
+  done
+  if [ "$name" = "SPA Platform poc Local CA" ]; then
+    case "$keychain" in
+      {self.SYSTEM}) rows="{rows[self.SYSTEM]}" ;;
+      "") rows="{rows[self.SYSTEM]} {rows[self.LOGIN]}" ;;
+      *) rows="{rows[self.LOGIN]}" ;;
+    esac
+  fi
+  for hash in $rows; do
+    found=1
+    [ -z "$hashes" ] || printf 'SHA-256 hash: %s\\nSHA-1 hash: 0000\\n' "$hash"
+    printf 'keychain: "%s"\\n    "labl"<blob>="%s"\\n' "$keychain" "$name"
+    [ -n "$all" ] || break
+  done
+  [ -n "$found" ] || {{ echo 'security: The specified item could not be found in the keychain.' >&2; return 44; }}
+}}"""
+
+    def run_line(self, double: str) -> tuple[subprocess.CompletedProcess, list[str]]:
+        found = [line for line in SKILL_FILES[0].read_text().splitlines() if "openssl x509 -in" in line]
+        self.assertEqual(len(found), 1, f"SKILL.md should hold one CA line: {found}")
+        done = self.bash(f"{SOURCE}\n{double}\n{found[0]}\n")
+        return done, (self.repo / PIN).with_name(f"{utc_day(-1)}.log").read_text().splitlines()
+
+    def verdict(self, done: subprocess.CompletedProcess) -> str:
+        return done.stdout.splitlines()[-1] if done.stdout else f"no output: {done.stderr}"
+
+    def test_the_current_authority_in_the_system_keychain_passes(self) -> None:
+        done, _ = self.run_line(self.double(("current",)))
+        self.assertEqual(self.verdict(done), "ca lookup exit=0 match exit=0")
+
+    def test_a_stale_authority_of_the_same_name_is_a_failing_verdict(self) -> None:
+        done, record = self.run_line(self.double(("stale",)))
+        self.assertEqual(self.verdict(done), "ca lookup exit=0 match exit=1")
+        self.assertEqual(record[-1], "ca lookup exit=0 match exit=1")
+
+    def test_the_current_authority_found_first_beside_a_stale_one_passes(self) -> None:
+        done, _ = self.run_line(self.double(("current", "stale")))
+        self.assertEqual(self.verdict(done), "ca lookup exit=0 match exit=0")
+
+    def test_the_current_authority_found_after_a_stale_one_passes(self) -> None:
+        done, _ = self.run_line(self.double(("stale", "current")))
+        self.assertEqual(self.verdict(done), "ca lookup exit=0 match exit=0")
+
+    def test_the_login_keychains_copy_does_not_satisfy_the_check(self) -> None:
+        done, _ = self.run_line(self.double(("stale",), login=("current",)))
+        self.assertEqual(self.verdict(done), "ca lookup exit=0 match exit=1")
+
+    def test_no_authority_of_that_name_keeps_each_exit_apart(self) -> None:
+        done, record = self.run_line(self.double(()))
+        self.assertEqual(self.verdict(done), "ca lookup exit=44 match exit=1")
+        self.assertEqual(record[-1], "ca lookup exit=44 match exit=1")
+
+    def test_no_certificate_file_is_a_failing_verdict(self) -> None:
+        self.cert.unlink()
+        done, record = self.run_line(self.double(("current",)))
+        self.assertEqual(self.verdict(done), "ca lookup exit=0 match exit=1")
+        self.assertIn("CA file SHA-256: none", done.stdout.splitlines())
+        self.assertGreater(record.index("CA file SHA-256: none"), 1, "openssl's own error stays in the record")
+
+    def test_a_certificate_file_that_does_not_parse_is_a_failing_verdict(self) -> None:
+        self.cert.write_text("not a certificate\n")
+        done, _ = self.run_line(self.double(("current",)))
+        self.assertEqual(self.verdict(done), "ca lookup exit=0 match exit=1")
+
+    def test_the_record_holds_both_commands_every_hash_and_the_verdict(self) -> None:
+        done, record = self.run_line(self.double(("stale", "current")))
+        self.assertEqual(record[0], f"$ openssl x509 -in {self.CERT} -noout -fingerprint -sha256")
+        self.assertEqual(len(record), 7, record)
+        self.assertRegex(record[1], r"Fingerprint=")
+        self.assertEqual(record[2], f"CA file SHA-256: {self.sha['current']}")
+        self.assertIn(f'security find-certificate -a -c "SPA Platform poc Local CA" -Z {self.SYSTEM}', record[3])
+        self.assertEqual(record[4:], [f"SHA-256 hash: {self.sha['stale']}", f"SHA-256 hash: {self.sha['current']}",
+                                      "ca lookup exit=0 match exit=0"])
+        self.assertEqual(done.stdout.splitlines(), [record[2]] + record[4:], done.stderr)
 
 
 class SkillGivesEachSittingItsOwnWayOutOfALostClaude(unittest.TestCase):
