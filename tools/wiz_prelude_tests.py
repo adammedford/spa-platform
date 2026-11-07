@@ -532,5 +532,40 @@ class SkillSavesThePlansItsConfirmsRead(Sitting):
         self.assertIn("any other verdict is a rule 7 stop (#1137)", route)
 
 
+class SkillGivesEachSittingItsOwnWayOutOfALostClaude(unittest.TestCase):
+    """D10 restores D2's copy and posts on #348, so sitting C has its own way out (#1138)."""
+
+    def setUp(self) -> None:
+        text = SKILL_FILES[0].read_text()
+        found = re.search(r"- \*\*A lost `claude`.*?(?=- \*\*AWS Settings)", text, re.S)
+        self.assertIsNotNone(found, "SKILL.md's route has no lost-claude item")
+        self.item = " ".join(found.group(0).split())
+
+    def sitting_c(self) -> str:
+        found = re.search(r"\*\*Sitting C never offers D10 \(#1138\)\.\*\*.*", self.item)
+        self.assertIsNotNone(found, f"the item gives sitting C no way out: {self.item}")
+        return found.group(0)
+
+    def test_only_sitting_d_is_offered_d10(self) -> None:
+        self.assertIn("**Sitting D offers D10**", self.item)
+        self.assertNotIn("A rule 7 stop that offers D10", self.item)
+
+    def test_sitting_c_asks_c5s_question_and_posts_on_its_own_tickets(self) -> None:
+        way_out = self.sitting_c()
+        self.assertIn("C5's question", way_out)
+        for ticket in ("#242", "#63"):
+            self.assertIn(ticket, way_out)
+
+    def test_sitting_c_restores_nothing_and_posts_nothing_on_d_s_ticket(self) -> None:
+        way_out = self.sitting_c()
+        self.assertIn("Nothing is restored", way_out)
+        self.assertNotIn('cp -p', way_out)
+        self.assertEqual(way_out.count("#348"), 1, way_out)
+        self.assertIn("#348 is not its ticket", way_out)
+
+    def test_the_new_session_keeps_the_lost_sittings_pin(self) -> None:
+        self.assertIn("runs no `--pin`", self.item)
+
+
 if __name__ == "__main__":
     unittest.main()
