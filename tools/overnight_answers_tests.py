@@ -190,12 +190,14 @@ class MatchingTests(ReaderTestCase):
                          f"#{NIGHT} {TITLE} Q3 names #{PR}, no Confirm covers it: Third, with #{PR}.")
 
     def test_a_plain_mark_is_followed_by_a_space_or_a_tab(self):
-        # A tab opens a question as a space does (Q2). A digit (Q3), a letter (Q4) or a line break
-        # (Q5) after the full stop does not, so each of those lines stays Q2's text, and the only
-        # line printed is Q2's. #5 is in none of Q1's or Q2's own words, so a mark read at any of
-        # the three takes the number with it and changes the line (#1079).
+        # A tab opens a question as a space does (Q2). A digit (Q3), a letter of either case (Q4,
+        # Q5), punctuation (Q6) or a line break (Q7) after the full stop does not, so each of those
+        # lines stays Q2's text, and the only line printed is Q2's. #5 is in none of Q1's or Q2's
+        # own words, so a mark read at any of them takes the number with it and changes the line.
+        # Together they tell the space-or-tab rule from a list of what may not follow (#1079).
         body = questions("**Q1.** First.", "Q2.\tSecond.", f"Q3.5 is a version, with #{PR}.",
-                         f"Q4.x is a name, with #{PR}.", f"Q5.\nA line after it, with #{PR}.")
+                         f"Q4.x is a name, with #{PR}.", f"Q5.X is a name, with #{PR}.",
+                         f"Q6.) is punctuation, with #{PR}.", f"Q7.\nA line after it, with #{PR}.")
         self.assertLines(self.read([comment(body)]),
                          f"#{NIGHT} {TITLE} Q2 names #{PR}, no Confirm covers it: Second.")
 
