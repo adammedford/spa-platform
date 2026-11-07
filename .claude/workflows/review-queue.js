@@ -936,8 +936,9 @@ const mutationRow = (n, m, i, got) => {
   const cell = (m.test || '').trim()
   // A Node companion is run as `node <file>`, so its run is its file whatever project the inventory's
   // cell names (#938): on #796 a stated row on overnight_tests.mjs took the directory as its project.
-  // A stated row has no file but a same-test candidate's, so one scoped to a check is known by the
-  // .mjs file its cell names; that makes it only a caught row, which the verdict still has to answer.
+  // A stated row has no file but a same-test candidate's, so with none, or scoped to a check, it is
+  // known by the .mjs file its cell names; that makes it only a caught row, which the verdict still
+  // has to answer (#1069), since only a candidate's file, not the author's cell, shows the run was it.
   const nodeFile = /\.mjs$/.test(m.file || '') || /\.mjs$/.test((/^[^\s(]*/.exec(cell) || [''])[0])
   const wholeFile = !!m.file && (m.project === m.file || nodeFile) && (cell === m.file || cell === m.file.split('/').pop())
   // A nomination's cls, from a cell 'test_x (pkg.Class)', is that class when unittest printed the
@@ -949,9 +950,11 @@ const mutationRow = (n, m, i, got) => {
   // check is a block of the file, and its failures are its fail() messages, which no cell such as
   // 'x_tests.mjs check 39' can match by name (#905). On #798 and #796 a stated row red only on its
   // own checks' messages read did-not-fail, and no acceptance could answer it. So a row there is a
-  // caught row unless it names the whole file (wholeFile above, whose failures are all its own),
-  // which the verdict answers when it verifies the messages are the named checks' own, and holds
-  // otherwise.
+  // caught row unless wholeFile above holds, whose failures are all its own, which takes a file on
+  // the row as well as a cell naming that file. A row with no file is a caught row even when its cell
+  // is the whole .mjs file: a stated or nominated one with no same-test candidate, or a held one
+  // with no candidate it names (#1069). The verdict answers a caught row when it verifies the
+  // messages are the named checks' own, and holds otherwise.
   const checksOnly = (/\.mjs$/.test(m.project || '') || nodeFile) && !wholeFile
   if (caughtElsewhere && !checksOnly && (m.kind === 'stated' || m.kind === 'nominated')) {
     row.why = `the project went red only on ${row.failingNames.join(', ')}, and a ${m.kind} mutation keeps its own test: ${row.why}`

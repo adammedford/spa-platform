@@ -862,9 +862,10 @@ try {
   // A Node companion prints no test names, only its checks' fail() messages (#905): on #798 a stated
   // row 'overnight_tests.mjs check 39', red only on check 39's own messages, read did-not-fail, and
   // the verdict's acceptance could not answer it. A row on a Node companion, identified by its .mjs
-  // project, its own .mjs file or the .mjs file its cell names, is a caught row unless it names the
-  // whole file: accepted, it reproduces and merges; not accepted, it reads did-not-fail and holds. A
-  // stated row on another project, red only on other tests, still reads did-not-fail whatever the
+  // project, its own .mjs file or the .mjs file its cell names, is a caught row unless the classifier's
+  // wholeFile holds, which takes a file on the row as well as a cell naming that file (#1069): accepted,
+  // it reproduces and merges; not accepted, it reads did-not-fail and holds. A stated row on another
+  // project, red only on other tests, still reads did-not-fail whatever the
   // verdict accepts, and the verdict prompt says how to judge the messages: the rule for a row red on
   // another check's message is scoped to a row on an .mjs file, as the classifier reads it (#938), and
   // keeps a held or candidate row's #684/#689 catch (#936). Each such row's line names the cell to
@@ -918,8 +919,9 @@ try {
   // An .mjs companion's row is read by its file (#938): on #796 the inventory gave a stated row on
   // overnight_tests.mjs the directory as its project, which overrode its candidate's, so the row was
   // neither the whole file nor an .mjs row, and red on the companion's own messages it held. Named by
-  // its path or basename it is the whole file and merges unaccepted; scoped to a check it is a caught
-  // row the verdict answers. A Terraform file and a .py companion with a directory project hold as before.
+  // its path or basename, with a same-test candidate giving it that file, it is the whole file and
+  // merges unaccepted; scoped to a check it is a caught row the verdict answers. A Terraform file and
+  // a .py companion with a directory project hold as before.
   checks++
   {
     const MJS = '.claude/workflows/overnight_tests.mjs'
@@ -936,6 +938,21 @@ try {
       const c = resultOf(213, result)
       const m = (c.mutations || []).find((x) => x.test === test && x.kind === 'stated') || {}
       if (m.result !== want || c.verdict !== verdict) fail(`PR 213 with the stated row ${JSON.stringify(test)} on project .claude/workflows red only on the companion's own messages, ${caught.length ? 'accepted' : 'not accepted'}: row ${JSON.stringify({ result: m.result })}, verdict ${c.verdict}, expected ${want} and ${verdict}`)
+    }
+    // With no same-test candidate a stated row has no file, so a cell that is the whole .mjs file is
+    // still a caught row (#1069): nothing but the author's cell says the run was that file, so it
+    // fails closed to the verdict, on either project. Read as the whole file it would merge unaccepted.
+    for (const test of [MJS, 'overnight_tests.mjs']) {
+      for (const project of [MJS, '.claude/workflows']) {
+        for (const [caught, want, verdict] of [[[test], 'reproduced', 'merge'], [[], 'did-not-fail', 'hold']]) {
+          const SHAPE = { 213: pr(213, [MJS, '.claude/workflows/overnight.js'], { statedMutations: [stated(test, 1, -1, project)] }) }
+          env = run({ prs: [213] }, SHAPE, { mutate: { [test]: { ...row('reproduced', 1, 1), failingNames: MSGS } }, caught: { 213: caught } })
+          result = await execute(env)
+          const c = resultOf(213, result)
+          const m = (c.mutations || []).find((x) => x.test === test && x.kind === 'stated') || {}
+          if (m.result !== want || c.verdict !== verdict) fail(`PR 213 with the stated row ${JSON.stringify(test)} on project ${project}, no same-test candidate, red only on the companion's own messages, ${caught.length ? 'accepted' : 'not accepted'}: row ${JSON.stringify({ result: m.result })}, verdict ${c.verdict}, expected ${want} and ${verdict}`)
+        }
+      }
     }
     // Known by its file alone (#940): a stated row whose cell leads with no .mjs path, on a directory
     // project, takes its .mjs file from the same-test candidate, and that file makes it a caught row.
