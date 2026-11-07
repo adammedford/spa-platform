@@ -69,7 +69,16 @@ by the caller gives the verdict, both runs' files kept; the benchmark itself nev
 than 10 is refused. A run that stops before judging (docker failed, the probe failed, the `--json`
 file could not be written) is also `bench: no verdict:`, exit 2, after its traceback: it says nothing
 about the gateway, so it is neither a pass nor a breach, and a check never ends without its verdict
-line (CODING_STANDARDS.md). Without `--verdict` a run reports as before and exits 0.
+line (CODING_STANDARDS.md).
+
+**Without `--verdict`** no exit judges the gateway. A run that reaches its report and writes its
+`--json` file exits 0, whatever its marks say. One that stops first exits 1: `SystemExit` from the
+docker lookup when `docker` is not on PATH, and otherwise the traceback of the uncaught error that
+stopped it, a `RuntimeError` from a failed docker command, a failed stand-in seed, a container that
+never printed its line, or a probe that did not start or failed, or an `OSError` when `git` is
+missing or the `--json` file could not be written. The `seed` subcommand's version check is a
+`SystemExit` too, exit 1 inside its container, which the run reads as a failed seed. In either mode
+argparse refuses a usage error, exit 2, before any run starts.
 """
 
 from __future__ import annotations
