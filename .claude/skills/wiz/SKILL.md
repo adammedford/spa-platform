@@ -143,7 +143,10 @@ Q3, Q6, Q7, Q11 and Q14 read here as its "Decided in a session" comment corrects
   the chat. "Holds secrets" means in its text: the apps root's saved file carries client secrets
   (rule 6), and Terraform prints them as `(sensitive value)`, so C3's and N's `shown` plans stay as
   they are. How the app renders a long plan is unproved (#1094): one hard to read there goes to ssh
-  too.
+  too. A plan a confirm rests on is saved, so this line has its `<plan>`: C3's, N's saved plan, secret
+  rotation's refresh-only plan and D2's (#1136). `deploy.sh`, `rollback.sh` and `teardown.sh` apply or
+  destroy inside themselves, and C1's preview reads the drift and not what the script will apply, so
+  theirs is led by the shape or the case list rule 2 names, with no list.
 - **A lost `claude` (#1090 Q14).** A rule 7 stop that offers D10 from a new session. The human
   starts it over ssh inside `screen` with `/remote-control` on, after typing `security
   unlock-keychain ~/Library/Keychains/login.keychain-db` in that shell, without which its `gh` calls
@@ -445,10 +448,13 @@ line of it:
   to rebuild it after a deployment or a rollback, and C1 was the last of either.
 - **Rule 2.** Secret rotation's refresh-only apply (its step 4) asks for a `yes` this tool's shell
   cannot type: run without one it prints its plan and exits 1 with `error asking for approval:
-  EOF`, applying nothing. So first `shown terraform -chdir=infra/envs/poc/apps plan -refresh-only`,
-  a read, whose plan must move the parameter's `version` and nothing else (the runbook's own
-  test); then, on confirm, the runbook's apply line as written with the approval on its standard
-  input, `printf 'yes\n' | shown terraform ...`, which is rule 2's confirm given through the shell
+  EOF`, applying nothing. So first `shown terraform -chdir=infra/envs/poc/apps plan -refresh-only
+  -input=false -out="$RUN/refresh.tfplan"`, a read, whose plan must move the parameter's `version`
+  and nothing else (the runbook's own test). The route's plan list on that file leads the confirm,
+  with `resource_drift` in place of `resource_changes`: a refresh-only plan reports its moves there
+  and has no `resource_changes`, so the line as written prints nothing, and with the swap an empty
+  list is a refresh that moved nothing, which fails that test (#1136). Then, on confirm, the runbook's apply line as written with the approval on its
+  standard input, `printf 'yes\n' | shown terraform ...`, which is rule 2's confirm given through the shell
   and not an edit of the line. The deletion of the old secret at the provider (secret rotation's
   step 7) and the removal of app 1's entry (step 2 of ending an app's sessions) each run on a
   confirm that names what goes (the secret's count before, the app and the release it comes back
@@ -568,12 +574,31 @@ one line naming the runbook followed, `docs/runbooks/teardown.md` at the commit,
 differed from it (#286 Q86, as C1's post does). The bootstrap root stays.
 
 **N, from nothing (#242, Q61 and Q79).** `docs/plan/05-infrastructure-and-cost.md`'s First
-deployment order from the first root that is absent:
+deployment order from the first root that is absent. Steps 2 and 4 plan and apply a root by **N's
+saved plan**, so the route's plan list has a file to read and the apply is the plan the confirm was
+given on (#1136). The file goes in rule 6's private directory whichever the root, since nothing here
+reads it after the apply:
+
+```bash
+P=$(mktemp -d); echo "$P"
+shown terraform -chdir=<root> plan -input=false -out="$P/n.tfplan"
+```
+
+Later calls set `P` again by hand. Run the route's plan list on `"$P/n.tfplan"` and ask for the
+confirm, then:
+
+```bash
+shown terraform -chdir=<root> apply -input=false "$P/n.tfplan"
+rm -rf "$P"
+```
+
+A declined confirm removes the directory too. A plan rule 2 stops on keeps it until the human has
+read the file in the ssh login the route names, and then removes it.
 
 1. `shown tools/scripts/certs.sh status`, then `shown tools/scripts/certs.sh import` when ACM holds
    no `*.spa-poc.test`.
-2. The identity root, then the apps root, each command as `shown terraform -chdir=<root> ...`:
-   `init -backend-config=backend.hcl`, `plan`, `apply` on confirm. Post both apply summaries on
+2. The identity root, then the apps root: `shown terraform -chdir=<root> init
+   -backend-config=backend.hcl`, then N's saved plan. Post both apply summaries on
    #242: this is a new user pool, so new client ids and test user passwords. The apply's Outputs
    block prints each `clientId`; rule 8 masks it in the post, and the post is read once for any
    client id in another shape before it goes.
@@ -587,10 +612,10 @@ deployment order from the first root that is absent:
    it again as `shown tools/scripts/platform-tfvars.sh --sample-digest sha256:<64 hex>` with the
    digest the human supplies. `images.auto.tfvars` must be absent (`teardown.sh` removes it; a
    plain `terraform destroy` leaves it, and it overrides the sample image).
-4. The platform root on the sample image, as `shown`: `plan`, read for the certificate found, no
-   per-app resource, and P-01's counts (one load balancer, one listener, one target group, one
-   service, one bucket; no NAT gateway, database or instance); `apply` on confirm, then `aws ecs
-   wait services-stable`. `infra/envs/poc/outputs.json` is now stale, or absent: a `tunnel.sh` run
+4. The platform root on the sample image, by N's saved plan, its plan read for the certificate
+   found, no per-app resource, and P-01's counts (one load balancer, one listener, one target group,
+   one service, one bucket; no NAT gateway, database or instance); then `aws ecs wait
+   services-stable`. `infra/envs/poc/outputs.json` is now stale, or absent: a `tunnel.sh` run
    before step 5 answers "no such host", because it reads the cell's names from that file, and
    `seed.sh` is what rewrites it.
 5. `shown tools/scripts/seed.sh`, with #236's Q107 capture in its order: the commit; the names only

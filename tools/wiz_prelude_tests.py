@@ -35,6 +35,7 @@ Checkout inputs: .claude/skills/wiz/*.md .gitignore tests/e2e/Program.cs tests/e
 from __future__ import annotations
 
 import datetime
+import json
 import os
 import pathlib
 import re
@@ -362,6 +363,90 @@ class SkillCountsTheWatchsLines(Sitting):
         for flag in flags:
             self.assertIn(f'"{flag}"', allowed.group(1), f"watch refuses {flag}")
             self.assertRegex(source, rf'options\.(ContainsKey|GetValueOrDefault)\("{flag}"\)', f"watch ignores {flag}")
+
+
+class SkillSavesThePlansItsConfirmsRead(Sitting):
+    """The route's plan list reads a saved file, so a confirm it leads needs one (#1136)."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.text = SKILL_FILES[0].read_text()
+        self.n_section = self.between("**N, from nothing", "**C4, the gate tags.**")
+
+    def between(self, start: str, end: str) -> str:
+        found = re.search(re.escape(start) + r".*?(?=" + re.escape(end) + ")", self.text, re.S)
+        self.assertIsNotNone(found, f"SKILL.md has nothing from {start!r} to {end!r}")
+        return found.group(0)
+
+    def step(self, number: int) -> str:
+        """Step n of N's list, its wrapped lines joined."""
+        found = re.search(rf"^{number}\. (.*?)(?=^{number + 1}\. )", self.n_section, re.M | re.S)
+        self.assertIsNotNone(found, f"N has no step {number}")
+        return " ".join(found.group(1).split())
+
+    def test_ns_saved_plan_reaches_the_list_and_the_apply_reads_the_same_file(self) -> None:
+        blocks = re.findall(r"^```bash\n(.*?)^```$", self.n_section, re.M | re.S)
+        self.assertEqual(len(blocks), 2, f"N should hold its saved plan's two blocks: {blocks}")
+        plan_block, apply_block = (block.replace("<root>", "infra/envs/poc/idp") for block in blocks)
+        listed = [line.strip() for line in self.text.splitlines()
+                  if line.strip().startswith("terraform -chdir=<root> show -json <plan>")]
+        self.assertEqual(len(listed), 1, f"SKILL.md should hold one plan list: {listed}")
+        saved = re.search(r'-out="(\$P/[^"]+)"', plan_block)
+        self.assertIsNotNone(saved, f"N's plan saves no file under $P: {plan_block}")
+        plan_list = listed[0].replace("<root>", "infra/envs/poc/idp").replace("<plan>", f'"{saved.group(1)}"')
+        self.pin(utc_day(-1) + "\n")
+        changes = {"resource_changes": [
+            {"address": "aws_cognito_user_pool.main", "change": {"actions": ["create"]}},
+            {"address": "aws_kept.same", "change": {"actions": ["no-op"]}},
+        ]}
+        # A double of terraform that writes the file plan is told to, and refuses a file that is not there.
+        double = ("terraform() { shift; case $1 in\n"
+                  "plan) for a in \"$@\"; do case $a in -out=*) echo saved > \"${a#-out=}\";; esac; done;;\n"
+                  f"show) [ -f \"$3\" ] && printf '%s' '{json.dumps(changes)}';;\n"
+                  "apply) test -f \"$3\" && echo \"applied $3\";;\n"
+                  "esac; }\n")
+        done = self.bash(f"{SOURCE}\n{double}{plan_block}{plan_list}\n{apply_block}"
+                         'test ! -e "$P" && echo removed\n')
+        self.assertEqual(done.returncode, 0, done.stderr)
+        printed = done.stdout.splitlines()
+        self.assertIn("create aws_cognito_user_pool.main", printed)
+        self.assertNotIn("no-op aws_kept.same", printed)
+        directory = printed[0]
+        self.assertIn(f"applied {directory}/{saved.group(1).removeprefix('$P/')}", printed)
+        self.assertEqual(printed[-1], "removed")
+
+    def test_ns_saved_plan_keeps_the_file_in_rule_6s_private_directory(self) -> None:
+        self.assertIn('P=$(mktemp -d); echo "$P"', self.n_section)
+
+    def test_steps_2_and_4_run_the_saved_plan_and_name_no_bare_plan_or_apply(self) -> None:
+        for number in (2, 4):
+            step = self.step(number)
+            self.assertIn("N's saved plan", step, f"step {number}")
+            self.assertNotRegex(step, r"`(plan|apply)`", f"step {number} names a plan with no file")
+
+    def test_secret_rotations_plan_saves_a_file_in_the_walks_private_directory(self) -> None:
+        rule = " ".join(self.between("- **Rule 2.** Secret rotation's", "The deletion of the old secret").split())
+        self.assertRegex(rule, r'shown terraform -chdir=infra/envs/poc/apps plan -refresh-only [^`]*-out="\$RUN/[^"]+"')
+        self.assertIn("plan list", rule)
+
+    def test_secret_rotations_list_reads_the_drift_where_a_refresh_only_plan_reports_its_moves(self) -> None:
+        rule = " ".join(self.between("- **Rule 2.** Secret rotation's", "The deletion of the old secret").split())
+        self.assertIn("with `resource_drift` in place of `resource_changes`", rule)
+        listed = [line.strip() for line in self.text.splitlines()
+                  if line.strip().startswith("terraform -chdir=<root> show -json <plan>")]
+        self.assertEqual(len(listed), 1, f"SKILL.md should hold one plan list: {listed}")
+        # The shape of terraform 1.16's show -json on a refresh-only plan with one move: no resource_changes.
+        plan = {"resource_drift": [{"address": "aws_ssm_parameter.client_secret", "change": {"actions": ["update"]}}]}
+        self.pin(utc_day(-1) + "\n")
+        double = f"terraform() {{ printf '%s' '{json.dumps(plan)}'; }}\n"
+        as_written = listed[0].replace("<root>", "infra/envs/poc/apps").replace("<plan>", "x")
+        written = self.bash(f"{SOURCE}\n{double}{as_written}\n")
+        self.assertEqual(written.returncode, 0, written.stderr)
+        self.assertEqual(written.stdout, "", "the line as written reads a refresh-only plan's moves")
+        swapped = as_written.replace("resource_changes", "resource_drift")
+        done = self.bash(f"{SOURCE}\n{double}{swapped}\n")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(done.stdout.splitlines(), ["update aws_ssm_parameter.client_secret"])
 
 
 if __name__ == "__main__":
