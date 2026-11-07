@@ -291,7 +291,7 @@ const REPLAY = {
   },
   required: ['listing', 'issue', 'phaseFiles', 'counts', 'creates', 'pending', 'renamed', 'stoppedAt', 'reason'],
 }
-const COMMENT_INDEXED = { type: 'object', properties: { author: { type: 'string' }, createdAt: { type: 'string' }, url: { type: 'string' }, bytes: { type: 'integer' }, tail: { type: 'integer' }, head: { type: 'string' } }, required: ['author', 'createdAt', 'url', 'bytes', 'head'] }
+const COMMENT_INDEXED = { type: 'object', properties: { author: { type: 'string' }, createdAt: { type: 'string' }, url: { type: 'string' }, bytes: { type: 'integer' }, tail: { type: 'integer', minimum: 0 }, head: { type: 'string' } }, required: ['author', 'createdAt', 'url', 'bytes', 'tail', 'head'] }
 const COMMENTS_INDEX = {
   type: 'object',
   properties: {
@@ -1460,8 +1460,14 @@ const utf8Bytes = (s) => { let n = 0; for (const ch of String(s)) { const cp = c
 // A reader drops a body's last newline (2026-11-05, #1071: 9867 bytes returned, 9868 in the index, on a
 // Confirm comment ending in two; #1084). Trailing newlines carry nothing, so the index records how many
 // the body ends in (tail) and the body is given exactly that many; every other byte is still held.
-const restoreTail = (c, ix) => c && ix && typeof ix.tail === 'number' && typeof c.body === 'string'
+const restoreTail = (c, ix) => c && ix && typeof c.body === 'string'
   ? { ...c, body: c.body.replace(/\n+$/, '') + '\n'.repeat(ix.tail) } : c
+// The index's entries whose tail the restore cannot use, each named (#1098). The jq prints a count from 0 to
+// the body's bytes, so anything else is a reader's own; Apply refuses it before reading a body, where it would
+// otherwise read as a count fault with nothing naming the field, or throw out of String.repeat.
+const tailFaults = (comments) => comments
+  .filter((c) => !(Number.isInteger(c.tail) && c.tail >= 0 && c.tail <= c.bytes))
+  .map((c) => `${c.url} has ${'tail' in c ? `tail ${JSON.stringify(c.tail)}` : 'no tail'}`)
 // The body held to the index is the restored one, and a count in the refusal names what the reader returned
 // (#1097): a diagnosis reads that number (#1084), and 262 returned that restores to 261 is no "262, 262".
 const bodyFault = (c, ix, returned) => {
@@ -2056,6 +2062,10 @@ const applyAnswers = async ({ date, issue, gate, refusals, reuse, after = false 
     : cr.error ? `the comments reader could not read the comments of #${issue}: ${cr.error}; nothing was sorted or applied`
       : cr.issue.number !== issue ? `the comments reader read the comments of #${cr.issue.number}, not #${issue}; nothing was sorted or applied`
         : ''
+  if (!commentsRefusal) {
+    const faults = tailFaults(cr.issue.comments || [])
+    if (faults.length) commentsRefusal = `the comments index of #${issue} gives no count of a body's trailing newlines to restore: ${faults.join('; ')}; nothing was sorted or applied; relaunch to apply`
+  }
   // The index, kept for the hand-over, which finds the night's earlier hand-overs in it (#969).
   const index = commentsRefusal ? null : cr.issue.comments || []
   // Every batch is read whole or the read fails: a body missing, or one from another comment than the

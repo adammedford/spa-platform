@@ -53,7 +53,7 @@ const MORNING_REL = `.scratch/overnight/log/morning-${DATE}`
 const WT = '/tmp/morning-tests-wt/overnight-2026-10-21'
 
 // ---------------------------------------------------------------- a minimal JSON Schema check
-// The subset the script's schemas use: type, properties, required, items, enum.
+// The subset the script's schemas use: type, properties, required, items, enum, minimum.
 const validate = (schema, value, where = '$') => {
   const bad = []
   if (!schema) return [`${where}: no schema`]
@@ -61,6 +61,7 @@ const validate = (schema, value, where = '$') => {
   const kind = Array.isArray(value) ? 'array' : value === null ? 'null' : Number.isInteger(value) ? 'integer' : typeof value
   if (t && !(t === kind || (t === 'number' && kind === 'integer'))) return [`${where}: ${kind}, expected ${t}`]
   if (schema.enum && !schema.enum.includes(value)) bad.push(`${where}: ${JSON.stringify(value)} not in ${schema.enum.join('|')}`)
+  if (schema.minimum !== undefined && value < schema.minimum) bad.push(`${where}: ${value} below ${schema.minimum}`)
   if (t === 'object') {
     for (const k of schema.required || []) if (!(k in value)) bad.push(`${where}.${k}: missing`)
     for (const [k, s] of Object.entries(schema.properties || {})) if (k in value) bad.push(...validate(s, value[k], `${where}.${k}`))
@@ -346,8 +347,9 @@ function stub(env, scriptArgs, served) {
         // The Apply phase's index (#319): the Overnight issue's comments, every one, in order, with the
         // first 200 characters of each body and no more (the prompt's jq is run on gh's shape in 19a).
         // served.commentsIssue: the number it reports reading, as a reader that read the wrong issue would.
+        // served.indexEntry: what the reader makes of comment 1's entry, as one returning what the jq cannot print (#1098).
         const issue = served.issue === undefined ? issueWith([...QUESTIONS, CONFIRM]) : served.issue
-        const indexed = (issue ? issue.comments : []).map((c) => ({ author: c.author, createdAt: c.createdAt, url: c.url, bytes: Buffer.byteLength(c.body), tail: /\n*$/.exec(c.body)[0].length, head: c.body.slice(0, 200) }))
+        const indexed = (issue ? issue.comments : []).map((c) => ({ author: c.author, createdAt: c.createdAt, url: c.url, bytes: Buffer.byteLength(c.body), tail: /\n*$/.exec(c.body)[0].length, head: c.body.slice(0, 200) })).map((c) => (served.indexEntry && c.url.endsWith('#issuecomment-1') ? served.indexEntry(c) : c))
         out = { issue: { number: served.commentsIssue || (issue ? issue.number : 0), comments: indexed }, error: served.commentsError || '' }
       } else if (/^handover-read(-retry\d+)?$/.test(label)) {
         // The earlier hand-overs' reader (#969): the comments its prompt's jq names, verbatim.
@@ -601,7 +603,8 @@ function stub(env, scriptArgs, served) {
         out = { url: `${URL(ISSUE)}#issuecomment-98`, posted: jsonAfter(prompt, 'POST') !== false, closed: jsonAfter(prompt, 'CLOSE') === true, reason: '', ...(served.afterHanded || {}) }
       } else throw new Error(`unexpected agent label ${label}`)
       const dropped = label === 'verify' ? (served.verifyDrop || []).map((f) => `$.${f}: missing`) : []
-      const bad = validate(opts.schema, out).filter((b) => !dropped.includes(b))
+      // served.indexEntry bends the index past its schema on purpose; the script's own guard is what answers it (#1098).
+      const bad = validate(opts.schema, out).filter((b) => !dropped.includes(b) && !(label === 'comments' && served.indexEntry && /\.tail: /.test(b)))
       if (bad.length) env.schemaFailures.push(`${label}: ${bad.slice(0, 3).join('; ')}`)
       for (const x of prompt.matchAll(/^OUTPUT FILE: (\S+)$/gm)) {
         fs.mkdirSync(path.dirname(x[1]), { recursive: true })
@@ -2115,6 +2118,11 @@ try {
       ['a reader that returns nothing', { nothingFrom: ['comments'] }, /the comments reader returned nothing/],
       ['a reader that reports an error', { commentsError: 'HTTP 502' }, /could not read the comments of #226: HTTP 502/],
       ['a reader that read another issue', { commentsIssue: 98 }, /read the comments of #98, not #226/],
+      // An index whose tail the restore cannot use names the field and the comment, and no body is read (#1098).
+      ['an index with no tail', { indexEntry: ({ tail: _, ...c }) => c }, /comments index of #226 .*#issuecomment-1 has no tail/],
+      ['an index with a negative tail', { indexEntry: (c) => ({ ...c, tail: -1 }) }, /comments index of #226 .*#issuecomment-1 has tail -1/],
+      ['an index with a fractional tail', { indexEntry: (c) => ({ ...c, tail: 1.5 }) }, /comments index of #226 .*#issuecomment-1 has tail 1\.5/],
+      ['an index with a tail past its bytes', { indexEntry: (c) => ({ ...c, tail: c.bytes + 1 }) }, /comments index of #226 .*#issuecomment-1 has tail \d+/],
       ['a body reader that returns nothing', { nothingFrom: ['comments-batch:1'] }, /were not all read: batch 1 \(.*\) returned nothing/],
       ['a body reader that returns another comment', { batchSwap: true }, /were not all read: batch 1 returned .*, not /],
     ]) {
@@ -2122,7 +2130,17 @@ try {
       if (!r.result.refusals.some((x) => named.test(x)) || !named.test(r.result.handover.text)) fail(`${label}: not named in the refusals and the hand-over: ${JSON.stringify(r.result.refusals)}`)
       if (r.labels.includes('classify') || APPLIERS(r.labels).length) fail(`${label}: Apply ran: ${r.labels.join(', ')}`)
       if (/Apply: dry, no Confirm comment/.test(r.result.handover.text) || Object.keys(r.result.apply.answers).length) fail(`${label}: the hand-over reads an unread issue as one with no Confirm comment`)
+      if (served.indexEntry && r.labels.some((l) => l.startsWith('comments-batch:'))) fail(`${label}: bodies were read against an index already refused: ${r.labels.join(', ')}`)
     }
+    // The tail's edges: 0 and a body that is nothing but newlines are both counts the jq prints, so neither is refused.
+    const onlyNewlines = await execute(newRepo(), { date: DATE }, { issue: issueWith([...QUESTIONS, CONFIRM, comment(98, '\n\n', '2026-10-21T08:00:00Z')]) })
+    if (onlyNewlines.result.refusals.some((x) => /comments index/.test(x))) fail(`a body of newlines alone, or a tail of 0: refused: ${JSON.stringify(onlyNewlines.result.refusals)}`)
+    // The reader's schema says the same, so a reader is told before the script has to refuse it.
+    const entry = stopped.calls.find((c) => c.label === 'comments').schema.properties.issue.properties.comments.items
+    const sound = { author: 'a', createdAt: 'b', url: 'u', bytes: 1, head: 'h' }
+    if (validate(entry, { ...sound, tail: 0 }).length) fail(`the index schema refuses a tail of 0: ${JSON.stringify(validate(entry, { ...sound, tail: 0 }))}`)
+    if (!validate(entry, sound).length) fail('the index schema does not require tail')
+    if (!validate(entry, { ...sound, tail: -1 }).length) fail('the index schema allows a negative tail')
   }
 
   // 19b. Replay checks for the pending-writes file before any replay step (#319). On 2026-10-22 it
