@@ -782,7 +782,7 @@ shown grep -E '^(login-prompt|tunnel-down|timeout|other|not-found) ' "$E/browser
 
 The watch writes no line before its first tick, an `--every` away, so a stop in that interval reads
 the confirm's empty log: a count of 0, no lines and `grep`'s `exit=1`. The apply has not run then, so
-that 0 observed no roll, and the post says the log is empty (#1135).
+that 0 observed no roll, and the post names the empty log as missing coverage (#1135).
 
 After convergence, and only then, the sitting browser makes the login. `/bff/login` discards the
 profile's session first, and the cleared provider makes it fill the form:

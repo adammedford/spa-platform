@@ -329,8 +329,9 @@ class SkillCountsTheWatchsLines(Sitting):
         self.assertEqual(kept, [earlier])
 
     def test_the_log_the_confirm_leaves_is_as_private_as_the_one_the_watch_creates(self) -> None:
-        # FileMode.Append keeps an existing file's mode, so the watch would not narrow a wider one; the
-        # block leans on the prelude's umask.
+        # UnixCreateMode applies "when a new file is created", so the watch's append would not narrow a
+        # wider one (https://learn.microsoft.com/en-us/dotnet/api/system.io.filestreamoptions.unixcreatemode);
+        # the block leans on the prelude's umask.
         bundle = self.stop_before_the_first_line()
         self.assertEqual(stat.S_IMODE((bundle / self.watch_log).stat().st_mode), 0o600)
 
@@ -338,6 +339,7 @@ class SkillCountsTheWatchsLines(Sitting):
         browser = (SITTING_BROWSER / "SittingBrowser.cs").read_text()
         # A log that exists already must not refuse the watch: WritePrivateAsync's other mode is CreateNew.
         self.assertIn('Path.Combine(bundle, WatchLog), line + "\\n", append: true', browser)
+        self.assertIn("Mode = append ? FileMode.Append : FileMode.CreateNew", browser)
         text = SKILL_FILES[0].read_text()
         self.assertLess(text.index(self.confirm_block()), text.index("shown sitting_browser watch main "))
 
