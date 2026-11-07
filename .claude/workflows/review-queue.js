@@ -91,10 +91,11 @@ export const meta = {
 // axis suspects it cannot fail, and a catch elsewhere confirms that, so the row is did-not-fail;
 // except on a Node companion, which prints no test names: a row whose project is an .mjs file, or
 // whose file or test cell's leading path is one, whatever project the inventory gives it (#938).
-// There a row of any kind is a caught row the verdict answers by its checks' fail() messages (#905),
-// and a held or candidate row red on another check's message keeps its catch when the check that
-// printed it guards the break and, for a candidate, its named check went red too or could not
-// (#936). A later review reads a caught cell as the named test alone, so a catcher, whose own break
+// There a row of any kind is a caught row unless the classifier reads it as its whole file
+// (wholeFile below), whose failures are all its own (#793). The verdict answers a caught row by its
+// checks' fail() messages (#905), and a held or candidate row red on another check's message keeps
+// its catch when the check that printed it guards the break and, for a candidate, its named check
+// went red too or could not (#936). A later review reads a caught cell as the named test alone, so a catcher, whose own break
 // nobody mutated, is neither answered nor cleared by it (#693). A held test the cap cuts is still
 // unanswered, so it holds the verdict as well as being named in the cap's line. The candidates a
 // `Review: ...` commit touches come next among the candidates. A candidate an earlier record
