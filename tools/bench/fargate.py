@@ -69,7 +69,8 @@ Set-Cookie holds the correlation cookie. The clock is that log line's duration_m
   0  ten clean restarts
   2  a usage error, a refusal, a failed AWS call or any other failure before restart 1's
      update-service is sent (no Region, no outputs document for it, no credentials, a missing tool,
-     the service not stable on gatewayImage); nothing is written
+     the service not stable on gatewayImage, a malformed image digest, caller account or hop task
+     id); nothing is written
   3  a breach: the scheduler stopped the new task for failing the load balancer's health checks
      (#286 Q148), the first such stop ending the run wherever it falls. ecs.tf's reading of the
      target group's defaults (#171) puts that stop past the T0 + 60 s hard bound, three failures 30 s
@@ -79,25 +80,34 @@ Set-Cookie holds the correlation cookie. The clock is that log line's duration_m
      further restart and nothing done to the service (the circuit breaker rolls back on its own);
      the files hold the restarts so far and the breach row
   4  incomplete: a deployment not stable within the waiter's bound, an expected log line absent
-     after a bounded wait, the probe never reaching the new task, another stop, or any other
-     failure once restart 1's update-service was sent, a failure of that call itself included,
-     since the service may have changed; the files hold the restarts so far, marked incomplete
-     with the reason
+     after a bounded wait, the probe never reaching the new task, another stop, a malformed task
+     id, deployment id, control-plane instant or 302 duration, or any other failure once restart
+     1's update-service was sent, a failure of that call itself included, since the service may
+     have changed; the files hold the restarts so far, marked incomplete with the reason
 
-**Secrecy** (Q7). No ARN, repository URI or account id reaches the .txt, the .json or stderr: tasks
-by id, an AWS error by its code, and every line written passed through redact(), which replaces
-each of the three with a placeholder. One exception: a twelve-digit run touching a letter or a digit
-is taken for part of a longer identifier (a digest, a task id) and kept, so another account's id is
-masked only where it stands alone; the caller's own is masked anywhere. Nothing this script reads
-puts another account's id against a letter: ARNs and repository URIs are replaced first, and an AWS
-error is reduced to its code.
+**Secrecy** (Q7, amended by #976's confirmed answers). The .txt, .json, stdout and stderr use the
+same field-aware publication policy. Arbitrary text has recognized ARNs and ECR repository URIs
+replaced with placeholders, and every contiguous sequence of twelve or more ASCII digits replaced in
+full, including sequences adjacent to letters. Repository URIs are recognized before replacing the
+known caller account. Only validated values from the designated Git commit, deployed image digest,
+ECS task-id and ECS deployment-id sources retain their identifier digits; the known caller account
+is still masked within those strings. Validated numerical measurements retain their numerical
+values, even if their digits incidentally contain an account-number sequence. These explicit
+exceptions mean the output does not promise the absence of every possible account-number substring.
+An identifier-shaped token in arbitrary text is not an exception. Required malformed identity or
+measurement evidence refuses the run before its first restart or makes it incomplete afterward;
+malformed optional diagnostic values are omitted with a fixed marker. Redaction operates on
+structured values before rendering or serialization, and detects literal digit sequences rather
+than separated, spelled-out or encoded numbers.
 """
 
 from __future__ import annotations
 
 import argparse
 import calendar
+import datetime
 import json
+import math
 import os
 import pathlib
 import re
@@ -122,11 +132,19 @@ HARD_BOUND_S = 60             # T0 + 60 s, the third check (#175 Q4, ecs.tf's co
 EXIT_CLEAN, EXIT_USAGE, EXIT_BREACH, EXIT_INCOMPLETE = 0, 2, 3, 4
 
 
-class Refused(Exception):
+class Stop(Exception):
+    """The message keeps its type here, since str() of an exception would lose Published (#976)."""
+
+    def __init__(self, message: str):
+        super().__init__(message)
+        self.message = message
+
+
+class Refused(Stop):
     """Before restart 1: exit 2 and write nothing."""
 
 
-class Incomplete(Exception):
+class Incomplete(Stop):
     """After restart 1 began: the files are written, marked incomplete, and exit 4."""
 
 
@@ -144,45 +162,214 @@ class AwsError(Exception):
 
 # --- secrecy ---------------------------------------------------------------------------------------
 
+# The division the Secrecy paragraph states (#976 Q219-Q226). redact() is for arbitrary text; it never
+# looks at what a token resembles. Everything written goes through publish_document(), by field path,
+# or for a line of stdout or stderr through compose(), before it is rendered, so no pass over the
+# rendered text exists to undo a kept identifier or corrupt a number.
+
+MALFORMED = "<malformed>"     # the fixed marker: a rejected value is never echoed (#976 contract 5)
+
 _ARN = re.compile(r"arn:aws[a-zA-Z-]*:[^\s\"',)]*")
 _REPOSITORY = re.compile(r"(?<![0-9])[0-9]{12}\.dkr\.ecr(?:-fips)?\.[a-z0-9-]+\.amazonaws\.com(?:\.cn)?/[^\s\"',)@:]*")
-_TWELVE = re.compile(r"(?<![0-9A-Za-z])[0-9]{12}(?![0-9A-Za-z])")
+_DIGIT_RUN = re.compile(r"[0-9]{12,}")
+
+# The designated sources' grammars, the only values that keep their digits: `git rev-parse HEAD` in
+# a SHA-1 repository, the digest gatewayImage pins, an ECS task ARN's last segment and the PRIMARY
+# deployment's id in update-service's answer (the shapes of #976's grilling record, fact 5).
+COMMIT = re.compile(r"[0-9a-f]{40}")
+IMAGE_DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
+TASK_ID = re.compile(r"[0-9a-f]{32}")
+DEPLOYMENT_ID = re.compile(r"ecs-svc/[0-9]{19}")
+# An AWS account id is twelve digits, which is what lets redact()'s digit rule cover the caller's.
+# https://docs.aws.amazon.com/accounts/latest/reference/manage-acct-identifiers.html
+CALLER_ACCOUNT = re.compile(r"[0-9]{12}")
+
+LATEST_EPOCH_S = 253402300799     # 9999-12-31T23:59:59Z, the last instant the ISO form can name
 
 
-def redact(text: str, account: Optional[str] = None) -> str:
-    """Every ECR repository URI becomes <repository> (an image keeps its @digest), every ARN <arn>
-    and every twelve-digit run standing alone <account id> (the rule tunnel.sh's session filter
-    keeps), so an account other than the caller's, or one redacted before the caller's is known,
-    is still masked where it stands alone. A run touching a letter or a digit, as in a sha256
-    digest or a task id, is taken for part of a longer identifier and kept, even when it is another
-    account's id (the Secrecy paragraph's one exception). The repository goes first, while its host
-    still starts with the account; then the caller's account itself, masked wherever it sits."""
-    text = _REPOSITORY.sub("<repository>", text)
-    if account:
-        text = text.replace(account, "<account id>")
-    return _TWELVE.sub("<account id>", _ARN.sub("<arn>", text))
+class Published(str):
+    """Text this policy has already passed. A subclass, so that an f-string or a str() loses the
+    type, and what lost it is arbitrary text again: the failure masks an id and leaks nothing."""
+
+
+def redact(text: str) -> str:
+    """Arbitrary text only: every ECR repository URI becomes <repository> (an image keeps what
+    follows it), every ARN <arn>, and every contiguous run of twelve or more ASCII digits
+    <account id>, whole, whatever touches it. The repository goes first, while its host still starts
+    with the account. The caller's own id is one such run (preflight refuses any other shape), so
+    this replaces it too. It does not read a token's shape and keeps nothing for resembling an
+    identifier: a designated value keeps its digits through publish_identifier() instead, and a
+    measurement stays a number by never being text."""
+    return _DIGIT_RUN.sub("<account id>", _ARN.sub("<arn>", _REPOSITORY.sub("<repository>", text)))
+
+
+def publish_text(value) -> Optional[str]:
+    """Arbitrary text: a task-definition name, a hostname, a log message, a stop reason. What is
+    Published stays; what is not a string is no text this script reads, so it is the marker."""
+    if value is None or isinstance(value, Published):
+        return value
+    return redact(value) if isinstance(value, str) else MALFORMED
+
+
+def publish_identifier(value, grammar: "re.Pattern[str]", account: Optional[str]) -> Published:
+    """A value from a designated source: kept only if it fits that source's grammar, and then with
+    the known caller's account masked inside it, the exact correlation being lost in that case
+    (#976 contract 2). The operational value the AWS calls use is not touched."""
+    if not isinstance(value, str) or not grammar.fullmatch(value):
+        return Published(MALFORMED)
+    return Published(value.replace(account, "<account id>") if account else value)
+
+
+def compose(template: str, **fields) -> Published:
+    """One line of stdout or stderr, or a reason, from a literal template: a Published field (an
+    identifier) and a number stand, and every other field is arbitrary text."""
+    return Published(template.format(**{name: value if isinstance(value, (Published, int, float)) else publish_text(value)
+                                        for name, value in fields.items()}))
+
+
+def is_measurement(value) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) or isinstance(value, float) and math.isfinite(value)
+
+
+def valid_status(value):
+    """An HTTP status, as the log's `status` and the probe's status line give it."""
+    return value if isinstance(value, int) and not isinstance(value, bool) and 100 <= value <= 599 else MALFORMED
+
+
+def valid_duration(value):
+    """A stopwatch reading, so never negative, unlike the differences of clocks ms() derives. The
+    upper bound is a thousand years in ms: float() below it cannot overflow."""
+    return value if is_measurement(value) and 0 <= value <= LATEST_EPOCH_S * 1000 else MALFORMED
+
+
+def valid_event_ms(value):
+    """CloudWatch's event timestamp, whole ms since the epoch.
+    https://docs.aws.amazon.com/AmazonCloudWatchLogs/latest/APIReference/API_OutputLogEvent.html"""
+    return value if isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= LATEST_EPOCH_S * 1000 else MALFORMED
+
+
+def _text(value, _account):
+    return publish_text(value)
+
+
+def _measured(value, _account):
+    return value if value is None or is_measurement(value) else MALFORMED
+
+
+def _optional(valid):
+    return lambda value, _account: None if value is None else valid(value)
+
+
+def _flag(value, _account):
+    return value if isinstance(value, bool) or value is None else MALFORMED
+
+
+def _identifier(grammar):
+    return lambda value, account: None if value is None else publish_identifier(value, grammar, account)
+
+
+def _commit(value, account):
+    # "unknown" is the fallback commit() takes when git gives nothing, an absence and no value.
+    return value if value == "unknown" else publish_identifier(value, COMMIT, account)
+
+
+def _instant(value, _account):
+    """An ISO instant the script read, kept as given. No form of it holds twelve digits in a row."""
+    if value is None:
+        return None
+    try:
+        time_ns(value)
+    except ValueError:
+        return MALFORMED
+    return value if isinstance(value, str) else MALFORMED
+
+
+def _unlisted(value, _account):
+    """A field no table names gains nothing from its name or its type (#976 boundaries)."""
+    if value is None:
+        return None
+    return redact(value if isinstance(value, str) else json.dumps(value, default=str))
+
+
+def _fields(table: dict):
+    def publish(value, account):
+        if value is None:
+            return None
+        if not isinstance(value, dict):
+            return MALFORMED
+        return {key: table.get(key, _unlisted)(item, account) for key, item in value.items()}
+    return publish
+
+
+def _each(kind):
+    def publish(value, account):
+        if value is None:
+            return None
+        return [kind(item, account) for item in value] if isinstance(value, list) else MALFORMED
+    return publish
+
+
+# The field paths. Every field of the document is here, by what writes it: the facts from preflight,
+# a restart from Bench.restart(), a line from read_lines(). A number nothing validated is the marker.
+_FACTS = _fields({"commit": _commit, "image_digest": _identifier(IMAGE_DIGEST), "task_definition": _text,
+                  "platform_version": _text, "region": _text, "restarts": _measured, "poll_seconds": _measured,
+                  "check_interval_s": _measured, "app_host": _text})
+_WINDOW = _fields({"after_ns": _measured, "at_ns": _measured})
+_SAMPLE = _fields({"at_ns": _measured, "state": _text, "reason": _text})
+_PROBE = _fields({"at_ns": _measured, "status": _optional(valid_status)})
+_LINE = _fields({"ts": _instant, "ts_ns": _measured, "event_timestamp_ms": _optional(valid_event_ms), "route": _text,
+                 "status": _optional(valid_status), "duration_ms": _optional(valid_duration), "msg": _text})
+_MARKS = _fields({"listening": _LINE, "registry_live": _LINE, "first_passing_check": _LINE, "redirect": _LINE,
+                  "health_lines": _measured})
+_DRIFT = _fields({"ClockErrorBound": _optional(valid_duration), "ReferenceTimestamp": _instant,
+                  "ClockSynchronizationStatus": _text})
+_ZERO = _fields({"source": _text, "ns": _measured, "clock_drift": _DRIFT, "fallback": _text})
+_STOP = _fields({"code": _text, "reason": _text, "seen": _WINDOW, "after_t0": _text})
+_RESTART = _fields({"index": _measured, "complete": _flag, "hop_task": _identifier(TASK_ID), "task_id": _identifier(TASK_ID),
+                    "deployment": _identifier(DEPLOYMENT_ID), "task_arn": _text, "created_ns": _measured,
+                    "pull_started_ns": _measured, "pull_stopped_ns": _measured, "started_ns": _measured,
+                    "platform_version": _text, "samples": _each(_SAMPLE), "t0": _WINDOW, "healthy": _WINDOW, "k": _measured,
+                    "probes": _each(_PROBE), "zero": _ZERO, "stop": _STOP, "lines": _each(_LINE), "marks": _MARKS})
+_DOCUMENT = _fields({"facts": _FACTS, "complete": _flag, "ending": _text, "reason": _text, "premise": _text,
+                     "restarts": _each(_RESTART)})
+
+
+def publish_document(document: dict, account: Optional[str]) -> dict:
+    """The sanitized copy the .json is serialized from and the .txt rendered from; the records
+    themselves stay as the AWS calls and the calculations need them."""
+    return _DOCUMENT(document, account)
 
 
 # --- timestamps ------------------------------------------------------------------------------------
 
-_TIME = re.compile(r"^(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d):(\d\d)(?:\.(\d{1,9}))?(Z|[+-]\d\d:\d\d)$")
+_TIME = re.compile(r"(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d):(\d\d)(?:\.(\d{1,9}))?(Z|[+-]\d\d:\d\d)", re.ASCII)
 
 
 def time_ns(value) -> int:
     """A UTC instant in ns since the epoch, from the three forms read here: the AWS CLI's ISO 8601
     (microseconds and an offset), the metadata endpoint's (nanoseconds and Z) and the log line's
     `ts` (.NET's "O": seven digits and an offset). A number is epoch seconds, the CLI's other
-    timestamp format. Parsed by hand, because datetime keeps only microseconds."""
+    timestamp format. Parsed by hand, because datetime keeps only microseconds. Anything else is a
+    ValueError, before a calculation uses it: a bool, an infinity, a number no instant reaches, a
+    string with anything around the form, a date or a time that does not exist (#976 contract 3)."""
     if isinstance(value, (int, float)):
+        if not is_measurement(value) or abs(value) > LATEST_EPOCH_S:
+            raise ValueError("not an epoch instant")
         return int(round(value * 1e9))
-    match = _TIME.match(str(value).strip())
+    match = _TIME.fullmatch(value) if isinstance(value, str) else None
     if not match:
         raise ValueError("not an ISO 8601 instant")
-    whole = calendar.timegm(tuple(int(part) for part in match.groups()[:6]))
+    year, month, day, hour, minute, second = (int(part) for part in match.groups()[:6])
+    datetime.date(year, month, day)
+    if hour > 23 or minute > 59 or second > 60:      # 60: a leap second, which ISO 8601 can name
+        raise ValueError("not an ISO 8601 instant")
+    whole = calendar.timegm((year, month, day, hour, minute, second))
     fraction = int((match.group(7) or "").ljust(9, "0"))
     zone = match.group(8)
     offset = 0
     if zone != "Z":
+        if int(zone[1:3]) > 23 or int(zone[4:6]) > 59:
+            raise ValueError("not an ISO 8601 instant")
         sign = 1 if zone[0] == "+" else -1
         offset = sign * (int(zone[1:3]) * 3600 + int(zone[4:6]) * 60)
     return (whole - offset) * 1_000_000_000 + fraction
@@ -327,20 +514,34 @@ _REGISTRY_LIVE = re.compile(r"^Registry revision .* is live")
 def read_lines(events: List[dict]) -> List[dict]:
     """Each event of the stream as the fields read here: its own `ts` and CloudWatch's event
     timestamp beside it (Q6), and route, status, duration_ms or the message. Nothing else of a line is
-    kept, and a line that is not the gateway's JSON is skipped."""
+    kept, and a line that is not the gateway's JSON is skipped. A value invalid for its field is the
+    marker before any calculation or mark can read it (#976 contract 3): its name earns it nothing. A
+    line of the gateway's with a malformed ts is kept as the marker and nothing else, since no clock
+    can stand on it."""
     lines = []
     for event in events:
         try:
             line = json.loads(event.get("message", ""))
-            ts_ns = time_ns(line["ts"])
+            stamp = line["ts"]
         except (ValueError, KeyError, TypeError):
             continue
         if not isinstance(line, dict):
             continue
-        kept = {"ts": line["ts"], "ts_ns": ts_ns, "event_timestamp_ms": event.get("timestamp")}
-        for key in ("route", "status", "duration_ms"):
-            if key in line:
-                kept[key] = line[key]
+        received = event.get("timestamp")
+        received = None if received is None else valid_event_ms(received)
+        try:
+            # The gateway writes its ts as a string; a number is the CLI's form, not the log's.
+            ts_ns = time_ns(stamp if isinstance(stamp, str) else None)
+        except ValueError:
+            lines.append({"ts": MALFORMED, "event_timestamp_ms": received})
+            continue
+        kept = {"ts": stamp, "ts_ns": ts_ns, "event_timestamp_ms": received}
+        if "route" in line:
+            kept["route"] = line["route"] if isinstance(line["route"], str) else MALFORMED
+        if "status" in line:
+            kept["status"] = valid_status(line["status"])
+        if "duration_ms" in line:
+            kept["duration_ms"] = valid_duration(line["duration_ms"])
         msg = line.get("msg", "")
         if "route" not in line and isinstance(msg, str) and (msg.startswith("Now listening on") or _REGISTRY_LIVE.match(msg)):
             kept["msg"] = msg
@@ -412,13 +613,22 @@ def read_outputs(region: str) -> dict:
         if not isinstance(value, str) or not value:
             raise Refused(f"infra/envs/poc/outputs.json gives no {field} for {region}. Run tools/scripts/seed.sh again.")
         names[field] = value
-    if "@sha256:" not in names["gatewayImage"]:
+    if not IMAGE_DIGEST.fullmatch(names["gatewayImage"].partition("@")[2]):
         raise Refused("infra/envs/poc/outputs.json's gatewayImage is not pinned by digest.")
     return names
 
 
-def _task_id(arn: str) -> str:
+def _last_segment(arn: str) -> str:
     return arn.rsplit("/", 1)[-1]
+
+
+def task_id_of(arn) -> Optional[str]:
+    """The id an ECS task ARN ends in, or None when it does not fit TASK_ID.
+    https://docs.aws.amazon.com/AmazonECS/latest/developerguide/ecs-account-settings.html"""
+    if not isinstance(arn, str):
+        return None
+    candidate = _last_segment(arn)
+    return candidate if TASK_ID.fullmatch(candidate) else None
 
 
 def _ip(task: dict) -> Optional[str]:
@@ -467,7 +677,10 @@ class Bench:
             identity = self.aws("sts", "get-caller-identity")
         except AwsError as error:
             raise Refused(f"no AWS credentials answered get-caller-identity ({error.code}). Sign in with the spa-platform profile.")
-        self.account = identity.get("Account")
+        account = identity.get("Account")
+        if not isinstance(account, str) or not CALLER_ACCOUNT.fullmatch(account):
+            raise Refused("get-caller-identity named no well-formed account id.")
+        self.account = account
         service = self.describe_service()
         balancers = service.get("loadBalancers") or []
         if not balancers or not balancers[0].get("targetGroupArn") or not balancers[0].get("containerName"):
@@ -489,7 +702,7 @@ class Bench:
         running = self.running_tasks()
         if len(running) != 1 or _container(running[0], self.container).get("imageDigest") != self.digest:
             raise Refused(f"{self.service} is not stable on gatewayImage: its running task does not carry that digest.")
-        family_revision = _task_id(service["taskDefinition"])
+        family_revision = _last_segment(service["taskDefinition"])
         self.facts = {
             "commit": self.commit(), "image_digest": self.digest, "task_definition": family_revision,
             "platform_version": running[0].get("platformVersion") or service.get("platformVersion"),
@@ -502,7 +715,12 @@ class Bench:
             done = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "HEAD"], capture_output=True, text=True, check=False)
         except OSError:
             return "unknown"
+        # Optional, since it has this fallback (#305): publication makes what git printed the marker
+        # when it does not fit COMMIT, and the run goes on.
         return done.stdout.strip() if done.returncode == 0 and done.stdout.strip() else "unknown"
+
+    def task(self, task_id: Optional[str]) -> Published:
+        return publish_identifier(task_id, TASK_ID, self.account)
 
     def describe_service(self) -> dict:
         services = self.aws("ecs", "describe-services", "--cluster", self.cluster, "--services", self.service).get("services") or []
@@ -533,12 +751,15 @@ class Bench:
         """Q10: a port forward of our own, through the task about to be replaced."""
         container = _container(through, self.container)
         agent = next((a for a in container.get("managedAgents", []) if a.get("name") == "ExecuteCommandAgent"), {})
-        task_id = _task_id(through["taskArn"])
+        task_id = task_id_of(through["taskArn"])
         problem = Refused if refuse else Incomplete
+        if task_id is None:
+            raise problem("the outgoing task's ARN holds no well-formed task id.")
         # A container takes a session once its ExecuteCommandAgent's lastStatus is RUNNING.
         # https://docs.aws.amazon.com/AmazonECS/latest/developerguide/ecs-exec.html#ecs-exec-enabling
         if through.get("lastStatus") != "RUNNING" or not container.get("runtimeId") or agent.get("lastStatus") != "RUNNING":
-            raise problem(f"task {task_id} cannot carry a session: its {self.container} container's ExecuteCommandAgent is not running.")
+            raise problem(compose("task {task} cannot carry a session: its {container} container's ExecuteCommandAgent is not running.",
+                                  task=self.task(task_id), container=self.container))
         # ecs:<cluster>_<task id>_<container runtime id> names an ECS container to Session Manager.
         # https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-sessions-start.html#sessions-remote-port-forwarding
         target = f"ecs:{self.cluster}_{task_id}_{container['runtimeId']}"
@@ -556,7 +777,8 @@ class Bench:
                 return task_id
             time.sleep(0.05)
         self.close_forward()
-        raise problem(f"the port forward through task {task_id} did not open within {self.options.forward_timeout:g} s.")
+        raise problem(compose("the port forward through task {task} did not open within {timeout:g} s.",
+                              task=self.task(task_id), timeout=self.options.forward_timeout))
 
     def close_forward(self) -> None:
         if self.forward is not None:
@@ -589,8 +811,12 @@ class Bench:
             primary = next((d for d in answer.get("service", {}).get("deployments", []) if d.get("status") == "PRIMARY"), None)
             if primary is None or not primary.get("id"):
                 raise Incomplete(f"update-service named no PRIMARY deployment on restart {index}.")
+            if not isinstance(primary["id"], str) or not DEPLOYMENT_ID.fullmatch(primary["id"]):
+                raise Incomplete(f"update-service named a malformed PRIMARY deployment id on restart {index}.")
             record["deployment"] = primary["id"]
-            self.say(f"restart {index}/{RESTARTS}: deployment {primary['id']}, hop through task {record['hop_task']}")
+            self.say(compose("restart {index}/{restarts}: deployment {deployment}, hop through task {hop}", index=index,
+                             restarts=RESTARTS, deployment=publish_identifier(primary["id"], DEPLOYMENT_ID, self.account),
+                             hop=self.task(record["hop_task"])))
             task = self.new_task(primary["id"], record)
             self.watch_health(task, record)
             self.probe_until_redirect(record)
@@ -614,12 +840,17 @@ class Bench:
             arns = self.aws("ecs", "list-tasks", "--cluster", self.cluster, "--service-name", self.service).get("taskArns") or []
             for task in self.describe_tasks(arns) if arns else []:
                 if task.get("startedBy") == deployment:
+                    found = task_id_of(task["taskArn"])
+                    if found is None:
+                        raise Incomplete(f"restart {record['index']}: the new task's ARN holds no well-formed task id.")
                     record["task_arn"] = task["taskArn"]
-                    record["task_id"] = _task_id(task["taskArn"])
+                    record["task_id"] = found
                     record["created_ns"] = _when(task, "createdAt")
                     return task
             if time.monotonic() >= end:
-                raise Incomplete(f"restart {record['index']}: no task of deployment {deployment} within {self.options.task_timeout:g} s.")
+                raise Incomplete(compose("restart {index}: no task of deployment {deployment} within {timeout:g} s.", index=record["index"],
+                                         deployment=publish_identifier(deployment, DEPLOYMENT_ID, self.account),
+                                         timeout=self.options.task_timeout))
             time.sleep(self.options.poll_seconds)
 
     def task_times(self, task: dict, record: dict) -> None:
@@ -656,15 +887,16 @@ class Bench:
             if health and health.get("State") == "healthy":
                 break
             if time.monotonic() >= end:
-                raise Incomplete(f"restart {record['index']}: task {record['task_id']}'s target was not healthy within {self.options.health_timeout:g} s.")
+                raise Incomplete(compose("restart {index}: task {task}'s target was not healthy within {timeout:g} s.", index=record["index"],
+                                         task=self.task(record["task_id"]), timeout=self.options.health_timeout))
             time.sleep(self.options.poll_seconds)
         found = windows(samples)
         record["t0"], record["healthy"] = found["t0"], found["healthy"]
         record["k"] = check_count(found["t0"], found["healthy"])
 
     def stopped(self, task: dict, record: dict, seen: dict) -> None:
-        code = task.get("stopCode") or "unknown"
-        reason = redact(task.get("stoppedReason") or "", self.account)
+        code = publish_text(task.get("stopCode") or "unknown")
+        reason = publish_text(task.get("stoppedReason") or "")
         found = windows(record.get("samples", []))
         record["t0"] = found["t0"]
         record["stop"] = {"code": code, "reason": reason, "seen": seen, "after_t0": stop_after_t0(found["t0"], seen)}
@@ -677,7 +909,8 @@ class Bench:
         # https://docs.aws.amazon.com/AmazonECS/latest/developerguide/stopped-task-error-codes.html
         if code == "ServiceSchedulerInitiated" and "health check" in reason.lower():
             raise Breach(record)
-        raise Incomplete(f"restart {record['index']}: task {record['task_id']} stopped ({code}), not for health.")
+        raise Incomplete(compose("restart {index}: task {task} stopped ({code}), not for health.", index=record["index"],
+                                 task=self.task(record["task_id"]), code=code))
 
     # --- the 302 ---
 
@@ -690,7 +923,8 @@ class Bench:
             time.sleep(self.options.probe_interval)
             if log_marks(self.read_log(record["task_id"]))["redirect"] is not None:
                 return
-        raise Incomplete(f"restart {record['index']}: no 302 reached task {record['task_id']}'s stream in {self.options.probe_attempts} probes.")
+        raise Incomplete(compose("restart {index}: no 302 reached task {task}'s stream in {attempts} probes.", index=record["index"],
+                                 task=self.task(record["task_id"]), attempts=self.options.probe_attempts))
 
     # --- the zero ---
 
@@ -747,10 +981,16 @@ class Bench:
             if not missing:
                 record["lines"] = lines
                 record["marks"] = marks
+                # The 302's clock is this value, so a malformed one is no result; none at all stays
+                # the row's "-", as a line without the field always was (#976 contract 5).
+                if marks["redirect"].get("duration_ms") == MALFORMED:
+                    raise Incomplete(compose("restart {index}: task {task}'s 302 line holds a malformed duration_ms.",
+                                             index=record["index"], task=self.task(record["task_id"])))
                 return
             if time.monotonic() >= end:
                 record["lines"] = lines
-                raise Incomplete(f"restart {record['index']}: task {record['task_id']}'s stream has no {', '.join(missing)} line after {self.options.log_timeout:g} s.")
+                raise Incomplete(compose("restart {index}: task {task}'s stream has no {missing} line after {timeout:g} s.", index=record["index"],
+                                         task=self.task(record["task_id"]), missing=", ".join(missing), timeout=self.options.log_timeout))
             time.sleep(self.options.poll_seconds)
 
 
@@ -781,7 +1021,10 @@ def probe(port: int, host: str, server_name: str, ca: str, timeout_s: float = 10
     except (OSError, ssl.SSLError):
         return None
     parts = line.split()
-    return int(parts[1]) if len(parts) >= 2 and parts[1].isdigit() else None
+    if len(parts) < 2:
+        return None
+    # Publication checks the number against valid_status; this reads it, or says it was no number.
+    return int(parts[1]) if parts[1].isdigit() else MALFORMED
 
 
 # --- the report -------------------------------------------------------------------------------------
@@ -807,7 +1050,7 @@ def clocks(record: dict) -> Dict[str, Optional[float]]:
         "registry_live": mark("registry_live"),
         "first_passing_check": mark("first_passing_check"),
         "target_healthy": None, "k": record.get("k"), "s_t0_low": None, "s_t0_high": None,
-        "redirect_ms": float(redirect["duration_ms"]) if redirect and isinstance(redirect.get("duration_ms"), (int, float)) else None,
+        "redirect_ms": float(redirect["duration_ms"]) if redirect and is_measurement(redirect.get("duration_ms")) else None,
         "redirect_mark": mark("redirect"),
     }
     if t0 and healthy:
@@ -841,6 +1084,8 @@ def _cell(value: Optional[float]) -> str:
 
 
 def report(facts: dict, records: List[dict], ending: str, reason: str) -> str:
+    """The .txt, rendered from publish_document()'s copy with nothing passed over the result."""
+    poll = facts.get("poll_seconds", 1)
     done = [record for record in records if record.get("complete")]
     per = [clocks(record) for record in records]
     lines = [
@@ -849,7 +1094,7 @@ def report(facts: dict, records: List[dict], ending: str, reason: str) -> str:
         f"platform version {facts.get('platform_version')}, Region {facts.get('region')}",
         "clocks: task (the gateway's log line ts and the metadata endpoint's StartedAt, one microVM), control plane "
         "(describe-tasks createdAt, pullStartedAt, pullStoppedAt, startedAt = S), workstation (describe-target-health "
-        f"polled every {facts.get('poll_seconds', 1):g} s: T0 and target healthy). A log clock is the line's own ts; "
+        f"polled every {f'{poll:g}' if is_measurement(poll) else poll} s: T0 and target healthy). A log clock is the line's own ts; "
         "CloudWatch's event timestamp is in the .json beside it (locally startup.py used dockerd's line timestamp).",
         "zero per restart: " + ", ".join(
             f"#{record['index']} " + ((record.get("zero") or {}).get("source") or "none")
@@ -910,11 +1155,11 @@ def report(facts: dict, records: List[dict], ending: str, reason: str) -> str:
 
 
 def write(options, facts: dict, records: List[dict], ending: str, reason: str, account: Optional[str]) -> None:
-    text = redact(report(facts, records, ending, reason), account)
-    document = {"facts": facts, "complete": ending == "clean", "ending": ending, "reason": reason,
-                "premise": "nothing on the cell calls /healthz during the run", "restarts": records}
-    pathlib.Path(options.txt).write_text(text)
-    pathlib.Path(options.json).write_text(redact(json.dumps(document, indent=2, default=str), account) + "\n")
+    document = publish_document({"facts": facts, "complete": ending == "clean", "ending": ending, "reason": reason,
+                                 "premise": "nothing on the cell calls /healthz during the run", "restarts": records}, account)
+    pathlib.Path(options.txt).write_text(report(document["facts"], document["restarts"], ending, document["reason"]))
+    # allow_nan=False: publication leaves no NaN, and a document no JSON parser reads is no report.
+    pathlib.Path(options.json).write_text(json.dumps(document, indent=2, allow_nan=False) + "\n")
 
 
 # --- the command line -------------------------------------------------------------------------------
@@ -937,8 +1182,8 @@ def main(argv: List[str]) -> int:
     parser.add_argument("--exec-timeout", type=float, default=120)
     parser.add_argument("--log-timeout", type=float, default=180)
 
-    def err(message: str, account: Optional[str] = None) -> None:
-        print(redact(f"{PROGRAM}: {message}", account), file=sys.stderr, flush=True)
+    def err(message: str) -> None:
+        print(f"{PROGRAM}: {publish_text(message)}", file=sys.stderr, flush=True)
 
     try:
         options = parser.parse_args(argv)
@@ -959,10 +1204,10 @@ def main(argv: List[str]) -> int:
         if _listening(options.local_port):
             raise Refused(f"something already listens on 127.0.0.1:{options.local_port}. Stop it, or pass --local-port.")
     except Refused as refusal:
-        err(str(refusal))
+        err(refusal.message)
         return EXIT_USAGE
 
-    bench = Bench(options, region, names, say=lambda message: print(redact(f"{PROGRAM}: {message}", bench.account), flush=True))
+    bench = Bench(options, region, names, say=lambda message: print(f"{PROGRAM}: {publish_text(message)}", flush=True))
     try:
         bench.preflight()
         # Q12's "about an hour" rested on the provider's 300 s drain; alb.tf sets 30 s (#347). A
@@ -972,15 +1217,15 @@ def main(argv: List[str]) -> int:
         bench.say(f"ten restarts, about half an hour: each runs two tasks side by side, and the old one drains for "
                   f"30 s and stops before the service is stable (#305 Q12, alb.tf's deregistration delay)")
     except Refused as refusal:
-        err(str(refusal), bench.account)
+        err(refusal.message)
         return EXIT_USAGE
     except AwsError as error:
-        err(f"an AWS call failed before restart 1 ({error.code}).", bench.account)
+        err(f"an AWS call failed before restart 1 ({error.code}).")
         return EXIT_USAGE
     except Exception as error:
         # Endings: 2, nothing written. Only the type is kept: its message can carry what the AWS
         # side answered (Q7).
-        err(f"an unexpected {type(error).__name__} before restart 1.", bench.account)
+        err(f"an unexpected {type(error).__name__} before restart 1.")
         return EXIT_USAGE
 
     ending, reason, code = "clean", "", EXIT_CLEAN
@@ -991,11 +1236,11 @@ def main(argv: List[str]) -> int:
             except Refused as refusal:
                 if index == 1 and bench.updates_issued == 0:
                     bench.restarts.pop()
-                    err(str(refusal), bench.account)
+                    err(refusal.message)
                     return EXIT_USAGE
                 # update-service was sent, so this is no refusal before restart 1 (Q8): what was
                 # measured is written, marked incomplete.
-                raise Incomplete(str(refusal)) from refusal
+                raise Incomplete(refusal.message) from refusal
             except AwsError as error:
                 # Before restart 1's update-service is sent nothing has changed on the service, so
                 # this is preflight's ending (Endings: 2, nothing written), not an incomplete run.
@@ -1003,7 +1248,7 @@ def main(argv: List[str]) -> int:
                 # counts the call before it is sent, and one predicate decides all three cases.
                 if index == 1 and bench.updates_issued == 0:
                     bench.restarts.pop()
-                    err(f"an AWS call failed before restart 1 ({error.code}).", bench.account)
+                    err(f"an AWS call failed before restart 1 ({error.code}).")
                     return EXIT_USAGE
                 raise
             except (Breach, Incomplete):
@@ -1013,16 +1258,16 @@ def main(argv: List[str]) -> int:
                 # on the service either, so the same ending (Endings: 2, nothing written).
                 if index == 1 and bench.updates_issued == 0:
                     bench.restarts.pop()
-                    err(f"an unexpected {type(error).__name__} before restart 1.", bench.account)
+                    err(f"an unexpected {type(error).__name__} before restart 1.")
                     return EXIT_USAGE
                 raise
     except Breach as breach:
         row = breach.row
         ending, code = "breach", EXIT_BREACH
-        reason = (f"the scheduler stopped task {row.get('task_id')} for failing the load balancer's health checks "
-                  f"({row['stop']['code']}), {row['stop']['after_t0']}")
+        reason = compose("the scheduler stopped task {task} for failing the load balancer's health checks ({code}), {after}",
+                         task=bench.task(row.get("task_id")), code=row["stop"]["code"], after=row["stop"]["after_t0"])
     except Incomplete as stop:
-        ending, reason, code = "incomplete", str(stop), EXIT_INCOMPLETE
+        ending, reason, code = "incomplete", stop.message, EXIT_INCOMPLETE
     except AwsError as error:
         ending, reason, code = "incomplete", f"an AWS call failed ({error.code})", EXIT_INCOMPLETE
     except Exception as error:
@@ -1033,7 +1278,7 @@ def main(argv: List[str]) -> int:
         bench.close_forward()
     write(options, bench.facts, bench.restarts, ending, reason, bench.account)
     if code != EXIT_CLEAN:
-        err(f"{ending}: {reason}", bench.account)
+        err(compose("{ending}: {reason}", ending=ending, reason=reason))
     bench.say(f"wrote {options.txt} and {options.json}")
     return code
 
