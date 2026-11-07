@@ -437,4 +437,34 @@ public sealed class ContinuityRunTests : IDisposable
 
         Assert.Equal(new EcsTask(TaskA, new DateTimeOffset(2026, 10, 28, 2, 0, 0, 123, TimeSpan.Zero), null, "sha256:aaaa"), task.Task);
     }
+
+    [Fact]
+    public async Task Row4s_lever_stops_nothing_when_a_third_listed_task_goes_unanswered()
+    {
+        // Two answered RUNNING would otherwise pass for exactly two running.
+        const string Third = "feedface00feedface00feedface00fe";
+        RecordedRunner runner = new(arguments => arguments switch
+        {
+            ["ecs", "list-tasks", ..] => new JsonObject { ["taskArns"] = new JsonArray([.. new[] { TaskA, TaskB, Third }.Select(id => (JsonNode)$"arn:aws:ecs:us-east-1:123456789012:task/spa-platform-poc/{id}")]) }.ToJsonString(),
+            ["ecs", "describe-tasks", ..] => Described((TaskA, "RUNNING"), (TaskB, "RUNNING")),
+            _ => "{}",
+        });
+
+        InvalidOperationException refused = await Assert.ThrowsAsync<InvalidOperationException>(() => new ContinuityEcs(Cell, runner).StopTheOtherAsync(TaskA, Ct));
+
+        Assert.Contains(Third, refused.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(runner.Calls, call => call.Arguments is ["ecs", "stop-task", ..]);
+    }
+
+    [Fact]
+    public async Task Row6s_read_of_the_old_tasks_refuses_one_ecs_no_longer_answers_for()
+    {
+        // RollingDeployAsync asks by id with no list before it, and its "every old task stopped" is true of a shorter list.
+        // Stopped tasks stay describable for at least an hour (https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_DescribeTasks.html) and row 6's bound is 40 minutes.
+        RecordedRunner runner = Ecs((TaskA, "RUNNING"));
+
+        InvalidOperationException refused = await Assert.ThrowsAsync<InvalidOperationException>(() => new ContinuityEcs(Cell, runner).DescribeAsync([TaskA, TaskB], Ct));
+
+        Assert.Contains(TaskB, refused.Message, StringComparison.Ordinal);
+    }
 }
