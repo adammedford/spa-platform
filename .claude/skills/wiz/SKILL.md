@@ -162,11 +162,13 @@ Q3, Q6, Q7, Q11 and Q14 read here as its "Decided in a session" comment corrects
   before relying on either. **Sitting D offers D10**, which restores D2's copy and posts on #348.
   **Sitting C never offers D10 (#1138).** C makes no copy for it to restore and #348 is not its
   ticket. The new session runs Stage 0's reads from the renewal on, to see what stands, posts the
-  stage that was cut short as failed, with the reason, on that stage's ticket (rule 4), and asks C5's
-  question. Before a destroy it reads whether a `deploy.sh` or a suite the lost session had in the
-  background is still running, since a teardown must not start over one. A destroy runs as T does,
-  on T's case list and a confirm on launch, and is posted as T's is, on #242 with P-05 on #63, with
-  a line saying it followed a lost session. Nothing is restored, and the sitting ends as C5 says.
+  stage that was cut short as failed, with the reason, on that stage's ticket (rule 4; C4 and C5 have
+  none, so the end of the sitting names theirs), and asks C5's question. Before a destroy it reads
+  whether a `deploy.sh`, `rollback.sh`, `teardown.sh`, `terraform` or suite the lost session started,
+  in the background or not, is still running, since a teardown must not start over one, and what a
+  kill does to any of them is unknown. A destroy runs as T does, on T's case list and a confirm on
+  launch, and is posted as T's is, on #242 with P-05 on #63, with a line saying it followed a lost
+  session. Nothing is restored, and the sitting ends as C5 says.
 - **AWS Settings (#1090 Q9).** H2's close path and the spend-limit checks may use the phone's
   browser; wiz names the step and waits for the report. That page has not been tried on a phone
   (#1094).
