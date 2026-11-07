@@ -950,8 +950,8 @@ try {
     if (!cmds.some((c) => /gh api graphql .*labels: \["change-request"\].*totalCount/.test(c))) fail('the Scope prompt does not ask GraphQL for the open change-request count')
   }
   // The B- class and tier L (#1121; ADR-0033, "The test id" and "The proof exception"): B-01 on L and D
-  // and B-02 on D, tiered from their register rows, which these fixtures make because contracts/test-ids.md
-  // has none until the register packet lands (#848). A B- id is proved by the startup benchmark's verdict
+  // and B-02 on D, tiered from register rows these fixtures make themselves, so the check says the same
+  // whatever contracts/test-ids.md holds (#848). A B- id is proved by the startup benchmark's verdict
   // on its tier, never by a test project, and this run runs no benchmark, so an L clause is reported as a
   // D clause is: named, not run here, and never proved, whatever a test or a record claims. Actual deployed
   // results stay separate.
@@ -1058,6 +1058,7 @@ try {
     const locate = both.prompt('locate-1')
     if (!/L for a clause of a fresh container/.test(locate)) fail('the Locate prompt does not define tier L')
     if (!/a B- id is proved by the startup benchmark's verdict on its tier, never by a test project/.test(locate) || !/tools\/bench\/startup\.py --verdict/.test(locate)) fail('the Locate prompt does not say how a B- id is proved')
+    if (!/Its wouldRun is `tools\/bench\/startup\.py --verdict` with the `--budget` flags/.test(locate)) fail('the Locate prompt does not say what would run a B- id on tier L, with the budgets its verdict mode refuses to run without')
 
     if (driftAll.length > driftBefore) fail(`schema drift or thrown thunks in the B- runs:\n  ${driftAll.slice(driftBefore).join('\n  ')}`)
   }
