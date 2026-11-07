@@ -126,10 +126,20 @@ function run(scriptArgs, served, behave = {}) {
   // the one id across the run, as a GitHub comment does.
   const ids = new Map()
   const byId = new Map()
-  const projected = (e) => {
+  const projected = (trim) => (e) => {
     if (!ids.has(e)) { ids.set(e, ids.size + 1); byId.set(ids.get(e), e) }
     const { body, ...rest } = e
-    return { ...rest, id: ids.get(e), length: Array.from((body || '').replace(/[ \t\r\n]+$/, '')).length, record: RECORD_TEXT.test(body || '') }
+    return { ...rest, id: ids.get(e), length: Array.from((body || '').replace(trim, '')).length, record: RECORD_TEXT.test(body || '') }
+  }
+  // What one list's --jq in the inventory prompt strips before it counts (#1072): the stub projects
+  // with the class the script asks jq to use, so it holds no copy of its own that could agree with
+  // one side while the other drifts. The prompt's \t, \r and \n mean the same in jq and in RegExp:
+  // a jq regex is a jq string read by Oniguruma (https://jqlang.org/manual/v1.7/#regular-expressions),
+  // so each is one character there as here. The companion does not call jq, so this rests on that.
+  const jqTrim = (prompt, list) => {
+    const m = new RegExp(`/${list} --jq '[^']*sub\\("([^"]+)"; ""\\)`).exec(prompt)
+    if (!m) throw new Error(`the inventory prompt's ${list} --jq has no sub(...; "") to count a body's length by`)
+    return new RegExp(m[1])
   }
   globalThis.agent = async (prompt, opts) => {
     flight.now++
@@ -185,9 +195,9 @@ function run(scriptArgs, served, behave = {}) {
       // run whose inventory was replayed from before the post.
       const comments = gh && gh.serveStore !== false ? [...inv.comments, ...gh.store.filter((c) => c.n === Number(n)).map((c) => c.entry)] : inv.comments
       // Each entry as the inventory's jq projection prints it (#1018): no body, its length in code
-      // points, as jq's length counts a string, once its trailing whitespace is removed (#1030), and
-      // whether the record's text is anywhere in it.
-      return { ...inv, comments: comments.map(projected), reviews: (inv.reviews || []).map(projected) }
+      // points, as jq's length counts a string, once what that list's --jq strips is removed (#1030,
+      // #1072), and whether the record's text is anywhere in it.
+      return { ...inv, comments: comments.map(projected(jqTrim(prompt, 'comments'))), reviews: (inv.reviews || []).map(projected(jqTrim(prompt, 'reviews'))) }
     }
     if (kind === 'range') {
       const r = (behave.range || {})[n]
@@ -2198,8 +2208,7 @@ try {
   // the review failed at the inventory. No parser reads that whitespace, so a body returned whole with
   // its final newline (the count the inventory gives leaves it out), without it, or with one added, is
   // read, and its record, follow-up rows and held mutation rows reach the parsers as from the whole
-  // body. The target here ends in a newline, as the live records on #796 do. The script's trim and the
-  // jq's are one class of characters, spaces, tabs, carriage returns and newlines.
+  // body. The target here ends in a newline, as the live records on #796 do.
   checks++
   {
     const RECORDS_NL = RECORDS796.map((r, i) => (i === 3 ? { ...r, body: r.body + '\n' } : r))
@@ -2223,8 +2232,42 @@ try {
       const missing = HELD796.filter((t) => !mutated.includes(t))
       if (missing.length) fail(`a body returned ${what}: mutationTableOf lost the held row(s) ${missing.join(', ')}`)
     }
-    const source = fs.readFileSync(scriptPath, 'utf8')
-    if (!source.includes('const TRAILING_SPACE = /[ \\t\\r\\n]+$/')) fail('#1030: the script\'s TRAILING_SPACE is not /[ \\t\\r\\n]+$/, the class the inventory\'s jq sub("[ \\t\\r\\n]+$"; "") strips')
+  }
+
+  // The script's trim, and the jq on each of the inventory's two lists, strip one class of characters
+  // (#1072): spaces, tabs, carriage returns and newlines, in any run, and nothing else. The tails below
+  // are that class written down here, and each reaches the script as a body ending in it, so the class
+  // is held by what a review does and not by how the source spells it. A body returned whole is read
+  // whatever its tail, on a comment and on a COMMENTED review, only while the script's count and that
+  // list's --jq count (the stub projects with the prompt's own class) strip the same: either side
+  // losing or gaining a character fails it. A body returned without its tail then says which side of
+  // the class the tail is on, which holds the case where every copy drifted together.
+  checks++
+  {
+    const STRIPPED = [' ', '\t', '\r', '\n', ' \t\r\n']
+    const KEPT = ['\f', '\v', '\u00a0', '\u2028', '\ufeff']
+    const last = RECORDS796.length - 1
+    const earlier = RECORDS796.slice(0, last)
+    const url = RECORDS796[last].html_url
+    const servedWith = (tail, onReview) => {
+      const record = { ...RECORDS796[last], body: RECORDS796[last].body + tail }
+      return { 796: { ...SERVED796[796], ...(onReview
+        ? { comments: [HUMAN796, ...earlier], reviews: [APPROVAL796, { ...record, state: 'COMMENTED', submitted_at: record.created_at }] }
+        : { comments: [HUMAN796, ...earlier, record] }) } }
+    }
+    const reviewed = async (tail, onReview, returned) => {
+      env = run({ prs: [796], maxMutationsPerPr: 20 }, servedWith(tail, onReview), { followUps: { 796: CARRIED796 }, bodies: { [url]: returned } })
+      return resultOf(796, await execute(env))
+    }
+    for (const tail of [...STRIPPED, ...KEPT]) {
+      for (const onReview of [false, true]) {
+        const r = await reviewed(tail, onReview, (b) => b)
+        if (r.outcome !== 'recorded' || (r.earlierRecords || []).length !== RECORDS796.length) fail(`a body ending in ${JSON.stringify(tail)} on a ${onReview ? 'review' : 'comment'}, returned whole: outcome ${r.outcome} at ${JSON.stringify(r.stage)} with ${(r.earlierRecords || []).length} earlier record(s), expected recorded with ${RECORDS796.length}: the script's trim and that list's --jq strip different characters`)
+      }
+      const r = await reviewed(tail, false, (b) => b.slice(0, -tail.length))
+      if (STRIPPED.includes(tail) && r.outcome !== 'recorded') fail(`a body returned without its tail ${JSON.stringify(tail)}: outcome ${r.outcome} at ${JSON.stringify(r.stage)}, expected recorded, since the class strips it`)
+      if (KEPT.includes(tail) && (r.outcome !== 'failed' || !String(r.stage).startsWith('inventory: ') || !String(r.stage).includes(url))) fail(`a body returned without its tail ${JSON.stringify(tail)}: outcome ${r.outcome} at ${JSON.stringify(r.stage)}, expected failed at the inventory naming ${url}, since the class keeps it`)
+    }
   }
 
   // The record's compact shape (#967). The verdict prompt asks for the Spec table of three columns,
