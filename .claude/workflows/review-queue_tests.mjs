@@ -6,7 +6,7 @@
 // Runs review-queue.js end to end with agent, parallel, log and phase stubbed, and with gh stubbed
 // where the script reaches it: through the inventory agent, which serves canned pull requests as gh
 // would list them, each comment and review without its body, the body agents, which serve each body
-// whole or as a check says (#1018), and the post agent, which records the comment it was asked to post instead of
+// whole or as a check says (#1018) from the endpoint their prompt names, a 404 from any other (#1073), and the post agent, which records the comment it was asked to post instead of
 // posting it. A check that needs more of GitHub gives the run ghStub(): a store of posted comments
 // that outlives one run, a head that moves before posting, and a GitHub that cannot be reached at
 // posting time (#85). A stubbed range agent reports the delta range a check gives it. A stubbed mutation agent reports, per test, the result a check tells it to, or dies by
@@ -27,6 +27,8 @@ const scriptPath = process.argv[2] || path.join(here, 'review-queue.js')
 const top = path.resolve(here, '..', '..')
 
 const sha = (c) => c.repeat(40)
+// The path a body prompt's gh api line asks for, below repos/{owner}/{repo}/, or '' when it has none.
+const ghEndpoint = (prompt) => (/gh api repos\/\{owner\}\/\{repo\}\/(\S+?)`/.exec(prompt) || [])[1] || ''
 // The inventory's jq test for a body that may carry a record, as the script's RECORD_TEST spells it.
 const RECORD_TEXT = /Reviewed [0-9a-f]{40} against [0-9a-f]{40}: (merge|hold)/
 const FORK = sha('b')
@@ -126,8 +128,10 @@ function run(scriptArgs, served, behave = {}) {
   // the one id across the run, as a GitHub comment does.
   const ids = new Map()
   const byId = new Map()
-  const projected = (trim) => (e) => {
+  const servedAt = new Map()   // id -> the one endpoint that serves it, as ghEndpoint below reads a prompt
+  const projected = (trim, at) => (e) => {
     if (!ids.has(e)) { ids.set(e, ids.size + 1); byId.set(ids.get(e), e) }
+    servedAt.set(ids.get(e), `${at}/${ids.get(e)}`)
     const { body, ...rest } = e
     return { ...rest, id: ids.get(e), length: Array.from((body || '').replace(trim, '')).length, record: RECORD_TEXT.test(body || '') }
   }
@@ -185,6 +189,12 @@ function run(scriptArgs, served, behave = {}) {
       const b = (behave.bodies || {})[e.html_url]
       if (b === 'throw') throw new Error(`the body agent for ${e.html_url} died`)
       if (b === 'null') return null
+      // gh answers from the endpoint the prompt names (#1073), whatever the label says. An id of the
+      // other list, or a review id under another pull request's number, is a 404 on GitHub: read live
+      // on 2026-11-07 against #76 and #1021, and the two pages are
+      // https://docs.github.com/rest/pulls/reviews#get-a-review-for-a-pull-request and
+      // https://docs.github.com/rest/issues/comments#get-an-issue-comment.
+      if (ghEndpoint(prompt) !== servedAt.get(ids.get(e))) return { body: '', error: 'gh: Not Found (HTTP 404)' }
       if (b && b.error) return { body: b.whole ? e.body : '', error: b.error }
       return { body: typeof b === 'function' ? b(e.body) : e.body, error: '' }
     }
@@ -197,7 +207,7 @@ function run(scriptArgs, served, behave = {}) {
       // Each entry as the inventory's jq projection prints it (#1018): no body, its length in code
       // points, as jq's length counts a string, once what that list's --jq strips is removed (#1030,
       // #1072), and whether the record's text is anywhere in it.
-      return { ...inv, comments: comments.map(projected(jqTrim(prompt, 'comments'))), reviews: (inv.reviews || []).map(projected(jqTrim(prompt, 'reviews'))) }
+      return { ...inv, comments: comments.map(projected(jqTrim(prompt, 'comments'), 'issues/comments')), reviews: (inv.reviews || []).map(projected(jqTrim(prompt, 'reviews'), `pulls/${n}/reviews`)) }
     }
     if (kind === 'range') {
       const r = (behave.range || {})[n]
@@ -2267,6 +2277,51 @@ try {
       const r = await reviewed(tail, false, (b) => b.slice(0, -tail.length))
       if (STRIPPED.includes(tail) && r.outcome !== 'recorded') fail(`a body returned without its tail ${JSON.stringify(tail)}: outcome ${r.outcome} at ${JSON.stringify(r.stage)}, expected recorded, since the class strips it`)
       if (KEPT.includes(tail) && (r.outcome !== 'failed' || !String(r.stage).startsWith('inventory: ') || !String(r.stage).includes(url))) fail(`a body returned without its tail ${JSON.stringify(tail)}: outcome ${r.outcome} at ${JSON.stringify(r.stage)}, expected failed at the inventory naming ${url}, since the class keeps it`)
+    }
+  }
+
+  // Who a record is read from, and where (#1073). A body agent runs for a record on a comment or a
+  // COMMENTED review from an account of the repository, and for nobody else's: a stranger who pastes a
+  // record line costs no agent, and a body agent of theirs that dies cannot fail the review, so their
+  // body agent is served as one that dies. recordsIn's own filter hides the first half, since it drops
+  // the stranger's record once read. The accounts are GitHub's, written out here rather than taken from
+  // the script: https://docs.github.com/en/graphql/reference/enums#commentauthorassociation. A
+  // repository account's record on a review reaches the parsers only through the reviews endpoint,
+  // since the stub answers a prompt naming any other with GitHub's 404.
+  checks++
+  {
+    const OLD1073 = sha('d')
+    const stray = (association, onReview) => {
+      const entry = {
+        author_association: association, created_at: '2026-11-04T08:00:00Z',
+        html_url: `https://github.com/adammedford/spa-platform/pull/796#${onReview ? 'pullrequestreview' : 'issuecomment'}-1073${association}`,
+        body: `Reviewed ${OLD1073} against ${F796}: hold`,
+      }
+      return onReview ? { ...entry, state: 'COMMENTED', submitted_at: entry.created_at } : entry
+    }
+    const served = (entry, onReview) => ({ 796: { ...SERVED796[796], ...(onReview ? { reviews: [APPROVAL796, entry] } : { comments: [HUMAN796, ...RECORDS796, entry] }) } })
+    const six = RECORDS796.map((x) => x.html_url)
+    for (const onReview of [false, true]) {
+      const where = onReview ? 'review' : 'comment'
+      for (const association of ['NONE', 'CONTRIBUTOR', 'FIRST_TIME_CONTRIBUTOR', 'FIRST_TIMER', 'MANNEQUIN']) {
+        const entry = stray(association, onReview)
+        env = run({ prs: [796], maxMutationsPerPr: 20 }, served(entry, onReview), { followUps: { 796: CARRIED796 }, bodies: { [entry.html_url]: 'null' } })
+        const r = resultOf(796, await execute(env))
+        const bodies = env.calls.filter((c) => /^inventory:796:body:/.test(c))
+        if (bodies.some((c) => (env.prompts[c] || '').includes(entry.html_url))) fail(`a record on a ${where} from ${association}: a body agent ran for it, expected none`)
+        if (bodies.length !== 6) fail(`a record on a ${where} from ${association}: ${bodies.length} body agent(s) ran, expected the six repository records' alone`)
+        if (r.outcome !== 'recorded') fail(`a record on a ${where} from ${association}: outcome ${r.outcome} at ${JSON.stringify(r.stage)}, expected recorded, since its body agent is not the review's to wait on`)
+        if (JSON.stringify(r.earlierRecords) !== JSON.stringify(six)) fail(`a record on a ${where} from ${association}: earlier records ${JSON.stringify(r.earlierRecords)}, expected the six alone`)
+      }
+      for (const association of ['OWNER', 'MEMBER', 'COLLABORATOR']) {
+        const entry = stray(association, onReview)
+        env = run({ prs: [796], maxMutationsPerPr: 20 }, served(entry, onReview), { followUps: { 796: CARRIED796 } })
+        const r = resultOf(796, await execute(env))
+        const bodies = env.calls.filter((c) => /^inventory:796:body:/.test(c))
+        if (bodies.length !== 7 || !bodies.some((c) => (env.prompts[c] || '').includes(entry.html_url))) fail(`a record on a ${where} from ${association}: ${bodies.length} body agent(s) ran, expected seven, one of them for it`)
+        if (r.outcome !== 'recorded') fail(`a record on a ${where} from ${association}: outcome ${r.outcome} at ${JSON.stringify(r.stage)}, expected recorded`)
+        if (JSON.stringify(r.earlierRecords) !== JSON.stringify([entry.html_url, ...six])) fail(`a record on a ${where} from ${association}: earlier records ${JSON.stringify(r.earlierRecords)}, expected it and the six`)
+      }
     }
   }
 
