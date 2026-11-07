@@ -52,8 +52,10 @@ questions are listed:
     #<issue> Overnight <date> Q<n> names #<number>, a Confirm covers it: <the question's first line>
     #<issue> Overnight <date> Q<n> names #<number>, no Confirm covers it: <the question's first line>
 
-The first line is the text after the mark, up to the question's first line break. Exit 0 with
-those lines, or with none when no question matches. Exit 2, with the reason on standard error,
+The first line is the text after the mark, up to the question's first line break. A question naming
+several of the given numbers has one line, with the first of them in the order given, which is the
+pull request's when land.sh gives it. Exit 0 with those lines, or with none when no question
+matches. Exit 2, with the reason on standard error,
 when the input cannot be read: wrong arguments, a gh call that failed (its own message passes
 through), or input not in GitHub's shape. land.sh prints its lines prefixed `land: `, and on a 2
 prints one line saying the search failed and merges anyway.

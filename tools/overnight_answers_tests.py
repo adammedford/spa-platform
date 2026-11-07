@@ -139,6 +139,19 @@ class MatchingTests(ReaderTestCase):
                          f"#{NIGHT} {TITLE} Q2 names #495, no Confirm covers it: (#495 Q1) Does #495 "
                          "close at this merge? It should.")
 
+    def test_a_question_naming_several_prints_one_line_with_the_first_number_given(self):
+        # Argument order decides, not the text's: the text names #495 first, and land.sh gives the
+        # pull request's number before the numbers it closes, so the pull request is the one named.
+        # The two orders together tell the first given from the last given and from the first in
+        # the text (#1079).
+        body = questions(question(2, f"Does #495 close with #{PR}?"))
+        self.assertLines(self.read([comment(body)], numbers=(PR, 495)),
+                         f"#{NIGHT} {TITLE} Q2 names #{PR}, no Confirm covers it: (#495 Q1) Does #495 "
+                         f"close with #{PR}?")
+        self.assertLines(self.read([comment(body)], numbers=(495, PR)),
+                         f"#{NIGHT} {TITLE} Q2 names #495, no Confirm covers it: (#495 Q1) Does #495 "
+                         f"close with #{PR}?")
+
     def test_the_heading_ticket_selects_nothing_by_itself(self):
         # The heading names #495; Q1's text and source tag name #497, so --number 495 finds
         # nothing, while Q2, whose tag names #495, is found by its own text (#531).
@@ -175,6 +188,16 @@ class MatchingTests(ReaderTestCase):
                          f"#{NIGHT} {TITLE} Q1 names #{PR}, no Confirm covers it: (#495 Q1) First, with #{PR}.",
                          f"#{NIGHT} {TITLE} Q2 names #{PR}, no Confirm covers it: Second, with #{PR}.",
                          f"#{NIGHT} {TITLE} Q3 names #{PR}, no Confirm covers it: Third, with #{PR}.")
+
+    def test_a_plain_mark_is_followed_by_a_space_or_a_tab(self):
+        # A tab opens a question as a space does (Q2). A digit (Q3), a letter (Q4) or a line break
+        # (Q5) after the full stop does not, so each of those lines stays Q2's text, and the only
+        # line printed is Q2's. #5 is in none of Q1's or Q2's own words, so a mark read at any of
+        # the three takes the number with it and changes the line (#1079).
+        body = questions("**Q1.** First.", "Q2.\tSecond.", f"Q3.5 is a version, with #{PR}.",
+                         f"Q4.x is a name, with #{PR}.", f"Q5.\nA line after it, with #{PR}.")
+        self.assertLines(self.read([comment(body)]),
+                         f"#{NIGHT} {TITLE} Q2 names #{PR}, no Confirm covers it: Second.")
 
     def test_no_matching_question_prints_nothing(self):
         body = questions(question(1, "Does #495 need no lane?"))
@@ -227,6 +250,13 @@ class ConfirmTests(ReaderTestCase):
         self.assertEqual(["a Confirm covers it", "no Confirm covers it", "no Confirm covers it",
                           "no Confirm covers it"],
                          self.verdicts(comment("Confirm Q1. Q2 and Q3 stay open.", T2, n=2)))
+
+    def test_a_number_named_after_the_first_line_does_not_cover(self):
+        # The first line has no full stop, so only the line break can end the first sentence: read
+        # past it, the sentence runs to the stop on the second line and takes Q2 and Q3 in (#1079).
+        self.assertEqual(["a Confirm covers it", "no Confirm covers it", "no Confirm covers it",
+                          "no Confirm covers it"],
+                         self.verdicts(comment("Confirm Q1 only\nQ2 and Q3 stay open.", T2, n=2)))
 
     def test_an_override_line_covers_and_a_bare_confirm_covers_nothing_else(self):
         self.assertEqual(["no Confirm covers it", "no Confirm covers it", "a Confirm covers it",
