@@ -63,13 +63,14 @@ public sealed class InboundTraceContextTests
         // Two requests with no traceparent each get a well-formed trace id, and not the same one: the
         // trace id on a request line is the request's own, so a line found by a client's trace id is
         // found by the header and never because every line shares a trace id or carries a stale one.
-        // Mutation: every request line written under one fixed trace id; the two lines are no longer
-        // distinct. A second: no activity started, so the formatter omits trace_id and GetProperty
-        // throws before the shape check. A third: the next bff line takes the trace id the earlier
-        // request sent, so only one of the two lines is stale; the lines stay well formed and distinct,
-        // and only the DoesNotContain goes red. The earlier request goes to /healthz, so its own line is
-        // not one of the two bff lines, and LineAsync proves the id reached the gateway: an id the
-        // gateway never saw could not make the DoesNotContain fail (#1045).
+        // Mutation: every bff request line written under one fixed trace id; the two lines are no longer
+        // distinct, and NotEqual goes red. With the health line under that id too, LineAsync goes red
+        // first, because the earlier id never arrives. A second: no activity started, so the formatter
+        // omits trace_id and GetProperty throws before the shape check. A third: the next bff line takes
+        // the trace id the earlier request sent, so only one of the two lines is stale; the lines stay
+        // well formed and distinct, and only the DoesNotContain goes red. The earlier request goes to
+        // /healthz, so its own line is not one of the two bff lines, and LineAsync proves the id reached
+        // the gateway: an id the gateway never saw could not make the DoesNotContain fail (#1045).
         await using GatewayHarness harness = await GatewayHarness.StartAsync(ct: Ct);
         using TestBrowser browser = harness.CreateBrowser();
         (string earlier, string traceparent) = Sampled();
