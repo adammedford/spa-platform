@@ -40,6 +40,10 @@ ends on a verdict line. The same class runs the line against doubles that fail, 
 print a state file's keys and print a plan terraform marked errored, each of which must name the failure,
 and against a plan with no changes, which must not.
 
+**A lost `claude` (#1138).** D10 restores D2's copy and posts on #348, so sitting C has its own way out
+and the new session keeps the lost sitting's pin. `SkillGivesEachSittingItsOwnWayOutOfALostClaude` holds
+the route's wording, not a run: the route itself has not been run (#1094).
+
 Checkout inputs: .claude/skills/wiz/*.md .gitignore tests/e2e/Program.cs tests/e2e/SittingBrowser/Observations.cs tests/e2e/SittingBrowser/ObservationLine.cs tests/e2e/SittingBrowser/SittingBrowser.cs tests/e2e/SittingBrowser/SittingCommand.cs
 """
 from __future__ import annotations
@@ -530,6 +534,55 @@ class SkillSavesThePlansItsConfirmsRead(Sitting):
         self.assertIn("# both 0, or stop:", self.plan_list())
         route = " ".join(self.between("- **Plans (#1090 Q7).**", "- **A lost `claude`").split())
         self.assertIn("any other verdict is a rule 7 stop (#1137)", route)
+
+
+class SkillGivesEachSittingItsOwnWayOutOfALostClaude(unittest.TestCase):
+    """D10 restores D2's copy and posts on #348, so sitting C has its own way out (#1138)."""
+
+    def setUp(self) -> None:
+        text = SKILL_FILES[0].read_text()
+        found = re.search(r"- \*\*A lost `claude`.*?(?=- \*\*AWS Settings)", text, re.S)
+        self.assertIsNotNone(found, "SKILL.md's route has no lost-claude item")
+        self.item = " ".join(found.group(0).split())
+
+    def sitting_c(self) -> str:
+        found = re.search(r"\*\*Sitting C never offers D10 \(#1138\)\.\*\*.*", self.item)
+        self.assertIsNotNone(found, f"the item gives sitting C no way out: {self.item}")
+        return found.group(0)
+
+    def test_only_sitting_d_is_offered_d10(self) -> None:
+        self.assertIn("**Sitting D offers D10**", self.item)
+        self.assertNotIn("A rule 7 stop that offers D10", self.item)
+
+    def test_sitting_c_asks_c5s_question_and_posts_on_its_own_tickets(self) -> None:
+        way_out = self.sitting_c()
+        self.assertIn("C5's question", way_out)
+        for ticket in ("#242", "#63"):
+            self.assertIn(ticket, way_out)
+
+    def test_sitting_c_restores_nothing_and_posts_nothing_on_d_s_ticket(self) -> None:
+        way_out = self.sitting_c()
+        self.assertIn("Nothing is restored", way_out)
+        self.assertNotIn("cp -p", way_out)
+        self.assertEqual(way_out.count("#348"), 1, way_out)
+        self.assertIn("#348 is not its ticket", way_out)
+
+    def test_sitting_c_reads_what_stands_and_posts_the_cut_stage_as_failed(self) -> None:
+        way_out = self.sitting_c()
+        self.assertIn("runs Stage 0's reads from the renewal on", way_out)
+        self.assertIn("posts the stage that was cut short as failed", way_out)
+        # C4 and C5 post on no ticket of their own, and the item's range runs to C5.
+        self.assertIn("C4 and C5 have none", way_out)
+
+    def test_a_destroy_first_reads_what_the_lost_session_left_running(self) -> None:
+        # R, T and N run in the foreground, and what a kill does to those is as unknown as the background's.
+        way_out = self.sitting_c()
+        for running in ("`deploy.sh`", "`rollback.sh`", "`teardown.sh`", "`terraform`", "suite"):
+            self.assertIn(running, way_out.partition("A destroy runs as T does")[0])
+        self.assertIn("in the background or not, is still running", way_out)
+
+    def test_the_new_session_keeps_the_lost_sittings_pin(self) -> None:
+        self.assertIn("runs no `--pin`", self.item)
 
 
 if __name__ == "__main__":

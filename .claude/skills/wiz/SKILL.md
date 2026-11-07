@@ -151,13 +151,24 @@ Q3, Q6, Q7, Q11 and Q14 read here as its "Decided in a session" comment corrects
   rotation's refresh-only plan and D2's (#1136). `deploy.sh`, `rollback.sh` and `teardown.sh` apply or
   destroy inside themselves, and C1's preview reads the drift and not what the script will apply, so
   theirs is led by the shape or the case list rule 2 names, with no list.
-- **A lost `claude` (#1090 Q14).** A rule 7 stop that offers D10 from a new session. The human
-  starts it over ssh inside `screen` with `/remote-control` on, after typing `security
+- **A lost `claude` (#1090 Q14).** A rule 7 stop whose way out is offered from a new session. The
+  human starts it over ssh inside `screen` with `/remote-control` on, after typing `security
   unlock-keychain ~/Library/Keychains/login.keychain-db` in that shell, without which its `gh` calls
   answer 401; the unlock does not carry to a new login, and its password stays in that shell as the
-  code does (#1094). The new session's first check is `gh api user`. This route has not been run
-  (#1094), nor is it known what a killed `claude` does to the tunnel and the sitting browser, its
-  background calls, so read both before relying on either.
+  code does (#1094). The new session's first check is `gh api user`. It asks the human which sitting
+  and stage were lost, and runs no `--pin`: on a later UTC date a new pin moves `E` off the lost
+  sitting's bundle, which holds D2's copy. This route has not been run (#1094), nor is it known what
+  a killed `claude` does to the tunnel and the sitting browser, its background calls, so read both
+  before relying on either. **Sitting D offers D10**, which restores D2's copy and posts on #348.
+  **Sitting C never offers D10 (#1138).** C makes no copy for it to restore and #348 is not its
+  ticket. The new session runs Stage 0's reads from the renewal on, to see what stands, posts the
+  stage that was cut short as failed, with the reason, on that stage's ticket (rule 4; C4 and C5 have
+  none, so the end of the sitting names theirs), and asks C5's question. Before a destroy it reads
+  whether a `deploy.sh`, `rollback.sh`, `teardown.sh`, `terraform` or suite the lost session started,
+  in the background or not, is still running, since a teardown must not start over one, and what a
+  kill does to any of them is unknown. A destroy runs as T does, on T's case list and a confirm on
+  launch, and is posted as T's is, on #242 with P-05 on #63, with a line saying it followed a lost
+  session. Nothing is restored, and the sitting ends as C5 says.
 - **AWS Settings (#1090 Q9).** H2's close path and the spend-limit checks may use the phone's
   browser; wiz names the step and waits for the report. That page has not been tried on a phone
   (#1094).
