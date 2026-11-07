@@ -261,8 +261,8 @@ full_sha='^[0123456789abcdef]{40}$'
 # closed (CODING_STANDARDS.md -> "A check fails closed"): the refusal asks for `Closes #n`, the
 # form docs/agents/landing-work.md gives, and nothing here closes another repository's ticket.
 # GitHub issue URLs after the keyword are refused on the same basis (#806); a URL must not
-# bypass the check simply because the local #n reader does not recognize it. That page does not
-# list a URL, and
+# bypass the check simply because the local #n reader does not recognize it. The closing-keywords
+# page cited above does not list a URL, and
 # https://docs.github.com/en/get-started/writing-on-github/working-with-advanced-formatting/autolinked-references-and-urls
 # lists one as a reference and says nothing of closing, so which shapes close is observed, not
 # documented, and GitHub can change it: #1053's Answer holds the table, read on 2026-11-07.
@@ -270,7 +270,8 @@ full_sha='^[0123456789abcdef]{40}$'
 # `#fragment`, which the pattern reads because it does not anchor the URL's end. `http://`, `www.`
 # and no scheme closed nothing; the pattern still refuses the first two, because a needless refusal
 # costs a rewrite and a missed form merges a ticket no commit names. What GitHub closed on and this
-# does not read is the URL inside `[text](url)`, `<url>` or `<a href>`, and `GH-n` (#1147).
+# does not read is the URL of a Markdown link, `[text](url)` or `[text][ref]`, the URL inside
+# `<url>` or `<a href>`, and `GH-n` (#1147).
 # bash's =~ finds one match, so a line is read from its right end, each match's prefix
 # becoming the next line to read, and the numbers are put back in the line's order. `#n` and
 # `issue-n` are matched in a message only where no digit follows, so #35 is not found inside #352
