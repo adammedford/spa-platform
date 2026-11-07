@@ -334,6 +334,7 @@ public sealed class CellOnboardingTests : IDisposable
 
         Assert.Contains("aws_ssm_parameter.client_secret[\"app1\"] delete", refused.Message, StringComparison.Ordinal);
         Assert.DoesNotContain(runner.Calls, call => call.Program == "terraform" && call.Arguments[1] == "apply");
+        Assert.DoesNotContain(runner.Calls, call => call.Program == "spactl"); // A plan that is refused waits on nothing first (#1141).
     }
 
     [Fact]
@@ -388,6 +389,41 @@ public sealed class CellOnboardingTests : IDisposable
     }
 
     [Fact]
+    public async Task A_second_clean_up_after_a_failed_wait_waits_on_every_task_before_anything_is_destroyed()
+    {
+        // The first took the app out of the registry and stopped on its wait, so the other task may still name the secret (#1071 Q51; #1141).
+        CellState cellState = new() { Tasks = [[Gateway, Other]] };
+        await FailedFirstCleanUpAsync(cellState);
+        RecordedRunner runner = OffboardingRunner(cellState);
+
+        await Onboarding(runner, new Tunnel(runner)).OffboardAsync("app3", TestContext.Current.CancellationToken);
+
+        string[] wait = Call(runner, "spactl", "wait");
+        Assert.Equal("9", Option(wait, "--revision")); // The first clean-up's removal, still the live revision.
+        Assert.Equal([Gateway.TaskId, Other.TaskId], Option(wait, "--instances").Split(',').Order(StringComparer.Ordinal));
+        Assert.DoesNotContain(runner.Calls, call => call.Program == "spactl" && call.Arguments[0] == "app");
+
+        int waited = runner.Calls.FindIndex(call => call.Program == "spactl" && call.Arguments[0] == "wait");
+        int applied = runner.Calls.FindIndex(call => call.Program == "terraform" && call.Arguments[1] == "apply");
+        Assert.True(waited >= 0 && waited < applied, $"the wait at {waited}, the apply at {applied}");
+    }
+
+    [Fact]
+    public async Task A_second_clean_up_whose_wait_fails_too_leaves_the_client_and_secret_alone()
+    {
+        CellState cellState = new() { Tasks = [[Gateway, Other]] };
+        await FailedFirstCleanUpAsync(cellState);
+        RecordedRunner runner = RecordedRunner.WithExits(command => command.Program == "spactl" && command.Arguments[0] == "wait"
+            ? new CommandResult(1, "")
+            : OffboardingAnswer(cellState, command));
+
+        await Assert.ThrowsAsync<CommandFailedException>(() => Onboarding(runner, new Tunnel(runner)).OffboardAsync("app3", TestContext.Current.CancellationToken));
+
+        Assert.Contains(runner.Calls, call => call.Program == "spactl" && call.Arguments[0] == "wait");
+        Assert.DoesNotContain(runner.Calls, call => call.Program == "terraform" && call.Arguments[1] == "apply");
+    }
+
+    [Fact]
     public async Task A_clean_up_with_no_running_task_to_wait_on_leaves_the_registry_alone()
     {
         // As wait_for_revision refuses it (tools/scripts/cell-common.sh): no wait could finish, so the removal would leave the app half taken off.
@@ -405,12 +441,14 @@ public sealed class CellOnboardingTests : IDisposable
     [Fact]
     public async Task A_clean_up_with_no_running_task_and_nothing_to_wait_for_still_destroys_what_is_left()
     {
-        // The app never reached the registry, so no snapshot can name its secret and there is no revision to wait on.
+        // The app is out of the registry, whether it never reached it or an earlier clean-up took it off, and no task is
+        // serving, so no snapshot can name its secret and spactl wait, which refuses an empty --instances, has nothing to wait on.
         RecordedRunner runner = OffboardingRunner(new CellState { Tasks = [[]] });
 
         await Onboarding(runner, new Tunnel(runner)).OffboardAsync("app3", TestContext.Current.CancellationToken);
 
         Assert.Contains(runner.Calls, call => call.Program == "terraform" && call.Arguments[1] == "apply");
+        Assert.DoesNotContain(runner.Calls, call => call.Program == "spactl");
     }
 
     [Theory]
@@ -569,6 +607,19 @@ public sealed class CellOnboardingTests : IDisposable
     private static CommandResult OffboardingAnswer(CellState cellState, Command command) => command.Program == "spactl" && command.Arguments[1] == "remove"
         ? cellState.Removed("app3")
         : cellState.Answer(command, App3Resources.Select(address => (address, "delete")).ToArray());
+
+    /// <summary>A first clean-up on this state that took the app out of the registry and stopped on its failed wait, having run no Terraform.</summary>
+    private async Task FailedFirstCleanUpAsync(CellState cellState)
+    {
+        cellState.Add("app3");
+        RecordedRunner runner = RecordedRunner.WithExits(command => command.Program == "spactl" && command.Arguments[0] == "wait"
+            ? new CommandResult(1, "")
+            : OffboardingAnswer(cellState, command));
+
+        await Assert.ThrowsAsync<CommandFailedException>(() => Onboarding(runner, new Tunnel(runner)).OffboardAsync("app3", TestContext.Current.CancellationToken));
+
+        Assert.DoesNotContain(runner.Calls, call => call.Program == "terraform");
+    }
 
     /// <summary>
     /// The onboarding of a service with one defect, refused before Terraform or spactl ran. The plan
