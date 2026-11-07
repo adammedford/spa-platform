@@ -198,7 +198,7 @@ human is: its three checks hold wherever that is (#1090 Q11), and they live here
 `tools/preflight.sh` unchanged (Q12). Then, each line after the prelude:
 
 ```bash
-shown security find-certificate -c "SPA Platform poc Local CA" /Library/Keychains/System.keychain   # exit=0, or stop: the CA is not in the System keychain
+ca=.certs/spa-platform-poc-ca.pem; echo "\$ openssl x509 -in $ca -noout -fingerprint -sha256" >> "$R"; want="$(openssl x509 -in "$ca" -noout -fingerprint -sha256 2>&1 | tee -a "$R" | sed -n 's/.*Fingerprint=//p' | tr -d :)"; echo "CA file SHA-256: ${want:-none}" | tee -a "$R"; filter='/^SHA-256 hash:/ {print; found = found || $3 == want} END {exit !found}'; echo "\$ security find-certificate -a -c \"SPA Platform poc Local CA\" -Z /Library/Keychains/System.keychain | awk -v want='$want' '$filter'" >> "$R"; security find-certificate -a -c "SPA Platform poc Local CA" -Z /Library/Keychains/System.keychain | awk -v want="$want" "$filter" | tee -a "$R"; echo "ca lookup exit=${PIPESTATUS[0]} match exit=${PIPESTATUS[1]}" | tee -a "$R"   # match 0, or stop: the CA in .certs is not in the System keychain
 filter='$1=="sleep" {s=$2; print} END {exit (s=="" || s!=0)}'; echo "\$ pmset -g | awk '$filter'" >> "$R"; pmset -g | awk "$filter" | tee -a "$R"; echo "sleep exit=${PIPESTATUS[1]}" | tee -a "$R"   # 0, or stop: system sleep is on
 filter='{print} /Container engine/ {ok=($1=="ok")} END {exit !ok}'; echo "\$ tools/preflight.sh | awk '$filter'" >> "$R"; tools/preflight.sh | awk "$filter" | tee -a "$R"; echo "preflight exit=${PIPESTATUS[0]} engine exit=${PIPESTATUS[1]}" | tee -a "$R"   # preflight 0: it ended ready and the account is the pin; engine 0, or stop: the Container engine row is not ok
 git fetch origin --tags && git status --short --branch   # on main, no tracked change
@@ -213,9 +213,12 @@ shown aws ecs describe-services --cluster spa-poc --services gateway \
 shown aws ecr describe-images --repository-name spa-poc/gateway --query 'length(imageDetails)'
 ```
 
-Each miss among the three is a rule 7 stop naming its cause. The CA's trust step is at the screen,
-and `tools/scripts/certs.sh trust` adds nothing while the login keychain's copy verifies (#1094 step
-1). A sleeping mini takes the session with it. preflight reports a stopped engine as `later` and
+Each miss among the three is a rule 7 stop naming its cause. The CA line matches the System
+keychain's certificates by the SHA-256 of `.certs/spa-platform-poc-ca.pem`, not by name, since a name
+also finds an older authority left there by `certs.sh --new-ca`, and `security verify-cert` also
+passes through the login keychain's copy (#1140). An older one beside the current one is listed and
+passes. The CA's trust step is at the screen, and `tools/scripts/certs.sh trust` adds nothing while
+the login keychain's copy verifies (#1094 step 1). A sleeping mini takes the session with it. preflight reports a stopped engine as `later` and
 still ends ready, which is why the row is read here; Docker Desktop's engine needs the live login
 session (#1090 Q6).
 
