@@ -119,10 +119,14 @@ public sealed class CellOnboarding(Cell cell, CellAws aws, ICommandRunner runner
     /// <summary>
     /// Takes the app off the cell, whatever part of <see cref="OnboardAsync"/> ran: out of the registry
     /// first, and only once every running task serves that revision, the client, branding style and
-    /// secret, so no snapshot on either task names a secret that is gone (#873). The running tasks are
-    /// read before the registry changes. No running task to wait on is refused there, as
-    /// <c>wait_for_revision</c> in tools/scripts/cell-common.sh refuses it, since no wait could finish
-    /// and the app would be left half taken off. A service mid-roll is not refused, as the onboarding
+    /// secret, so no snapshot on either task names a secret that is gone (#873). An app already out of
+    /// the registry may be one an earlier clean-up removed and whose wait failed, so this clean-up waits
+    /// too, on the live revision, once its plan shows something to destroy (#1141). The one destroy with
+    /// no wait is a clean-up that finds the app out of the registry and no task running, since no task
+    /// serves a snapshot and <c>spactl wait</c> refuses an empty set. The running tasks are read before
+    /// the registry changes. An app still in the registry with no running task to wait on is refused
+    /// there, as <c>wait_for_revision</c> in tools/scripts/cell-common.sh refuses it, since no wait could
+    /// finish and the app would be left half taken off. A service mid-roll is not refused, as the onboarding
     /// refuses it: a clean-up that stopped there would leave the secret live, and a task replaced under
     /// the wait fails the wait before anything is destroyed. The apps root's plan without the onboarding
     /// definition is applied only when it destroys that app's resources and nothing else. The release
@@ -133,7 +137,9 @@ public sealed class CellOnboarding(Cell cell, CellAws aws, ICommandRunner runner
         // Before the registry changes, so a root that cannot destroy the app's resources leaves the app served rather than half taken off.
         RequireInitialised();
         IReadOnlySet<RunningTask> serving = await aws.RunningTasksAsync(ct);
-        if ((await aws.LiveRegistryAsync(ct)).AppIds.Contains(appId))
+        LiveRegistry live = await aws.LiveRegistryAsync(ct);
+        bool inRegistry = live.AppIds.Contains(appId);
+        if (inRegistry)
         {
             if (serving.Count == 0)
             {
@@ -158,6 +164,13 @@ public sealed class CellOnboarding(Cell cell, CellAws aws, ICommandRunner runner
             }
 
             Require(planned, [.. owned.Select(address => new PlannedChange(address, "delete")).Where(planned.Contains)], "taking " + appId + " off");
+
+            if (!inRegistry && serving.Count > 0)
+            {
+                // spactl wait accepts the revision or later, and the live revision is at or past any earlier clean-up's removal.
+                await WaitAsync(live.Revision, serving, ct);
+            }
+
             await TerraformAsync(["apply", "-input=false", "-no-color", plan], ct);
         }
         finally
