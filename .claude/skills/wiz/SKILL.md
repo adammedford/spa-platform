@@ -144,7 +144,8 @@ Q3, Q6, Q7, Q11 and Q14 read here as its "Decided in a session" comment corrects
   `show -json` writes sensitive values in the clear, so its output goes into this filter and nowhere
   else, and the line runs bare, never under `shown`, with its command echoed into `"$R"` (#1139).
   Where rule 2 stops, or a plan holds secrets, the human reads it with
-  `terraform -chdir=<root> show <plan>` in an ssh login, and it never enters the chat. "Holds secrets" means in its text: the apps root's saved file carries client secrets
+  `terraform -chdir=<root> show <plan>` in an ssh login, and it never enters the chat.
+  "Holds secrets" means in its text: the apps root's saved file carries client secrets
   (rule 6), and Terraform prints them as `(sensitive value)`, so C3's and N's `shown` plans stay as
   they are. How the app renders a long plan is unproved (#1094): one hard to read there goes to ssh
   too. A plan a confirm rests on is saved, so this line has its `<plan>`: C3's, N's saved plan, secret
