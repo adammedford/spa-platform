@@ -17,14 +17,14 @@ the Bash tool runs (#183), which on macOS is 3.2. The environment is built, not 
 the directories of git and python3 and the system's own, HOME is inside the case's directory, and
 git reads no configuration of the machine's.
 
-**The skill's text.** The third class reads the wiz skill's two files from this checkout and holds
+**The skill's text.** `SkillHoldsNoCopy` reads the wiz skill's two files from this checkout and holds
 that no line of the prelude's commands is copied into them, so the file stays the one copy.
 
 **Row 2's number (#1088).** D2's `awk` and `grep` count the sitting browser's lines and the skill
 writes the tokens they match by hand, so renaming a token left them printing 0 sign-outs on a roll
-that signed the browser out, and the row read as failed. The fourth class reads the tokens, the log's
-name and the watch's flags from tests/e2e/SittingBrowser/, builds a log out of those tokens, and runs
-the skill's own two lines over it through the prelude.
+that signed the browser out, and the row read as failed. `SkillCountsTheWatchsLines` reads the tokens,
+the log's name and the watch's flags from tests/e2e/SittingBrowser/, builds a log out of those tokens,
+and runs the skill's own two lines over it through the prelude.
 
 Checkout inputs: .claude/skills/wiz/*.md .gitignore tests/e2e/Program.cs tests/e2e/SittingBrowser/Observations.cs tests/e2e/SittingBrowser/ObservationLine.cs tests/e2e/SittingBrowser/SittingBrowser.cs tests/e2e/SittingBrowser/SittingCommand.cs
 """
@@ -271,6 +271,13 @@ class SkillCountsTheWatchsLines(Sitting):
         # token in between is missing coverage, which neither counts nor ends a sign-out.
         _, printed = self.run_over_log("awk", [signed_in, prompt, prompt, *others, prompt, signed_in, *others, prompt])
         self.assertEqual(printed, ["2", "exit=0"])
+
+    def test_the_awk_prints_0_on_a_roll_with_no_sign_out(self) -> None:
+        # The row posts this number, and a line with nothing on it is not one (#1088).
+        signed_in, prompt = self.tokens["SignedInToken"], self.tokens["LoginPromptToken"]
+        others = [token for token in self.navigation if token not in (signed_in, prompt)]
+        _, printed = self.run_over_log("awk", [signed_in, *others, signed_in])
+        self.assertEqual(printed, ["0", "exit=0"])
 
     def test_the_grep_prints_every_navigation_line_but_signed_in(self) -> None:
         signed_in = self.tokens["SignedInToken"]
