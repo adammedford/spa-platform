@@ -640,6 +640,114 @@ try {
       if (!/asserts a header nothing sets/.test(prompt)) fail('PR 208: the qualified nomination\'s why did not reach the mutation prompt')
       if (!/nominated as Nom \(only the Assert\.Null/.test(prompt)) fail('PR 208: the qualified nomination\'s qualifier did not reach the mutation prompt')
     }
+    // A nomination that is prose before its first '(' keeps its whole text as its test, not its first
+    // word (#1091): on #1085 'the comments index jq tail check (19a)' read as 'the', and a catch the
+    // verdict accepted under the other rows' names held on that one. On a Node companion, red on its
+    // own check's message, it is a caught row the verdict answers by that name: accepted it reproduces
+    // and merges, and not accepted it holds, its Broken cell naming it for the next review.
+    {
+      const CMJS = '.claude/workflows/morning_tests.mjs'
+      const PROSE_CELL = 'the comments index jq tail check (19a)'
+      const SHAPE = { 208: pr(208, [CMJS, '.claude/workflows/morning.js']) }
+      const prose = { 208: [{ test: PROSE_CELL, project: CMJS, why: 'asserts a constant tail' }] }
+      const red = { ...row('reproduced', 1, 54), failingNames: ['the comments index counts the trailing newlines of [0,0,0], not 1,2,0'] }
+      for (const [accept, want, verdict] of [[true, 'reproduced', 'merge'], [false, 'did-not-fail', 'hold']]) {
+        env = run({ prs: [208] }, SHAPE, { nominations: prose, mutate: { [PROSE_CELL]: red, the: red }, caught: accept ? { 208: [PROSE_CELL] } : {} })
+        result = await execute(env)
+        const c = resultOf(208, result)
+        const ms = (c.mutations || []).filter((x) => x.kind === 'nominated')
+        if (ms.length !== 1 || ms[0].test !== PROSE_CELL || ms[0].result !== want || c.verdict !== verdict) fail(`PR 208 with the nomination ${JSON.stringify(PROSE_CELL)}, ${accept ? 'accepted' : 'not accepted'}: rows ${JSON.stringify(ms.map((m) => ({ test: m.test, result: m.result })))}, verdict ${c.verdict}, expected the whole cell ${want} and ${verdict}`)
+        if (!(env.prompts['verdict:208'] || '').includes(`put ${JSON.stringify(PROSE_CELL)} in caughtAccepted`)) fail(`PR 208: the verdict prompt does not name the cell ${JSON.stringify(PROSE_CELL)} to accept`)
+        if (!accept && !commentOf(env, 208).split('\n').some((l) => l.startsWith(`| \`${PROSE_CELL}\`: `))) fail(`PR 208: the held record's Broken cell does not name ${JSON.stringify(PROSE_CELL)}`)
+      }
+      // With no parenthesis the whole text is what comes before it, and it is prose all the same.
+      const NOPAREN = 'the comments index jq tail check'
+      env = run({ prs: [208] }, SHAPE, { nominations: { 208: [{ ...prose[208][0], test: NOPAREN }] }, mutate: { [NOPAREN]: red, the: red }, caught: { 208: [NOPAREN] } })
+      result = await execute(env)
+      {
+        const m = (resultOf(208, result).mutations || []).find((x) => x.kind === 'nominated') || {}
+        if (m.test !== NOPAREN || m.result !== 'reproduced') fail(`PR 208 with the nomination ${JSON.stringify(NOPAREN)}: row ${JSON.stringify({ test: m.test, result: m.result })}, expected the whole cell reproduced`)
+      }
+      // Two prose cells that differ only in their parenthesis keep a row each: read by the text before
+      // it, the dedup by test folds the second one away and nobody mutates it.
+      const TWO = ['the tail check (19a)', 'the tail check (19b)']
+      env = run({ prs: [208] }, SHAPE, { nominations: { 208: TWO.map((test) => ({ test, project: CMJS, why: 'asserts a constant' })) }, mutate: { [TWO[0]]: red, [TWO[1]]: red }, caught: { 208: TWO } })
+      result = await execute(env)
+      {
+        const tests = (resultOf(208, result).mutations || []).filter((x) => x.kind === 'nominated').map((m) => m.test)
+        if (TWO.some((t) => !tests.includes(t))) fail(`PR 208 with the nominations ${JSON.stringify(TWO)}: rows ${JSON.stringify(tests)}, expected a row for each`)
+      }
+      // A backtick leaves the name: a Broken cell holding one reads as no row in the next review, so a
+      // hold on it would be forgotten.
+      const TICKED = 'the `tail` check (19a)'
+      const UNTICKED = 'the tail check (19a)'
+      env = run({ prs: [208] }, SHAPE, { nominations: { 208: [{ ...prose[208][0], test: TICKED }] }, mutate: { [UNTICKED]: red, [TICKED]: red } })
+      result = await execute(env)
+      {
+        const m = (resultOf(208, result).mutations || []).find((x) => x.kind === 'nominated') || {}
+        if (m.test !== UNTICKED) fail(`PR 208 with the nomination ${JSON.stringify(TICKED)}: row ${JSON.stringify(m.test)}, expected ${JSON.stringify(UNTICKED)}`)
+      }
+      // A cell that is only backticks and spaces names no test: its row could not run, and holds (#811).
+      env = run({ prs: [208] }, SHAPE, { nominations: { 208: [{ ...prose[208][0], test: '` `' }] } })
+      result = await execute(env)
+      {
+        const c = resultOf(208, result)
+        const m = (c.mutations || []).find((x) => x.kind === 'nominated') || {}
+        if (m.result !== 'could-not-run' || c.verdict !== 'hold') fail(`PR 208 with the nomination "\` \`": row ${JSON.stringify({ test: m.test, result: m.result })}, verdict ${c.verdict}, expected could-not-run and hold`)
+      }
+      // A backtick leaves a one-word name as well: held on '`Nom`', the Broken cell would read as no
+      // row in the next review, and red on Nom the row would not read as its own.
+      env = run({ prs: [208] }, NOM, { nominations: { 208: [{ test: '`Nom`', project: 'tests/Platform.Registry.Tests', why: 'asserts a constant' }] }, mutate: { Nom: row('did-not-fail') } })
+      result = await execute(env)
+      {
+        const m = (resultOf(208, result).mutations || []).find((x) => x.kind === 'nominated') || {}
+        if (m.test !== 'Nom' || m.result !== 'did-not-fail') fail(`PR 208 with the nomination "\`Nom\`": row ${JSON.stringify({ test: m.test, result: m.result })}, expected Nom did-not-fail`)
+        if (commentOf(env, 208).includes('``Nom``')) fail('PR 208 with the nomination "`Nom`": the held record\'s Broken cell keeps its backticks')
+      }
+      const onTicked = { ...row('reproduced', 1, 10), failingNames: ['Platform.Registry.Tests.NomTests.Nom'] }
+      for (const ticked of ['`Nom` (only the Assert.Null line)', '`Nom` only the Assert.Null line']) {
+        env = run({ prs: [208] }, NOM, { nominations: { 208: [{ test: ticked, project: 'tests/Platform.Registry.Tests', why: 'asserts a constant' }] }, mutate: { Nom: onTicked } })
+        result = await execute(env)
+        const c = resultOf(208, result)
+        const m = (c.mutations || []).find((x) => x.kind === 'nominated') || {}
+        if (m.test !== 'Nom' || m.result !== 'reproduced' || c.verdict !== 'merge') fail(`PR 208 with the nomination ${JSON.stringify(ticked)}: row ${JSON.stringify({ test: m.test, result: m.result })}, verdict ${c.verdict}, expected Nom reproduced and merge`)
+      }
+      // A prose cell that is a candidate's whole name is that candidate: one row, lent what it guards.
+      const NAMED = 'morning_tests check 19a (comments index jq)'
+      const WITHCAND = { 208: pr(208, [CMJS, '.claude/workflows/morning.js'], { candidates: [{ test: NAMED, project: CMJS, file: CMJS, guards: 'the tail capture', breaks: '.claude/workflows/morning.js' }] }) }
+      env = run({ prs: [208] }, WITHCAND, { nominations: { 208: [{ test: NAMED, project: CMJS, why: 'asserts a constant' }] }, mutate: { [NAMED]: red }, caught: { 208: [NAMED] } })
+      result = await execute(env)
+      {
+        const ms = (resultOf(208, result).mutations || []).filter((x) => x.test === NAMED)
+        const prompt = (env.mutations.find((x) => x.test === NAMED) || {}).prompt || ''
+        if (ms.length !== 1 || ms[0].kind !== 'nominated') fail(`PR 208 with the nomination ${JSON.stringify(NAMED)}, a candidate's name: rows ${JSON.stringify(ms.map((m) => ({ test: m.test, kind: m.kind })))}, expected one nominated row`)
+        if (!prompt.includes('It guards: the tail capture')) fail(`PR 208: the candidate ${JSON.stringify(NAMED)} did not lend the nomination what it guards`)
+      }
+      // A cell that is a candidate's whole name is that candidate even when its first word is another
+      // candidate's test: read as the whole-file row, any red check in the file would be its own.
+      const SCOPED = 'morning_tests.mjs check 19a'
+      const BOTH = { 208: pr(208, [CMJS, '.claude/workflows/morning.js'], { candidates: [
+        { test: 'morning_tests.mjs', project: CMJS, file: CMJS, guards: 'the whole companion', breaks: '.claude/workflows/morning.js' },
+        { test: SCOPED, project: CMJS, file: CMJS, guards: 'the tail capture', breaks: '.claude/workflows/morning.js' },
+      ] }) }
+      env = run({ prs: [208] }, BOTH, { nominations: { 208: [{ test: SCOPED, project: CMJS, why: 'asserts a constant' }] }, mutate: { [SCOPED]: red, 'morning_tests.mjs': red }, caught: { 208: [SCOPED] } })
+      result = await execute(env)
+      {
+        const ms = (resultOf(208, result).mutations || []).filter((x) => x.kind === 'nominated')
+        if (ms.length !== 1 || ms[0].test !== SCOPED) fail(`PR 208 with the nomination ${JSON.stringify(SCOPED)}, a candidate's name whose first word is another candidate's: rows ${JSON.stringify(ms.map((m) => m.test))}, expected ${JSON.stringify(SCOPED)}`)
+      }
+      // A first word that is a candidate's test is that test, whatever prose follows it, and red on
+      // it the row reproduces: this reading is why prose is not simply any cell with a space.
+      const SPACED = 'Nom only the Assert.Null line'
+      const onNom = { ...row('reproduced', 1, 10), failingNames: ['Platform.Registry.Tests.NomTests.Nom'] }
+      env = run({ prs: [208] }, NOM, { nominations: { 208: [{ test: SPACED, project: 'tests/Platform.Registry.Tests', why: 'asserts a constant' }] }, mutate: { Nom: onNom, [SPACED]: onNom } })
+      result = await execute(env)
+      {
+        const c = resultOf(208, result)
+        const m = (c.mutations || []).find((x) => x.kind === 'nominated') || {}
+        if (m.test !== 'Nom' || m.result !== 'reproduced' || c.verdict !== 'merge') fail(`PR 208 with the nomination ${JSON.stringify(SPACED)} and the candidate Nom: row ${JSON.stringify({ test: m.test, result: m.result })}, verdict ${c.verdict}, expected Nom reproduced and merge`)
+      }
+    }
     // A cell with no name before its first space or '(' keeps its whole text and still gets a row: an
     // empty name would be dropped with no row the verdict could see.
     {
@@ -899,7 +1007,7 @@ try {
     for (const [label, shape, test, nominations] of [
       ['stated', { statedMutations: [stated('overnight_tests.mjs check 39', 2, -1, MJS)] }, 'overnight_tests.mjs check 39'],
       ['stated on the directory', { statedMutations: [stated('overnight_tests.mjs check 39', 2, -1, '.claude/workflows')] }, 'overnight_tests.mjs check 39'],
-      ['nominated', {}, 'overnight_tests.mjs', { 212: [{ test: 'overnight_tests.mjs check 39', project: MJS, why: 'check 39 may not read the Answer' }] }],
+      ['nominated', {}, 'overnight_tests.mjs check 39', { 212: [{ test: 'overnight_tests.mjs check 39', project: MJS, why: 'check 39 may not read the Answer' }] }],
       ['candidate', { candidates: [{ test: 'overnight_tests.mjs check 39 (#631)', project: MJS, file: MJS, guards: 'the decisions step', breaks: '.claude/workflows/overnight.js' }] }, 'overnight_tests.mjs check 39 (#631)'],
     ]) {
       const SHAPE = { 212: pr(212, [MJS, '.claude/workflows/overnight.js'], shape) }
