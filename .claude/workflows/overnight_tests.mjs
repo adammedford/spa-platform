@@ -47,7 +47,8 @@
 // record and #634's with no pass line, and checks that each skips implement and review, runs the gate once and
 // integrates. A last short run has the live read find tickets relabelled since collect (#721), #544's case relabelled
 // ready-for-human among them, and checks that none is implemented, that each takes its live status, and that a read
-// that died fails closed. Every house-rules prompt sends docker to ~/.docker/bin before an agent may call it
+// that died fails closed. One more has the subject selector refuse a merge (#1052), and checks that the ticket fails at
+// integrate as neither a conflict nor a red gate. Every house-rules prompt sends docker to ~/.docker/bin before an agent may call it
 // absent (#742). No agent, gh or git call is made.
 import fs from 'node:fs'
 import os from 'node:os'
@@ -911,6 +912,15 @@ const HOUSE_CREATE = 'gh issue create` only for a change request, after the sear
     if (!c.prompt.includes('- subject "<head>: <what landed>"')) fail(`#388: the ${c.label} prompt does not write the subject from the answer's head`)
     if (c.prompt.includes(`- subject "Merge task ${id}: `)) fail(`#388: the ${c.label} prompt still writes "Merge task ${id}" from the lane's completeness`)
     if (!c.prompt.includes('naming each open part ticket')) fail(`#388: the ${c.label} prompt does not name the open part tickets on a part merge's Outstanding line`)
+    // A selector that exits non-zero chose nothing, so nothing stands in for its answer (#1052).
+    if (c.prompt.includes('When it exits non-zero, <head> is')) fail(`#1052: the ${c.label} prompt still gives <head> a value when the selector exits non-zero`)
+    const refusal = c.prompt.indexOf('When it exits non-zero it chose no subject')
+    if (refusal < at || refusal > merge) fail(`#1052: the ${c.label} prompt does not refuse the merge between asking the subject and merging`)
+    else {
+      const says = c.prompt.slice(refusal, c.prompt.indexOf('\n', refusal))
+      for (const w of ['merge nothing', 'return ok=false', 'mergeSha ""', 'conflictFiles []', 'notes that begin "no subject: "', 'quote its last line'])
+        if (!says.includes(w)) fail(`#1052: the ${c.label} prompt's refusal does not say ${JSON.stringify(w)}`)
+    }
   }
 }
 
@@ -2306,6 +2316,63 @@ const forkOf = (prompt) => (/Otherwise fork from [^:]+: forkSha = (\S+?)\. Take 
     const issueBody = '## What to build\n\nx\n\n## Acceptance criteria\n\n- [ ] F-01 passes\n- [x] F-02 passes\n\n## Blocked by\n\n- [ ] not a box of the list\n'
     const r = spawnSync('awk', [reader], { encoding: 'utf8', input: issueBody })
     if (r.status !== 0 || !r.stdout.includes('- [ ] F-01 passes') || r.stdout.includes('not a box of the list')) fail(`#973: the acceptance reader awk '${reader}' does not read the "## Acceptance criteria" section alone: exit ${r.status}, ${JSON.stringify(r.stdout)}`)
+  }
+}
+
+// 48. A merge the selector refused fails its ticket and nothing else (#1052). --subject-for exits 2 on a listing it
+//     cannot prove complete (#871), and the integrate step then wrote the full subject the listing could not choose.
+//     Now the agent merges nothing and answers ok=false with notes beginning "no subject: ". One short run: issue-1101
+//     gets that answer, issue-1102 is blocked by it, issue-1103 is free, and issue-1104 is blocked by issue-1103, whose
+//     review waits for the refusal, so issue-1104 starts after it. The ticket fails at integrate with the selector's
+//     line as its reason, once: a refusal is no conflict to send back and no red gate to re-run or reset, and the log
+//     does not call it a red gate. Its dependant is skipped, and the free ticket, and one started after the refusal,
+//     still merge.
+{
+  const LINE = 'landing-subjects: fail: nothing judged: the open issues could not be listed completely: gh exited 1.'
+  const logged = [], labels = []
+  let refused = () => {}
+  const refusal = new Promise((resolve) => { refused = resolve })
+  globalThis.args = { ...fixture.args, skills: OTHER_SKILLS }
+  globalThis.log = (m) => { logged.push(String(m)) }
+  const set = [
+    { ...synthetic(1101, 'issue-1101', 'ready-for-agent', [], 1), owner: 'integrator' },
+    { ...synthetic(1102, 'issue-1102', 'ready-for-agent', ['issue-1101'], 1), owner: 'integrator' },
+    { ...synthetic(1103, 'issue-1103', 'ready-for-agent', [], 1), owner: 'integrator' },
+    { ...synthetic(1104, 'issue-1104', 'ready-for-agent', ['issue-1103'], 1), owner: 'integrator' },
+  ]
+  globalThis.agent = async (prompt, opts) => {
+    labels.push(opts.label)
+    const [kind, id] = opts.label.split(':')
+    if (kind === 'collect') return { outcome: 'ok', reason: 'companion', tickets: set.map((t) => ({ ...t })), landed: [], base: 'a'.repeat(40), shell: '3.2', shellCommand: '/bin/bash' }
+    if (kind === 'resume') return NOT_MERGED
+    if (kind === 'live') return LIVE_READY
+    if (kind === 'report') return { questions: 0, mainCheckoutClean: true, leftovers: '', issue: 0, url: '' }
+    if (kind === 'closing') return { ok: true, headSha: CLOSING_TIP, lastLine: 'check: pass: companion.', notes: '' }
+    await sleep(5)
+    if (kind === 'implement') return { outcome: 'resolved', branch: `b-${id}`, forkSha: 'f', headSha: 'h', complete: true, outstanding: '', summary: 's', question: '', delegatedDecisions: [], changeRequests: [] }
+    if (kind === 'review' && id === 'issue-1103') await Promise.race([refusal, sleep(500)])
+    if (kind === 'review') return { outcome: 'committed', headSha: 'h', findingsFixed: [], findingsSkipped: [], summary: 's', question: '', changeRequests: [], changedFiles: [`files/${id}.txt`] }
+    if (kind === 'integrate' && id === 'issue-1101') { refused(); return { ok: false, mergeSha: '', notes: `no subject: ${LINE}`, conflictFiles: [], headSha: '', old: '', redHead: '', reach: '' } }
+    if (kind === 'integrate') return { ok: true, mergeSha: 'm', notes: '', conflictFiles: [], headSha: `verified-${id}`, old: '', redHead: '', reach: '' }
+    throw new Error(`unexpected agent label ${opts.label} in the refused-merge run`)
+  }
+  const src = fs.readFileSync(scriptPath, 'utf8').replace(/^export const meta/m, 'const meta')
+  let res = null
+  try { res = await new Function('return (async () => {' + src + '\n})()')() } catch (e) { fail(`#1052: the refused-merge run threw: ${e && e.message ? e.message : e}`) }
+  if (res) {
+    const refused = (res.reasons || []).find((r) => r.id === 'issue-1101')
+    if (!refused || refused.outcome !== 'failed' || refused.stage !== 'integrate' || !refused.reason.includes(LINE)) fail(`#1052: a refused merge does not fail at integrate with the selector's line: ${JSON.stringify(refused)}`)
+    if ((res.integrated || []).includes('issue-1101')) fail('#1052: the refused ticket counts as integrated')
+    for (const free of ['issue-1103', 'issue-1104'])
+      if (!(res.integrated || []).includes(free)) fail(`#1052: a refusal stopped ${free}, which it does not hold: ${JSON.stringify(res.integrated)}`)
+    if (!(res.skipped || []).includes('issue-1102')) fail(`#1052: the refused ticket's dependant was not skipped: ${JSON.stringify(res.skipped)}`)
+    const about = labels.filter((l) => l.endsWith(':issue-1101'))
+    const extra = about.filter((l) => /^(resolve|rerun|reset):/.test(l))
+    if (extra.length) fail(`#1052: a refused merge was treated as a conflict or a red gate: ${extra.join(', ')}`)
+    if (about.filter((l) => l.startsWith('integrate:')).length !== 1) fail(`#1052: a refused merge was asked again: ${about.join(', ')}`)
+    const lines = logged.filter((l) => l.startsWith('issue-1101: '))
+    if (lines.some((l) => l.includes('integration gate red'))) fail(`#1052: the log calls a merge that never ran a gate red: ${lines.join(' | ')}`)
+    if (!lines.some((l) => l.includes('no merge made') && l.includes(LINE))) fail(`#1052: the log does not say the merge was refused and why: ${lines.join(' | ')}`)
   }
 }
 
