@@ -453,9 +453,10 @@ line of it:
   and nothing else (the runbook's own test). The route's plan list on that file leads the confirm,
   with `resource_drift` in place of `resource_changes`: a refresh-only plan reports its moves there
   and has no `resource_changes`, so the line as written prints nothing, and with the swap an empty
-  list is a refresh that moved nothing, which fails that test (#1136). Then, on confirm, the runbook's apply line as written with the approval on its
-  standard input, `printf 'yes\n' | shown terraform ...`, which is rule 2's confirm given through the shell
-  and not an edit of the line. The deletion of the old secret at the provider (secret rotation's
+  list is a refresh that moved nothing, which fails that test (#1136). Then, on confirm, the
+  runbook's apply line as written with the approval on its standard input, `printf 'yes\n' | shown
+  terraform ...`, which is rule 2's confirm given through the shell and not an edit of the line.
+  The deletion of the old secret at the provider (secret rotation's
   step 7) and the removal of app 1's entry (step 2 of ending an app's sessions) each run on a
   confirm that names what goes (the secret's count before, the app and the release it comes back
   at). Every other step writes the registry through `spactl` or the provider through the CLI and

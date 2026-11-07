@@ -30,6 +30,11 @@ and runs the skill's own two lines over it through the prelude.
 `SkillCountsTheWatchsLines` runs the confirm's own block and then the two lines over what it leaves:
 a count of 0, an earlier attempt's log kept whole, and a log as private as the one the watch creates.
 
+**The plans a confirm reads (#1136).** The route's plan list reads a saved file, and N's plans saved
+none. `SkillSavesThePlansItsConfirmsRead` runs N's two blocks and the list through the prelude against
+a double of terraform, runs the list over a refresh-only plan's shape, and reads the prose that joins
+them: the blocks do not themselves say that the list leads the confirm or that a declined one cleans up.
+
 Checkout inputs: .claude/skills/wiz/*.md .gitignore tests/e2e/Program.cs tests/e2e/SittingBrowser/Observations.cs tests/e2e/SittingBrowser/ObservationLine.cs tests/e2e/SittingBrowser/SittingBrowser.cs tests/e2e/SittingBrowser/SittingCommand.cs
 """
 from __future__ import annotations
@@ -384,16 +389,31 @@ class SkillSavesThePlansItsConfirmsRead(Sitting):
         self.assertIsNotNone(found, f"N has no step {number}")
         return " ".join(found.group(1).split())
 
-    def test_ns_saved_plan_reaches_the_list_and_the_apply_reads_the_same_file(self) -> None:
-        blocks = re.findall(r"^```bash\n(.*?)^```$", self.n_section, re.M | re.S)
-        self.assertEqual(len(blocks), 2, f"N should hold its saved plan's two blocks: {blocks}")
-        plan_block, apply_block = (block.replace("<root>", "infra/envs/poc/idp") for block in blocks)
+    def plan_list(self) -> str:
+        """The route's plan list, the one line of it in the skill."""
         listed = [line.strip() for line in self.text.splitlines()
                   if line.strip().startswith("terraform -chdir=<root> show -json <plan>")]
         self.assertEqual(len(listed), 1, f"SKILL.md should hold one plan list: {listed}")
+        return listed[0]
+
+    def rotation_rule(self) -> str:
+        """Secret rotation's rule 2 note, its wrapped lines joined."""
+        return " ".join(self.between("- **Rule 2.** Secret rotation's", "The deletion of the old secret").split())
+
+    def saved_file(self, plan_block: str) -> str:
         saved = re.search(r'-out="(\$P/[^"]+)"', plan_block)
         self.assertIsNotNone(saved, f"N's plan saves no file under $P: {plan_block}")
-        plan_list = listed[0].replace("<root>", "infra/envs/poc/idp").replace("<plan>", f'"{saved.group(1)}"')
+        return saved.group(1)
+
+    def n_blocks(self) -> list[str]:
+        blocks = re.findall(r"^```bash\n(.*?)^```$", self.n_section, re.M | re.S)
+        self.assertEqual(len(blocks), 2, f"N should hold its saved plan's two blocks: {blocks}")
+        return blocks
+
+    def test_ns_saved_plan_reaches_the_list_and_the_apply_reads_the_same_file(self) -> None:
+        plan_block, apply_block = (block.replace("<root>", "infra/envs/poc/idp") for block in self.n_blocks())
+        saved = self.saved_file(plan_block)
+        plan_list = self.plan_list().replace("<root>", "infra/envs/poc/idp").replace("<plan>", f'"{saved}"')
         self.pin(utc_day(-1) + "\n")
         changes = {"resource_changes": [
             {"address": "aws_cognito_user_pool.main", "change": {"actions": ["create"]}},
@@ -412,11 +432,17 @@ class SkillSavesThePlansItsConfirmsRead(Sitting):
         self.assertIn("create aws_cognito_user_pool.main", printed)
         self.assertNotIn("no-op aws_kept.same", printed)
         directory = printed[0]
-        self.assertIn(f"applied {directory}/{saved.group(1).removeprefix('$P/')}", printed)
+        self.assertIn(f"applied {directory}/{saved.removeprefix('$P/')}", printed)
         self.assertEqual(printed[-1], "removed")
 
     def test_ns_saved_plan_keeps_the_file_in_rule_6s_private_directory(self) -> None:
         self.assertIn('P=$(mktemp -d); echo "$P"', self.n_section)
+
+    def test_ns_list_on_the_saved_file_leads_the_confirm_and_a_declined_one_removes_it(self) -> None:
+        prose = " ".join(self.n_section.split())
+        saved = self.saved_file(self.n_blocks()[0])
+        self.assertIn(f"Run the route's plan list on `\"{saved}\"` and ask for the confirm", prose)
+        self.assertIn("A declined confirm removes the directory", prose)
 
     def test_steps_2_and_4_run_the_saved_plan_and_name_no_bare_plan_or_apply(self) -> None:
         for number in (2, 4):
@@ -425,21 +451,17 @@ class SkillSavesThePlansItsConfirmsRead(Sitting):
             self.assertNotRegex(step, r"`(plan|apply)`", f"step {number} names a plan with no file")
 
     def test_secret_rotations_plan_saves_a_file_in_the_walks_private_directory(self) -> None:
-        rule = " ".join(self.between("- **Rule 2.** Secret rotation's", "The deletion of the old secret").split())
+        rule = self.rotation_rule()
         self.assertRegex(rule, r'shown terraform -chdir=infra/envs/poc/apps plan -refresh-only [^`]*-out="\$RUN/[^"]+"')
         self.assertIn("plan list", rule)
 
     def test_secret_rotations_list_reads_the_drift_where_a_refresh_only_plan_reports_its_moves(self) -> None:
-        rule = " ".join(self.between("- **Rule 2.** Secret rotation's", "The deletion of the old secret").split())
-        self.assertIn("with `resource_drift` in place of `resource_changes`", rule)
-        listed = [line.strip() for line in self.text.splitlines()
-                  if line.strip().startswith("terraform -chdir=<root> show -json <plan>")]
-        self.assertEqual(len(listed), 1, f"SKILL.md should hold one plan list: {listed}")
+        self.assertIn("with `resource_drift` in place of `resource_changes`", self.rotation_rule())
         # The shape of terraform 1.16's show -json on a refresh-only plan with one move: no resource_changes.
         plan = {"resource_drift": [{"address": "aws_ssm_parameter.client_secret", "change": {"actions": ["update"]}}]}
         self.pin(utc_day(-1) + "\n")
         double = f"terraform() {{ printf '%s' '{json.dumps(plan)}'; }}\n"
-        as_written = listed[0].replace("<root>", "infra/envs/poc/apps").replace("<plan>", "x")
+        as_written = self.plan_list().replace("<root>", "infra/envs/poc/apps").replace("<plan>", "x")
         written = self.bash(f"{SOURCE}\n{double}{as_written}\n")
         self.assertEqual(written.returncode, 0, written.stderr)
         self.assertEqual(written.stdout, "", "the line as written reads a refresh-only plan's moves")
