@@ -724,12 +724,13 @@ shown sitting_browser reload main
 
 Anything but `signed-in` stops the sitting (rule 7) before any apply: D0's session is gone, so no
 sign-out could be attributed to the cutover. Name the counts and the one replacement when asking for
-the confirm. On the confirm, set any earlier attempt's log aside, start the watch in a background
-call of its own, and once its first line has printed apply the saved plan (the apply does not wait
-for the roll):
+the confirm. On the confirm, set any earlier attempt's log aside and leave this attempt's empty
+(#1135), start the watch in a background call of its own, and once its first line has printed
+apply the saved plan (the apply does not wait for the roll):
 
 ```bash
 [ ! -e "$E/browser.log" ] || mv "$E/browser.log" "$E/browser.log.$$"
+: > "$E/browser.log"
 ```
 
 ```bash
@@ -778,6 +779,10 @@ shown sitting_browser unwatch main
 shown awk '$1=="login-prompt" && !p {n++; p=1} $1=="signed-in" {p=0} END {print n+0}' "$E/browser.log"
 shown grep -E '^(login-prompt|tunnel-down|timeout|other|not-found) ' "$E/browser.log"
 ```
+
+The watch writes no line before its first tick, an `--every` away, so a stop in that interval reads
+the confirm's empty log: a count of 0, no lines and `grep`'s `exit=1`. The apply has not run then, so
+that 0 observed no roll, and the post says the log is empty (#1135).
 
 After convergence, and only then, the sitting browser makes the login. `/bff/login` discards the
 profile's session first, and the cleared provider makes it fill the form:

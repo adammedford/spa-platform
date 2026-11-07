@@ -26,6 +26,10 @@ that signed the browser out, and the row read as failed. `SkillCountsTheWatchsLi
 the log's name and the watch's flags from tests/e2e/SittingBrowser/, builds a log out of those tokens,
 and runs the skill's own two lines over it through the prelude.
 
+**A stop before the watch's first line (#1135).** The watch writes no line for its first interval, so
+`SkillCountsTheWatchsLines` runs the confirm's own block and then the two lines over what it leaves:
+a count of 0, an earlier attempt's log kept whole, and a log as private as the one the watch creates.
+
 Checkout inputs: .claude/skills/wiz/*.md .gitignore tests/e2e/Program.cs tests/e2e/SittingBrowser/Observations.cs tests/e2e/SittingBrowser/ObservationLine.cs tests/e2e/SittingBrowser/SittingBrowser.cs tests/e2e/SittingBrowser/SittingCommand.cs
 """
 from __future__ import annotations
@@ -35,6 +39,7 @@ import os
 import pathlib
 import re
 import shutil
+import stat
 import subprocess
 import tempfile
 import unittest
@@ -284,6 +289,57 @@ class SkillCountsTheWatchsLines(Sitting):
         self.assertIn(signed_in, self.navigation)
         lines, printed = self.run_over_log("grep", self.navigation)
         self.assertEqual(printed, [line for line in lines if not line.startswith(signed_in + " ")] + ["exit=0"])
+
+    def confirm_block(self) -> str:
+        """The fenced block the confirm runs before the watch, as the skill holds it."""
+        blocks = [block for block in re.findall(r"^```bash\n(.*?)^```$", SKILL_FILES[0].read_text(), re.M | re.S)
+                  if f'mv "$E/{self.watch_log}"' in block]
+        self.assertEqual(len(blocks), 1, f"SKILL.md should hold one block setting the log aside: {blocks}")
+        return blocks[0]
+
+    def stop_before_the_first_line(self, earlier: str | None = None) -> pathlib.Path:
+        """The confirm's block run through the prelude; the bundle it leaves."""
+        day = utc_day(-1)
+        self.pin(day + "\n")
+        bundle = self.repo / ".scratch" / "sitting" / "log" / day
+        bundle.mkdir(parents=True, exist_ok=True)
+        if earlier is not None:
+            (bundle / self.watch_log).write_text(earlier)
+        done = self.bash(f"{SOURCE} && {self.confirm_block()}")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        return bundle
+
+    def fence(self, tool: str) -> list[str]:
+        line = self.skill_line(f"shown {tool} ", f'"$E/{self.watch_log}"')
+        done = self.bash(f"{SOURCE} && {line}")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        return done.stdout.splitlines()
+
+    def test_a_stop_before_the_first_line_counts_0_and_lists_nothing(self) -> None:
+        self.stop_before_the_first_line()
+        self.assertEqual(self.fence("awk"), ["0", "exit=0"])
+        # grep's 1 is "no line matched", the answer here; a missing file would be its 2.
+        self.assertEqual(self.fence("grep"), ["exit=1"])
+
+    def test_a_stop_before_the_first_line_does_not_read_or_lose_an_earlier_attempts_log(self) -> None:
+        earlier = f"{self.tokens['LoginPromptToken']} 2026-11-06T00:00:00Z main app=app1 revision=7 instance=i-1\n"
+        bundle = self.stop_before_the_first_line(earlier)
+        self.assertEqual(self.fence("awk"), ["0", "exit=0"])
+        kept = [path.read_text() for path in bundle.glob(f"{self.watch_log}.*")]
+        self.assertEqual(kept, [earlier])
+
+    def test_the_log_the_confirm_leaves_is_as_private_as_the_one_the_watch_creates(self) -> None:
+        # FileMode.Append keeps an existing file's mode, so the watch would not narrow a wider one; the
+        # block leans on the prelude's umask.
+        bundle = self.stop_before_the_first_line()
+        self.assertEqual(stat.S_IMODE((bundle / self.watch_log).stat().st_mode), 0o600)
+
+    def test_the_watch_appends_to_the_log_the_confirm_leaves_and_the_block_comes_first(self) -> None:
+        browser = (SITTING_BROWSER / "SittingBrowser.cs").read_text()
+        # A log that exists already must not refuse the watch: WritePrivateAsync's other mode is CreateNew.
+        self.assertIn('Path.Combine(bundle, WatchLog), line + "\\n", append: true', browser)
+        text = SKILL_FILES[0].read_text()
+        self.assertLess(text.index(self.confirm_block()), text.index("shown sitting_browser watch main "))
 
     def test_a_line_starts_with_its_token_then_a_space_as_both_read_it(self) -> None:
         source = (SITTING_BROWSER / "ObservationLine.cs").read_text()
