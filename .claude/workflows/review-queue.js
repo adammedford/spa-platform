@@ -824,12 +824,20 @@ const dotted = (f, withClass = true) => {
 // cell that names no test, empty or whitespace only, reads as its place in the list, which no other
 // row's test can equal, and is unnamed: no agent can break a test it is not told, so execute() makes
 // its row could-not-run, which holds (#811). Read as the empty name, mutationList dropped it.
+// A cell whose text before its first '(', or its whole text with none, holds a space is prose unless
+// its first word is a candidate's test, and it keeps its whole text, so it says which test it means
+// and two of them keep a row each (#1091). On #1085 'the comments index jq tail check (19a)' read as
+// 'the', and a verdict that accepted the catch under the other rows' names held on that one. A
+// backtick leaves the name, since a Broken cell cannot hold one and its row would read as none. A
+// first word that is a candidate's test is still that test, so 'Nom only the Y line' reads as Nom.
 const nominated = (s, byTest, i = 0) => {
   const cell = (s.test || '').trim()
   if (!cell) return { ...s, test: `(nomination ${i + 1} names no test)`, why: `the Standards axis nomination names no test: ${s.why}`, kind: 'nominated', cls: '', unnamed: true }
   const bare = (/^[^\s(]*/.exec(cell) || [''])[0]
   const whole = dotted(cell, false)
-  const test = whole !== bare && whole.endsWith(`.${bare}`) ? whole : bare || cell
+  const prose = cell.replace(/`/g, '').trim()
+  const test = !byTest.has(bare) && /\s/.test(prose.split('(')[0].trim()) ? prose
+    : whole !== bare && whole.endsWith(`.${bare}`) ? whole : bare || cell
   const classed = dotted(cell)
   const cls = test === bare && classed !== bare ? classed.slice(0, -bare.length - 1) : ''
   const why = test === s.test ? s.why : `${s.why} (nominated as ${s.test})`
