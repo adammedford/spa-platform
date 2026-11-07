@@ -2322,18 +2322,23 @@ const forkOf = (prompt) => (/Otherwise fork from [^:]+: forkSha = (\S+?)\. Take 
 // 48. A merge the selector refused fails its ticket and nothing else (#1052). --subject-for exits 2 on a listing it
 //     cannot prove complete (#871), and the integrate step then wrote the full subject the listing could not choose.
 //     Now the agent merges nothing and answers ok=false with notes beginning "no subject: ". One short run: issue-1101
-//     gets that answer, issue-1102 is blocked by it, issue-1103 is free. The ticket fails at integrate with the
-//     selector's line as its reason, once: a refusal is no conflict to send back and no red gate to re-run or reset,
-//     and the log does not call it a red gate. Its dependant is skipped, and the free ticket still merges.
+//     gets that answer, issue-1102 is blocked by it, issue-1103 is free, and issue-1104 is blocked by issue-1103, whose
+//     review waits for the refusal, so issue-1104 starts after it. The ticket fails at integrate with the selector's
+//     line as its reason, once: a refusal is no conflict to send back and no red gate to re-run or reset, and the log
+//     does not call it a red gate. Its dependant is skipped, and the free ticket, and one started after the refusal,
+//     still merge.
 {
   const LINE = 'landing-subjects: fail: nothing judged: the open issues could not be listed completely: gh exited 1.'
   const logged = [], labels = []
+  let refused = () => {}
+  const refusal = new Promise((resolve) => { refused = resolve })
   globalThis.args = { ...fixture.args, skills: OTHER_SKILLS }
   globalThis.log = (m) => { logged.push(String(m)) }
   const set = [
     { ...synthetic(1101, 'issue-1101', 'ready-for-agent', [], 1), owner: 'integrator' },
     { ...synthetic(1102, 'issue-1102', 'ready-for-agent', ['issue-1101'], 1), owner: 'integrator' },
     { ...synthetic(1103, 'issue-1103', 'ready-for-agent', [], 1), owner: 'integrator' },
+    { ...synthetic(1104, 'issue-1104', 'ready-for-agent', ['issue-1103'], 1), owner: 'integrator' },
   ]
   globalThis.agent = async (prompt, opts) => {
     labels.push(opts.label)
@@ -2345,8 +2350,9 @@ const forkOf = (prompt) => (/Otherwise fork from [^:]+: forkSha = (\S+?)\. Take 
     if (kind === 'closing') return { ok: true, headSha: CLOSING_TIP, lastLine: 'check: pass: companion.', notes: '' }
     await sleep(5)
     if (kind === 'implement') return { outcome: 'resolved', branch: `b-${id}`, forkSha: 'f', headSha: 'h', complete: true, outstanding: '', summary: 's', question: '', delegatedDecisions: [], changeRequests: [] }
+    if (kind === 'review' && id === 'issue-1103') await Promise.race([refusal, sleep(500)])
     if (kind === 'review') return { outcome: 'committed', headSha: 'h', findingsFixed: [], findingsSkipped: [], summary: 's', question: '', changeRequests: [], changedFiles: [`files/${id}.txt`] }
-    if (kind === 'integrate' && id === 'issue-1101') return { ok: false, mergeSha: '', notes: `no subject: ${LINE}`, conflictFiles: [], headSha: '', old: '', redHead: '', reach: '' }
+    if (kind === 'integrate' && id === 'issue-1101') { refused(); return { ok: false, mergeSha: '', notes: `no subject: ${LINE}`, conflictFiles: [], headSha: '', old: '', redHead: '', reach: '' } }
     if (kind === 'integrate') return { ok: true, mergeSha: 'm', notes: '', conflictFiles: [], headSha: `verified-${id}`, old: '', redHead: '', reach: '' }
     throw new Error(`unexpected agent label ${opts.label} in the refused-merge run`)
   }
@@ -2357,7 +2363,8 @@ const forkOf = (prompt) => (/Otherwise fork from [^:]+: forkSha = (\S+?)\. Take 
     const refused = (res.reasons || []).find((r) => r.id === 'issue-1101')
     if (!refused || refused.outcome !== 'failed' || refused.stage !== 'integrate' || !refused.reason.includes(LINE)) fail(`#1052: a refused merge does not fail at integrate with the selector's line: ${JSON.stringify(refused)}`)
     if ((res.integrated || []).includes('issue-1101')) fail('#1052: the refused ticket counts as integrated')
-    if (!(res.integrated || []).includes('issue-1103')) fail(`#1052: a refusal stopped a ticket it does not hold: ${JSON.stringify(res.integrated)}`)
+    for (const free of ['issue-1103', 'issue-1104'])
+      if (!(res.integrated || []).includes(free)) fail(`#1052: a refusal stopped ${free}, which it does not hold: ${JSON.stringify(res.integrated)}`)
     if (!(res.skipped || []).includes('issue-1102')) fail(`#1052: the refused ticket's dependant was not skipped: ${JSON.stringify(res.skipped)}`)
     const about = labels.filter((l) => l.endsWith(':issue-1101'))
     const extra = about.filter((l) => /^(resolve|rerun|reset):/.test(l))
