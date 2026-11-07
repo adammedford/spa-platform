@@ -131,8 +131,12 @@ internal sealed partial class Assets(ILogger logger)
         catch (ObjectReadRefusedException)
         {
             // A refusal is ambiguous: a missing key under a role without s3:ListBucket, or a key the
-            // role may not read (IObjectStore.GetAsync). A refused shell answers 500 shell_unavailable;
-            // a refused asset answers 404 not_found. The request line carries which kind of key it
+            // role may not read (IObjectStore.GetAsync). The task role holds no s3:ListBucket, so under
+            // it every missing key arrives as this refusal, and it answers as an absent key does, so
+            // that one missing key does not answer differently with the role's permissions: 404
+            // not_found for an asset, 500 shell_unavailable for the shell
+            // (contracts/http-contract.md -> "When a dependency is unavailable"; change request
+            // issue-381-object-read-refusal, item 3). The request line carries which kind of key it
             // was (contracts/telemetry.md, read_refused), never the key, which holds the client's
             // path; for the same reason the exception, which names the key, is not logged.
             if (context.Features.Get<IRequestTelemetryFeature>() is { } telemetry)
