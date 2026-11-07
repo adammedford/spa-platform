@@ -817,9 +817,9 @@ when a sign-out occurred and the post-convergence login succeeded.
 
 **A failed row with no convergence read (#1134).** An apply that exits non-zero, or a
 `services-stable` that times out, ends D2 on a cell nobody has read, and the apply does not wait for
-the roll. The service may be rolling to the new task definition, may have been rolled back by its
-circuit breaker (`infra/modules/cell/ecs.tf`), or may stand as D0 left it, when the apply stopped
-before reaching it. After the fences and before the post, read which:
+the roll. The service may be rolling to the new task definition, may have finished that roll, may
+have been rolled back by its circuit breaker (`infra/modules/cell/ecs.tf`), or may stand as D0 left
+it, when the apply stopped before reaching it. After the fences and before the post, read which:
 
 ```bash
 shown aws ecs describe-services --cluster spa-poc --services gateway \
@@ -827,18 +827,23 @@ shown aws ecs describe-services --cluster spa-poc --services gateway \
 ```
 
 then the `list-tasks` and `describe-tasks` lines above. More than one deployment, or a `rollout` of
-`IN_PROGRESS`, is a roll under way, and a new task is a RUNNING one on a revision other than D0's.
-The post carries these reads and says whether the tunnel restart ran, with the id it kept, or that
-it did not. Asking what next, wiz first says, from those reads: which of the three the cell is; that
-"go on" takes D1 and D3 onward to that cell and not to a converged one, so a read or a row can fail
-for that reason alone, and a pass says nothing of convergence; and whether D4 has an id. "Go on"
-stays the human's answer, and wiz holds it to no wait. On it:
+`IN_PROGRESS`, is a roll under way. One settled deployment on a new revision has finished the roll,
+and no convergence has been read. One on D0's revision is rolled back when `desired` has reached the
+cutover's 2, and is as D0 left it when `desired` is still 1. A new task is a RUNNING one on a revision
+other than D0's. The post carries these reads and says whether the tunnel restart ran, with the id it
+kept, or that it did not. Asking what next, wiz first says, from those reads: which of the four the
+cell is; that "go on" takes D1 and D3 onward to that cell and not to one D2 has read as converged, so
+a read or a row can fail for that reason alone, and a pass says nothing of convergence; and whether
+D4 has an id, which is one `tunnel.sh` printed in D2 that still names a RUNNING task. "Go on" stays
+the human's answer, and wiz holds it to no wait. On it:
 
-- **The tunnel.** If the restart has not run and a new task is RUNNING, offer it now as above (rule
-  1), and keep the id; its times and id go into the next step's post. With no new task it has nothing
-  to go through yet: D0's tunnel stays up, and wiz says that D4 still has no id. `tunnel.sh` takes the
-  first task it can reach, so mid-roll its id can name an old task that the roll then drains: name
-  that task's revision from `describe-tasks` when keeping the id.
+- **The tunnel.** If the restart has not run, or the task its id names is no longer RUNNING, and a
+  new task is RUNNING, offer it now as above (rule 1), and keep the id; its times and id go into the
+  next step's post. With no new task it has nothing to go through yet: wiz says that D4 still has no
+  id from D2, and that D0's tunnel is up if the restart never stopped it and down if the hop it moved
+  to has gone. D0's id is not one for D4: a row 4 on D0's revision says nothing of the cutover.
+  `tunnel.sh` takes the first task it can reach, so mid-roll its id can name an old task that the roll
+  then drains: name that task's revision from `describe-tasks` when keeping the id.
 - **Each later step, D1 and D3 to D9.** Run the `describe-services` read above first, and open the
   step's post with "D2 failed" and what that read showed. A read that has since settled makes no
   row 2 pass and is no convergence: only D2's own block is that.
@@ -927,9 +932,10 @@ mutation the summary does not name stops the sitting:
   `SPA_TUNNEL_TASK=<the id tunnel.sh printed in D2>` in the call, say which task will be stopped,
   and the human's approval of the row's command is its rule-2 confirm, as C3 treats F-07. After the
   row, the service replaces the task; read the two tasks again before D5 and name the new id. After
-  a failed D2 that kept no id, run D2's restart first if a new task is RUNNING, and use the id it
-  prints; with none, say so when asking: the row then refuses and stops nothing, and is posted failed
-  with the refusal's line.
+  a failed D2 that kept no id, or one whose task is no longer RUNNING, run D2's restart first if a new
+  task is RUNNING, and use the id it prints; with none, say so when asking: the row then refuses and
+  stops nothing. Its evidence file then records not proved and names only the exception, so post it as
+  not proved with the refusal's line from the test's output. A refusal spends no attempt.
 - **D6 (row 6, F1; #348 Q29).** The class drives for up to 40 minutes while the operator deploys:
   start the row's `dotnet test` in the background first, then `deploy.sh` on the same commit as C1
   runs it (confirm on launch, C1's shape: the one replacement is the task definition), with no
