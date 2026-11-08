@@ -6,7 +6,7 @@
 // Runs review-queue.js end to end with agent, parallel, log and phase stubbed, and with gh stubbed
 // where the script reaches it: through the inventory agent, which serves canned pull requests as gh
 // would list them, each comment and review without its body, the body agents, which serve each body
-// whole or as a check says (#1018), and the post agent, which records the comment it was asked to post instead of
+// whole or as a check says (#1018) from the endpoint their prompt names, a 404 from any other (#1073), and the post agent, which records the comment it was asked to post instead of
 // posting it. A check that needs more of GitHub gives the run ghStub(): a store of posted comments
 // that outlives one run, a head that moves before posting, and a GitHub that cannot be reached at
 // posting time (#85). A stubbed range agent reports the delta range a check gives it. A stubbed mutation agent reports, per test, the result a check tells it to, or dies by
@@ -27,6 +27,8 @@ const scriptPath = process.argv[2] || path.join(here, 'review-queue.js')
 const top = path.resolve(here, '..', '..')
 
 const sha = (c) => c.repeat(40)
+// The path a body prompt's gh api line asks for, below repos/{owner}/{repo}/, or '' when it has none.
+const ghEndpoint = (prompt) => (/gh api repos\/\{owner\}\/\{repo\}\/(\S+?)`/.exec(prompt) || [])[1] || ''
 // The inventory's jq test for a body that may carry a record, as the script's RECORD_TEST spells it.
 const RECORD_TEXT = /Reviewed [0-9a-f]{40} against [0-9a-f]{40}: (merge|hold)/
 const FORK = sha('b')
@@ -126,10 +128,22 @@ function run(scriptArgs, served, behave = {}) {
   // the one id across the run, as a GitHub comment does.
   const ids = new Map()
   const byId = new Map()
-  const projected = (e) => {
+  const servedAt = new Map()   // id -> the one endpoint that serves it, as ghEndpoint below reads a prompt
+  const projected = (trim, at) => (e) => {
     if (!ids.has(e)) { ids.set(e, ids.size + 1); byId.set(ids.get(e), e) }
+    servedAt.set(ids.get(e), `${at}/${ids.get(e)}`)
     const { body, ...rest } = e
-    return { ...rest, id: ids.get(e), length: Array.from((body || '').replace(/[ \t\r\n]+$/, '')).length, record: RECORD_TEXT.test(body || '') }
+    return { ...rest, id: ids.get(e), length: Array.from((body || '').replace(trim, '')).length, record: RECORD_TEXT.test(body || '') }
+  }
+  // What one list's --jq in the inventory prompt strips before it counts (#1072): the stub projects
+  // with the class the script asks jq to use, so it holds no copy of its own that could agree with
+  // one side while the other drifts. The prompt's \t, \r and \n mean the same in jq and in RegExp:
+  // a jq regex is a jq string read by Oniguruma (https://jqlang.org/manual/v1.7/#regular-expressions),
+  // so each is one character there as here. The companion does not call jq, so this rests on that.
+  const jqTrim = (prompt, list) => {
+    const m = new RegExp(`/${list} --jq '[^']*sub\\("([^"]+)"; ""\\)`).exec(prompt)
+    if (!m) throw new Error(`the inventory prompt's ${list} --jq has no sub(...; "") to count a body's length by`)
+    return new RegExp(m[1])
   }
   globalThis.agent = async (prompt, opts) => {
     flight.now++
@@ -153,6 +167,8 @@ function run(scriptArgs, served, behave = {}) {
     if (killed === 'throw') throw new Error(`the agent ${opts.label} was killed`)
     if (killed === 'null') return null
     for (const m of prompt.matchAll(/^OUTPUT FILE: (\S+)$/gm)) {
+      // behave.unwritten: `<label>:<file name>`, an OUTPUT FILE that agent returns without writing (#1092).
+      if ((behave.unwritten || []).includes(`${opts.label}:${path.basename(m[1])}`)) continue
       fs.mkdirSync(path.dirname(m[1]), { recursive: true })
       fs.writeFileSync(m[1], `${opts.label}\n`)
     }
@@ -167,14 +183,21 @@ function run(scriptArgs, served, behave = {}) {
     }
     if (kind === 'inventory' && opts.label.split(':')[2] === 'body') {
       // A body agent (#1018): the one comment or review its label names by id, its body as gh serves
-      // it, or what behave.bodies says of its URL: 'null' or 'throw' for an agent that dies, a
-      // function of the body for the body it returns instead, or { error } for a gh it cannot reach,
-      // with the whole body beside it when whole is true.
+      // it, or what behave.bodies says of its URL: 'null' for an agent that dies returning nothing,
+      // { throws } for one that dies throwing that value, whose message the harness wrote and so need
+      // not name the URL (#1076), a function of the body for the body it returns instead, or { error }
+      // for a gh it cannot reach, with the whole body beside it when whole is true.
       const e = byId.get(Number(opts.label.split(':')[3]))
       if (!e) throw new Error(`a body agent for an id the inventory never gave: ${opts.label}`)
       const b = (behave.bodies || {})[e.html_url]
-      if (b === 'throw') throw new Error(`the body agent for ${e.html_url} died`)
+      if (b && b.throws !== undefined) throw b.throws
       if (b === 'null') return null
+      // gh answers from the endpoint the prompt names (#1073), whatever the label says. An id of the
+      // other list, or a review id under another pull request's number, is a 404 on GitHub: read live
+      // on 2026-11-07 against #76 and #1021, and the two pages are
+      // https://docs.github.com/rest/pulls/reviews#get-a-review-for-a-pull-request and
+      // https://docs.github.com/rest/issues/comments#get-an-issue-comment.
+      if (ghEndpoint(prompt) !== servedAt.get(ids.get(e))) return { body: '', error: 'gh: Not Found (HTTP 404)' }
       if (b && b.error) return { body: b.whole ? e.body : '', error: b.error }
       return { body: typeof b === 'function' ? b(e.body) : e.body, error: '' }
     }
@@ -185,9 +208,9 @@ function run(scriptArgs, served, behave = {}) {
       // run whose inventory was replayed from before the post.
       const comments = gh && gh.serveStore !== false ? [...inv.comments, ...gh.store.filter((c) => c.n === Number(n)).map((c) => c.entry)] : inv.comments
       // Each entry as the inventory's jq projection prints it (#1018): no body, its length in code
-      // points, as jq's length counts a string, once its trailing whitespace is removed (#1030), and
-      // whether the record's text is anywhere in it.
-      return { ...inv, comments: comments.map(projected), reviews: (inv.reviews || []).map(projected) }
+      // points, as jq's length counts a string, once what that list's --jq strips is removed (#1030,
+      // #1072), and whether the record's text is anywhere in it.
+      return { ...inv, comments: comments.map(projected(jqTrim(prompt, 'comments'), 'issues/comments')), reviews: (inv.reviews || []).map(projected(jqTrim(prompt, 'reviews'), `pulls/${n}/reviews`)) }
     }
     if (kind === 'range') {
       const r = (behave.range || {})[n]
@@ -206,19 +229,26 @@ function run(scriptArgs, served, behave = {}) {
       if (b === 'null') return null
       return { test, broken: `broke what ${test} guards`, failingNames: [], why: b.result === 'could-not-run' ? 'the project did not build' : '', ...b }
     }
-    if (kind === 'verdict') return { verdict: behave.verdict || 'merge', findings: [], claims: [], outstanding: ['nothing'], summary: 's', boxes: (behave.boxes || {})[n] || [], earlierFindings: (behave.earlier || {})[n] || [], caughtAccepted: (behave.caught || {})[n] || [], followUps: (behave.followUps || {})[n] || [], changeRequests: (behave.changeRequests || {})[n] || [] }
+    if (kind === 'verdict') return { verdict: behave.verdict || 'merge', findings: (behave.findings || {})[n] || [], claims: [], outstanding: ['nothing'], summary: 's', boxes: (behave.boxes || {})[n] || [], earlierFindings: (behave.earlier || {})[n] || [], caughtAccepted: (behave.caught || {})[n] || [], followUps: (behave.followUps || {})[n] || [], changeRequests: (behave.changeRequests || {})[n] || [] }
     if (kind === 'post') {
       const m = /^BEGIN COMMENT\n([\s\S]*)\nEND COMMENT$/m.exec(prompt)
       const body = m ? m[1] : null
       const file = (/^OUTPUT FILE: (\S+)$/m.exec(prompt) || [])[1]
       // Step 1 of the post prompt: the body goes to the log before gh is reached.
       if (file && body !== null) fs.writeFileSync(file, body)
+      // And the verdict the script received, in place of whatever an earlier review left (#1092). The
+      // prompt names the file; verdictFile is empty when the agent did not write it.
+      const given = /^BEGIN VERDICT\n([\s\S]*?)\nEND VERDICT$/m.exec(prompt)
+      const verdictAt = (/^OUTPUT FILE: (\S+\/verdict\.json)$/m.exec(prompt) || [])[1]
+      const wrote = given && verdictAt && !(behave.unwritten || []).includes(`${opts.label}:verdict.json`)
+      if (wrote) fs.writeFileSync(verdictAt, given[1])
+      const verdictFile = wrote ? verdictAt : ''
       const gh = behave.gh
       if (!gh) {
         posted.push({ n: Number(n), body })
-        return { posted: true, url: `https://github.com/o/r/pull/${n}#issuecomment-1`, headNow: served[n].head, unreachable: false, bodyFile: file }
+        return { posted: true, url: `https://github.com/o/r/pull/${n}#issuecomment-1`, headNow: served[n].head, unreachable: false, bodyFile: file, verdictFile }
       }
-      return gh.post(Number(n), prompt, body, file, posted, served[n])
+      return { ...gh.post(Number(n), prompt, body, file, posted, served[n]), verdictFile }
     }
     throw new Error(`unexpected agent label ${opts.label}`)
   }
@@ -619,6 +649,114 @@ try {
       if (!/asserts a header nothing sets/.test(prompt)) fail('PR 208: the qualified nomination\'s why did not reach the mutation prompt')
       if (!/nominated as Nom \(only the Assert\.Null/.test(prompt)) fail('PR 208: the qualified nomination\'s qualifier did not reach the mutation prompt')
     }
+    // A nomination that is prose before its first '(' keeps its whole text as its test, not its first
+    // word (#1091): on #1085 'the comments index jq tail check (19a)' read as 'the', and a catch the
+    // verdict accepted under the other rows' names held on that one. On a Node companion, red on its
+    // own check's message, it is a caught row the verdict answers by that name: accepted it reproduces
+    // and merges, and not accepted it holds, its Broken cell naming it for the next review.
+    {
+      const CMJS = '.claude/workflows/morning_tests.mjs'
+      const PROSE_CELL = 'the comments index jq tail check (19a)'
+      const SHAPE = { 208: pr(208, [CMJS, '.claude/workflows/morning.js']) }
+      const prose = { 208: [{ test: PROSE_CELL, project: CMJS, why: 'asserts a constant tail' }] }
+      const red = { ...row('reproduced', 1, 54), failingNames: ['the comments index counts the trailing newlines of [0,0,0], not 1,2,0'] }
+      for (const [accept, want, verdict] of [[true, 'reproduced', 'merge'], [false, 'did-not-fail', 'hold']]) {
+        env = run({ prs: [208] }, SHAPE, { nominations: prose, mutate: { [PROSE_CELL]: red, the: red }, caught: accept ? { 208: [PROSE_CELL] } : {} })
+        result = await execute(env)
+        const c = resultOf(208, result)
+        const ms = (c.mutations || []).filter((x) => x.kind === 'nominated')
+        if (ms.length !== 1 || ms[0].test !== PROSE_CELL || ms[0].result !== want || c.verdict !== verdict) fail(`PR 208 with the nomination ${JSON.stringify(PROSE_CELL)}, ${accept ? 'accepted' : 'not accepted'}: rows ${JSON.stringify(ms.map((m) => ({ test: m.test, result: m.result })))}, verdict ${c.verdict}, expected the whole cell ${want} and ${verdict}`)
+        if (!(env.prompts['verdict:208'] || '').includes(`put ${JSON.stringify(PROSE_CELL)} in caughtAccepted`)) fail(`PR 208: the verdict prompt does not name the cell ${JSON.stringify(PROSE_CELL)} to accept`)
+        if (!accept && !commentOf(env, 208).split('\n').some((l) => l.startsWith(`| \`${PROSE_CELL}\`: `))) fail(`PR 208: the held record's Broken cell does not name ${JSON.stringify(PROSE_CELL)}`)
+      }
+      // With no parenthesis the whole text is what comes before it, and it is prose all the same.
+      const NOPAREN = 'the comments index jq tail check'
+      env = run({ prs: [208] }, SHAPE, { nominations: { 208: [{ ...prose[208][0], test: NOPAREN }] }, mutate: { [NOPAREN]: red, the: red }, caught: { 208: [NOPAREN] } })
+      result = await execute(env)
+      {
+        const m = (resultOf(208, result).mutations || []).find((x) => x.kind === 'nominated') || {}
+        if (m.test !== NOPAREN || m.result !== 'reproduced') fail(`PR 208 with the nomination ${JSON.stringify(NOPAREN)}: row ${JSON.stringify({ test: m.test, result: m.result })}, expected the whole cell reproduced`)
+      }
+      // Two prose cells that differ only in their parenthesis keep a row each: read by the text before
+      // it, the dedup by test folds the second one away and nobody mutates it.
+      const TWO = ['the tail check (19a)', 'the tail check (19b)']
+      env = run({ prs: [208] }, SHAPE, { nominations: { 208: TWO.map((test) => ({ test, project: CMJS, why: 'asserts a constant' })) }, mutate: { [TWO[0]]: red, [TWO[1]]: red }, caught: { 208: TWO } })
+      result = await execute(env)
+      {
+        const tests = (resultOf(208, result).mutations || []).filter((x) => x.kind === 'nominated').map((m) => m.test)
+        if (TWO.some((t) => !tests.includes(t))) fail(`PR 208 with the nominations ${JSON.stringify(TWO)}: rows ${JSON.stringify(tests)}, expected a row for each`)
+      }
+      // A backtick leaves the name: a Broken cell holding one reads as no row in the next review, so a
+      // hold on it would be forgotten.
+      const TICKED = 'the `tail` check (19a)'
+      const UNTICKED = 'the tail check (19a)'
+      env = run({ prs: [208] }, SHAPE, { nominations: { 208: [{ ...prose[208][0], test: TICKED }] }, mutate: { [UNTICKED]: red, [TICKED]: red } })
+      result = await execute(env)
+      {
+        const m = (resultOf(208, result).mutations || []).find((x) => x.kind === 'nominated') || {}
+        if (m.test !== UNTICKED) fail(`PR 208 with the nomination ${JSON.stringify(TICKED)}: row ${JSON.stringify(m.test)}, expected ${JSON.stringify(UNTICKED)}`)
+      }
+      // A cell that is only backticks and spaces names no test: its row could not run, and holds (#811).
+      env = run({ prs: [208] }, SHAPE, { nominations: { 208: [{ ...prose[208][0], test: '` `' }] } })
+      result = await execute(env)
+      {
+        const c = resultOf(208, result)
+        const m = (c.mutations || []).find((x) => x.kind === 'nominated') || {}
+        if (m.result !== 'could-not-run' || c.verdict !== 'hold') fail(`PR 208 with the nomination "\` \`": row ${JSON.stringify({ test: m.test, result: m.result })}, verdict ${c.verdict}, expected could-not-run and hold`)
+      }
+      // A backtick leaves a one-word name as well: held on '`Nom`', the Broken cell would read as no
+      // row in the next review, and red on Nom the row would not read as its own.
+      env = run({ prs: [208] }, NOM, { nominations: { 208: [{ test: '`Nom`', project: 'tests/Platform.Registry.Tests', why: 'asserts a constant' }] }, mutate: { Nom: row('did-not-fail') } })
+      result = await execute(env)
+      {
+        const m = (resultOf(208, result).mutations || []).find((x) => x.kind === 'nominated') || {}
+        if (m.test !== 'Nom' || m.result !== 'did-not-fail') fail(`PR 208 with the nomination "\`Nom\`": row ${JSON.stringify({ test: m.test, result: m.result })}, expected Nom did-not-fail`)
+        if (commentOf(env, 208).includes('``Nom``')) fail('PR 208 with the nomination "`Nom`": the held record\'s Broken cell keeps its backticks')
+      }
+      const onTicked = { ...row('reproduced', 1, 10), failingNames: ['Platform.Registry.Tests.NomTests.Nom'] }
+      for (const ticked of ['`Nom` (only the Assert.Null line)', '`Nom` only the Assert.Null line']) {
+        env = run({ prs: [208] }, NOM, { nominations: { 208: [{ test: ticked, project: 'tests/Platform.Registry.Tests', why: 'asserts a constant' }] }, mutate: { Nom: onTicked } })
+        result = await execute(env)
+        const c = resultOf(208, result)
+        const m = (c.mutations || []).find((x) => x.kind === 'nominated') || {}
+        if (m.test !== 'Nom' || m.result !== 'reproduced' || c.verdict !== 'merge') fail(`PR 208 with the nomination ${JSON.stringify(ticked)}: row ${JSON.stringify({ test: m.test, result: m.result })}, verdict ${c.verdict}, expected Nom reproduced and merge`)
+      }
+      // A prose cell that is a candidate's whole name is that candidate: one row, lent what it guards.
+      const NAMED = 'morning_tests check 19a (comments index jq)'
+      const WITHCAND = { 208: pr(208, [CMJS, '.claude/workflows/morning.js'], { candidates: [{ test: NAMED, project: CMJS, file: CMJS, guards: 'the tail capture', breaks: '.claude/workflows/morning.js' }] }) }
+      env = run({ prs: [208] }, WITHCAND, { nominations: { 208: [{ test: NAMED, project: CMJS, why: 'asserts a constant' }] }, mutate: { [NAMED]: red }, caught: { 208: [NAMED] } })
+      result = await execute(env)
+      {
+        const ms = (resultOf(208, result).mutations || []).filter((x) => x.test === NAMED)
+        const prompt = (env.mutations.find((x) => x.test === NAMED) || {}).prompt || ''
+        if (ms.length !== 1 || ms[0].kind !== 'nominated') fail(`PR 208 with the nomination ${JSON.stringify(NAMED)}, a candidate's name: rows ${JSON.stringify(ms.map((m) => ({ test: m.test, kind: m.kind })))}, expected one nominated row`)
+        if (!prompt.includes('It guards: the tail capture')) fail(`PR 208: the candidate ${JSON.stringify(NAMED)} did not lend the nomination what it guards`)
+      }
+      // A cell that is a candidate's whole name is that candidate even when its first word is another
+      // candidate's test: read as the whole-file row, any red check in the file would be its own.
+      const SCOPED = 'morning_tests.mjs check 19a'
+      const BOTH = { 208: pr(208, [CMJS, '.claude/workflows/morning.js'], { candidates: [
+        { test: 'morning_tests.mjs', project: CMJS, file: CMJS, guards: 'the whole companion', breaks: '.claude/workflows/morning.js' },
+        { test: SCOPED, project: CMJS, file: CMJS, guards: 'the tail capture', breaks: '.claude/workflows/morning.js' },
+      ] }) }
+      env = run({ prs: [208] }, BOTH, { nominations: { 208: [{ test: SCOPED, project: CMJS, why: 'asserts a constant' }] }, mutate: { [SCOPED]: red, 'morning_tests.mjs': red }, caught: { 208: [SCOPED] } })
+      result = await execute(env)
+      {
+        const ms = (resultOf(208, result).mutations || []).filter((x) => x.kind === 'nominated')
+        if (ms.length !== 1 || ms[0].test !== SCOPED) fail(`PR 208 with the nomination ${JSON.stringify(SCOPED)}, a candidate's name whose first word is another candidate's: rows ${JSON.stringify(ms.map((m) => m.test))}, expected ${JSON.stringify(SCOPED)}`)
+      }
+      // A first word that is a candidate's test is that test, whatever prose follows it, and red on
+      // it the row reproduces: this reading is why prose is not simply any cell with a space.
+      const SPACED = 'Nom only the Assert.Null line'
+      const onNom = { ...row('reproduced', 1, 10), failingNames: ['Platform.Registry.Tests.NomTests.Nom'] }
+      env = run({ prs: [208] }, NOM, { nominations: { 208: [{ test: SPACED, project: 'tests/Platform.Registry.Tests', why: 'asserts a constant' }] }, mutate: { Nom: onNom, [SPACED]: onNom } })
+      result = await execute(env)
+      {
+        const c = resultOf(208, result)
+        const m = (c.mutations || []).find((x) => x.kind === 'nominated') || {}
+        if (m.test !== 'Nom' || m.result !== 'reproduced' || c.verdict !== 'merge') fail(`PR 208 with the nomination ${JSON.stringify(SPACED)} and the candidate Nom: row ${JSON.stringify({ test: m.test, result: m.result })}, verdict ${c.verdict}, expected Nom reproduced and merge`)
+      }
+    }
     // A cell with no name before its first space or '(' keeps its whole text and still gets a row: an
     // empty name would be dropped with no row the verdict could see.
     {
@@ -862,13 +1000,15 @@ try {
   // A Node companion prints no test names, only its checks' fail() messages (#905): on #798 a stated
   // row 'overnight_tests.mjs check 39', red only on check 39's own messages, read did-not-fail, and
   // the verdict's acceptance could not answer it. A row on a Node companion, identified by its .mjs
-  // project or by the .mjs file its cell names, is a caught row unless it names the whole file:
-  // accepted, it reproduces and merges; not accepted, it reads did-not-fail and holds. A stated row on
-  // another project, red only on other tests, still reads did-not-fail whatever the verdict accepts,
-  // and the verdict prompt says how to judge the messages: the rule for a row red on another check's
-  // message is scoped to a row on an .mjs file, as the classifier reads it (#938), and keeps a held
-  // or candidate row's #684/#689 catch (#936). Each such row's line names the cell to accept: on #960
-  // a stated row read as 'Caught by <its own messages>, not by <it>' was taken for no caught row.
+  // project, its own .mjs file or the .mjs file its cell names, is a caught row unless the classifier's
+  // wholeFile holds, which takes a file on the row as well as a cell naming that file (#1069): accepted,
+  // it reproduces and merges; not accepted, it reads did-not-fail and holds. A stated row on another
+  // project, red only on other tests, still reads did-not-fail whatever the
+  // verdict accepts, and the verdict prompt says how to judge the messages: the rule for a row red on
+  // another check's message is scoped to a row on an .mjs file, as the classifier reads it (#938), and
+  // keeps a held or candidate row's #684/#689 catch (#936). Each such row's line names the cell to
+  // accept: on #960 a stated row read as 'Caught by <its own messages>, not by <it>' was taken for no
+  // caught row.
   checks++
   {
     const MJS = '.claude/workflows/overnight_tests.mjs'
@@ -876,7 +1016,7 @@ try {
     for (const [label, shape, test, nominations] of [
       ['stated', { statedMutations: [stated('overnight_tests.mjs check 39', 2, -1, MJS)] }, 'overnight_tests.mjs check 39'],
       ['stated on the directory', { statedMutations: [stated('overnight_tests.mjs check 39', 2, -1, '.claude/workflows')] }, 'overnight_tests.mjs check 39'],
-      ['nominated', {}, 'overnight_tests.mjs', { 212: [{ test: 'overnight_tests.mjs check 39', project: MJS, why: 'check 39 may not read the Answer' }] }],
+      ['nominated', {}, 'overnight_tests.mjs check 39', { 212: [{ test: 'overnight_tests.mjs check 39', project: MJS, why: 'check 39 may not read the Answer' }] }],
       ['candidate', { candidates: [{ test: 'overnight_tests.mjs check 39 (#631)', project: MJS, file: MJS, guards: 'the decisions step', breaks: '.claude/workflows/overnight.js' }] }, 'overnight_tests.mjs check 39 (#631)'],
     ]) {
       const SHAPE = { 212: pr(212, [MJS, '.claude/workflows/overnight.js'], shape) }
@@ -917,8 +1057,9 @@ try {
   // An .mjs companion's row is read by its file (#938): on #796 the inventory gave a stated row on
   // overnight_tests.mjs the directory as its project, which overrode its candidate's, so the row was
   // neither the whole file nor an .mjs row, and red on the companion's own messages it held. Named by
-  // its path or basename it is the whole file and merges unaccepted; scoped to a check it is a caught
-  // row the verdict answers. A Terraform file and a .py companion with a directory project hold as before.
+  // its path or basename, with a same-test candidate giving it that file, it is the whole file and
+  // merges unaccepted; scoped to a check it is a caught row the verdict answers. A Terraform file and
+  // a .py companion with a directory project hold as before.
   checks++
   {
     const MJS = '.claude/workflows/overnight_tests.mjs'
@@ -935,6 +1076,21 @@ try {
       const c = resultOf(213, result)
       const m = (c.mutations || []).find((x) => x.test === test && x.kind === 'stated') || {}
       if (m.result !== want || c.verdict !== verdict) fail(`PR 213 with the stated row ${JSON.stringify(test)} on project .claude/workflows red only on the companion's own messages, ${caught.length ? 'accepted' : 'not accepted'}: row ${JSON.stringify({ result: m.result })}, verdict ${c.verdict}, expected ${want} and ${verdict}`)
+    }
+    // With no same-test candidate a stated row has no file, so a cell that is the whole .mjs file is
+    // still a caught row (#1069): nothing but the author's cell says the run was that file, so it
+    // fails closed to the verdict, on either project. Read as the whole file it would merge unaccepted.
+    for (const test of [MJS, 'overnight_tests.mjs']) {
+      for (const project of [MJS, '.claude/workflows']) {
+        for (const [caught, want, verdict] of [[[test], 'reproduced', 'merge'], [[], 'did-not-fail', 'hold']]) {
+          const SHAPE = { 213: pr(213, [MJS, '.claude/workflows/overnight.js'], { statedMutations: [stated(test, 1, -1, project)] }) }
+          env = run({ prs: [213] }, SHAPE, { mutate: { [test]: { ...row('reproduced', 1, 1), failingNames: MSGS } }, caught: { 213: caught } })
+          result = await execute(env)
+          const c = resultOf(213, result)
+          const m = (c.mutations || []).find((x) => x.test === test && x.kind === 'stated') || {}
+          if (m.result !== want || c.verdict !== verdict) fail(`PR 213 with the stated row ${JSON.stringify(test)} on project ${project}, no same-test candidate, red only on the companion's own messages, ${caught.length ? 'accepted' : 'not accepted'}: row ${JSON.stringify({ result: m.result })}, verdict ${c.verdict}, expected ${want} and ${verdict}`)
+        }
+      }
     }
     // Known by its file alone (#940): a stated row whose cell leads with no .mjs path, on a directory
     // project, takes its .mjs file from the same-test candidate, and that file makes it a caught row.
@@ -2175,13 +2331,38 @@ try {
     }
   }
 
+  // A body agent that throws fails the review at the inventory like one that returns nothing, with a
+  // stage naming the body's URL beside the first line of what was thrown (#1076). The review of #1021
+  // read the message as the harness's own, which need not name the URL, so these name none. Without
+  // the script's catch, the strict parallel() stub carries the throw to review()'s catch, whose stage
+  // names no body, which is how each case goes red here.
+  checks++
+  {
+    const target = RECORDS796[3].html_url
+    const cases = {
+      'an Error': { thrown: new Error('the agent was killed\n    at agent (harness.js:1:1)'), says: 'the agent was killed', hides: 'harness.js' },
+      'a bare string': { thrown: 'budget exhausted', says: 'budget exhausted' },
+    }
+    for (const [what, { thrown, says, hides }] of Object.entries(cases)) {
+      env = run({ prs: [796], maxMutationsPerPr: 20 }, SERVED796, { followUps: { 796: CARRIED796 }, bodies: { [target]: { throws: thrown } } })
+      result = await execute(env)
+      const r = resultOf(796, result)
+      const stage = String(r.stage)
+      if (r.outcome !== 'failed' || !stage.startsWith('inventory: ') || !stage.includes(target)) fail(`a body agent throwing ${what}: outcome ${r.outcome} at ${JSON.stringify(r.stage)}, expected failed at the inventory naming ${target}`)
+      if (!stage.includes(says)) fail(`a body agent throwing ${what}: stage ${JSON.stringify(r.stage)}, expected it to carry ${JSON.stringify(says)}`)
+      if (hides && stage.includes(hides)) fail(`a body agent throwing ${what}: stage ${JSON.stringify(r.stage)} carries more than the first line`)
+      const after = env.calls.filter((c) => !c.startsWith('inventory:') && c !== 'launch')
+      if (after.length || env.posted.length) fail(`a body agent throwing ${what}: ${after.join(', ') || 'nothing'} ran after the inventory and ${env.posted.length} comment(s) were posted, expected none`)
+      if (r.recordUrl || r.verdict) fail(`a body agent throwing ${what}: verdict ${JSON.stringify(r.verdict)} with record ${JSON.stringify(r.recordUrl)}, expected none`)
+    }
+  }
+
   // A body whose return differs from it only in whitespace at its end is whole (#1030): on 2026-11-05
   // one of #796's body agents returned a record without its final newline, which its file kept, and
   // the review failed at the inventory. No parser reads that whitespace, so a body returned whole with
   // its final newline (the count the inventory gives leaves it out), without it, or with one added, is
   // read, and its record, follow-up rows and held mutation rows reach the parsers as from the whole
-  // body. The target here ends in a newline, as the live records on #796 do. The script's trim and the
-  // jq's are one class of characters, spaces, tabs, carriage returns and newlines.
+  // body. The target here ends in a newline, as the live records on #796 do.
   checks++
   {
     const RECORDS_NL = RECORDS796.map((r, i) => (i === 3 ? { ...r, body: r.body + '\n' } : r))
@@ -2205,8 +2386,124 @@ try {
       const missing = HELD796.filter((t) => !mutated.includes(t))
       if (missing.length) fail(`a body returned ${what}: mutationTableOf lost the held row(s) ${missing.join(', ')}`)
     }
-    const source = fs.readFileSync(scriptPath, 'utf8')
-    if (!source.includes('const TRAILING_SPACE = /[ \\t\\r\\n]+$/')) fail('#1030: the script\'s TRAILING_SPACE is not /[ \\t\\r\\n]+$/, the class the inventory\'s jq sub("[ \\t\\r\\n]+$"; "") strips')
+  }
+
+  // The script's trim, and the jq on each of the inventory's two lists, strip one class of characters
+  // (#1072): spaces, tabs, carriage returns and newlines, in any run, and nothing else. The tails below
+  // are that class written down here, and each reaches the script as a body ending in it, so the class
+  // is held by what a review does and not by how the source spells it. A body returned whole is read
+  // whatever its tail, on a comment and on a COMMENTED review, only while the script's count and that
+  // list's --jq count (the stub projects with the prompt's own class) strip the same: either side
+  // losing or gaining a character fails it. A body returned without its tail then says which side of
+  // the class the tail is on, which holds the case where every copy drifted together.
+  checks++
+  {
+    const STRIPPED = [' ', '\t', '\r', '\n', ' \t\r\n']
+    const KEPT = ['\f', '\v', '\u00a0', '\u2028', '\ufeff']
+    const last = RECORDS796.length - 1
+    const earlier = RECORDS796.slice(0, last)
+    const url = RECORDS796[last].html_url
+    const servedWith = (tail, onReview) => {
+      const record = { ...RECORDS796[last], body: RECORDS796[last].body + tail }
+      return { 796: { ...SERVED796[796], ...(onReview
+        ? { comments: [HUMAN796, ...earlier], reviews: [APPROVAL796, { ...record, state: 'COMMENTED', submitted_at: record.created_at }] }
+        : { comments: [HUMAN796, ...earlier, record] }) } }
+    }
+    const reviewed = async (tail, onReview, returned) => {
+      env = run({ prs: [796], maxMutationsPerPr: 20 }, servedWith(tail, onReview), { followUps: { 796: CARRIED796 }, bodies: { [url]: returned } })
+      return resultOf(796, await execute(env))
+    }
+    for (const tail of [...STRIPPED, ...KEPT]) {
+      for (const onReview of [false, true]) {
+        const r = await reviewed(tail, onReview, (b) => b)
+        if (r.outcome !== 'recorded' || (r.earlierRecords || []).length !== RECORDS796.length) fail(`a body ending in ${JSON.stringify(tail)} on a ${onReview ? 'review' : 'comment'}, returned whole: outcome ${r.outcome} at ${JSON.stringify(r.stage)} with ${(r.earlierRecords || []).length} earlier record(s), expected recorded with ${RECORDS796.length}: the script's trim and that list's --jq strip different characters`)
+      }
+      const r = await reviewed(tail, false, (b) => b.slice(0, -tail.length))
+      if (STRIPPED.includes(tail) && r.outcome !== 'recorded') fail(`a body returned without its tail ${JSON.stringify(tail)}: outcome ${r.outcome} at ${JSON.stringify(r.stage)}, expected recorded, since the class strips it`)
+      if (KEPT.includes(tail) && (r.outcome !== 'failed' || !String(r.stage).startsWith('inventory: ') || !String(r.stage).includes(url))) fail(`a body returned without its tail ${JSON.stringify(tail)}: outcome ${r.outcome} at ${JSON.stringify(r.stage)}, expected failed at the inventory naming ${url}, since the class keeps it`)
+    }
+  }
+
+  // Who a record is read from, and where (#1073). A body agent runs for a record on a comment or a
+  // COMMENTED review from an account of the repository, and for nobody else's: a stranger who pastes a
+  // record line costs no agent, and a body agent of theirs that dies cannot fail the review, so their
+  // body agent is served as one that dies. recordsIn's own filter hides the first half, since it drops
+  // the stranger's record once read. The accounts are GitHub's, written out here rather than taken from
+  // the script: https://docs.github.com/en/graphql/reference/enums#commentauthorassociation. A
+  // repository account's record on a review reaches the parsers only through the reviews endpoint,
+  // since the stub answers a prompt naming any other with GitHub's 404.
+  checks++
+  {
+    const OLD1073 = sha('d')
+    const stray = (association, onReview) => {
+      const entry = {
+        author_association: association, created_at: '2026-11-04T08:00:00Z',
+        html_url: `https://github.com/adammedford/spa-platform/pull/796#${onReview ? 'pullrequestreview' : 'issuecomment'}-1073${association}`,
+        body: `Reviewed ${OLD1073} against ${F796}: hold`,
+      }
+      return onReview ? { ...entry, state: 'COMMENTED', submitted_at: entry.created_at } : entry
+    }
+    const served = (entry, onReview) => ({ 796: { ...SERVED796[796], ...(onReview ? { reviews: [APPROVAL796, entry] } : { comments: [HUMAN796, ...RECORDS796, entry] }) } })
+    const six = RECORDS796.map((x) => x.html_url)
+    for (const onReview of [false, true]) {
+      const where = onReview ? 'review' : 'comment'
+      for (const association of ['NONE', 'CONTRIBUTOR', 'FIRST_TIME_CONTRIBUTOR', 'FIRST_TIMER', 'MANNEQUIN']) {
+        const entry = stray(association, onReview)
+        env = run({ prs: [796], maxMutationsPerPr: 20 }, served(entry, onReview), { followUps: { 796: CARRIED796 }, bodies: { [entry.html_url]: 'null' } })
+        const r = resultOf(796, await execute(env))
+        const bodies = env.calls.filter((c) => /^inventory:796:body:/.test(c))
+        if (bodies.some((c) => (env.prompts[c] || '').includes(entry.html_url))) fail(`a record on a ${where} from ${association}: a body agent ran for it, expected none`)
+        if (bodies.length !== 6) fail(`a record on a ${where} from ${association}: ${bodies.length} body agent(s) ran, expected the six repository records' alone`)
+        if (r.outcome !== 'recorded') fail(`a record on a ${where} from ${association}: outcome ${r.outcome} at ${JSON.stringify(r.stage)}, expected recorded, since its body agent is not the review's to wait on`)
+        if (JSON.stringify(r.earlierRecords) !== JSON.stringify(six)) fail(`a record on a ${where} from ${association}: earlier records ${JSON.stringify(r.earlierRecords)}, expected the six alone`)
+      }
+      for (const association of ['OWNER', 'MEMBER', 'COLLABORATOR']) {
+        const entry = stray(association, onReview)
+        env = run({ prs: [796], maxMutationsPerPr: 20 }, served(entry, onReview), { followUps: { 796: CARRIED796 } })
+        const r = resultOf(796, await execute(env))
+        const bodies = env.calls.filter((c) => /^inventory:796:body:/.test(c))
+        if (bodies.length !== 7 || !bodies.some((c) => (env.prompts[c] || '').includes(entry.html_url))) fail(`a record on a ${where} from ${association}: ${bodies.length} body agent(s) ran, expected seven, one of them for it`)
+        if (r.outcome !== 'recorded') fail(`a record on a ${where} from ${association}: outcome ${r.outcome} at ${JSON.stringify(r.stage)}, expected recorded`)
+        if (JSON.stringify(r.earlierRecords) !== JSON.stringify([entry.html_url, ...six])) fail(`a record on a ${where} from ${association}: earlier records ${JSON.stringify(r.earlierRecords)}, expected it and the six`)
+      }
+    }
+  }
+
+  // What costs a body agent (#1074): the inventory's flag, not a record line. RECORD_TEST finds the
+  // record's text anywhere in a body, so a repository account's sentence quoting a record is flagged,
+  // costs an agent of its own, and reads as no record; that agent dying fails the review as a record's
+  // would, since nothing can tell the two apart before the body is read. meta's Inventory detail is
+  // what a launch shows, so it is held to saying the same; an APPROVED review's flag costs nothing,
+  // which #796's shape above proves.
+  checks++
+  {
+    const OLD1074 = sha('c')
+    const quoting = (onReview) => {
+      const entry = {
+        author_association: 'OWNER', created_at: '2026-11-04T08:00:00Z',
+        html_url: `https://github.com/adammedford/spa-platform/pull/796#${onReview ? 'pullrequestreview' : 'issuecomment'}-1074`,
+        body: `The last record read Reviewed ${OLD1074} against ${F796}: hold, and that head is gone.`,
+      }
+      return onReview ? { ...entry, state: 'COMMENTED', submitted_at: entry.created_at } : entry
+    }
+    const served = (entry, onReview) => ({ 796: { ...SERVED796[796], ...(onReview ? { reviews: [APPROVAL796, entry] } : { comments: [HUMAN796, ...RECORDS796, entry] }) } })
+    for (const onReview of [false, true]) {
+      const where = onReview ? 'review' : 'comment'
+      const entry = quoting(onReview)
+      env = run({ prs: [796], maxMutationsPerPr: 20 }, served(entry, onReview), { followUps: { 796: CARRIED796 } })
+      let r = resultOf(796, await execute(env))
+      const bodies = env.calls.filter((c) => /^inventory:796:body:/.test(c))
+      if (bodies.length !== 7 || !bodies.some((c) => (env.prompts[c] || '').includes(entry.html_url))) fail(`a ${where} quoting a record: ${bodies.length} body agent(s) ran, expected seven, one of them for it`)
+      if (r.outcome !== 'recorded') fail(`a ${where} quoting a record: outcome ${r.outcome} at ${JSON.stringify(r.stage)}, expected recorded`)
+      if (JSON.stringify(r.earlierRecords) !== JSON.stringify(RECORDS796.map((x) => x.html_url))) fail(`a ${where} quoting a record: earlier records ${JSON.stringify(r.earlierRecords)}, expected the six alone, since it holds no record line`)
+      env = run({ prs: [796], maxMutationsPerPr: 20 }, served(entry, onReview), { followUps: { 796: CARRIED796 }, bodies: { [entry.html_url]: 'null' } })
+      r = resultOf(796, await execute(env))
+      if (r.outcome !== 'failed' || !String(r.stage).includes(entry.html_url)) fail(`a ${where} quoting a record, its body agent dead: outcome ${r.outcome} at ${JSON.stringify(r.stage)}, expected failed naming its URL`)
+    }
+    const meta = loadMeta()
+    const inventory = (meta && meta.phases.find((ph) => ph.title === 'Inventory')) || {}
+    for (const w of ['COMMENTED review', 'repository account', 'flags']) if (!String(inventory.detail).includes(w)) fail(`meta's Inventory detail does not name ${JSON.stringify(w)} of what costs a body agent`)
+    if (String(inventory.detail).includes('carries a record line')) fail('meta\'s Inventory detail says a body agent runs per record line; it runs per flagged body')
   }
 
   // The record's compact shape (#967). The verdict prompt asks for the Spec table of three columns,
@@ -2284,6 +2581,64 @@ try {
     if (top967 < 0 || !(hl[top967 + 2] || '').includes(OLD_RECORD('hold').html_url)) fail(`#967: the earlier hold section does not link the held record: ${JSON.stringify(hl.slice(top967, top967 + 5))}`)
     if (!hl.includes('- Answered: the cap is off by one. src/Fixed.cs now stops at the cap') || !hl.includes('- Still open: an ADR index row.')) fail(`#967: the earlier hold section is ${JSON.stringify(hl.slice(top967, top967 + 6))}, expected each answered finding with what changed and each open one by name`)
     if (hl.some((l) => l.includes('RESTATED'))) fail('#967: the earlier hold section restates an unanswered finding\'s evidence')
+  }
+
+  // An earlier review's verdict.json is never read as this run's (#1092). On #1085's third review the
+  // verdict agent returned its verdict and wrote no file, so verdict.json stayed the review written
+  // earlier that day, in the log directory same-date runs share: a finding already answered, and a
+  // hold where the agent had returned merge. The script has no filesystem, so the post agent writes
+  // the verdict the script received, replacing what is there, and the file names its head and date.
+  checks++
+  {
+    const LOGDIR = (e) => `${e.repo}/.scratch/review-queue/log/2026-10-21/pr-101`
+    const EARLIER = 'the finding an earlier review held on'
+    const seeded = async (behave) => {
+      const e = run({ prs: [101], skipRecorded: false }, PRS, behave)
+      fs.mkdirSync(LOGDIR(e), { recursive: true })
+      fs.writeFileSync(`${LOGDIR(e)}/verdict.json`, JSON.stringify({ verdict: 'hold', findings: [{ title: EARLIER }] }))
+      return { e, ret: await execute(e) }
+    }
+    const fileOf = (e) => (fs.existsSync(`${LOGDIR(e)}/verdict.json`) ? fs.readFileSync(`${LOGDIR(e)}/verdict.json`, 'utf8') : '')
+    const parsed = (e) => { const text = fileOf(e); try { return JSON.parse(text) } catch { fail(`#1092: verdict.json is not JSON after the run: ${JSON.stringify(text.slice(0, 60))}`); return {} } }
+    const ONE = { axis: 'Spec', title: 'this review found it', where: 'a.md', severity: 'low', status: 'verified', checked: 'read it' }
+    // The verdict agent returns merge and writes nothing, with an earlier review's hold in the file.
+    {
+      const { e, ret } = await seeded({ verdict: 'merge', unwritten: ['verdict:101:verdict.json'], findings: { 101: [ONE] } })
+      const text = fileOf(e)
+      const v = parsed(e)
+      if (text.includes(EARLIER)) fail('#1092: a verdict agent that wrote no file left the earlier review\'s verdict.json to be read as this run\'s')
+      if (v.verdict !== 'merge') fail(`#1092: verdict.json says ${v.verdict}; the agent returned merge`)
+      if (!(v.findings || []).some((f) => f.title === ONE.title)) fail('#1092: verdict.json does not carry the finding the verdict agent returned')
+      if (v.head !== sha('1') || v.base !== FORK || v.date !== '2026-10-21') fail(`#1092: verdict.json names head ${v.head}, base ${v.base}, date ${v.date}; a repair session compares them with the summary line`)
+      if (/not this run's/.test((ret.summary || [])[0] || '')) fail(`#1092: a written verdict.json is reported as not this run's: ${ret.summary[0]}`)
+      const postP = e.prompts['post:101'] || ''
+      if (!postP.includes(`OUTPUT FILE: ${LOGDIR(e)}/verdict.json`) || !postP.includes(`rm -f ${LOGDIR(e)}/verdict.json`)) fail('#1092: the post prompt does not have its agent replace verdict.json')
+      if ((e.prompts['verdict:101'] || '').includes('/verdict.json')) fail('#1092: the verdict prompt still asks its agent for verdict.json, a write nothing checks')
+    }
+    // As the agent returned it: the script's own findings stay out, as "Repairing findings" says.
+    {
+      const stale = { ...PRS[101], statedHeads: [{ sha: 'ed8d063', quote: 'head `ed8d063`.' }] }
+      const e = run({ prs: [101], skipRecorded: false }, { 101: stale }, { findings: { 101: [ONE] } })
+      const ret = await execute(e)
+      const v = parsed(e)
+      if (resultOf(101, ret).findings.verified.length !== 2) fail(`#1092: the stale head's finding did not reach the return: ${resultOf(101, ret).findings.verified.length} verified`)
+      if ((v.findings || []).length !== 1 || v.findings[0].title !== ONE.title) fail(`#1092: verdict.json holds other than the agent's findings: ${JSON.stringify((v.findings || []).map((f) => f.title))}`)
+    }
+    // A post agent that returns without writing it: the earlier file stands, and the summary says so.
+    {
+      const { e, ret } = await seeded({ unwritten: ['verdict:101:verdict.json', 'post:101:verdict.json'] })
+      const line = (ret.summary || [])[0] || ''
+      if (!fileOf(e).includes(EARLIER)) fail('#1092: the check\'s post agent wrote the file it was told to leave')
+      if (!/verdict\.json is not this run's/.test(line)) fail(`#1092: a verdict.json the post agent did not write is not reported in the summary line: ${line}`)
+      if (resultOf(101, ret).outcome !== 'recorded') fail(`#1092: an unwritten verdict.json stopped the record: ${resultOf(101, ret).outcome}`)
+    }
+    // A post agent that dies: nobody knows which file stands, and the stage says so.
+    {
+      for (const how of ['null', 'throw']) {
+        const { ret } = await seeded({ kill: { 'post:101': how } })
+        if (!/verdict\.json may be an earlier review's/.test(resultOf(101, ret).stage || '')) fail(`#1092: a post agent killed (${how}) leaves a stage that does not say verdict.json may be an earlier review's: ${resultOf(101, ret).stage}`)
+      }
+    }
   }
 
   // The launch in whenToUse (#522): /review-queue shows meta and then a launch by name, which runs a

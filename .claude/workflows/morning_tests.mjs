@@ -53,7 +53,7 @@ const MORNING_REL = `.scratch/overnight/log/morning-${DATE}`
 const WT = '/tmp/morning-tests-wt/overnight-2026-10-21'
 
 // ---------------------------------------------------------------- a minimal JSON Schema check
-// The subset the script's schemas use: type, properties, required, items, enum.
+// The subset the script's schemas use: type, properties, required, items, enum, minimum.
 const validate = (schema, value, where = '$') => {
   const bad = []
   if (!schema) return [`${where}: no schema`]
@@ -61,6 +61,7 @@ const validate = (schema, value, where = '$') => {
   const kind = Array.isArray(value) ? 'array' : value === null ? 'null' : Number.isInteger(value) ? 'integer' : typeof value
   if (t && !(t === kind || (t === 'number' && kind === 'integer'))) return [`${where}: ${kind}, expected ${t}`]
   if (schema.enum && !schema.enum.includes(value)) bad.push(`${where}: ${JSON.stringify(value)} not in ${schema.enum.join('|')}`)
+  if (schema.minimum !== undefined && value < schema.minimum) bad.push(`${where}: ${value} below ${schema.minimum}`)
   if (t === 'object') {
     for (const k of schema.required || []) if (!(k in value)) bad.push(`${where}.${k}: missing`)
     for (const [k, s] of Object.entries(schema.properties || {})) if (k in value) bad.push(...validate(s, value[k], `${where}.${k}`))
@@ -346,16 +347,26 @@ function stub(env, scriptArgs, served) {
         // The Apply phase's index (#319): the Overnight issue's comments, every one, in order, with the
         // first 200 characters of each body and no more (the prompt's jq is run on gh's shape in 19a).
         // served.commentsIssue: the number it reports reading, as a reader that read the wrong issue would.
+        // served.indexEntry: what the reader makes of comment 1's entry, as one returning what the jq cannot print (#1098).
         const issue = served.issue === undefined ? issueWith([...QUESTIONS, CONFIRM]) : served.issue
-        const indexed = (issue ? issue.comments : []).map((c) => ({ author: c.author, createdAt: c.createdAt, url: c.url, bytes: Buffer.byteLength(c.body), tail: /\n*$/.exec(c.body)[0].length, head: c.body.slice(0, 200) }))
+        const indexed = (issue ? issue.comments : []).map((c) => ({ author: c.author, createdAt: c.createdAt, url: c.url, bytes: Buffer.byteLength(c.body), tail: /\n*$/.exec(c.body)[0].length, head: c.body.slice(0, 200) })).map((c) => (served.indexEntry && c.url.endsWith('#issuecomment-1') ? served.indexEntry(c) : c))
         out = { issue: { number: served.commentsIssue || (issue ? issue.number : 0), comments: indexed }, error: served.commentsError || '' }
       } else if (/^handover-read(-retry\d+)?$/.test(label)) {
         // The earlier hand-overs' reader (#969): the comments its prompt's jq names, verbatim.
         // served.handoverMangle: a reader that drops each body's last character, as a changed read would;
-        // 'newline': one that drops one trailing newline and nothing else (#1084).
+        // 'newline': one that drops one trailing newline and nothing else (#1084); 'reread-newline': one
+        // whose first read rewrites a body's first character, which no restore clears, and whose re-read
+        // drops one trailing newline and nothing else (#1096); 'cut-newline': one that drops a body's last
+        // character before its newlines and one of those newlines, on every read (#1097).
         const issue = served.issue === undefined ? issueWith([...QUESTIONS, CONFIRM]) : served.issue
         const at = /\.comments\[([\d,]+)\]/.exec(prompt)[1].split(',').map(Number)
-        out = { comments: at.map((i) => issue.comments[i]).map((c) => served.handoverMangle === 'newline' ? { ...c, body: c.body.replace(/\n$/, '') } : served.handoverMangle ? { ...c, body: c.body.slice(0, -1) } : c), error: '' }
+        const retried = /-retry\d+$/.test(label)
+        const dropNewline = served.handoverMangle === 'newline' || (served.handoverMangle === 'reread-newline' && retried)
+        const bend = (c) => served.handoverMangle === 'cut-newline' ? { ...c, body: c.body.replace(/[^\n](\n*)\n$/, '$1') }
+          : dropNewline ? { ...c, body: c.body.replace(/\n$/, '') }
+          : served.handoverMangle === 'reread-newline' ? { ...c, body: '=' + c.body.slice(1) }
+            : served.handoverMangle ? { ...c, body: c.body.slice(0, -1) } : c
+        out = { comments: at.map((i) => issue.comments[i]).map(bend), error: '' }
       } else if (label.startsWith('comments-batch:')) {
         // A batch reader: the comments its prompt's jq names, verbatim. served.batchSwap: a reader
         // that returns another comment than the one named.
@@ -366,10 +377,17 @@ function stub(env, scriptArgs, served) {
         // 'tail' change comment 1 on every read so that only one of the index's two fields differs: 'head'
         // rewrites its first character (same bytes, another head), 'tail' drops its last non-newline
         // character, past the head. 'newline' drops one trailing newline from every body, as the reader did on #1071 (#1084).
-        const marker = (c) => (served.mangle === 'always' || (served.mangle === 'first' && !/-retry\d+$/.test(label))) ? { ...c, body: c.body.replace(/\*\*Q\d+\.\*\* /, '') } : c
+        // 'reread-newline' drops the marker on the first read, as 'first' does, and one trailing newline
+        // on a re-read and nothing else (#1096). 'cut-newline' and 'refill' change comment 1 on every read so
+        // that what the reader returned and what the restore makes of it differ (#1097): 'cut-newline' drops its
+        // last character before its newlines and one of those newlines, 'refill' swaps that character for a newline.
+        const retried = /-retry\d+$/.test(label)
+        const marker = (c) => (served.mangle === 'always' || ((served.mangle === 'first' || served.mangle === 'reread-newline') && !retried)) ? { ...c, body: c.body.replace(/\*\*Q\d+\.\*\* /, '') } : c
         const mangled = (c) => c.url.endsWith('#issuecomment-1') && served.mangle === 'head' ? { ...c, body: '=' + c.body.slice(1) }
           : c.url.endsWith('#issuecomment-1') && served.mangle === 'tail' ? { ...c, body: c.body.replace(/(.)(\n*)$/s, '$2') }
-          : served.mangle === 'newline' ? { ...c, body: c.body.replace(/\n$/, '') } : marker(c)
+          : c.url.endsWith('#issuecomment-1') && served.mangle === 'cut-newline' ? { ...c, body: c.body.replace(/[^\n](\n*)\n$/, '$1') }
+          : c.url.endsWith('#issuecomment-1') && served.mangle === 'refill' ? { ...c, body: c.body.replace(/[^\n](\n*)$/, '$1\n') }
+          : served.mangle === 'newline' || (served.mangle === 'reread-newline' && retried) ? { ...c, body: c.body.replace(/\n$/, '') } : marker(c)
         out = { comments: at.map((i) => mangled(issue.comments[served.batchSwap ? (i + 1) % issue.comments.length : i])), error: '' }
       } else if (label === 'verify') {
         const v = served.verify || {}
@@ -585,7 +603,8 @@ function stub(env, scriptArgs, served) {
         out = { url: `${URL(ISSUE)}#issuecomment-98`, posted: jsonAfter(prompt, 'POST') !== false, closed: jsonAfter(prompt, 'CLOSE') === true, reason: '', ...(served.afterHanded || {}) }
       } else throw new Error(`unexpected agent label ${label}`)
       const dropped = label === 'verify' ? (served.verifyDrop || []).map((f) => `$.${f}: missing`) : []
-      const bad = validate(opts.schema, out).filter((b) => !dropped.includes(b))
+      // served.indexEntry bends the index past its schema on purpose; the script's own guard is what answers it (#1098).
+      const bad = validate(opts.schema, out).filter((b) => !dropped.includes(b) && !(label === 'comments' && served.indexEntry && /\.tail: /.test(b)))
       if (bad.length) env.schemaFailures.push(`${label}: ${bad.slice(0, 3).join('; ')}`)
       for (const x of prompt.matchAll(/^OUTPUT FILE: (\S+)$/gm)) {
         fs.mkdirSync(path.dirname(x[1]), { recursive: true })
@@ -2064,11 +2083,33 @@ try {
     if (!head.result.refusals.some((x) => /#issuecomment-1 was not returned .*: its first characters differ from the index/.test(x))) fail(`a body with the same bytes and another head: not refused: ${JSON.stringify(head.result.refusals)}`)
     const tail = await execute(newRepo(), { date: DATE }, { mangle: 'tail' })
     if (!tail.result.refusals.some((x) => /#issuecomment-1 was not returned .*: \d+ bytes returned, \d+ in the index/.test(x))) fail(`a body with the same head and another length: not refused: ${JSON.stringify(tail.result.refusals)}`)
+    // The refusal's first count is what the reader returned, not what the restore made of it (#1097; #1084's
+    // diagnosis rested on that number). 260 returned of 262 with tail 2 restores to 261; a return of 262 that
+    // restores to 261 would otherwise read as 262 against 262. A fault no restore touched keeps the two-count
+    // form the 'tail' case above holds. The last read's fault is the one named, so a reader that answers no
+    // re-read names the first read's.
+    const sized = comment(1, `## Questions: ${cite(300)}, issue-300, First ticket\n\n**Q1.** Sized?\nRecommended: Yes.\n${PRE}\n\n`.padEnd(260, 'x') + '\n\n', '2026-10-21T06:00:00Z')
+    if (Buffer.byteLength(sized.body) !== 262 || !sized.body.endsWith('x\n\n')) fail(`#1097: the fixture is ${Buffer.byteLength(sized.body)} bytes, not 262 ending in two newlines`)
+    const sizedIssue = issueWith([sized, ...QUESTIONS.slice(1), CONFIRM])
+    for (const [why, served, count] of [
+      ['a re-read that returns 260 of 262', { mangle: 'cut-newline' }, `: 260 bytes returned, 261 with its trailing newlines set to the index\'s 2, 262 in the index`],
+      ['a first read that returns 260 of 262', { mangle: 'cut-newline', nothingFrom: ['comments-batch:1-retry1', 'comments-batch:1-retry2'] }, `: 260 bytes returned, 261 with its trailing newlines set to the index\'s 2, 262 in the index`],
+      ['a read that returns 262 of 262 and restores to 261', { mangle: 'refill' }, `: 262 bytes returned, 261 with its trailing newlines set to the index\'s 2, 262 in the index`],
+    ]) {
+      const r = await execute(newRepo(), { date: DATE }, { issue: sizedIssue, ...served })
+      if (!r.result.refusals.some((x) => x.includes(`${URL(ISSUE)}#issuecomment-1 was not returned`) && x.includes(count))) fail(`#1097: ${why}: the refusal does not read "${count}": ${JSON.stringify(r.result.refusals)}`)
+    }
     // A reader that drops one trailing newline (#1071, #1084): the index counts the newlines a body ends in
     // and the script gives the body them back, with no re-read. A body that differs elsewhere is still refused.
     const withNewlines = issueWith([...QUESTIONS, { ...CONFIRM, body: CONFIRM.body + '\n\n' }])
     const lost = await execute(newRepo(), { date: DATE }, { issue: withNewlines, mangle: 'newline' })
     if (lost.result.refusals.length || lost.labels.some((l) => /-retry\d+$/.test(l))) fail(`a reader that drops a trailing newline: refused or re-read: ${JSON.stringify(lost.result.refusals)} ${lost.labels.join(', ')}`)
+    // The re-read's own restore (#1096): a first read with another fault sends the comment to a re-read, and
+    // the re-read drops a trailing newline. It is given back there too, so the one re-read is enough.
+    if (!QUESTIONS[0].body.endsWith('\n')) fail('a re-read that drops a trailing newline: the fixture\'s first question comment ends in no newline')
+    const relost = await execute(newRepo(), { date: DATE }, { mangle: 'reread-newline' })
+    if (!relost.labels.includes('comments-batch:1-retry1')) fail(`a re-read that drops a trailing newline: the first read's fault sent nothing to a re-read: ${relost.labels.join(', ')}`)
+    if (relost.result.refusals.length || relost.labels.includes('comments-batch:1-retry2') || !relost.result.apply.answers[4]) fail(`a re-read that drops a trailing newline: refused or re-read again: ${JSON.stringify(relost.result.refusals)} ${relost.labels.join(', ')}`)
     if (always.labels.includes('classify') || APPLIERS(always.labels).length) fail(`a body changed on every read: Apply ran: ${always.labels.join(', ')}`)
     if (/PHASE FILE|OUTPUT FILE/.test(cp)) fail('the comments reader writes a file, so a rerun could reuse stale comments')
     const stopped = await execute(newRepo(), { date: DATE }, { verify: { outcome: 'stop', step: 3, reason: 'dirty' } })
@@ -2077,6 +2118,11 @@ try {
       ['a reader that returns nothing', { nothingFrom: ['comments'] }, /the comments reader returned nothing/],
       ['a reader that reports an error', { commentsError: 'HTTP 502' }, /could not read the comments of #226: HTTP 502/],
       ['a reader that read another issue', { commentsIssue: 98 }, /read the comments of #98, not #226/],
+      // An index whose tail the restore cannot use names the field and the comment, and no body is read (#1098).
+      ['an index with no tail', { indexEntry: ({ tail: _, ...c }) => c }, /comments index of #226 .*#issuecomment-1 has no tail/],
+      ['an index with a negative tail', { indexEntry: (c) => ({ ...c, tail: -1 }) }, /comments index of #226 .*#issuecomment-1 has tail -1/],
+      ['an index with a fractional tail', { indexEntry: (c) => ({ ...c, tail: 1.5 }) }, /comments index of #226 .*#issuecomment-1 has tail 1\.5/],
+      ['an index with a tail past its bytes', { indexEntry: (c) => ({ ...c, tail: c.bytes + 1 }) }, /comments index of #226 .*#issuecomment-1 has tail \d+/],
       ['a body reader that returns nothing', { nothingFrom: ['comments-batch:1'] }, /were not all read: batch 1 \(.*\) returned nothing/],
       ['a body reader that returns another comment', { batchSwap: true }, /were not all read: batch 1 returned .*, not /],
     ]) {
@@ -2084,7 +2130,17 @@ try {
       if (!r.result.refusals.some((x) => named.test(x)) || !named.test(r.result.handover.text)) fail(`${label}: not named in the refusals and the hand-over: ${JSON.stringify(r.result.refusals)}`)
       if (r.labels.includes('classify') || APPLIERS(r.labels).length) fail(`${label}: Apply ran: ${r.labels.join(', ')}`)
       if (/Apply: dry, no Confirm comment/.test(r.result.handover.text) || Object.keys(r.result.apply.answers).length) fail(`${label}: the hand-over reads an unread issue as one with no Confirm comment`)
+      if (served.indexEntry && r.labels.some((l) => l.startsWith('comments-batch:'))) fail(`${label}: bodies were read against an index already refused: ${r.labels.join(', ')}`)
     }
+    // The tail's edges: 0 and a body that is nothing but newlines are both counts the jq prints, so neither is refused.
+    const onlyNewlines = await execute(newRepo(), { date: DATE }, { issue: issueWith([...QUESTIONS, CONFIRM, comment(98, '\n\n', '2026-10-21T08:00:00Z')]) })
+    if (onlyNewlines.result.refusals.some((x) => /comments index/.test(x))) fail(`a body of newlines alone, or a tail of 0: refused: ${JSON.stringify(onlyNewlines.result.refusals)}`)
+    // The reader's schema says the same, so a reader is told before the script has to refuse it.
+    const entry = stopped.calls.find((c) => c.label === 'comments').schema.properties.issue.properties.comments.items
+    const sound = { author: 'a', createdAt: 'b', url: 'u', bytes: 1, head: 'h' }
+    if (validate(entry, { ...sound, tail: 0 }).length) fail(`the index schema refuses a tail of 0: ${JSON.stringify(validate(entry, { ...sound, tail: 0 }))}`)
+    if (!validate(entry, sound).length) fail('the index schema does not require tail')
+    if (!validate(entry, { ...sound, tail: -1 }).length) fail('the index schema allows a negative tail')
   }
 
   // 19b. Replay checks for the pending-writes file before any replay step (#319). On 2026-10-22 it
@@ -3195,6 +3251,33 @@ try {
     const envTwice = newRepo()
     const twice = await execute(envTwice, { date: DATE }, { issue: withEarlier(comment(97, into(envTwice, W1).replace('\n\n### Replay\n', '\n\n### main\n\n- twice\n\n### Replay\n'), '2026-10-21T09:00:00Z')) })
     if (twice.result.handover.mode !== 'whole' || posted(twice, 'handover') !== twice.result.handover.text || !/repeats/.test(twice.result.handover.note)) fail(`#969: an earlier hand-over with a repeated title was diffed: mode ${twice.result.handover.mode}, note ${twice.result.handover.note}`)
+    // ...but one identical to the latest earlier hand-over needs no diff, so its titles do not matter (#1132):
+    // nothing is posted, and the note does not say posted whole. A failing job's name carries the title
+    // into the text this pass writes, and the same pass with another job's name changes one line of it.
+    for (const [label, title] of [['a repeated title', 'Replay'], ['a title reading as a delta\'s mark', 'Old findings (unchanged)']]) {
+      const jobs = (name) => ({ verify: { ci: 'red', failingJobs: [`${name}\n\n### ${title}\n\n- again`] } })
+      const envOwn = newRepo()
+      const own = await execute(envOwn, { date: DATE }, jobs('.NET build and test'))
+      const T = own.result.handover.text
+      const heldTitles = T.split('\n').filter((l) => l.startsWith('### ')).map((l) => l.slice(4))
+      if (!heldTitles.includes(title) || (title === 'Replay' && new Set(heldTitles).size === heldTitles.length)) fail(`#1132 ${label}: the fixture's hand-over does not hold it: ${heldTitles.join(', ')}`)
+      const envSame = newRepo()
+      const same = await execute(envSame, { date: DATE }, { issue: withEarlier(comment(97, into(envSame, T, envOwn), '2026-10-21T09:00:00Z')), ...jobs('.NET build and test') })
+      if (same.labels.includes('handover') || same.result.handover.posted || same.result.handover.mode !== 'identical' || same.result.handover.url !== at97) fail(`#1132 ${label}: an identical hand-over was decided ${same.result.handover.mode}: ${same.labels.join(', ')}; url ${same.result.handover.url}`)
+      if (!/identical/.test(same.result.handover.note) || /posted whole/.test(same.result.handover.note)) fail(`#1132 ${label}: the identical hand-over's note reads: ${same.result.handover.note}`)
+      // Changed, the titles still hold it to whole, and the note says why.
+      const envMoved = newRepo()
+      const moved = await execute(envMoved, { date: DATE }, { issue: withEarlier(comment(97, into(envMoved, T, envOwn), '2026-10-21T09:00:00Z')), ...jobs('Another job') })
+      if (moved.result.handover.mode !== 'whole' || posted(moved, 'handover') !== moved.result.handover.text || !/repeats or reads as a delta's mark/.test(moved.result.handover.note)) fail(`#1132 ${label}: a changed hand-over was decided ${moved.result.handover.mode}: ${moved.result.handover.note}`)
+      // The same when only this hand-over holds the title, over an earlier one that does not.
+      const envOnlyNow = newRepo()
+      const onlyNow = await execute(envOnlyNow, { date: DATE }, { issue: withEarlier(comment(97, into(envOnlyNow, W1), '2026-10-21T09:00:00Z')), ...jobs('.NET build and test') })
+      if (onlyNow.result.handover.mode !== 'whole' || posted(onlyNow, 'handover') !== onlyNow.result.handover.text || !/repeats or reads as a delta's mark/.test(onlyNow.result.handover.note)) fail(`#1132 ${label}: a hand-over holding it, over an earlier one that does not, was decided ${onlyNow.result.handover.mode}: ${onlyNow.result.handover.note}`)
+      // Identical to the whole comment with a delta after it is not identical to the latest: posted whole.
+      const envOlder = newRepo()
+      const older = await execute(envOlder, { date: DATE }, { issue: withEarlier(comment(97, into(envOlder, T, envOwn), '2026-10-21T09:00:00Z'), comment(98, into(envOlder, D2, envSecond), '2026-10-21T10:00:00Z')), ...jobs('.NET build and test') })
+      if (older.result.handover.mode !== 'whole' || posted(older, 'handover') !== older.result.handover.text) fail(`#1132 ${label}: a hand-over matching the whole comment under a later delta was decided ${older.result.handover.mode}, url ${older.result.handover.url}`)
+    }
     // A delta with no whole comment before it extends nothing: the hand-over is posted whole, saying why.
     const orphan = await execute(newRepo(), { date: DATE }, { issue: withEarlier(comment(98, D2, '2026-10-21T10:00:00Z')), ...RED })
     if (orphan.result.handover.mode !== 'whole' || posted(orphan, 'handover') !== orphan.result.handover.text || !/no whole comment/.test(orphan.result.handover.note)) fail(`#969: a delta with no whole comment was extended: mode ${orphan.result.handover.mode}`)
@@ -3207,6 +3290,21 @@ try {
     // A reader that drops one trailing newline is given it back, as Apply's are (#1084): no re-read, no refusal.
     const lostLine = await execute(newRepo(), { date: DATE }, { issue: withEarlier(comment(97, W1 + '\n', '2026-10-21T09:00:00Z')), ...RED, handoverMangle: 'newline' })
     if (lostLine.result.handover.mode === 'whole' || lostLine.result.refusals.some((x) => /earlier hand-over/.test(x)) || lostLine.labels.some((l) => /^handover-read-retry/.test(l))) fail(`#969: a reader that drops a trailing newline of the earlier hand-over was refused or re-read: mode ${lostLine.result.handover.mode}, ${lostLine.labels.join(', ')}`)
+    // The refusal counts what the reader returned, at both read sites here too (#1097).
+    const tailed = W1.replace(/\n*$/, '') + '\n\n'
+    const tailedBytes = Buffer.byteLength(tailed)
+    for (const [why, served] of [
+      ['a re-read', {}],
+      ['a first read', { nothingFrom: ['handover-read-retry1', 'handover-read-retry2'] }],
+    ]) {
+      const r = await execute(newRepo(), { date: DATE }, { issue: withEarlier(comment(97, tailed, '2026-10-21T09:00:00Z')), ...RED, handoverMangle: 'cut-newline', ...served })
+      const count = `: ${tailedBytes - 2} bytes returned, ${tailedBytes - 1} with its trailing newlines set to the index's 2, ${tailedBytes} in the index`
+      if (!r.result.refusals.some((x) => /earlier hand-over/.test(x) && x.includes(count))) fail(`#1097: ${why} of the earlier hand-over: the refusal does not read "${count}": ${JSON.stringify(r.result.refusals)}`)
+    }
+    // The re-read's own restore (#1096): a first read with another fault, and a re-read that drops a trailing newline.
+    const relostLine = await execute(newRepo(), { date: DATE }, { issue: withEarlier(comment(97, W1 + '\n', '2026-10-21T09:00:00Z')), ...RED, handoverMangle: 'reread-newline' })
+    if (!relostLine.labels.includes('handover-read-retry1')) fail(`#969: the first read's fault sent the earlier hand-over to no re-read: ${relostLine.labels.join(', ')}`)
+    if (relostLine.result.handover.mode === 'whole' || relostLine.result.refusals.some((x) => /earlier hand-over/.test(x)) || relostLine.labels.includes('handover-read-retry2')) fail(`#969: a re-read that drops a trailing newline of the earlier hand-over was refused or re-read again: mode ${relostLine.result.handover.mode}, ${relostLine.labels.join(', ')}`)
 
     // 28b. The After pass, against an earlier "## After <date>": the same rules.
     const a1 = await afterRun({ after: { ci: 'red' } })
@@ -3220,6 +3318,12 @@ try {
     const a3 = await afterRun({ issue: afterWith(comment(97, A1, '2026-10-22T09:00:00Z')), after: { ci: 'red' } })
     if (a3.labels.includes('after-handover') || a3.result.handover.mode !== 'identical' || a3.result.handover.posted || a3.result.handover.url !== at97 || !/identical/.test(a3.result.handover.note || '')) fail(`#969 After: an identical After comment was posted, or not reported: ${a3.labels.join(', ')}; ${JSON.stringify({ ...a3.result.handover, text: undefined })}`)
     if (a3.result.refusals.some((x) => /returned nothing/.test(x))) fail(`#969 After: the skipped After agent is read as one that returned nothing: ${JSON.stringify(a3.result.refusals)}`)
+    // Identical with a repeated title (#1132): the same, and the note does not say posted whole.
+    const twiceAfter = { ci: 'red', removed: ['a path\n\n### Cleanup\n\n- again'] }
+    const A5 = afterText(await afterRun({ after: twiceAfter }))
+    if (A5.split('\n').filter((l) => l === '### Cleanup').length !== 2) fail(`#1132 After: the fixture's After comment does not repeat a title:\n${A5}`)
+    const a5 = await afterRun({ issue: afterWith(comment(97, A5, '2026-10-22T09:00:00Z')), after: twiceAfter })
+    if (a5.labels.includes('after-handover') || a5.result.handover.mode !== 'identical' || a5.result.handover.url !== at97 || /posted whole/.test(a5.result.handover.note) || !/identical/.test(a5.result.handover.note)) fail(`#1132 After: an identical After comment with a repeated title was decided ${a5.result.handover.mode}: ${a5.labels.join(', ')}; note ${a5.result.handover.note}`)
     // Identical, on a night that closes: the agent still closes the issue, and posts nothing.
     const s1 = await afterRun({ landed: [1] })
     const S1 = afterText(s1)

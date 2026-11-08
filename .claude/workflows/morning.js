@@ -86,9 +86,10 @@ export const meta = {
 // the whole comment it extends, each changed section whole, each unchanged one as "### <title>
 // (unchanged)", each one gone as "### <title> (removed)". Every delta extends the whole comment, never
 // another delta, so a reader needs those two comments at most. A hand-over identical to the latest
-// earlier one, whole or delta, is not posted, and the return says so. A read that failed, a delta with
-// no whole comment before it, or a hand-over whose section titles repeat is posted whole, and the
-// first is named: posting it again costs bytes, losing it costs the hand-over.
+// earlier one, whole or delta, is not posted, whatever its section titles (#1132), and the return says
+// so. A read that failed, a delta with no whole comment before it, or any other hand-over whose section
+// titles repeat is posted whole, and the first is named: posting it again costs bytes, losing it costs
+// the hand-over.
 //
 // An already merged landing pull request (#661, from #706 Q21 to Q29). On 2026-10-30 Verify stopped
 // at step 6 because #620 had merged, and the hand-over said "Review record: none" and "CI: none" and
@@ -291,7 +292,7 @@ const REPLAY = {
   },
   required: ['listing', 'issue', 'phaseFiles', 'counts', 'creates', 'pending', 'renamed', 'stoppedAt', 'reason'],
 }
-const COMMENT_INDEXED = { type: 'object', properties: { author: { type: 'string' }, createdAt: { type: 'string' }, url: { type: 'string' }, bytes: { type: 'integer' }, tail: { type: 'integer' }, head: { type: 'string' } }, required: ['author', 'createdAt', 'url', 'bytes', 'head'] }
+const COMMENT_INDEXED = { type: 'object', properties: { author: { type: 'string' }, createdAt: { type: 'string' }, url: { type: 'string' }, bytes: { type: 'integer' }, tail: { type: 'integer', minimum: 0 }, head: { type: 'string' } }, required: ['author', 'createdAt', 'url', 'bytes', 'tail', 'head'] }
 const COMMENTS_INDEX = {
   type: 'object',
   properties: {
@@ -1460,13 +1461,24 @@ const utf8Bytes = (s) => { let n = 0; for (const ch of String(s)) { const cp = c
 // A reader drops a body's last newline (2026-11-05, #1071: 9867 bytes returned, 9868 in the index, on a
 // Confirm comment ending in two; #1084). Trailing newlines carry nothing, so the index records how many
 // the body ends in (tail) and the body is given exactly that many; every other byte is still held.
-const restoreTail = (c, ix) => c && ix && typeof ix.tail === 'number' && typeof c.body === 'string'
+const restoreTail = (c, ix) => c && ix && typeof c.body === 'string'
   ? { ...c, body: c.body.replace(/\n+$/, '') + '\n'.repeat(ix.tail) } : c
-const bodyFault = (c, ix) => {
+// The index's entries whose tail the restore cannot use, each named (#1098). The jq prints a count from 0 to
+// the body's bytes, so anything else is a reader's own; Apply refuses it before reading a body, where it would
+// otherwise read as a count fault with nothing naming the field, or throw out of String.repeat.
+const tailFaults = (comments) => comments
+  .filter((c) => !(Number.isInteger(c.tail) && c.tail >= 0 && c.tail <= c.bytes))
+  .map((c) => `${c.url} has ${'tail' in c ? `tail ${JSON.stringify(c.tail)}` : 'no tail'}`)
+// The body held to the index is the restored one, and a count in the refusal names what the reader returned
+// (#1097): a diagnosis reads that number (#1084), and 262 returned that restores to 261 is no "262, 262".
+const bodyFault = (c, ix, returned) => {
   if (!c || !ix) return 'the index has no such comment'
   const body = String(c.body || '')
   const bytes = utf8Bytes(body)
-  if (bytes !== ix.bytes) return `${bytes} bytes returned, ${ix.bytes} in the index`
+  if (bytes !== ix.bytes) {
+    const got = utf8Bytes(String(returned.body || ''))
+    return `${got} bytes returned, ${got === bytes ? '' : `${bytes} with its trailing newlines set to the index's ${ix.tail}, `}${ix.bytes} in the index`
+  }
   if (Array.from(body).slice(0, HEAD_CHARS).join('') !== String(ix.head || '')) return 'its first characters differ from the index'
   return ''
 }
@@ -1946,6 +1958,9 @@ const sameText = (a, b) => String(a || '').replace(/\r\n/g, '\n').trim() === Str
 const handoverPost = (text, earlier) => {
   const whole = { mode: 'whole', body: text, extends: '', url: '', note: '' }
   if (!earlier) return whole
+  const identical = { mode: 'identical', body: '', extends: earlier.whole.url, url: earlier.latest.url, note: `this hand-over is identical to the latest earlier one, ${earlier.latest.url}, so nothing was posted` }
+  // Before the titles are read: the same text needs no diff, so a title that cannot be diffed does not post it again (#1132).
+  if (sameText(earlier.latest.body, text)) return identical
   const now = sectionsOf(text)
   const was = sectionsOf(earlier.whole.body)
   const titles = now.sections.map((x) => x.title)
@@ -1964,7 +1979,7 @@ const handoverPost = (text, earlier) => {
   for (const t of before.keys()) if (!titles.includes(t)) { changed++; L.push('', `### ${t}${REMOVED}`) }
   const body = L.join('\n')
   const latestIsWhole = earlier.latest.url === earlier.whole.url
-  if (latestIsWhole ? !changed : sameText(earlier.latest.body, body)) return { mode: 'identical', body: '', extends: earlier.whole.url, url: earlier.latest.url, note: `this hand-over is identical to the latest earlier one, ${earlier.latest.url}, so nothing was posted` }
+  if (latestIsWhole ? !changed : sameText(earlier.latest.body, body)) return identical
   return { mode: 'delta', body, extends: earlier.whole.url, url: '', note: '' }
 }
 // The night's earlier hand-overs, found in Apply's index of the comments (index: null when it was not
@@ -1996,11 +2011,11 @@ const earlierHandovers = async (issue, index, heading) => {
   const bad = []
   for (let j = 0; j < read.length; j++) {
     let c = restoreTail(got[j], index[read[j]])
-    let fault = bodyFault(c, index[read[j]])
+    let fault = bodyFault(c, index[read[j]], got[j])
     for (let tries = 1; fault && tries <= READ_RETRIES; tries++) {
       const again = await run(batchPrompt(issue, [read[j]], 'for the hand-over (#969). You read; the script compares this pass\'s hand-over with them.') + RETRY_NOTE, { label: `handover-read-retry${tries}`, phase: 'Hand-over', schema: COMMENTS_BATCH })
       const rc = again && !again.error && (again.comments || []).length === 1 && again.comments[0].url === urls[j] ? again.comments[0] : null
-      if (rc) { c = restoreTail(rc, index[read[j]]); fault = bodyFault(c, index[read[j]]) }
+      if (rc) { c = restoreTail(rc, index[read[j]]); fault = bodyFault(c, index[read[j]], rc) }
     }
     if (fault) bad.push(`${urls[j]} after ${READ_RETRIES} re-reads: ${fault}`)
     bodies.push(c)
@@ -2051,6 +2066,10 @@ const applyAnswers = async ({ date, issue, gate, refusals, reuse, after = false 
     : cr.error ? `the comments reader could not read the comments of #${issue}: ${cr.error}; nothing was sorted or applied`
       : cr.issue.number !== issue ? `the comments reader read the comments of #${cr.issue.number}, not #${issue}; nothing was sorted or applied`
         : ''
+  if (!commentsRefusal) {
+    const faults = tailFaults(cr.issue.comments || [])
+    if (faults.length) commentsRefusal = `the comments index of #${issue} gives no count of a body's trailing newlines to restore: ${faults.join('; ')}; nothing was sorted or applied; relaunch to apply`
+  }
   // The index, kept for the hand-over, which finds the night's earlier hand-overs in it (#969).
   const index = commentsRefusal ? null : cr.issue.comments || []
   // Every batch is read whole or the read fails: a body missing, or one from another comment than the
@@ -2074,11 +2093,11 @@ const applyAnswers = async ({ date, issue, gate, refusals, reuse, after = false 
       // still differs is named, never sorted.
       for (let j = 0; j < b.at.length; j++) {
         let c = restoreTail(g.comments[j], index[b.at[j]])
-        let why = bodyFault(c, index[b.at[j]])
+        let why = bodyFault(c, index[b.at[j]], g.comments[j])
         for (let tries = 1; why && tries <= READ_RETRIES; tries++) {
           const r = await run(batchPrompt(issue, [b.at[j]]) + RETRY_NOTE, { label: `comments-batch:${k + 1}-retry${tries}`, phase: 'Apply', schema: COMMENTS_BATCH })
           const rc = r && !r.error && (r.comments || []).length === 1 && r.comments[0].url === b.urls[j] ? r.comments[0] : null
-          if (rc) { c = restoreTail(rc, index[b.at[j]]); why = bodyFault(c, index[b.at[j]]) }
+          if (rc) { c = restoreTail(rc, index[b.at[j]]); why = bodyFault(c, index[b.at[j]], rc) }
         }
         if (why) bad.push(`${b.urls[j]} was not returned as the index shows it after ${READ_RETRIES} re-reads: ${why}`)
         else comments.push(c)

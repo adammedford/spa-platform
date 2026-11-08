@@ -4,7 +4,7 @@ export const meta = {
   whenToUse: 'In a foreground session, launched by scriptPath, by the integrator before tagging a gate; it never tags, merges or pushes, and a second run on the same base reuses the first run\'s mutation results',
   phases: [
     { title: 'Scope', detail: 'one agent reads the gates table, the gate register, the ladder, the stage\'s rows, the tags, origin\'s main, CI, the merges since the previous tag with their review records, and the durable results for this base' },
-    { title: 'Locate', detail: 'at most three agents, ids batched: every test citing each id, its project, owner, tier and whether CI runs it, both proofs, and what would run a deployed clause' },
+    { title: 'Locate', detail: 'at most three agents, ids batched: every test citing each id, its project, owner, tier and whether CI runs it, both proofs, and what would run a clause this run does not' },
     { title: 'Prove', detail: 'at most maxParallel agents, items dealt round-robin across ids and cut at mutationCap, each in its own detached worktree at base: a baseline, then a mutation of what the test guards per item' },
     { title: 'Row audit', detail: 'one agent per four landed or part-landed rows: merges, Outstanding lines and the ownership check between each merge and its first parent; skipped when auditRows is false' },
     { title: 'Report', detail: 'one agent checks the checkout and creates, or edits, the <gate> evidence, <date> issue the script composed' },
@@ -59,7 +59,7 @@ const A = args || {}
 const KNOWN_ARGS = ['gate', 'maxParallel', 'mutationCap', 'auditRows', 'repo', 'base', 'wt', 'date', 'only', 'skipIds']
 const REPO_DEFAULT = '/Users/adammedford/Projects/spa-platform'
 const WT_DEFAULT = '/Users/adammedford/.worktrees/gate-evidence'
-const ID_RE = /^[FNPA]-\d{2}$/
+const ID_RE = /^[FNPAB]-\d{2}$/
 const badArguments = (a) => {
   const bad = []
   for (const k of Object.keys(a)) if (!KNOWN_ARGS.includes(k)) bad.push(`${k}: not an argument of this workflow; it takes ${KNOWN_ARGS.join(', ')}`)
@@ -135,7 +135,9 @@ const str = { type: 'string' }
 const int = { type: 'integer' }
 const bool = { type: 'boolean' }
 const strs = { type: 'array', items: str }
-const TIER = { type: 'string', enum: ['H', 'D'] }
+// The test tiers, in the one order a list of them is read and printed in (ADR-0033: L is the third).
+const TIERS = ['H', 'L', 'D']
+const TIER = { type: 'string', enum: TIERS }
 const SCOPE = S({
   fetched: bool, reason: str, date: str, base: str, originMain: str,
   tagsReachable: strs, tagsAll: strs,
@@ -281,7 +283,7 @@ const idRowsOf = (tables) => {
   }
   return { rows, problems }
 }
-const ID_CELL_RE = /^([FNPA])-(\d{2})(?: to \1-(\d{2}))?$/
+const ID_CELL_RE = /^([FNPAB])-(\d{2})(?: to \1-(\d{2}))?$/
 const idsOfCell = (cell) => {
   const m = ID_CELL_RE.exec(String(cell).replace(/`/g, '').trim())
   if (!m) return []
@@ -289,10 +291,10 @@ const idsOfCell = (cell) => {
   const b = m[3] ? Number(m[3]) : a
   return b < a ? [] : Array.from({ length: b - a + 1 }, (_, i) => `${m[1]}-${String(a + i).padStart(2, '0')}`)
 }
-// "H", "D" or "H, D"; anything else is null, an unreadable cell, and never a guess.
+// A list of H, L and D, such as "H, D" or "L, D"; anything else is null, an unreadable cell, and never a guess.
 const tiersOfCell = (cell) => {
   const t = String(cell).split(/[\s,]+/).filter(Boolean)
-  return t.length && t.every((x) => x === 'H' || x === 'D') ? ['H', 'D'].filter((x) => t.includes(x)) : null
+  return t.length && t.every((x) => TIERS.includes(x)) ? TIERS.filter((x) => t.includes(x)) : null
 }
 // id -> its rows in either document, each with its Tier cell read; a row with no Tier cell gives no tier.
 const tierIndex = (rows) => {
@@ -308,21 +310,26 @@ const tierIndex = (rows) => {
 // One exit-test id: { tiers } when it can be judged, else { why }, a reason the verdict names. An id
 // in neither document is unknown whatever tier the cell gives it: no row defines what it checks. A
 // retired id, and an id both documents define, are steering errors to surface whatever the cell says
-// (Q40 of #349). kind marks the two a gate register's definition is refused for (Q9 of #364).
+// (Q40 of #349). kind marks those a gate register's definition is refused for (Q9 of #364). A B- id
+// required hermetically is one (ADR-0033, "The proof exception"): a mutation of a test could only
+// read as the proof the benchmark's verdict alone can give.
+const tiersOrProofException = (id, tiers) => (id.startsWith('B-') && tiers.includes('H')
+  ? { kind: 'benchmark', why: `${id} is required hermetically by the exit test or its row, and a B- id is proved by the startup benchmark's verdict on its tier, never by a test project (ADR-0033, "The proof exception"), so it was not judged` }
+  : { tiers })
 const tiersFor = (x, idx) => {
   const all = idx.get(x.id)
   if (!all) return { kind: 'unknown', why: `${x.id} is in neither ${ID_DOCS.join(' nor ')}, so it is unknown: it was not tiered or judged` }
   const retired = all.find((gv) => gv.retired)
   if (retired) return { kind: 'retired', why: `${x.id} is retired in ${REGISTER_DOC}, so it was not judged${retired.recordedBy ? ` (recorded by ${retired.recordedBy})` : ''}` }
   if (ID_DOCS.every((d) => all.some((gv) => gv.document === d && gv.defines))) return { why: `${x.id} is listed by both ${ID_DOCS.join(' and ')}, so it was not judged` }
-  if (x.tiers.length) return { tiers: ['H', 'D'].filter((t) => x.tiers.includes(t)) }
+  if (x.tiers.length) return tiersOrProofException(x.id, TIERS.filter((t) => x.tiers.includes(t)))
   const given = all.filter((gv) => !gv.tiers || gv.tiers.length)
   const bad = given.find((gv) => !gv.tiers)
-  if (bad) return { why: `${x.id}'s Tier cell ${JSON.stringify(bad.cell)} in ${bad.document} is not H, D or both, so it was not judged` }
+  if (bad) return { why: `${x.id}'s Tier cell ${JSON.stringify(bad.cell)} in ${bad.document} is not H, L or D, or a list of them, so it was not judged` }
   const sets = [...new Set(given.map((gv) => gv.tiers.join(', ')))]
   if (!sets.length) return { why: `the exit test gives ${x.id} no tier and no row of ${ID_DOCS.join(' or ')} gives it one, so it was not judged` }
   if (sets.length > 1) return { why: `the exit test gives ${x.id} no tier and its rows disagree (${given.map((gv) => `${gv.document}: ${gv.cell}`).join('; ')}), so it was not judged` }
-  return { tiers: sets[0].split(', ') }
+  return tiersOrProofException(x.id, sets[0].split(', '))
 }
 
 // ---------------------------------------------------------------- the gate register, in code
@@ -336,7 +343,7 @@ const tiersFor = (x, idx) => {
 //   | G6 | ... | ... | ... | ... |                              message quotes
 //
 //   | Id | Tiers required |                                     beneath it, one test id a row, its
-//   | --- | --- |                                              tiers H, D or "H, D"
+//   | --- | --- |                                              tiers a list of H, L and D
 //   | N-28 | H |
 //
 //   | Criterion | Ids |                                        optional, beneath that: each criterion
@@ -401,7 +408,7 @@ const registerOfLines = (reg) => {
     if (kind === 'ids') {
       if (!ID_RE.test(first)) { problem(owner, `${owner}'s ids table names ${JSON.stringify(c[0])}, which is not one test id`); return }
       const tiers = tiersOfCell(c[1])
-      if (!tiers) { problem(owner, `${owner}'s Tiers required cell for ${first} reads ${JSON.stringify(c[1])}, which is not H, D or both`); return }
+      if (!tiers) { problem(owner, `${owner}'s Tiers required cell for ${first} reads ${JSON.stringify(c[1])}, which is not H, L or D, or a list of them`); return }
       if (gd.ids.some((x) => x.id === first)) { problem(owner, `${owner}'s ids table lists ${first} twice`); return }
       gd.ids.push({ id: first, tiers })
       return
@@ -476,22 +483,26 @@ const resultOf = (got) => {
 }
 
 // ---------------------------------------------------------------- verdicts, in code
+const TIER_WORD = { H: 'hermetic', L: 'local', D: 'deployed' }
 const TEST_VERDICT = {
   proved: 'proved', 'did-not-fail': 'did-not-fail', 'baseline-red': 'baseline red', 'timed-out': 'not proved: timed out',
-  'could-not-run': 'not proved: could not run', deployed: 'deployed, not run here', 'not-in-ci': 'not in CI', 'not-mutated': 'not mutated this run',
+  'could-not-run': 'not proved: could not run', local: 'local, not run here', deployed: 'deployed, not run here', 'not-in-ci': 'not in CI', 'not-mutated': 'not mutated this run',
 }
-// A deployed-tier test is deployed whatever record names it: a record claiming it proved is not
-// evidence this run could have made.
+// A deployed-tier test is deployed whatever record names it, and a local-tier test local: a record
+// claiming it proved is not evidence this run could have made.
 const testStatus = (t, rec) => {
   if (t.tier === 'D') return 'deployed'
+  if (t.tier === 'L') return 'local'
   if (rec) return rec.result
   if (!t.inCi) return 'not-in-ci'
   return 'not-mutated'
 }
 // An id's verdict at one tier. A deployed clause is never proved here: the run does not reach the
-// deployed tier, whatever a test claims.
+// deployed tier, whatever a test claims. Nor is a local clause: tier L is the startup benchmark's
+// verdict on a fresh container, on its own cadence (ADR-0033), and this run runs no benchmark.
 const idVerdict = (tier, tests) => {
   if (tier === 'D') return 'deployed, not run here'
+  if (tier === 'L') return 'local, not run here'
   const h = tests.filter((t) => t.tier === 'H')
   if (!h.length) return 'no citing test'
   const st = h.map((t) => t.status)
@@ -593,17 +604,18 @@ const reportText = (s) => {
   L.push('', '## DRAFT tag message', '', 'A draft for the tagger, not a record: the tag is cut by hand, and only once nothing above is withheld.', '', '```text', ...s.draft, '```')
   // The tracked-file half is not asserted here: the Report agent's checkout line below is its evidence,
   // and it can say a file changed.
-  L.push('', '## What this run did not do', '', 'It did not tag, merge or push, applied nothing in AWS and ran no deployed suite: no prompt of this run asks for any of them. Its writes are meant to be its log and its throwaway worktrees only; the checkout line below says what the Report agent found.', '', 'CHECKOUT: pending')
+  L.push('', '## What this run did not do', '', 'It did not tag, merge or push, applied nothing in AWS and ran no deployed suite and no startup benchmark: no prompt of this run asks for any of them. Its writes are meant to be its log and its throwaway worktrees only; the checkout line below says what the Report agent found.', '', 'CHECKOUT: pending')
   return L.join('\n')
 }
 const draftOf = (s) => {
   const proved = s.table.filter((r) => r.verdict === 'proved').map((r) => r.id)
-  const deployed = s.table.filter((r) => /deployed/.test(r.verdict)).map((r) => r.id)
+  const deployed = s.table.filter((r) => /deployed, not run here/.test(r.verdict)).map((r) => r.id)
+  const local = s.table.filter((r) => /local, not run here/.test(r.verdict)).map((r) => r.id)
   const skipped = (s.ci.jobs || []).filter((j) => j.conclusion !== 'success').map((j) => `${j.name} ${j.conclusion}`)
   return [
     `${s.gate}: ${s.exitTest}, proved by ${s.ci.url || '<CI run URL of base>'}`,
     '',
-    `Exit evidence: hermetically proved by mutation at ${s.base}: ${proved.join(', ') || 'none'}.${deployed.length ? ` Deployed: ${deployed.join(', ')}, from <the deployed run's saved trace, cookie and storage dump, gateway log and plans>.` : ''}`,
+    `Exit evidence: hermetically proved by mutation at ${s.base}: ${proved.join(', ') || 'none'}.${local.length ? ` Local: ${local.join(', ')}, from <the startup benchmark's verdict, its saved .txt and .json>.` : ''}${deployed.length ? ` Deployed: ${deployed.join(', ')}, from <the deployed run's saved trace, cookie and storage dump, gateway log and plans>.` : ''}`,
     '',
     `CI of base: ${s.ci.url || 'not found'}${skipped.length ? `; it skipped or did not pass: ${skipped.join(', ')}` : ''}.`,
     `Deciding CI: ${s.lastFull.url || '<the latest first-parent run where Build and test and Terraform ran and passed>'}${s.lastFull.sha ? ` (${s.lastFull.sha.slice(0, 12)})` : ''}`,
@@ -624,7 +636,7 @@ DATE ARGUMENT: ${JSON.stringify(A.date || '')}
 1. \`git -C ${REPO} fetch origin --tags\`. If it fails, stop: fetched false, reason its error, every other field empty. originMain is \`git -C ${REPO} ls-remote origin refs/heads/main\`, its sha. base is the BASE ARGUMENT resolved with \`git -C ${REPO} rev-parse --verify <it>^{commit}\`, or originMain when it is "". date is the DATE ARGUMENT, or \`date +%F\` when it is "". Record the checkout as it is now, \`mkdir -p ${LOG}/<date>-<base's first 12>\` and \`git -C ${REPO} status --porcelain --untracked-files=all > ${LOG}/<date>-<base's first 12>/checkout-at-start.txt\`.
 2. tagsReachable: \`git -C ${REPO} for-each-ref --merged <base> --format=%(refname:short) refs/tags\`. tagsAll: \`git -C ${REPO} for-each-ref --format=%(refname:short) refs/tags\` together with the names \`git -C ${REPO} ls-remote --tags origin\` prints.
 3. ladder: docs/roadmap.md at base, its ladder table, one {stage, gate, tag} per row in order, tag without backticks ("—" where it has none).
-4. gate: the GATE, or, when it is "first untagged", the first ladder row whose tag is not in tagsReachable. From docs/plan/01-plan.md at base, the gates table's row for it: defined true, and exitTest, the exit test cell verbatim; when that table has no row for it, defined false, exitTest "", ids [] and criteria [], since the script reads a gate defined after the export from gateRegister below and never from your reading. phase is a label only, 1 for a gate of that table and 2 for G6 to G8, which Phase 2 adds; it admits or refuses nothing. ids: the exit test split into test ids, each with the tiers the cell itself requires of it ("H" hermetic, "D" deployed; "in both tiers" is both; a range "X to Y" names every id between; "the deployed subset" is every N- id whose row in docs/plan/04-tests.md or contracts/test-ids.md has a Tier cell that includes D, plus any it adds), and tiers [] for an id the cell gives no tier: never tier one yourself, since the script tiers it from idTables. idTables: two entries, one per document that lists test ids, each {document, lines}: document "docs/plan/04-tests.md" (the export) with lines every line \`git -C ${REPO} show <base>:docs/plan/04-tests.md | grep -E '^[|]'\` prints, and document "contracts/test-ids.md" (the test id register) with lines every line \`git -C ${REPO} show <base>:contracts/test-ids.md | grep -E '^[|]'\` prints, each in the order printed, verbatim. Copy the lines as printed and never drop, add, reorder or edit one: the script reads the tables, the ranges and the tiers from them. gateRegister: the gate register, ${GATES_DOC}, which defines the gates added after the export: exists, whether \`git -C ${REPO} cat-file -e <base>:${GATES_DOC}\` succeeds; lines, when it does, every line \`git -C ${REPO} show <base>:${GATES_DOC} | grep -E '^[|]'\` prints, in the order printed, verbatim, under the same rule as idTables, else []. The script reads each gate's row, its ids and tiers and its criteria from those lines, so copy them whatever gate you were asked for. criteria: for a gate whose exit test names the acceptance criteria, each criterion of docs/plan/01-plan.md's acceptance table with its proving ids, else []. previousTag: the tag of the nearest earlier ladder row that is in tagsReachable. rows: the ladder stage's **Plan rows.** in docs/roadmap.md, each with its owner and Done-when clause from docs/plan/03-workstreams-and-tasks.md and the test ids that clause names.
+4. gate: the GATE, or, when it is "first untagged", the first ladder row whose tag is not in tagsReachable. From docs/plan/01-plan.md at base, the gates table's row for it: defined true, and exitTest, the exit test cell verbatim; when that table has no row for it, defined false, exitTest "", ids [] and criteria [], since the script reads a gate defined after the export from gateRegister below and never from your reading. phase is a label only, 1 for a gate of that table and 2 for G6 to G8, which Phase 2 adds; it admits or refuses nothing. ids: the exit test split into test ids, each with the tiers the cell itself requires of it ("H" hermetic, "L" local, "D" deployed; "in both tiers" is H and D; a range "X to Y" names every id between; "the deployed subset" is every N- id whose row in docs/plan/04-tests.md or contracts/test-ids.md has a Tier cell that includes D, plus any it adds), and tiers [] for an id the cell gives no tier: never tier one yourself, since the script tiers it from idTables. idTables: two entries, one per document that lists test ids, each {document, lines}: document "docs/plan/04-tests.md" (the export) with lines every line \`git -C ${REPO} show <base>:docs/plan/04-tests.md | grep -E '^[|]'\` prints, and document "contracts/test-ids.md" (the test id register) with lines every line \`git -C ${REPO} show <base>:contracts/test-ids.md | grep -E '^[|]'\` prints, each in the order printed, verbatim. Copy the lines as printed and never drop, add, reorder or edit one: the script reads the tables, the ranges and the tiers from them. gateRegister: the gate register, ${GATES_DOC}, which defines the gates added after the export: exists, whether \`git -C ${REPO} cat-file -e <base>:${GATES_DOC}\` succeeds; lines, when it does, every line \`git -C ${REPO} show <base>:${GATES_DOC} | grep -E '^[|]'\` prints, in the order printed, verbatim, under the same rule as idTables, else []. The script reads each gate's row, its ids and tiers and its criteria from those lines, so copy them whatever gate you were asked for. criteria: for a gate whose exit test names the acceptance criteria, each criterion of docs/plan/01-plan.md's acceptance table with its proving ids, else []. previousTag: the tag of the nearest earlier ladder row that is in tagsReachable. rows: the ladder stage's **Plan rows.** in docs/roadmap.md, each with its owner and Done-when clause from docs/plan/03-workstreams-and-tasks.md and the test ids that clause names.
 5. rowStates: in a throwaway worktree at base, \`git -C ${REPO} worktree add --detach ${WT}/scope-<base's first 12> <base>\`, run \`python3 -I tools/roadmap.py --json\` there and return its "rows" object as it prints it; then remove the worktree. The roadmap script is the derivation: never derive a row's state yourself.
 6. changeRequests: the open change requests, which are the issues labelled change-request (docs/agents/tracker-policy.md -> "Change requests"; #435), read in full or reported unread, never derived: the script decides which rows wait on which request. Three reads: \`cd ${REPO} && gh label list --search change-request --json name\`; \`cd ${REPO} && gh issue list --state open --label change-request --limit 500 --json number,title,state,labels,body,blocking\`; and \`cd ${REPO} && gh api graphql -F owner='{owner}' -F name='{repo}' -f query='query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { requests: issues(states: OPEN, labels: ["change-request"]) { totalCount } open: issues(states: OPEN) { totalCount } } }'\`. changeRequests is one entry per issue of that listing, raw: number, title, state (as gh prints it, OPEN or CLOSED), labels (the label names), rowsLine (the body's first line that begins **Rows:**, verbatim, or "" when it has none), and blocking (each node of its blocking list as {number, state}, closed ones included). changeRequestsRead is {ok, why}: ok is true only when the label listing includes the exact name change-request, both gh listings and the graphql query succeeded, the change-request listing's length equals requests.totalCount, and the open-issue listing of the next sentence, before you filter it, has a length equal to open.totalCount; otherwise ok is false and why names the check that failed and what it read (a missing label, a failed command with its error, or the two counts). A listing that is short or empty with exit 0 is the case this check exists for: it must read as unread, never as "no request is open". openIssues: \`cd ${REPO} && gh issue list --state open --limit 500 --json number,title,body,labels,assignees\`, each issue whose title or body names a row of rows or ends " evidence, <date>", with the rows it names, its first label and its first assignee ("" for none).
 7. ci: the GitHub Actions run of base, \`cd ${REPO} && gh run list --commit <base> --json url,headSha,databaseId\` and \`cd ${REPO} && gh run view <id> --json jobs\`, with each job's name and conclusion. lastFull: walking \`git -C ${REPO} log --first-parent --format=%H <base>\`, the most recent commit whose run's Build and test and Terraform jobs both ran and succeeded: {sha, url}.
@@ -640,9 +652,10 @@ PHASE FILE: ${phaseFile}
 Write your return value to the PHASE FILE as JSON before you return.
 IDS: ${JSON.stringify(ids)}
 
-The base is ${ctx.base}. For each id, \`git -C ${REPO} grep -n -F -e <id> ${ctx.base}\`: every xUnit fact or theory whose name, documentation or class documentation names it; every Terraform test run or assertion naming it; every Python companion naming it; the browser suite's tests. For each test: test, its full name; project, its test project, Terraform directory or companion path; runner, dotnet, terraform or python, by how CI runs it ("none" when no runner of the three runs it); owner, from OWNERSHIP.md at base; role, composed for a composed suite under tests/Gateway.*, owner for the component test of the workstream that owns the id's behaviour, other for the rest; tier, H for in-process composed and component tests and the browser suite against its local stand-in, D for a clause only the deployed binding can show; guards, the production thing it guards, in one line.
+The base is ${ctx.base}. For each id, \`git -C ${REPO} grep -n -F -e <id> ${ctx.base}\`: every xUnit fact or theory whose name, documentation or class documentation names it; every Terraform test run or assertion naming it; every Python companion naming it; the browser suite's tests. For each test: test, its full name; project, its test project, Terraform directory or companion path; runner, dotnet, terraform or python, by how CI runs it ("none" when no runner of the three runs it); owner, from OWNERSHIP.md at base; role, composed for a composed suite under tests/Gateway.*, owner for the component test of the workstream that owns the id's behaviour, other for the rest; tier, H for in-process composed and component tests and the browser suite against its local stand-in, L for a clause of a fresh container of the built image under the task's limits, which is the startup benchmark's, D for a clause only the deployed binding can show; guards, the production thing it guards, in one line.
 inCi, leg by leg (truth-audit's proves rule): the project is in SpaPlatform.slnx and runs under CI's test step in .github/workflows/ci.yml; it is not an empty project the suppressed zero-tests exit code hides (a count of its facts); nothing filters it; nothing skips it on the machine (an attribute, an environment probe, or an early return on a missing tool); a Terraform test sits where CI's discovery step finds it, which is how the plan policy is in CI: P-01 to P-03 and P-07 are mock-provider assertions the Terraform job's test step runs with no AWS credential (the header of .github/workflows/ci.yml; ADR-0016; contracts/test-ids.md), so a plan-policy test passes this leg when that step finds it, and plan generation staying disabled is not a leg that fails. notInCiWhy names the leg that fails ("" when inCi).
-For an F- or N- id: ownerProof and composedProof, whether each exists, and missing, the one that does not ("" when both do). wouldRun: for a deployed clause, what would run it (${wouldRunOf(ctx.gate, ctx.fromRegister)}); "" otherwise, and "" for P-01 to P-03 and P-07, which are hermetic and run in CI's Terraform test step (the plan policy of row 1.9 for P-01 to P-03, contracts/test-ids.md's row for P-07), so no deployed clause of theirs waits on a run.`
+For an F- or N- id: ownerProof and composedProof, whether each exists, and missing, the one that does not ("" when both do). wouldRun: for a deployed clause, what would run it (${wouldRunOf(ctx.gate, ctx.fromRegister)}); "" otherwise, and "" for P-01 to P-03 and P-07, which are hermetic and run in CI's Terraform test step (the plan policy of row 1.9 for P-01 to P-03, contracts/test-ids.md's row for P-07), so no deployed clause of theirs waits on a run.
+For a B- id: a B- id is proved by the startup benchmark's verdict on its tier, never by a test project (ADR-0033, "The proof exception"). Report \`tools/bench/startup.py --verdict\` as its test once per tier its row gives, tier L or D, runner none, inCi false with notInCiWhy naming the benchmark's cadence, and \`tools/bench/startup_tests.py\` only as the benchmark's test companion, tier H, whose guards says it proves the benchmark's logic and not the id's clause. Its wouldRun is \`tools/bench/startup.py --verdict\` with the \`--budget\` flags its header gives, which it refuses to run without, on tier L, and the deployed run on tier D; ownerProof and composedProof are false and missing is "".`
 
 const provePrompt = (ctx, items, k, phaseFile) => {
   const wt = `${WT}/prove-${ctx.base.slice(0, 12)}-${k}`
@@ -824,13 +837,13 @@ for (const x of ids) {
   const l = loc.get(x.id) || { tests: [], ownerProof: false, composedProof: false, missing: 'not located', wouldRun: '' }
   const tests = ranked(l.tests).map((t) => { const rec = recOf(x.id, t); return { ...t, rec, status: testStatus(t, rec) } })
   const per = x.tiers.map((tier) => ({ tier, verdict: idVerdict(tier, tests) }))
-  const verdict = per.map((p) => (x.tiers.length > 1 ? `${p.tier}: ${p.verdict}` : p.verdict)).join('; ') + (per.some((p) => p.tier === 'D') && l.wouldRun ? ` (would run it: ${l.wouldRun})` : '')
+  const verdict = per.map((p) => (x.tiers.length > 1 ? `${p.tier}: ${p.verdict}` : p.verdict)).join('; ') + (per.some((p) => p.tier !== 'H') && l.wouldRun ? ` (would run it: ${l.wouldRun})` : '')
   idState.set(x.id, { proved: per.every((p) => p.verdict === 'proved'), verdict })
   const proofNote = /^[FN]-/.test(x.id) && l.missing ? ` Missing proof: ${l.missing}.` : ''
   table.push({
     id: x.id, tiers: x.tiers, per, testsList: tests,
     tests: tests.length ? tests.map((t) => `${t.test} (${t.project}, ${t.owner}): ${TEST_VERDICT[t.status]}`).join('; ') + proofNote : `none${proofNote}`,
-    required: x.tiers.join(', '), exercised: [...new Set(tests.map((t) => t.tier))].join(', ') || '—',
+    required: x.tiers.join(', '), exercised: TIERS.filter((tier) => tests.some((t) => t.tier === tier)).join(', ') || '—',
     inCi: tests.length ? tests.map((t) => (t.inCi ? 'yes' : `no: ${t.notInCiWhy}`)).join('; ') : '—',
     mutation: tests.filter((t) => t.rec && t.tier === 'H').map((t) => mutationWords(t.rec)).join('; ') || '—',
     verdict,
@@ -840,7 +853,7 @@ const allTests = table.flatMap((r) => r.testsList.map((t) => ({ ...t, id: r.id }
 const counts = {
   proved: allTests.filter((t) => t.status === 'proved').length,
   didNotFail: allTests.filter((t) => t.status === 'did-not-fail').length,
-  notRunHere: table.reduce((n, r) => n + r.per.filter((p) => p.tier === 'D').length, 0),
+  notRunHere: table.reduce((n, r) => n + r.per.filter((p) => p.tier !== 'H').length, 0),
   notMutated: allTests.filter((t) => t.status === 'not-mutated').length,
 }
 const noProof = table.filter((r) => r.per.some((p) => p.tier === 'H' && p.verdict !== 'proved')).map((r) => `${r.id}: ${r.testsList.filter((t) => t.tier === 'H').map((t) => `${t.test} ${TEST_VERDICT[t.status]}`).join('; ') || 'no hermetic test cites it'}`)
@@ -884,7 +897,7 @@ const reasons = [...failedAgents]
 if (!requestsRead.ok) reasons.push(`the open change requests could not be read (${requestsRead.why || 'no reason given'})`)
 for (const c of requests) for (const t of c.unknown) reasons.push(`change request ${'#' + c.number}'s Rows line names ${t}, which is no plan row`)
 for (const c of requests) if (c.stray) reasons.push(`change request ${'#' + c.number}'s Rows line "${c.stray}" does not begin **Rows:**, so it names no row`)
-for (const r of table) for (const p of r.per) if (p.verdict !== 'proved') reasons.push(`${r.id} is not proved at ${p.tier === 'H' ? 'the hermetic' : 'the deployed'} tier: ${p.verdict}`)
+for (const r of table) for (const p of r.per) if (p.verdict !== 'proved') reasons.push(`${r.id} is not proved at the ${TIER_WORD[p.tier]} tier: ${p.verdict}`)
 for (const t of allTests) if (t.status === 'did-not-fail') reasons.push(`${t.test}, citing ${t.id}, did not fail under mutation`)
 for (const r of rowsNotDone) reasons.push(`row ${r.row} is not done`)
 for (const m of openReviews) reasons.push(`merge ${m.sha.slice(0, 12)} since ${g.previousTag || 'the previous tag'} has an open review`)

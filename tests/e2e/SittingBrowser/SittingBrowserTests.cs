@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Reflection;
+using System.Runtime.ExceptionServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -179,6 +180,118 @@ public sealed partial class SittingBrowserTests
         Assert.Equal(ticks.Length, (await File.ReadAllLinesAsync(log, Ct)).Length);
         Assert.Equal(ticks.Length, watched.Lines.Count);
         (await sitting.SendAsync("unwatch", "main")).Assert(1, Line("failed", "main", "command=unwatch reason=not-watching"));
+    }
+
+    /// <summary>
+    /// A closed page's reload is a <see cref="PlaywrightException"/> with no <c>net::ERR_</c> in it, so it
+    /// is no <c>tunnel-down</c> and the tick fails. The page closes just after a line, between ticks,
+    /// where no read of the page can turn the failure into an observation.
+    /// </summary>
+    [Fact]
+    public async Task A_tick_that_fails_ends_the_watch_with_its_failed_line_last_in_the_log_and_at_the_caller()
+    {
+        await using Running sitting = await Running.StartAsync();
+        (await sitting.SendAsync("open", "main", "--app", "app1")).Assert(0, Line("signed-in", "main", "app=app1 .*"));
+
+        TimedLines watched = new();
+        string[] words = ["watch", "main", "--every", "2s"];
+        Task<int> watch = SittingBrowserClient.SendAsync(sitting.Bundle.FullName, SittingCommand.Parse(words).Command!, words, watched, Ct);
+        await watched.WaitForCountAsync(1, watch);
+        await sitting.Engine.ProfileNamed("main")!.Page.CloseAsync();
+        Assert.Equal(1, await watch.WaitAsync(StopBound, Ct));
+
+        string[] printed = [.. watched.Lines.Select(line => line.Line)];
+        Assert.True(printed.Length >= 2, string.Join(" | ", printed));
+        Assert.Matches(Line("signed-in", "main", "app=app1 .*"), printed[0]);
+        Assert.Matches(Line("failed", "main", "command=watch reason=PlaywrightException"), printed[^1]);
+        string log = Path.Combine(sitting.Bundle.FullName, SittingBrowser.WatchLog);
+        Assert.Equal(printed, await File.ReadAllLinesAsync(log, Ct));
+
+        // The unwatch D2 runs next answers its caller alone, so the failed line stays the log's last.
+        (await sitting.SendAsync("unwatch", "main")).Assert(0, Line("unwatched", "main", "app=app1 ticks=[0-9]+"));
+        Assert.Equal(printed, await File.ReadAllLinesAsync(log, Ct));
+    }
+
+    [Fact]
+    public async Task A_tick_that_fails_after_its_caller_has_gone_still_writes_its_failed_line_to_the_log()
+    {
+        await using Running sitting = await Running.StartAsync();
+        (await sitting.SendAsync("open", "main", "--app", "app1")).Assert(0, Line("signed-in", "main", "app=app1 .*"));
+
+        using CancellationTokenSource caller = CancellationTokenSource.CreateLinkedTokenSource(Ct);
+        TimedLines watched = new();
+        string[] words = ["watch", "main", "--every", "2s"];
+        Task<int> watch = SittingBrowserClient.SendAsync(sitting.Bundle.FullName, SittingCommand.Parse(words).Command!, words, watched, caller.Token);
+        await watched.WaitForCountAsync(1, watch);
+        await caller.CancelAsync();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => watch);
+        await sitting.Engine.ProfileNamed("main")!.Page.CloseAsync();
+
+        string log = Path.Combine(sitting.Bundle.FullName, SittingBrowser.WatchLog);
+        Stopwatch waited = Stopwatch.StartNew();
+        string[] written = await File.ReadAllLinesAsync(log, Ct);
+        while (!written[^1].StartsWith("failed", StringComparison.Ordinal) && waited.Elapsed < StopBound)
+        {
+            await Task.Delay(100, Ct);
+            written = await File.ReadAllLinesAsync(log, Ct);
+        }
+
+        Assert.Matches(Line("failed", "main", "command=watch reason=PlaywrightException"), written[^1]);
+    }
+
+    /// <summary>
+    /// An AWS failure's line is the one that carries free text, and the log does not pass the redactor
+    /// the caller's stream does, so the account stays masked by the exception's own message. A sitting's
+    /// AWS failure is the password's read, which needs the deployed stack's form (the class's summary);
+    /// here the same exception comes from the stack's <c>ProviderHost</c>, which <c>--clear-provider</c>
+    /// reads on every tick.
+    /// </summary>
+    [Fact]
+    public async Task A_tick_that_fails_on_aws_writes_its_failed_line_with_the_masked_message_to_the_log()
+    {
+        FailingStack? failing = null;
+        await using Running sitting = await Running.StartAsync(async ct =>
+        {
+            failing = FailingStack.Over(await Stacks.StartCancellableAsync(ct));
+            return (IBrowserStack)(object)failing;
+        });
+        (await sitting.SendAsync("open", "main", "--app", "app1")).Assert(0, Line("signed-in", "main", "app=app1 .*"));
+
+        TimedLines watched = new();
+        string[] words = ["watch", "main", "--every", "2s", "--clear-provider"];
+        Task<int> watch = SittingBrowserClient.SendAsync(sitting.Bundle.FullName, SittingCommand.Parse(words).Command!, words, watched, Ct);
+        await watched.WaitForCountAsync(1, watch);
+        failing!.ProviderHostFailure = new CommandFailedException("aws", ["ssm", "get-parameter"], 254, "AccessDenied on 123456789012");
+        Assert.Equal(1, await watch.WaitAsync(StopBound, Ct));
+
+        string[] printed = [.. watched.Lines.Select(line => line.Line)];
+        Assert.Matches(Line("failed", "main", "command=watch reason=aws text=.*AccessDenied on \\*{12}.*"), printed[^1]);
+        Assert.Equal(printed, await File.ReadAllLinesAsync(Path.Combine(sitting.Bundle.FullName, SittingBrowser.WatchLog), Ct));
+    }
+
+    [Fact]
+    public async Task A_failed_line_outside_a_watch_goes_to_the_caller_alone()
+    {
+        await using Running sitting = await Running.StartAsync();
+        (await sitting.SendAsync("open", "main", "--app", "app1")).Assert(0, Line("signed-in", "main", "app=app1 .*"));
+        (await sitting.SendAsync("open", "other", "--app", "app1")).Assert(0, Line("signed-in", "other", "app=app1 .*"));
+
+        TimedLines watched = new();
+        string[] words = ["watch", "main", "--every", "2s"];
+        Task<int> watch = SittingBrowserClient.SendAsync(sitting.Bundle.FullName, SittingCommand.Parse(words).Command!, words, watched, Ct);
+        await watched.WaitForCountAsync(1, watch);
+
+        // With a log to write to: a command that fails as a tick does, and the two watches that never start.
+        await sitting.Engine.ProfileNamed("other")!.Page.CloseAsync();
+        (await sitting.SendAsync("reload", "other")).Assert(1, Line("failed", "other", "command=reload reason=PlaywrightException"));
+        (await sitting.SendAsync("watch", "main", "--every", "2s")).Assert(1, Line("failed", "main", "command=watch reason=already-watching"));
+        (await sitting.SendAsync("watch", "nobody", "--every", "2s")).Assert(1, Line("failed", "nobody", "command=watch reason=unknown-profile"));
+
+        (await sitting.SendAsync("unwatch", "main")).Assert(0, Line("unwatched", "main", "app=app1 ticks=[0-9]+"));
+        Assert.Equal(0, await watch.WaitAsync(StopBound, Ct));
+        string[] printed = [.. watched.Lines.Select(line => line.Line)];
+        Assert.DoesNotContain(printed, line => line.StartsWith("failed", StringComparison.Ordinal));
+        Assert.Equal(printed, await File.ReadAllLinesAsync(Path.Combine(sitting.Bundle.FullName, SittingBrowser.WatchLog), Ct));
     }
 
     [Fact]
@@ -475,12 +588,12 @@ public sealed partial class SittingBrowserTests
             }
         }
 
-        public static async Task<Running> StartAsync()
+        public static async Task<Running> StartAsync(Func<CancellationToken, Task<IBrowserStack>>? startStack = null)
         {
             SkipUnlessTheSwitchIsUnset();
             Running running = new();
             TaskCompletionSource<SittingBrowser> started = new(TaskCreationOptions.RunContinuationsAsynchronously);
-            running.Run = SittingBrowserServer.RunAsync(running.bundle.Path, running.ServerLines, Stacks.StartCancellableAsync, NoEnvironment, running.cancel.Token, started.SetResult);
+            running.Run = SittingBrowserServer.RunAsync(running.bundle.Path, running.ServerLines, startStack ?? Stacks.StartCancellableAsync, NoEnvironment, running.cancel.Token, started.SetResult);
             await running.ServerLines.WaitForAsync("ready", running.Run);
             running.Engine = await started.Task;
             return running;
@@ -511,6 +624,40 @@ public sealed partial class SittingBrowserTests
 
             cancel.Dispose();
             bundle.Dispose();
+        }
+    }
+
+    /// <summary>A stack that is another stack, but for a <c>ProviderHost</c> that throws once told to.</summary>
+    public class FailingStack : DispatchProxy
+    {
+        private IBrowserStack inner = null!;
+
+        public Exception? ProviderHostFailure { get; set; }
+
+        public static FailingStack Over(IBrowserStack inner)
+        {
+            IBrowserStack proxy = Create<IBrowserStack, FailingStack>();
+            FailingStack failing = (FailingStack)(object)proxy;
+            failing.inner = inner;
+            return failing;
+        }
+
+        protected override object? Invoke(MethodInfo? targetMethod, object?[]? args)
+        {
+            if (ProviderHostFailure is { } failure && targetMethod!.Name == "get_" + nameof(IBrowserStack.ProviderHost))
+            {
+                throw failure;
+            }
+
+            try
+            {
+                return targetMethod!.Invoke(inner, args);
+            }
+            catch (TargetInvocationException thrown)
+            {
+                ExceptionDispatchInfo.Capture(thrown.InnerException!).Throw();
+                throw;
+            }
         }
     }
 

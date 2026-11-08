@@ -134,23 +134,42 @@ Q3, Q6, Q7, Q11 and Q14 read here as its "Decided in a session" comment corrects
   addresses and actions, which summarises the plan and does not replace it:
 
   ```bash
-  terraform -chdir=<root> show -json <plan> | python3 -I -c 'import json,sys; [print(",".join(c["change"]["actions"]), c["address"]) for c in json.load(sys.stdin).get("resource_changes", []) if c["change"]["actions"] != ["no-op"]]' | tee -a "$R"
+  filter='import json,sys; p=json.load(sys.stdin); p["planned_values"]; p.get("errored") and sys.exit(2); [print(",".join(c["change"]["actions"]), c["address"]) for c in p.get("resource_changes", []) if c["change"]["actions"] != ["no-op"]]'; echo "\$ terraform -chdir=<root> show -json <plan> | python3 -I -c '$filter'" >> "$R"; terraform -chdir=<root> show -json <plan> | python3 -I -c "$filter" | tee -a "$R"; echo "plan list show exit=${PIPESTATUS[0]} filter exit=${PIPESTATUS[1]}" | tee -a "$R"   # both 0, or stop: no whole plan was read
   ```
 
+  A wrong path, a terraform error, a state file where the plan should be (`show -json` reads either,
+  and only a plan has `planned_values`) or the file a failed `plan` saved (terraform sets its `errored`,
+  and the filter exits 2) prints no rows, as a plan with no changes does. So no rows are an empty list
+  only under `show exit=0 filter exit=0`, and any other verdict is a rule 7 stop (#1137).
   `show -json` writes sensitive values in the clear, so its output goes into this filter and nowhere
-  else, and the line runs bare, never under `shown`. Where rule 2 stops, or a plan holds secrets,
-  the human reads it with `terraform -chdir=<root> show <plan>` in an ssh login, and it never enters
-  the chat. "Holds secrets" means in its text: the apps root's saved file carries client secrets
+  else, and the line runs bare, never under `shown`, with its command echoed into `"$R"` (#1139).
+  Where rule 2 stops, or a plan holds secrets, the human reads it with
+  `terraform -chdir=<root> show <plan>` in an ssh login, and it never enters the chat.
+  "Holds secrets" means in its text: the apps root's saved file carries client secrets
   (rule 6), and Terraform prints them as `(sensitive value)`, so C3's and N's `shown` plans stay as
   they are. How the app renders a long plan is unproved (#1094): one hard to read there goes to ssh
-  too.
-- **A lost `claude` (#1090 Q14).** A rule 7 stop that offers D10 from a new session. The human
-  starts it over ssh inside `screen` with `/remote-control` on, after typing `security
+  too. A plan a confirm rests on is saved, so this line has its `<plan>`: C3's, N's saved plan, secret
+  rotation's refresh-only plan and D2's (#1136). `deploy.sh`, `rollback.sh` and `teardown.sh` apply or
+  destroy inside themselves, and C1's preview reads the drift and not what the script will apply, so
+  theirs is led by the shape or the case list rule 2 names, with no list.
+- **A lost `claude` (#1090 Q14).** A rule 7 stop whose way out is offered from a new session. The
+  human starts it over ssh inside `screen` with `/remote-control` on, after typing `security
   unlock-keychain ~/Library/Keychains/login.keychain-db` in that shell, without which its `gh` calls
   answer 401; the unlock does not carry to a new login, and its password stays in that shell as the
-  code does (#1094). The new session's first check is `gh api user`. This route has not been run
-  (#1094), nor is it known what a killed `claude` does to the tunnel and the sitting browser, its
-  background calls, so read both before relying on either.
+  code does (#1094). The new session's first check is `gh api user`. It asks the human which sitting
+  and stage were lost, and runs no `--pin`: on a later UTC date a new pin moves `E` off the lost
+  sitting's bundle, which holds D2's copy. This route has not been run (#1094), nor is it known what
+  a killed `claude` does to the tunnel and the sitting browser, its background calls, so read both
+  before relying on either. **Sitting D offers D10**, which restores D2's copy and posts on #348.
+  **Sitting C never offers D10 (#1138).** C makes no copy for it to restore and #348 is not its
+  ticket. The new session runs Stage 0's reads from the renewal on, to see what stands, posts the
+  stage that was cut short as failed, with the reason, on that stage's ticket (rule 4; C4 and C5 have
+  none, so the end of the sitting names theirs), and asks C5's question. Before a destroy it reads
+  whether a `deploy.sh`, `rollback.sh`, `teardown.sh`, `terraform` or suite the lost session started,
+  in the background or not, is still running, since a teardown must not start over one, and what a
+  kill does to any of them is unknown. A destroy runs as T does, on T's case list and a confirm on
+  launch, and is posted as T's is, on #242 with P-05 on #63, with a line saying it followed a lost
+  session. Nothing is restored, and the sitting ends as C5 says.
 - **AWS Settings (#1090 Q9).** H2's close path and the spend-limit checks may use the phone's
   browser; wiz names the step and waits for the report. That page has not been tried on a phone
   (#1094).
@@ -179,9 +198,9 @@ human is: its three checks hold wherever that is (#1090 Q11), and they live here
 `tools/preflight.sh` unchanged (Q12). Then, each line after the prelude:
 
 ```bash
-shown security find-certificate -c "SPA Platform poc Local CA" /Library/Keychains/System.keychain   # exit=0, or stop: the CA is not in the System keychain
-pmset -g | awk '$1=="sleep" {s=$2; print} END {exit (s=="" || s!=0)}' | tee -a "$R"; echo "sleep exit=${PIPESTATUS[1]}"   # 0, or stop: system sleep is on
-tools/preflight.sh | awk '{print} /Container engine/ {ok=($1=="ok")} END {exit !ok}' | tee -a "$R"; echo "preflight exit=${PIPESTATUS[0]} engine exit=${PIPESTATUS[1]}"   # preflight 0: it ended ready and the account is the pin; engine 0, or stop: the Container engine row is not ok
+ca=.certs/spa-platform-poc-ca.pem; echo "\$ openssl x509 -in $ca -noout -fingerprint -sha256" >> "$R"; want="$(openssl x509 -in "$ca" -noout -fingerprint -sha256 2>&1 | tee -a "$R" | sed -n 's/.*Fingerprint=//p' | tr -d :)"; echo "CA file SHA-256: ${want:-none}" | tee -a "$R"; filter='/^SHA-256 hash:/ {print; found = found || $3 == want} END {exit !found}'; echo "\$ security find-certificate -a -c \"SPA Platform poc Local CA\" -Z /Library/Keychains/System.keychain | awk -v want='$want' '$filter'" >> "$R"; security find-certificate -a -c "SPA Platform poc Local CA" -Z /Library/Keychains/System.keychain | awk -v want="$want" "$filter" | tee -a "$R"; echo "ca lookup exit=${PIPESTATUS[0]} match exit=${PIPESTATUS[1]}" | tee -a "$R"   # match 0, or stop: the CA in .certs is not in the System keychain
+filter='$1=="sleep" {s=$2; print} END {exit (s=="" || s!=0)}'; echo "\$ pmset -g | awk '$filter'" >> "$R"; pmset -g | awk "$filter" | tee -a "$R"; echo "sleep exit=${PIPESTATUS[1]}" | tee -a "$R"   # 0, or stop: system sleep is on
+filter='{print} /Container engine/ {ok=($1=="ok")} END {exit !ok}'; echo "\$ tools/preflight.sh | awk '$filter'" >> "$R"; tools/preflight.sh | awk "$filter" | tee -a "$R"; echo "preflight exit=${PIPESTATUS[0]} engine exit=${PIPESTATUS[1]}" | tee -a "$R"   # preflight 0: it ended ready and the account is the pin; engine 0, or stop: the Container engine row is not ok
 git fetch origin --tags && git status --short --branch   # on main, no tracked change
 git merge --ff-only --quiet origin/main  # a call of its own: the guard admits exactly this form, --quiet allowed
 for n in 63 242 236 244 348; do
@@ -194,11 +213,14 @@ shown aws ecs describe-services --cluster spa-poc --services gateway \
 shown aws ecr describe-images --repository-name spa-poc/gateway --query 'length(imageDetails)'
 ```
 
-Each miss among the three is a rule 7 stop naming its cause. The CA's trust step is at the screen,
-and `tools/scripts/certs.sh trust` adds nothing while the login keychain's copy verifies (#1094 step
-1). A sleeping mini takes the session with it. preflight reports a stopped engine as `later` and
-still ends ready, which is why the row is read here; Docker Desktop's engine needs the live login
-session (#1090 Q6).
+Each miss among the three is a rule 7 stop naming its cause. The CA line matches the System
+keychain's certificates by the SHA-256 of `.certs/spa-platform-poc-ca.pem`, not by name, since a name
+also finds an older authority left there by `certs.sh --new-ca`, and `security verify-cert` also
+passes through the login keychain's copy (#1140). An older one beside the current one is listed and
+passes. The CA's trust step is at the screen, and `tools/scripts/certs.sh trust` adds nothing while
+the login keychain's copy verifies (#1094 step 1). A sleeping mini takes the session with it.
+preflight reports a stopped engine as `later` and still ends ready, which is why the row is read
+here; Docker Desktop's engine needs the live login session (#1090 Q6).
 
 The open boxes are what this sitting can still tick; a box already ticked is not a blocker. An open
 `blocked_by` edge names a ticket whose work gates a row (#63 waits on #242 for P-05 alone, Q78); say
@@ -445,11 +467,15 @@ line of it:
   to rebuild it after a deployment or a rollback, and C1 was the last of either.
 - **Rule 2.** Secret rotation's refresh-only apply (its step 4) asks for a `yes` this tool's shell
   cannot type: run without one it prints its plan and exits 1 with `error asking for approval:
-  EOF`, applying nothing. So first `shown terraform -chdir=infra/envs/poc/apps plan -refresh-only`,
-  a read, whose plan must move the parameter's `version` and nothing else (the runbook's own
-  test); then, on confirm, the runbook's apply line as written with the approval on its standard
-  input, `printf 'yes\n' | shown terraform ...`, which is rule 2's confirm given through the shell
-  and not an edit of the line. The deletion of the old secret at the provider (secret rotation's
+  EOF`, applying nothing. So first `shown terraform -chdir=infra/envs/poc/apps plan -refresh-only
+  -input=false -out="$RUN/refresh.tfplan"`, a read, whose plan must move the parameter's `version`
+  and nothing else (the runbook's own test). The route's plan list on that file leads the confirm,
+  with `resource_drift` in place of `resource_changes`: a refresh-only plan reports its moves there
+  and has no `resource_changes`, so the line as written prints no rows, and with the swap an empty
+  list is a refresh that moved nothing, which fails that test (#1136). Then, on confirm, the
+  runbook's apply line as written with the approval on its standard input, `printf 'yes\n' | shown
+  terraform ...`, which is rule 2's confirm given through the shell and not an edit of the line.
+  The deletion of the old secret at the provider (secret rotation's
   step 7) and the removal of app 1's entry (step 2 of ending an app's sessions) each run on a
   confirm that names what goes (the secret's count before, the app and the release it comes back
   at). Every other step writes the registry through `spactl` or the provider through the CLI and
@@ -568,12 +594,31 @@ one line naming the runbook followed, `docs/runbooks/teardown.md` at the commit,
 differed from it (#286 Q86, as C1's post does). The bootstrap root stays.
 
 **N, from nothing (#242, Q61 and Q79).** `docs/plan/05-infrastructure-and-cost.md`'s First
-deployment order from the first root that is absent:
+deployment order from the first root that is absent. Steps 2 and 4 plan and apply a root by **N's
+saved plan**, so the route's plan list has a file to read and the apply is the plan the confirm was
+given on (#1136). The file goes in rule 6's private directory whichever the root, since nothing here
+reads it after the apply:
+
+```bash
+P=$(mktemp -d); echo "$P"
+shown terraform -chdir=<root> plan -input=false -out="$P/n.tfplan"
+```
+
+Later calls set `P` again by hand. Run the route's plan list on `"$P/n.tfplan"` and ask for the
+confirm, then:
+
+```bash
+shown terraform -chdir=<root> apply -input=false "$P/n.tfplan"
+rm -rf "$P"
+```
+
+A declined confirm removes the directory too. A plan rule 2 stops on keeps it until the human has
+read the file in the ssh login the route names, and then removes it.
 
 1. `shown tools/scripts/certs.sh status`, then `shown tools/scripts/certs.sh import` when ACM holds
    no `*.spa-poc.test`.
-2. The identity root, then the apps root, each command as `shown terraform -chdir=<root> ...`:
-   `init -backend-config=backend.hcl`, `plan`, `apply` on confirm. Post both apply summaries on
+2. The identity root, then the apps root: `shown terraform -chdir=<root> init
+   -backend-config=backend.hcl`, then N's saved plan. Post both apply summaries on
    #242: this is a new user pool, so new client ids and test user passwords. The apply's Outputs
    block prints each `clientId`; rule 8 masks it in the post, and the post is read once for any
    client id in another shape before it goes.
@@ -587,10 +632,10 @@ deployment order from the first root that is absent:
    it again as `shown tools/scripts/platform-tfvars.sh --sample-digest sha256:<64 hex>` with the
    digest the human supplies. `images.auto.tfvars` must be absent (`teardown.sh` removes it; a
    plain `terraform destroy` leaves it, and it overrides the sample image).
-4. The platform root on the sample image, as `shown`: `plan`, read for the certificate found, no
-   per-app resource, and P-01's counts (one load balancer, one listener, one target group, one
-   service, one bucket; no NAT gateway, database or instance); `apply` on confirm, then `aws ecs
-   wait services-stable`. `infra/envs/poc/outputs.json` is now stale, or absent: a `tunnel.sh` run
+4. The platform root on the sample image, by N's saved plan, its plan read for the certificate
+   found, no per-app resource, and P-01's counts (one load balancer, one listener, one target group,
+   one service, one bucket; no NAT gateway, database or instance); then `aws ecs wait
+   services-stable`. `infra/envs/poc/outputs.json` is now stale, or absent: a `tunnel.sh` run
    before step 5 answers "no such host", because it reads the cell's names from that file, and
    `seed.sh` is what rewrites it.
 5. `shown tools/scripts/seed.sh`, with #236's Q107 capture in its order: the commit; the names only
@@ -651,7 +696,8 @@ as such with the reason (rule 4), and wiz then asks whether to go on to the next
 to D10. Every stop, rule 7's included, offers D10 before the sitting ends: the two-task cell costs
 about $0.10 an hour (#347 Q10), and teardown the same day is the practice. A stop after D0's `start`
 and before D2's end, and a failed D2 whichever way the human then answers, first ends any watch and
-closes the sitting browser, as D2 says. A declined D10 is recorded as "not run: declined", keeps
+closes the sitting browser, as D2 says, and a failed D2 with no convergence read says what the cell
+is before the question, as D2 says too. A declined D10 is recorded as "not run: declined", keeps
 D2's copy of `terraform.tfvars`, and the sitting ends naming where it is.
 
 **D0, the fresh deploy and the live login (#348 Q22).** The root is absent (Stage 0). Fetch and
@@ -723,12 +769,13 @@ shown sitting_browser reload main
 
 Anything but `signed-in` stops the sitting (rule 7) before any apply: D0's session is gone, so no
 sign-out could be attributed to the cutover. Name the counts and the one replacement when asking for
-the confirm. On the confirm, set any earlier attempt's log aside, start the watch in a background
-call of its own, and once its first line has printed apply the saved plan (the apply does not wait
-for the roll):
+the confirm. On the confirm, set any earlier attempt's log aside and leave this attempt's empty
+(#1135), start the watch in a background call of its own, and once its first line has printed
+apply the saved plan (the apply does not wait for the roll):
 
 ```bash
 [ ! -e "$E/browser.log" ] || mv "$E/browser.log" "$E/browser.log.$$"
+: > "$E/browser.log"
 ```
 
 ```bash
@@ -778,6 +825,10 @@ shown awk '$1=="login-prompt" && !p {n++; p=1} $1=="signed-in" {p=0} END {print 
 shown grep -E '^(login-prompt|tunnel-down|timeout|other|not-found) ' "$E/browser.log"
 ```
 
+The watch writes no line before its first tick, an `--every` away, so a stop in that interval reads
+the confirm's empty log: a count of 0, no lines and `grep`'s `exit=1`. The apply has not run then, so
+that 0 observed no roll, and the post names the empty log as missing coverage (#1135).
+
 After convergence, and only then, the sitting browser makes the login. `/bff/login` discards the
 profile's session first, and the cleared provider makes it fill the form:
 
@@ -796,18 +847,56 @@ D2 uses the sitting browser, and every way out of D2 closes it:
 shown sitting_browser stop
 ```
 
-A failed row or a stop runs the count's fence and this one before its post and before wiz asks what
-next: a watch left running would write `browser.log` through D3 onward, and a same-day attempt's
-`start` would answer `refused reason=running`, a failed D0.
+A failed row or a stop runs this fence, and once the watch has started the count's fence before it,
+before its post and before wiz asks what next: a watch left running would write `browser.log` through
+D3 onward, and a same-day attempt's `start` would answer `refused reason=running`, a failed D0. A stop
+before the watch has started, at the G6 block, the plan's read, the baseline or the confirm, runs this fence alone:
+until the confirm's `mv` sets it aside, a `browser.log` in the bundle is an earlier attempt's, and its
+count is not this attempt's.
 
 Post `## D2, row 2` on #348: the plan's counts and its one replacement address, the apply's exit,
 the baseline's line, the sign-outs observed with the watch's lines that were not `signed-in` quoted
 as they read, the tunnel gap as missing coverage, the two task ids with their zones, the readiness
 wait's lines, the post-convergence login's lines, and the bundle files (`terraform.tfvars.phase1`,
 `cutover.tfplan`, `row2.log`, `browser.log`, and each file under `browser-pages/` when an `other`
-wrote one) by SHA-256. A failed row or a stop posts as much of this as it reached, the count and the
-watch's lines included. The row passes when a sign-out occurred and the post-convergence login
-succeeded.
+wrote one) by SHA-256. A failed row or a stop posts as much of this as it reached: once the watch has
+started, the count and the watch's lines included; before that, no count and no watch's lines, among
+the files no `browser.log` or `row2.log` and under `browser-pages/` only what this attempt wrote, since
+an earlier attempt's stay in the bundle, and the post says the watch never started. The row passes
+when a sign-out occurred and the post-convergence login succeeded.
+
+**A failed row with no convergence read (#1134).** An apply that exits non-zero, or a
+`services-stable` that times out, ends D2 on a cell nobody has read, and the apply does not wait for
+the roll. The service may be rolling to the new task definition, may have finished that roll, may
+have been rolled back by its circuit breaker (`infra/modules/cell/ecs.tf`), or may stand as D0 left
+it, when the apply stopped before reaching it. After the fences and before the post, read which:
+
+```bash
+shown aws ecs describe-services --cluster spa-poc --services gateway \
+  --query 'services[0].{desired:desiredCount,running:runningCount,deployments:deployments[].{status:status,rollout:rolloutState,desired:desiredCount,running:runningCount,revision:taskDefinition}}'
+```
+
+then the `list-tasks` and `describe-tasks` lines above. More than one deployment, or a `rollout` of
+`IN_PROGRESS`, is a roll under way. One settled deployment on a new revision has finished the roll,
+and no convergence has been read. One on D0's revision is rolled back when `desired` has reached the
+cutover's 2, and is as D0 left it when `desired` is still 1. A new task is a RUNNING one on a revision
+other than D0's. The post carries these reads and says whether the tunnel restart ran, with the id it
+kept, or that it did not. Asking what next, wiz first says, from those reads: which of the four the
+cell is; that "go on" takes D1 and D3 onward to that cell and not to one D2 has read as converged, so
+a read or a row can fail for that reason alone, and a pass says nothing of convergence; and whether
+D4 has an id, which is one `tunnel.sh` printed in D2 that still names a RUNNING task. "Go on" stays
+the human's answer, and wiz holds it to no wait. On it:
+
+- **The tunnel.** If the restart has not run, or the task its id names is no longer RUNNING, and a
+  new task is RUNNING, offer it now as above (rule 1), and keep the id; its times and id go into the
+  next step's post. With no new task it has nothing to go through yet: wiz says that D4 still has no
+  id from D2, and that D0's tunnel is up if the restart never stopped it and down if the hop it moved
+  to has gone. D0's id is not one for D4: a row 4 on D0's revision says nothing of the cutover.
+  `tunnel.sh` takes the first task it can reach, so mid-roll its id can name an old task that the roll
+  then drains: name that task's revision from `describe-tasks` when keeping the id.
+- **Each later step, D1 and D3 to D9.** Run the `describe-services` read above first, and open the
+  step's post with "D2 failed" and what that read showed. A read that has since settled makes no
+  row 2 pass and is no convergence: only D2's own block is that.
 
 **D1, the configuration as decided (row 1; #348 Q24).** Reads only, each a `describe`, `get` or
 `list`, through `shown`; never `get-parameter` or `get-parameters`, which return the ring's values
@@ -865,7 +954,9 @@ task ids from D2.
 
 **D3 to D9, #358's class, one row per invocation (#361 Q8, #442 Q169).** Before D3, rebuild the
 configuration from the post-cutover task definition exactly as C2's first block does: D2 changed
-the environment, and row 7's onboarding reads it. Then the switches, in every call that runs a row:
+the environment, and row 7's onboarding reads it. After a failed D2 that block reads whatever
+revision the service names, which can be D0's: the post names it. Then the switches, in every call
+that runs a row:
 
 ```bash
 export SPA_E2E_STACK=deployed SPA_E2E_PLATFORM_CONFIG="$PWD/$E/platform-config.json" SPA_E2E_EVIDENCE="$PWD/$E/continuity"
@@ -890,7 +981,11 @@ mutation the summary does not name stops the sitting:
   name, with a drain, and refuses unless that variable is exactly one of the two RUNNING tasks. Set
   `SPA_TUNNEL_TASK=<the id tunnel.sh printed in D2>` in the call, say which task will be stopped,
   and the human's approval of the row's command is its rule-2 confirm, as C3 treats F-07. After the
-  row, the service replaces the task; read the two tasks again before D5 and name the new id.
+  row, the service replaces the task; read the two tasks again before D5 and name the new id. After
+  a failed D2 that kept no id, or one whose task is no longer RUNNING, run D2's restart first if a new
+  task is RUNNING, and use the id it prints; with none, say so when asking: the row then refuses and
+  stops nothing. Its evidence file then records not proved and names only the exception, so post it as
+  not proved with the refusal's line from the test's output. A refusal spends no attempt.
 - **D6 (row 6, F1; #348 Q29).** The class drives for up to 40 minutes while the operator deploys:
   start the row's `dotnet test` in the background first, then `deploy.sh` on the same commit as C1
   runs it (confirm on launch, C1's shape: the one replacement is the task definition), with no

@@ -178,12 +178,18 @@ A session that repairs what a review found works from the record, not from the P
   return names `logDir`. The return's `prs` is cut short by the completion notice; its `summary`
   lines are not. The verdict agent's findings, verified and suspected, are in `verdict.json`. The
   script's own, its head comparison's and its later-date search's, are never there: they lead the
-  comment's Spec findings, in `comment.md` and the posted record. A pull request has a
-  `verdict.json` from the run only when it reached its verdict stage. One skipped because its head
-  already carries a record has none, and its findings are in the record its `summary` line names.
-  One failed before its verdict, at the stage its `summary` line names, has none and no findings to
-  repair: run the review again. One failed at posting has its `verdict.json`,
-  and `comment.md` when the post agent wrote it.
+  comment's Spec findings, in `comment.md` and the posted record. Same-date runs share the log
+  directory, so a `verdict.json` the run did not write is an earlier review's, and it is never read
+  as this run's. The post agent writes the file, from the verdict the script received, and it names
+  its `head`, `base` and `date`. One whose `summary` line says `verdict.json is not this run's` had
+  a post agent that did not write it: read the findings from `comment.md` or the posted record the
+  line names. A file whose `head` is not the one on the `summary` line is an earlier review's.
+  One skipped because its head already carries a record has none from the run, and its findings are
+  in the record its `summary` line names. One failed before or at its verdict, at the stage its
+  `summary` line names, has none from the run and no findings to repair: run the review again. One
+  failed at posting has its `verdict.json` and `comment.md`, unless its stage says `verdict.json may
+  be an earlier review's`: the post agent died, so neither file can be told from an earlier review
+  of the same head, and the fix is to run the review again.
 - **Repair what a commit can settle**: a test that cannot fail, a wrong comment or quotation, a
   refusal that reports the wrong verdict. Leave to the human what a commit cannot: an approval, a
   tracker spec source, a live proof, a scope question. Name each left one in the report.

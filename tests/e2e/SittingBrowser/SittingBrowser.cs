@@ -76,17 +76,22 @@ public sealed partial class SittingBrowser(IBrowserStack stack, string bundle, C
                 _ => await FailAsync(write, command, "not-a-profile-command"),
             };
         }
-        catch (CommandFailedException failed)
+        catch (Exception failed) when (FailureOf(failed) is { } failure)
         {
-            // The password's SSM read: its message, the account masked, so an AccessDenied reaches the stream (#1024 Q10).
-            return await FailAsync(write, command, "aws", failed.Message);
-        }
-        catch (Exception failed) when (failed is PlaywrightException or InvalidOperationException or KeyNotFoundException)
-        {
-            // A closed browser among them. The type, never the message, which may hold a URL.
-            return await FailAsync(write, command, failed.GetType().Name);
+            return await FailAsync(write, command, failure.Reason, failure.Text);
         }
     }
+
+    /// <summary>What a command's <c>failed</c> line says of a failure it answers, or null for one it does not.</summary>
+    private static (string Reason, string? Text)? FailureOf(Exception failed) => failed switch
+    {
+        // The password's SSM read: its message, the account masked, so an AccessDenied reaches the stream (#1024 Q10).
+        CommandFailedException => ("aws", failed.Message),
+
+        // A closed browser among them. The type, never the message, which may hold a URL.
+        PlaywrightException or InvalidOperationException or KeyNotFoundException => (failed.GetType().Name, null),
+        _ => null,
+    };
 
     /// <summary>Closes every profile, a line each, and ends every watch; the stack goes at <see cref="DisposeAsync"/>.</summary>
     public async Task StopAsync(Func<string, Task> write)
@@ -251,7 +256,8 @@ public sealed partial class SittingBrowser(IBrowserStack stack, string bundle, C
     /// reloads and prints the observation, and on <c>login-prompt</c> with <c>--relogin</c> completes the
     /// login and prints that observation too. Each line goes to <see cref="WatchLog"/> and to the caller
     /// that started it, until <c>unwatch</c>, <c>close</c> or <c>stop</c>; a caller that has gone away
-    /// leaves the log.
+    /// leaves the log. A tick that fails ends the watch with a <c>failed</c> line, and that line takes
+    /// the same path, so the log says why it stops (#1086).
     /// </summary>
     private async Task<int> WatchAsync(SittingCommand command, Func<string, Task> write)
     {
@@ -316,6 +322,10 @@ public sealed partial class SittingBrowser(IBrowserStack stack, string bundle, C
                 });
                 Interlocked.Increment(ref watching.Ticks);
             }
+        }
+        catch (Exception failed) when (FailureOf(failed) is { } failure)
+        {
+            return await FailAsync(Tell, command, failure.Reason, failure.Text);
         }
         finally
         {
