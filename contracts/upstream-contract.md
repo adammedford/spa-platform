@@ -41,10 +41,13 @@ body read or write, so it bounds how long an upstream may stay silent, not how l
 take; connecting counts as silence. Silence before the response headers is `504`
 `upstream_timeout`. Silence after them is not: the upstream's status is already on the wire,
 so `UpstreamFailure.Use` in `Platform.Proxy` writes no problem body and the call ends without
-one (finding T-C18). The gateway holds at most a fixed number of connections to each upstream
-origin per task, a constant in `Platform.Proxy` on the precedent of the Kestrel limits; a
-request that waits for a connection past the entry's timeout is `504` `upstream_timeout`, like
-any other silence before the headers. Nothing bounds a call whose upstream keeps sending, and
-nothing limits requests per client: the first is accepted, and the second stays deferred until
-a load test (P2-10) shows one app's traffic exhausting that connection bound or the task's,
-which is the trigger `docs/plan/06-phase-2-and-risks.md` leaves open.
+one (finding T-C18). The gateway holds at most a fixed number of HTTP/1.1 connections per task
+for each of an app's APIs, a constant in `Platform.Proxy` on the precedent of the Kestrel
+limits, so apps that name the same upstream each hold up to that number to it, and an upstream
+that negotiates HTTP/2 is bounded by it neither in connections nor in concurrent requests until
+P2-10 measures that case (`docs/gaps.md`); a request that waits for a connection past the
+entry's timeout is `504` `upstream_timeout`, like any other silence before the headers. Nothing
+bounds a call whose upstream keeps sending, and nothing limits requests per client: the first
+is accepted, and the second stays deferred until a load test (P2-10) shows one app's traffic
+exhausting that connection bound or the task's, which is the trigger
+`docs/plan/06-phase-2-and-risks.md` leaves open.
