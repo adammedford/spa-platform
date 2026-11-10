@@ -160,7 +160,7 @@
           "type": "integer",
           "minimum": 1,
           "maximum": 2147483,
-          "description": "The entry's upstream idle timeout: the longest the upstream may stay silent, restarted on headers and on every body byte. Exceeding it is 504 upstream_timeout. The maximum is the measured YARP 2.3.0 ceiling, added at G2 under ADR-0015 and ADR-0019: larger values cannot be applied as written."
+          "description": "The entry's upstream idle timeout: the longest the upstream may stay silent, restarted on headers and on every body byte. Silence before the response headers is 504 upstream_timeout; after them the response has started, and the call ends without a problem body (finding T-C18). The maximum is the measured YARP 2.3.0 ceiling, added at G2 under ADR-0015 and ADR-0019: larger values cannot be applied as written."
         }
       }
     },
