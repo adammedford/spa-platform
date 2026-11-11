@@ -436,7 +436,10 @@ const RECORDS_READ = {
 }
 const ISSUED = { type: 'array', items: { type: 'object', properties: { pr: { type: 'integer' }, title: { type: 'string' }, number: { type: 'integer' }, url: { type: 'string' } }, required: ['pr', 'title', 'number', 'url'] } }
 const SHAPE_REFUSED = { type: 'array', items: { type: 'object', properties: { pr: { type: 'integer' }, title: { type: 'string' }, why: { type: 'string' } }, required: ['pr', 'title', 'why'] } }
-const FILED = { type: 'object', properties: { filed: ISSUED, skipped: ISSUED, refused: SHAPE_REFUSED, unreachable: { type: 'boolean' }, reason: { type: 'string' } }, required: ['filed', 'skipped', 'refused', 'unreachable', 'reason'] }
+// A row the reviewed pull request's description, or the latest Answer on an issue it closes, already
+// fixes (#1111): filed by nobody, each with why naming the text that fixes it.
+const ALREADY_FIXED = { type: 'array', items: { type: 'object', properties: { pr: { type: 'integer' }, title: { type: 'string' }, why: { type: 'string' } }, required: ['pr', 'title', 'why'] } }
+const FILED = { type: 'object', properties: { filed: ISSUED, skipped: ISSUED, fixed: ALREADY_FIXED, refused: SHAPE_REFUSED, unreachable: { type: 'boolean' }, reason: { type: 'string' } }, required: ['filed', 'skipped', 'fixed', 'refused', 'unreachable', 'reason'] }
 const HANDED = { type: 'object', properties: { url: { type: 'string' }, posted: { type: 'boolean' }, reason: { type: 'string' } }, required: ['url', 'posted', 'reason'] }
 const REFRESHED = { type: 'object', properties: { edited: { type: 'boolean' }, reason: { type: 'string' } }, required: ['edited', 'reason'] }
 const RECORDED = { type: 'object', properties: { verdict: { type: 'string', enum: ['merge', 'hold', 'none'] }, head: { type: 'string' }, url: { type: 'string' }, reader: { type: 'string' } }, required: ['verdict', 'head', 'url', 'reader'] }
@@ -1720,9 +1723,10 @@ ${items.map((f) => `OUTPUT FILE: ${f.file}`).join('\n')}
 For each follow-up, in order:
 1. Write its body, exactly, to its file.
 2. Look again before filing, since a rerun or a person may have filed it since the read: \`cd ${REPO} && gh issue list --state all --limit 100 --search "<its title> in:title" --json number,title,body,url\`. An issue whose title is the follow-up's title and whose body's Raised-by line names #<its pr> holds it: file nothing, and list it in skipped.
-3. Check its shape as the overnight run checks a new ticket, under the label it will be filed with (#479): \`cd ${REPO} && python3 -I -c 'import json,sys; print(json.dumps({"number": 0, "body": open(sys.argv[1]).read(), "labels": [{"name": sys.argv[2]}], "subIssuesSummary": {"total": 0}, "blockedBy": {"nodes": []}}))' <its file> <its label> | python3 -I tools/ticket_shape.py -\`. Only when that exits 0 with its last line starting "ticket-shape: pass:" go on to step 4. On exit 1 file nothing, and list it in refused with its pr, title and why, each "ticket-shape: <rule>:" line it printed joined by "; "; on any other exit file nothing, and list it in refused with why "the check did not judge it: " and its last line. Never reword a body to get past the check: a failure is reported, not repaired.
-4. File it: \`cd ${REPO} && gh issue create --title "<its title>" --label <its label> --body-file <its file>\`, with its label exactly as given (needs-triage, or ready-for-human for one whose place names no path or two owners' paths). A follow-up is filed as neither a sub-issue nor a blocker of anything (docs/agents/tracker-policy.md -> "An issue is held open by its own scope"): no parent, and no blocked-by edge either way. List it in filed with its pr, title, the new number and URL.
-If GitHub cannot be reached, stop filing: unreachable true, reason the error, and return what was filed. reason is "" when nothing stopped you; refused is [] when the check refused none.`
+3. Re-read what may already fix it, since a finding is often fixed after the record that carried it (#1111): the reviewed pull request's description as it reads now, \`cd ${REPO} && gh pr view <its pr> --json body --jq .body\`, and, for each issue that description closes (each #<n> on a Closes, Fixes or Resolves line), the latest comment on it whose first line is "## Answer", from \`cd ${REPO} && gh issue view <n> --json comments\`. Whether either fixes the follow-up's finding is your judgement on reading them, not a title match. When either already fixes it, file nothing, and list it in fixed with its pr, title and why, why quoting the text that fixes it and naming where it stands (#<its pr>'s description, or the Answer's URL).
+4. Check its shape as the overnight run checks a new ticket, under the label it will be filed with (#479): \`cd ${REPO} && python3 -I -c 'import json,sys; print(json.dumps({"number": 0, "body": open(sys.argv[1]).read(), "labels": [{"name": sys.argv[2]}], "subIssuesSummary": {"total": 0}, "blockedBy": {"nodes": []}}))' <its file> <its label> | python3 -I tools/ticket_shape.py -\`. Only when that exits 0 with its last line starting "ticket-shape: pass:" go on to step 5. On exit 1 file nothing, and list it in refused with its pr, title and why, each "ticket-shape: <rule>:" line it printed joined by "; "; on any other exit file nothing, and list it in refused with why "the check did not judge it: " and its last line. Never reword a body to get past the check: a failure is reported, not repaired.
+5. File it: \`cd ${REPO} && gh issue create --title "<its title>" --label <its label> --body-file <its file>\`, with its label exactly as given (needs-triage, or ready-for-human for one whose place names no path or two owners' paths). A follow-up is filed as neither a sub-issue nor a blocker of anything (docs/agents/tracker-policy.md -> "An issue is held open by its own scope"): no parent, and no blocked-by edge either way. List it in filed with its pr, title, the new number and URL.
+If GitHub cannot be reached, stop filing: unreachable true, reason the error, and return what was filed. reason is "" when nothing stopped you; fixed is [] when nothing already fixed one; refused is [] when the check refused none.`
 }
 
 const handoverPrompt = (date, issue, text) => {
@@ -1924,6 +1928,9 @@ const followupsText = (s) => {
   if ((fu.forHuman || []).length) list('Follow-ups filed ready-for-human', fu.forHuman.map((f) => `#${f.number} from #${f.pr}: ${f.title}`))
   if ((fu.refused || []).length) list('Follow-ups not filed: tools/ticket_shape.py failed them', fu.refused.map((f) => `from #${f.pr}: ${f.title}: ${f.why}`))
   if (fu.already.length) list('Follow-ups already filed', fu.already.map((f) => `#${f.number} from #${f.pr}: ${f.title}`))
+  // #1111: each row the filer found already fixed, with the text that fixes it, so a reader can
+  // check the judgement rather than read silence as "none carried".
+  if ((fu.fixed || []).length) list('Follow-ups not filed: already fixed', fu.fixed.map((f) => `from #${f.pr}: ${f.title}: ${f.why}`))
   // #481: each open Apply ticket, from any night, a step of its own for the session that holds the context.
   const at = s.applyTickets
   list('Open Apply tickets, oldest first: apply each, then close it', [
@@ -2430,7 +2437,7 @@ if (FOLLOWUPS_PASS) {
   const P = paths(DATE)
   const refusals = []
   log(`follow-ups ${DATE} (#${ISSUE}): run log ${P.mdir}`)
-  const followUps = { filed: [], already: [], refused: [], forHuman: [] }
+  const followUps = { filed: [], already: [], fixed: [], refused: [], forHuman: [] }
   // The window first (#514): the discovery start, then the checkpoint. A window reader that failed leaves
   // no checkpoint, so the read backfills: more read, nothing missed, and the checkpoint is kept.
   const win = judgeWindow(wr)
@@ -2474,6 +2481,9 @@ if (FOLLOWUPS_PASS) {
       } else {
         followUps.filed.push(...fd.filed)
         followUps.already.push(...fd.skipped)
+        // Already fixed by the pull request's description or an origin's later Answer (#1111): filed by
+        // nobody, and accounted for, so it neither reads as lost nor holds the checkpoint.
+        followUps.fixed.push(...fd.fixed)
         followUps.refused.push(...fd.refused)
         // Filed ready-for-human, each with why (#479): the comment lists them under a heading of their
         // own, and the return keeps the why the ticket's body carries.
@@ -2485,7 +2495,7 @@ if (FOLLOWUPS_PASS) {
         for (const r of fd.refused) refusals.push(`the follow-up #${r.pr} ${JSON.stringify(r.title)} failed tools/ticket_shape.py and was not filed: ${r.why}`)
         // A follow-up the filer accounts for in no list is named, never read as filed: the comment
         // would otherwise say "none" over a finding nobody filed (CODING_STANDARDS.md -> "A check fails closed").
-        const told = [...fd.filed, ...fd.skipped, ...fd.refused]
+        const told = [...fd.filed, ...fd.skipped, ...fd.fixed, ...fd.refused]
         const lost = toFile.filter((f) => !told.some((t) => t && t.pr === f.pr && sameFinding(t.title, f.title)))
         if (lost.length && !fd.unreachable && !fd.reason) refusals.push(`the follow-ups filer returned ${named(lost)} neither filed nor skipped; relaunch to file them`)
         if (fd.unreachable || fd.reason) refusals.push(`the follow-ups filer stopped: ${fd.reason || 'GitHub could not be reached'}; relaunch to file the rest`)
