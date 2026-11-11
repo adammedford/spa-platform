@@ -806,9 +806,9 @@ provider's cookies, since a live provider session answers the gateway's challeng
 again. A sign-out is a `login-prompt` line with a `signed-in` line since the previous prompt, so a
 prompt repeated after a failed login is one sign-out (#1025 Q3). `tunnel-down`, `timeout`, `other` and
 `not-found` lines are missing coverage, never a sign-out and never a stop. A `watch` call that exits
-before `unwatch` has ended, and the `failed` line it printed is not in the log: run `unwatch`, run
-the watch line again with the log left where it is, and post the interval as missing coverage. The gateway's log lines go into the
-bundle uncounted (`tools/scripts/logs.sh` into `"$E/row2.log"`), because a navigation the shell gate
+before `unwatch` has ended, and the `failed` line it printed is in the log too, where it marks the
+interval's start: run `unwatch`, run the watch line again with the log left where it is, and post
+the interval as missing coverage. The gateway's log lines go into the bundle uncounted (`tools/scripts/logs.sh` into `"$E/row2.log"`), because a navigation the shell gate
 challenges is a redirect and not a 401 (`GLOSSARY.md` → Shell gate), so the log could count what
 the browser never saw. The tunnel's hop is an old task, which the roll drains (#348 Q20): once
 `describe-tasks` lists a new task RUNNING, stop `tunnel.sh`, note the UTC time, start it again in
@@ -836,7 +836,7 @@ the watch has started, convergence, a failed row or a stop, ends the watch and r
 ```bash
 shown sitting_browser unwatch main
 shown awk '$1=="login-prompt" && !p {n++; p=1} $1=="signed-in" {p=0} END {print n+0}' "$E/browser.log"
-shown grep -E '^(login-prompt|tunnel-down|timeout|other|not-found) ' "$E/browser.log"
+shown grep -E '^(login-prompt|tunnel-down|timeout|other|not-found|failed) ' "$E/browser.log"
 ```
 
 The watch writes no line before its first tick, an `--every` away, so a stop in that interval reads
