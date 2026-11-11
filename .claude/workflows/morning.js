@@ -140,8 +140,9 @@ export const meta = {
 // window", #514), and files each row no issue already holds, with a "**Raised by:** #<pr>" line and a link
 // to the record, as neither a sub-issue nor a blocker (docs/agents/tracker-policy.md). Neither Verify's
 // verdict nor a Confirm comment gates it: the review decided the finding, and the night did not. Each
-// carries the "**Owner:**" and "**Touches:**" lines its place derives, or is filed ready-for-human
-// saying why it has none, and is filed only when tools/ticket_shape.py passes its body (#479).
+// carries the "**Touches:**" line its place derives and no "**Owner:**" line, since those paths derive
+// the owner (#1070, #973), or is filed ready-for-human with the integrator's Owner line, saying why it
+// has no Touches line, and is filed only when tools/ticket_shape.py passes its body (#479).
 //
 // Open Apply tickets (#481). The same reader lists the open "Apply Q<n> of Overnight <date> to #<m>"
 // tickets of every night, and the hand-over lists each, with this morning's, oldest first, as a step
@@ -547,8 +548,8 @@ const filedAs = (filed, pr, title) => (filed || []).find((i) => i && sameFinding
 // ---------------------------------------------------------------- follow-ups, owners and places
 // #479. A follow-up filed with a Raised-by line alone failed tools/ticket_shape.py on owner-line the
 // moment it was labelled ready-for-agent (#458 to #461; #386 to #401), though its place was in hand.
-// So its Touches line is the paths the finding's Where cell names, and its Owner line the role
-// OWNERSHIP.md derives from them. OWNERSHIP.md's block is read as .github/path-ownership.py's rules()
+// So its Touches line is the paths the finding's Where cell names, and the role OWNERSHIP.md derives
+// from them is its owner, which the body leaves to those paths (#1070, #973). OWNERSHIP.md's block is read as .github/path-ownership.py's rules()
 // and owner_of() read it: the first fenced block, "#" opening a comment, the last matching line
 // winning, "*" every path, a pattern ending "/" a directory, any other an fnmatch pattern. A path is
 // read as tools/ticket_shape.py's owner_of() reads a Touches path: a directory written without its
@@ -625,13 +626,16 @@ const placeOf = (rules, where) => {
 
 // ---------------------------------------------------------------- follow-ups, their bodies
 // The finding is the ticket's title, and the body does not repeat it (#972): the Raised-by line
-// filedAs reads, the Owner line ticket_shape's owner-line wants (#479), the Touches line or why it
-// has none, the row's Fails on sentence and one box. The record the Raised-by line links holds the
-// rest of the row (its axis, place and first record).
+// filedAs reads; the Touches line, and no Owner line beside it, since tools/ticket_shape.py derives
+// the owner from those paths and the collect step routes by them (#1070, #973); or, with no Touches
+// line, the Owner line ticket_shape's owner-line wants (#479) and why it has none; then the row's
+// Fails on sentence and one box. The record the Raised-by line links holds the rest of the row (its
+// axis, place and first record).
 const followUpBody = (pr, record, f, place) => [
   `**Raised by:** #${pr}, from its review record ${record}`,
-  `**Owner:** ${place.owner}`,
-  place.label === 'needs-triage' ? `**Touches:** ${place.touches.map((p) => '`' + p + '`').join(', ')}` : `**Filed ready-for-human:** ${place.why}`,
+  ...(place.label === 'needs-triage'
+    ? [`**Touches:** ${place.touches.map((p) => '`' + p + '`').join(', ')}`]
+    : [`**Owner:** ${place.owner}`, `**Filed ready-for-human:** ${place.why}`]),
   '',
   '## What to build',
   '',
@@ -1265,8 +1269,9 @@ const refreshDescription = (body, head, merges, lanes) => {
 // them, though each answer asked for an integrator follow-up ticket, and skipped Q91 and Q92 because
 // their edit (two boxes off #62's body; blocked-by edges on #244) lands on a ticket outside the
 // rewrite list. So an answer asking for a follow-up is filed as one, under the Overnight issue's
-// rules: its body is written here, the applier derives its owner from its Touches paths, and
-// tools/ticket_shape.py checks its shape before it is filed (overnight.js -> NEW TICKETS). An answer
+// rules: its body is written here, with a Touches line and no Owner line where it names a path, since
+// those paths derive its owner (#1070, #973), and tools/ticket_shape.py checks its shape before it is
+// filed (overnight.js -> NEW TICKETS). An answer
 // whose change is an edit to a ticket's body boxes or blocked-by edges is applied to that ticket; the
 // part of it the answer alone cannot state (a ticket not yet filed, a condition) is filed as a
 // follow-up naming the ticket, and so is an edit stated nowhere. A follow-up names its origin on a
@@ -1276,7 +1281,8 @@ const followUpTicket = (date, issue, q, f) => ({
   q: q.q, title: f.title, blockedBy: f.blockedBy, file: `${paths(date).mdir}/apply/followup-q${q.q}.md`,
   body: [
     `**Raised by:** #${q.issue}, Q${q.q} of Overnight ${date} (#${issue}), confirmed at ${q.authority || 'no Confirm comment'}`,
-    `**Owner:** ${f.owner || '<role>'}`,
+    // A Touches line naming no path derives no owner, so only then is the Owner line written.
+    ...(f.touches.length ? [] : [`**Owner:** ${f.owner}`]),
     `**Touches:** ${f.touches.length ? f.touches.map((p) => '`' + p + '`').join(', ') : 'none: a tracker edit, no repository path'}`,
     '',
     '## What to build',
@@ -1588,7 +1594,7 @@ ${commits ? `Integrator edits, one commit each, on ${p.morningBranch} in the mor
 Decisions to record: draft each ADR candidate as a comment on its ticket, \`cd ${REPO} && gh issue comment <ticket> --body-file <a file under ${p.mdir}/>\`: the decision, the rejected alternatives, and any sentence that contradicts an existing ADR flagged as docs/agents/domain.md asks. Never an ADR file.
 Rewrites (a ticket with "rewrite": true): rewrite its body as current decision, what to build and acceptance, naming every confirmed question number, by the REWRITE RECORD's four steps below. List each in rewrites {issue: the ticket, comment: the "## Body rewritten ${date}" comment's URL}. A spec's body is never rewritten (#78 grill Q13): list that one in skipped.
 FOLLOW-UP TICKETS: the unit's followUps, each with its q, title, blockedBy, file and body, written by the script (#320). For each, in order:
-1. Write its body to its file, exactly, but for an Owner line reading <role>: replace <role> with the one OWNERSHIP.md role its Touches paths derive (the last matching line wins, as git's rule). Paths that derive more than one role are filed by nobody: list it in skipped with the roles.
+1. Write its body to its file, exactly. A body whose Touches line names a path has no Owner line, and you add none: tools/ticket_shape.py derives its owner from those paths and the collect step routes it by them (#1070, #973); paths of more than one owner fail step 2's check (one-owner).
 2. Check its shape as the overnight run checks a new ticket, under the label and blockers it will be filed with: \`cd ${REPO} && python3 -I -c 'import json,sys; print(json.dumps({"number": 0, "body": open(sys.argv[1]).read(), "labels": [{"name": sys.argv[2]}], "subIssuesSummary": {"total": 0}, "blockedBy": {"nodes": [{"number": int(n), "state": "OPEN"} for n in sys.argv[3:]]}}))' <its file> needs-triage <each blockedBy number> | python3 -I tools/ticket_shape.py -\` (bare numbers; with none, nothing after the label).
 3. Only when that exits 0, its last line starting "ticket-shape: pass:", file it: \`cd ${REPO} && gh issue create --title "<its title>" --label needs-triage --body-file <its file>\`, adding --blocked-by <n> for each blockedBy number. It is neither a sub-issue nor a blocker of the ticket that raised it (docs/agents/tracker-policy.md): no --parent. On exit 1 file nothing and list it in skipped with each "ticket-shape: <rule>:" line; on any other exit file nothing and say in skipped that the check did not judge it, quoting its last line. Never reword a body to get past the check: a failure is reported, not repaired. List each one filed in issues with its number, url, title and questions [its q].
 Ticket edits: the unit's edits, each {q, target, removeBoxes} (#320). Read the target, \`cd ${REPO} && gh issue view <target> --json body,subIssuesSummary\`. A spec, an issue with sub-issues, is never edited (#78 grill Q13): list it in skipped. Each line of removeBoxes must be a whole line of the body, byte for byte; when one is not, edit nothing for that q and list it in skipped with the line not found. Otherwise, as a rewrite does, change it by the REWRITE RECORD's four steps below, its new body the current one with exactly those lines removed and no other byte changed, and its comment's question line naming Q<n> of #${issue}. List each in edits {issue: the target, comment: the "## Body rewritten ${date}" comment's URL, removed: the lines removed, questions: [its q]}. The unit's edits run in order, each reading the body the last one left.

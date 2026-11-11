@@ -35,7 +35,8 @@ const shapeOf = (body, label) => {
   return { status: r.status, last: lines[lines.length - 1] || '', failures: lines.filter((l) => /^ticket-shape: (?!note:|pass:|fail:)/.test(l)), notes: lines.filter((l) => l.startsWith('ticket-shape: note: ')) }
 }
 // The ticket template's headings (#973), as the ticket names the set, and what a filed body breaks of
-// it: each `##` heading outside the set, and each heading note tools/ticket_shape.py prints on it. A
+// it: each `##` heading outside the set, and each heading note tools/ticket_shape.py prints on it, and
+// each derived-owner note, an Owner line beside a Touches line that names a path (#1070). A
 // run of the check that judged nothing (exit 2, or no exit) is itself an entry, so an unreadable body
 // or a broken check reads as off the template rather than as a body with no notes (CODING_STANDARDS.md
 // -> "A check fails closed").
@@ -45,7 +46,7 @@ const offTemplate = (body, label) => {
   return [
     ...String(body).split('\n').filter((l) => /^## /.test(l) && !TICKET_SET.includes(l.slice(3).trim())).map((l) => `writes "${l}"`),
     ...(shape.status === 0 || shape.status === 1 ? [] : [`tools/ticket_shape.py judged nothing: exit ${shape.status}, ${shape.last}`]),
-    ...shape.notes.filter((l) => /^ticket-shape: note: heading:/.test(l)),
+    ...shape.notes.filter((l) => /^ticket-shape: note: (heading|derived-owner):/.test(l)),
   ]
 }
 const DATE = '2026-10-21'
@@ -1186,19 +1187,22 @@ try {
     if (f1.length !== 1) fail(`#320 Q71 shape: ${f1.length} follow-ups for Q1, expected one`)
     else {
       if (!f1[0].body.startsWith(`**Raised by:** ${cite(278)}, Q1 of `) || !f1[0].body.includes(cite(ISSUE))) fail(`#320 Q71 shape: the follow-up's Raised-by line does not name its ticket, the question and the Overnight issue: ${f1[0].body.split('\n')[0]}`)
-      if (!/^\*\*Touches:\*\* `\.claude\/skills\/wiz\/SKILL\.md`$/m.test(f1[0].body) || !/^\*\*Owner:\*\* <role>$/m.test(f1[0].body)) fail('#320 Q71 shape: the follow-up body lacks its Touches line or the Owner line the applier derives')
+      if (!/^\*\*Touches:\*\* `\.claude\/skills\/wiz\/SKILL\.md`$/m.test(f1[0].body)) fail('#320 Q71 shape: the follow-up body lacks its Touches line')
+      // #973: its paths derive the owner, so the body carries no Owner line beside them.
+      if (/^\*\*Owner:\*\*/m.test(f1[0].body)) fail(`#973: the follow-up body for Q1 writes an Owner line beside its path-bearing Touches line:\n${f1[0].body}`)
     }
     if ((done.match(/^filed #\d+ [^\n]*\(Q1\)/gm) || []).length !== 1) fail(`#320 Q71 shape: the hand-over does not name one filed ticket for Q1:\n${done}`)
     const fp = calls.filter((c) => c.label.startsWith('apply:') && /FOLLOW-UP TICKETS/.test(c.prompt)).map((c) => c.prompt).join('\n')
     if (!/`[^`]*tools\/ticket_shape\.py[^`]*`/.test(fp)) fail('#320: the applier that files a follow-up is not told to check its shape with tools/ticket_shape.py')
     const create = (/`cd [^`]*gh issue create[^`]*FOLLOW-UP[^`]*`|`cd [^`]*gh issue create --title "<its title>"[^`]*`/.exec(fp) || [''])[0]
     if (!create || /--parent/.test(create)) fail(`#320: the follow-up is filed ${create ? 'as a sub-issue' : 'by no gh issue create'}: ${create}`)
-    // #973: the Apply filer's bodies, the applier's <role> filled in as it fills it, carry only the
-    // ticket template's headings, and tools/ticket_shape.py prints no heading note on them; and the
+    // #973: the Apply filer's bodies, as the applier writes them, carry only the ticket template's
+    // headings and no Owner line beside a path-bearing Touches line, and tools/ticket_shape.py prints
+    // no heading or derived-owner note on them; and the
     // workstream tickets an applier writes are asked for those headings and no other.
     if (!followUps.length) fail('#973: Apply wrote no follow-up body, so its headings went unread')
     for (const f of followUps) {
-      const off = offTemplate(f.body.replace('<role>', 'integrator'), 'needs-triage')
+      const off = offTemplate(f.body, 'needs-triage')
       if (off.length) fail(`#973: Apply's follow-up for Q${f.q} is off the ticket template: ${off.join(' | ')}`)
     }
     const applierPrompts = calls.filter((c) => c.label.startsWith('apply:')).map((c) => c.prompt)
@@ -1473,13 +1477,14 @@ try {
     if (!lost.result.refusals.some((r) => /neither filed nor skipped/.test(r) && r.includes(FINDING_Q9))) fail(`follow-ups: a follow-up the filer dropped is not named: ${JSON.stringify(lost.result.refusals)}`)
   }
 
-  // 17b. Owner and Touches (#479). Each follow-up carries an Owner line and a Touches line derived
-  //      from the finding's place, so it passes tools/ticket_shape.py when it is relabelled
-  //      ready-for-agent: the Touches line is the paths the Where cell names, each without its
-  //      ":line" suffix or commit prefix, and the Owner line the role OWNERSHIP.md derives from them,
-  //      by the reading ticket_shape uses. A place naming no path, or paths of two owners, is filed
-  //      ready-for-human saying why. Each body goes through the real ticket_shape under its label
-  //      before it is filed, and one that fails is not filed.
+  // 17b. Owner and Touches (#479). Each follow-up carries a Touches line derived from the finding's
+  //      place, so it passes tools/ticket_shape.py when it is relabelled ready-for-agent: the paths
+  //      the Where cell names, each without its ":line" suffix or commit prefix, filed needs-triage
+  //      when OWNERSHIP.md derives one role from them, by the reading ticket_shape uses, and with no
+  //      Owner line beside them, since those paths derive the owner (#1070, #973). A place naming no
+  //      path, or paths of two owners, is filed ready-for-human with the integrator's Owner line,
+  //      saying why. Each body goes through the real ticket_shape under its label before it is
+  //      filed, and one that fails is not filed.
   checks++
   {
     const line = (body, key) => (new RegExp(`^\\*\\*${key}:\\*\\* (.*)$`, 'm').exec(body) || [])[1]
@@ -1488,9 +1493,9 @@ try {
     const sent = jsonAfter(run443.prompt('followups-file'), 'FOLLOW-UPS') || []
     const of = (t) => sent.find((f) => f.title === t) || { body: '', label: '' }
     const ddb = of(FINDING_DDB)
-    if (line(ddb.body, 'Owner') !== 'integrator' || line(ddb.body, 'Touches') !== '`.github/workflows/ci.yml`' || ddb.label !== 'needs-triage') fail(`#479: the finding at .github/workflows/ci.yml:657-658 files with Owner ${JSON.stringify(line(ddb.body, 'Owner'))}, Touches ${JSON.stringify(line(ddb.body, 'Touches'))}, label ${JSON.stringify(ddb.label)}`)
+    if (line(ddb.body, 'Owner') !== undefined || line(ddb.body, 'Touches') !== '`.github/workflows/ci.yml`' || ddb.label !== 'needs-triage') fail(`#479: the finding at .github/workflows/ci.yml:657-658 files with Owner ${JSON.stringify(line(ddb.body, 'Owner'))}, Touches ${JSON.stringify(line(ddb.body, 'Touches'))}, label ${JSON.stringify(ddb.label)}`)
     const deadline = of(FINDING_DEADLINE)
-    if (line(deadline.body, 'Owner') !== 'ws3-identity' || line(deadline.body, 'Touches') !== '`tests/Platform.Identity.Tests/AccessTokenSourceTests.cs`, `tests/Platform.Identity.Tests/BackchannelTimeoutTests.cs`' || deadline.label !== 'needs-triage') fail(`#479: the finding in tests/Platform.Identity.Tests/ files with Owner ${JSON.stringify(line(deadline.body, 'Owner'))}, Touches ${JSON.stringify(line(deadline.body, 'Touches'))}, label ${JSON.stringify(deadline.label)}`)
+    if (line(deadline.body, 'Owner') !== undefined || line(deadline.body, 'Touches') !== '`tests/Platform.Identity.Tests/AccessTokenSourceTests.cs`, `tests/Platform.Identity.Tests/BackchannelTimeoutTests.cs`' || deadline.label !== 'needs-triage') fail(`#479: the finding in tests/Platform.Identity.Tests/ files with Owner ${JSON.stringify(line(deadline.body, 'Owner'))}, Touches ${JSON.stringify(line(deadline.body, 'Touches'))}, label ${JSON.stringify(deadline.label)}`)
     const nopath = of(FINDING_NOPATH)
     if (nopath.label !== 'ready-for-human' || line(nopath.body, 'Owner') !== 'integrator' || line(nopath.body, 'Touches') !== undefined || !/names no repository path/.test(line(nopath.body, 'Filed ready-for-human') || '')) fail(`#479: the finding with no path files as ${JSON.stringify(nopath.label)}, saying ${JSON.stringify(line(nopath.body, 'Filed ready-for-human'))}:\n${nopath.body}`)
     for (const f of sent) {
@@ -1511,8 +1516,8 @@ try {
       if (!shaped || shaped.status !== 0) fail(`#966: ${JSON.stringify(title)} fails tools/ticket_shape.py: ${shaped ? [...shaped.failures, shaped.last].join('; ') : 'never checked'}`)
     }
     // #973: every body the follow-up filer sent, of a four-column record and a five-column one, under
-    // each label it is filed with, carries only the ticket template's headings, and tools/ticket_shape.py
-    // prints no heading note on it.
+    // each label it is filed with, carries only the ticket template's headings and no Owner line beside a
+    // path-bearing Touches line, and tools/ticket_shape.py prints no heading or derived-owner note on it.
     for (const f of [...sent, ...sent966]) {
       const off = offTemplate(f.body, f.label)
       if (off.length) fail(`#973: the follow-up ${JSON.stringify(f.title)} (${f.label}) is off the ticket template: ${off.join(' | ')}`)
@@ -1531,23 +1536,27 @@ try {
     const why = line(two.body, 'Filed ready-for-human') || ''
     if (two.label !== 'ready-for-human' || line(two.body, 'Touches') !== undefined || !/two owners/.test(why) || !/integrator: \.github\/workflows\/ci\.yml/.test(why) || !/ws1-infra: tools\/scripts/.test(why)) fail(`#479: the finding with paths of two owners files as ${JSON.stringify(two.label)}, saying ${JSON.stringify(why)}`)
     const q9 = sent287.find((f) => f.title === FINDING_Q9) || { body: '' }
-    if (line(q9.body, 'Owner') !== 'ws6-verification' || line(q9.body, 'Touches') !== '`docs/runbooks/end-app-sessions.md`') fail(`#479: "#244 Q9; docs/runbooks/end-app-sessions.md" files with Owner ${JSON.stringify(line(q9.body, 'Owner'))}, Touches ${JSON.stringify(line(q9.body, 'Touches'))}`)
+    if (line(q9.body, 'Owner') !== undefined || line(q9.body, 'Touches') !== '`docs/runbooks/end-app-sessions.md`') fail(`#479: "#244 Q9; docs/runbooks/end-app-sessions.md" files with Owner ${JSON.stringify(line(q9.body, 'Owner'))}, Touches ${JSON.stringify(line(q9.body, 'Touches'))}`)
 
     // A body ticket_shape fails is not filed: the reader served an OWNERSHIP.md that gives
-    // tests/Platform.Identity.Tests/ to the integrator, so the script writes Owner integrator, which
-    // the checkout's ticket_shape reads as ws3-identity's paths (owner-line). It is refused and named.
-    const drifted = OWNERSHIP_MD.replace(/^\/tests\/Platform\.Identity\.Tests\/\s+ws3-identity$/m, '/tests/Platform.Identity.Tests/       integrator')
-    if (drifted === OWNERSHIP_MD) fail('#479: the drift fixture found no ws3-identity line for tests/Platform.Identity.Tests/ to change')
+    // tools/scripts/ to the integrator, so the script reads #287's first row, ci.yml and tools/scripts,
+    // as one owner's and writes their Touches line, which the checkout's ticket_shape reads as the
+    // integrator's and ws1-infra's paths (one-owner). It is refused and named. (The body carries no
+    // Owner line to drift since #973, so the drift is in the paths' owners.)
+    const drifted = OWNERSHIP_MD.replace(/^\/tools\/scripts\/\s+ws1-infra$/m, '/tools/scripts/                       integrator')
+    if (drifted === OWNERSHIP_MD) fail('#479: the drift fixture found no ws1-infra line for tools/scripts/ to change')
     const envD = newRepo()
-    const runD = await execute(envD, { date: DATE }, { followUps: { ...FU443, ownership: drifted } })
-    if ((envD.filed || []).some((i) => i.title === FINDING_DEADLINE)) fail('#479: a body tools/ticket_shape.py fails was filed')
-    if ((envD.filed || []).length !== 2) fail(`#479: with one body failing the shape check, ${(envD.filed || []).length} were filed, expected the other two`)
+    const runD = await execute(envD, { date: DATE }, { followUps: { ...FU287, ownership: drifted } })
+    const sentD = jsonAfter(runD.prompt('followups-file'), 'FOLLOW-UPS') || []
+    if ((sentD.find((f) => f.title === FINDING_CI) || {}).label !== 'needs-triage') fail(`#479: the drifted OWNERSHIP.md did not read #287's first row as one owner's: ${JSON.stringify(sentD.find((f) => f.title === FINDING_CI))}`)
+    if ((envD.filed || []).some((i) => i.title === FINDING_CI)) fail('#479: a body tools/ticket_shape.py fails was filed')
+    if ((envD.filed || []).length !== 1 || !(envD.filed || []).some((i) => i.title === FINDING_Q9)) fail(`#479: with one body failing the shape check, ${(envD.filed || []).length} were filed, expected the other one`)
     const refusedD = (runD.result.followUps || {}).refused || []
-    if (!refusedD.some((r) => r.title === FINDING_DEADLINE && /owner-line/.test(r.why))) fail(`#479: the return does not list the shape-failed follow-up as refused: ${JSON.stringify(refusedD)}`)
-    if (!runD.result.refusals.some((r) => r.includes(FINDING_DEADLINE) && /ticket_shape/.test(r))) fail(`#479: the refusals do not name the shape-failed follow-up: ${JSON.stringify(runD.result.refusals)}`)
+    if (!refusedD.some((r) => r.title === FINDING_CI && /one-owner/.test(r.why))) fail(`#479: the return does not list the shape-failed follow-up as refused: ${JSON.stringify(refusedD)}`)
+    if (!runD.result.refusals.some((r) => r.includes(FINDING_CI) && /ticket_shape/.test(r))) fail(`#479: the refusals do not name the shape-failed follow-up: ${JSON.stringify(runD.result.refusals)}`)
     // Under its own heading: the refusals the hand-over also carries would name it without the list.
     const notFiled = runD.result.handover.text.split(/^### /m).find((s) => s.startsWith('Follow-ups not filed: tools/ticket_shape.py failed them')) || ''
-    if (!notFiled.includes(FINDING_DEADLINE)) fail(`#479: the hand-over does not list the follow-up the shape check refused under "Follow-ups not filed":\n${runD.result.handover.text}`)
+    if (!notFiled.includes(FINDING_CI)) fail(`#479: the hand-over does not list the follow-up the shape check refused under "Follow-ups not filed":\n${runD.result.handover.text}`)
     // A refused follow-up is accounted for: it is not reported again as one the filer lost.
     if (runD.result.refusals.some((r) => /neither filed nor skipped/.test(r))) fail(`#479: a follow-up the shape check refused is reported as lost by the filer: ${JSON.stringify(runD.result.refusals)}`)
     const fp = runD.prompt('followups-file')
@@ -1769,8 +1778,8 @@ try {
       ['a failed record read', { followUps: pair, nothingFrom: ['followups-batch:1'] }, /record reader[^|]*returned nothing/],
       ['a failed filing', { followUps: pair, filerDrops: [F_B] }, new RegExp(F_B)],
       // A row tools/ticket_shape.py refuses is neither filed nor found already filed (Q12): the
-      // OWNERSHIP.md drift of the #479 case gives #443's deadline row an owner-line failure.
-      ['a filing the shape check refused', { followUps: { prs: [...pair.prs, ...FU443.prs], filed: [], ownership: OWNERSHIP_MD.replace(/^\/tests\/Platform\.Identity\.Tests\/\s+ws3-identity$/m, '/tests/Platform.Identity.Tests/       integrator') } }, new RegExp(`tools/ticket_shape\\.py failed them: ${cite(443)} "${FINDING_DEADLINE.replace(/[()]/g, '\\$&')}"`)],
+      // OWNERSHIP.md drift of the #479 case gives #287's first row a one-owner failure.
+      ['a filing the shape check refused', { followUps: { prs: [...pair.prs, ...FU287.prs], filed: [...FU287.filed], ownership: OWNERSHIP_MD.replace(/^\/tools\/scripts\/\s+ws1-infra$/m, '/tools/scripts/                       integrator') } }, new RegExp(`tools/ticket_shape\\.py failed them: ${cite(287)} "${FINDING_CI.replace(/[()]/g, '\\$&')}"`)],
       // The window reader's listing of the issues at its limit may miss an Overnight issue's checkpoint.
       ['a truncated listing of the issues', { followUps: pair, windowRead: { issues: { count: 2000, limit: 2000, numbers: [528], error: '' } } }, /the listing of the issues returned 2000 at its limit of 2000/],
     ]) {
@@ -2615,7 +2624,8 @@ try {
         const want = direct(pr, url, body, k)
         if (r.status !== 0 || r.stdout !== want) fail(`#643: row ${k} of #${pr}'s record: exit ${r.status}, ${r.status === 0 ? 'the output is not followUpBody\'s direct result' : r.stderr}:\n${JSON.stringify(r.stdout)}\n${JSON.stringify(want)}`)
         // #973: the printed body, under the label its stderr names, carries only the ticket
-        // template's headings, and tools/ticket_shape.py prints no heading note on it.
+        // template's headings and no Owner line beside a path-bearing Touches line, and
+        // tools/ticket_shape.py prints no heading or derived-owner note on it.
         const label = (/, label (\S+?)(:|$)/m.exec(r.stderr) || [])[1]
         if (!label) fail(`#973: row ${k} of #${pr}'s record names no label on stderr: ${r.stderr}`)
         else {
@@ -2631,7 +2641,6 @@ try {
       // and line suffix taken off, "this record" read as the record's own link.
       const BODY_443_2 = [
         `**Raised by:** #443, from its review record ${R443}`,
-        '**Owner:** ws3-identity',
         '**Touches:** `tests/Platform.Identity.Tests/AccessTokenSourceTests.cs`, `tests/Platform.Identity.Tests/BackchannelTimeoutTests.cs`',
         '',
         '## What to build',
@@ -2651,7 +2660,6 @@ try {
       // escaped pipe read back as a pipe.
       const BODY_966_1 = [
         `**Raised by:** #966, from its review record ${R966}`,
-        '**Owner:** integrator',
         '**Touches:** `tools/review_record.py`',
         '',
         '## What to build',
