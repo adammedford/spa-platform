@@ -1654,15 +1654,18 @@ class ClosesTests(LandTestCase):
                                  case.origin_refs())
 
     def assertRowAnswered(self, row: dict, locale: str = "C"):
-        """One row of the shared table (#745, #806), a local reference, a qualified one or a GitHub
-        issue URL: its commits on the branch, oldest first, its description on the pull request,
-        and land.sh's answer the row's, with land.sh run under LC_ALL=`locale`."""
+        """One row of the shared table (#745, #806, #1147), a local reference, a qualified one,
+        `GH-n`, a GitHub issue URL or a link form: its commits on the branch, oldest first, its
+        description on the pull request, and land.sh's answer the row's, with land.sh run under
+        LC_ALL=`locale`."""
         case = MergingCase(self, commits=tuple(row["commits"]), description=row["description"])
         result = case.run(PR, *case.with_body, "--subject", self.SUBJECT,
                           env=case.env(LC_ALL=locale))
-        if "otherRepository" in row:
-            self.assertRefused(case, result, f"closes {row['otherRepository']}, the owner/repo#n form",
-                               READS_HEAD)
+        refused = (f"closes {row['otherRepository']}, the owner/repo#n form" if "otherRepository" in row
+                   else f"closes through a link, {row['link']}, beside a GitHub issue URL" if "link" in row
+                   else "")
+        if refused:
+            self.assertRefused(case, result, refused, READS_HEAD)
             self.assertTrue(any("Write Closes #n" in line for line in result.land_lines()),
                             result.stderr)
             self.assertEqual({"main": case.base_tip, MergingCase.BRANCH: case.head},
@@ -1681,8 +1684,8 @@ class ClosesTests(LandTestCase):
         for row in CLOSING_ROWS:
             with self.subTest(why=row.get("why")):
                 self.assertEqual({"why", "description", "commits"},
-                                 set(row) - {"unnamed", "otherRepository", "locales"})
-                self.assertEqual(1, len({"unnamed", "otherRepository"} & set(row)))
+                                 set(row) - {"unnamed", "otherRepository", "link", "locales"})
+                self.assertEqual(1, len({"unnamed", "otherRepository", "link"} & set(row)))
                 self.assertIs(True, row.get("locales", True))
                 self.assertTrue(row["commits"] and all(isinstance(m, str) for m in row["commits"]))
                 for n in row.get("unnamed", []):
