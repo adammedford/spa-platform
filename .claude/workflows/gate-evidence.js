@@ -524,7 +524,7 @@ const idVerdict = (tier, tests) => {
 // each one raw and the code decides, so the companion can hold it (Q1). A request is counted only
 // when its state is OPEN and its labels include change-request, which repeats the listing's own
 // filter so that a closed or unlabelled one served anyway holds nothing. A row waits on a request
-// in two ways: (a) the request's **Rows:** line names the row, parsed to exact row ids, no range
+// in three ways: (a) the request's **Rows:** line names the row, parsed to exact row ids, no range
 // expanded, split on commas, whitespace and the word "and", a token that is no plan row
 // withholding the tag (Q4). A served rowsLine that is not empty and does not begin **Rows:**
 // names no row and withholds the tag, quoting the line: the prompt asks only for a line that
@@ -532,7 +532,9 @@ const idVerdict = (tier, tests) => {
 // comment, 6509327875; CODING_STANDARDS.md, "A check fails closed"); (b) the request blocks an OPEN issue whose
 // title names the row as a whole token (Q3): bodies name neighbouring rows, so a body mention keeps
 // only the "open issue #n carries it" annotation. A title's tokens split on everything but letters,
-// digits, "." and "-", so P2-1 never matches P2-10 and 1.6 never matches 1.6a.
+// digits, "." and "-", so P2-1 never matches P2-10 and 1.6 never matches 1.6a; (c) the request
+// blocks the OPEN issue N that a stage row written issue-N names (#1057), whether or not openIssues
+// serves it.
 const REQUEST_LABEL = 'change-request'
 const ROWS_LINE = /^\*\*Rows:\*\*/
 const rowTokens = (text) => text.split(/[^A-Za-z0-9.\-]+/).filter(Boolean)
