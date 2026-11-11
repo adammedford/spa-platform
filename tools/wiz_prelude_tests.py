@@ -55,7 +55,19 @@ and against a plan with no changes, which must not.
 and the new session keeps the lost sitting's pin. `SkillGivesEachSittingItsOwnWayOutOfALostClaude` holds
 the route's wording, not a run: the route itself has not been run (#1094).
 
-Checkout inputs: .claude/skills/wiz/*.md .gitignore tests/e2e/Program.cs tests/e2e/SittingBrowser/Observations.cs tests/e2e/SittingBrowser/ObservationLine.cs tests/e2e/SittingBrowser/SittingBrowser.cs tests/e2e/SittingBrowser/SittingCommand.cs
+**N's `init` under a guard, and a test user's password (#760).** In the sitting of 2026-11-02 and
+2026-11-03 N's `init` exited 1 on "Backend configuration changed" over a cache that lacked a `region`,
+and run with `-reconfigure` unguarded it would follow a moved key to empty state. `GuardedInit` runs
+`shown guarded_init <root>` as N's step 2 does, on a root made for each case and against a double of
+terraform, through every branch the decision on #760 lists: no cached backend, a match, a difference,
+a value that cannot be read, and a failed `init`; on each, neither bucket's name reaches the terminal
+or the record. The same sitting asked three times for alice's password and got an improvised
+`aws ssm get-parameter | pbcopy`. `WizPassword` runs `wiz_password <user>` against doubles of `aws`,
+`pbcopy` and `sleep`: the parameter is the one the identity module names, the password reaches the
+clipboard and nothing else, the clipboard is emptied after 45 seconds by a job that does not hold the
+call's output open, and a failed read touches the clipboard not at all.
+
+Checkout inputs: .claude/skills/wiz/*.md .gitignore infra/modules/idp-cognito/main.tf tests/e2e/Program.cs tests/e2e/SittingBrowser/Observations.cs tests/e2e/SittingBrowser/ObservationLine.cs tests/e2e/SittingBrowser/SittingBrowser.cs tests/e2e/SittingBrowser/SittingCommand.cs
 """
 from __future__ import annotations
 
@@ -237,7 +249,7 @@ class SkillHoldsNoCopy(unittest.TestCase):
     # The commands a hand copy of the old block carried, written out here rather than read from the
     # prelude, so a copy is caught even when the prelude changes.
     SIGNATURES = ("date -u", ".docker/bin", "umask 077;", "aws-project.env && set +a", "shown() {", "captured() {",
-                  "spactl() {", "sitting_browser() {", "wiz_redact.py --stream; echo", "git check-ignore -q \"$E/x\"")
+                  "spactl() {", "sitting_browser() {", "wiz_password() {", "guarded_init() {", "wiz_redact.py --stream; echo", "git check-ignore -q \"$E/x\"")
 
     def skill_lines(self) -> list[tuple[str, int, str]]:
         return [(path.name, n, line) for path in SKILL_FILES
@@ -790,6 +802,277 @@ class SkillGivesEachSittingItsOwnWayOutOfALostClaude(unittest.TestCase):
 
     def test_the_new_session_keeps_the_lost_sittings_pin(self) -> None:
         self.assertIn("runs no `--pin`", self.item)
+
+class GuardedInit(Sitting):
+    """N's step 2 runs a root's `init` under the guard the decision on #760 gives, as `shown guarded_init <root>`."""
+
+    ROOT_DIR = "infra/envs/poc/idp"
+    KEY = "poc/idp/terraform.tfstate"
+    MOVED = "poc/moved/terraform.tfstate"
+    BUCKET = "spa-platform-poc-tfstate-111122223333"
+    OTHER = "spa-platform-poc-tfstate-444455556666"
+    # A double of terraform that names each call and exits as the case says.
+    DOUBLE = 'terraform() { echo "terraform $*"; return "${TF_EXIT:-0}"; }'
+    PLAIN = f"terraform -chdir={ROOT_DIR} init -backend-config=backend.hcl"
+    RECONFIGURE = f"terraform -chdir={ROOT_DIR} init -reconfigure -backend-config=backend.hcl"
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.pin(utc_day(-1) + "\n")
+        self.root = self.repo / self.ROOT_DIR
+        self.root.mkdir(parents=True)
+        self.versions(self.KEY)
+
+    def versions(self, key: str) -> None:
+        (self.root / "versions.tf").write_text(
+            'terraform {\n  required_version = ">= 1.11.0"\n\n  backend "s3" {\n'
+            f'    key          = "{key}"\n    encrypt      = true\n    use_lockfile = true\n  }}\n}}\n')
+
+    def backend_hcl(self, bucket: str | None = BUCKET, key: str | None = KEY) -> None:
+        lines = ['region = "us-east-2"']
+        if bucket is not None:
+            lines.insert(0, f'bucket       = "{bucket}"')
+        if key is not None:
+            lines.append(f'key = "{key}"')
+        lines += ["encrypt      = true", "use_lockfile = true"]
+        (self.root / "backend.hcl").write_text("\n".join(lines) + "\n")
+
+    def cache(self, bucket: str = BUCKET, key: str = KEY, region: str | None = "us-east-2", text: str | None = None) -> None:
+        directory = self.root / ".terraform"
+        directory.mkdir(exist_ok=True)
+        if text is None:
+            config = {"bucket": bucket, "key": key, "encrypt": True, "use_lockfile": True}
+            if region is not None:
+                config["region"] = region
+            text = json.dumps({"version": 3, "terraform_version": "1.16.5",
+                               "backend": {"type": "s3", "config": config, "hash": 1}})
+        (directory / "terraform.tfstate").write_text(text)
+
+    def run_guard(self, exit_code: int = 0) -> tuple[list[str], str]:
+        """`shown guarded_init <root>` through the prelude; the terminal's lines and the record."""
+        done = self.bash(f"{SOURCE}\n{self.DOUBLE}\nTF_EXIT={exit_code}\nshown guarded_init {self.ROOT_DIR}\n")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        record = (self.repo / PIN).with_name(f"{utc_day(-1)}.log").read_text()
+        for where in (done.stdout, done.stderr, record):
+            # Neither bucket's name, masked or not: the masked one keeps its prefix.
+            self.assertNotIn("tfstate-", where)
+        return done.stdout.splitlines(), record
+
+    def line(self, rest: str) -> str:
+        return f"guarded_init {self.ROOT_DIR}: {rest}"
+
+    def assertStops(self, printed: list[str], rest: str) -> None:
+        self.assertEqual(len(printed), 2, printed)
+        self.assertEqual(printed[0], self.line("stop, no init: " + rest))
+        self.assertRegex(printed[1], r"^exit=[1-9][0-9]*$")
+
+    def test_a_root_with_no_cache_runs_the_plain_init(self) -> None:
+        self.backend_hcl()
+        printed, _ = self.run_guard()
+        self.assertEqual(printed, [self.line("no cached backend; init -backend-config=backend.hcl"), self.PLAIN, "exit=0"])
+
+    def test_a_cache_with_no_backend_object_runs_the_plain_init(self) -> None:
+        self.backend_hcl()
+        self.cache(text=json.dumps({"version": 3, "terraform_version": "1.16.5"}))
+        printed, _ = self.run_guard()
+        self.assertEqual(printed, [self.line("no cached backend; init -backend-config=backend.hcl"), self.PLAIN, "exit=0"])
+
+    def test_a_cache_that_matches_runs_the_init_with_reconfigure(self) -> None:
+        self.backend_hcl()
+        self.cache()
+        printed, _ = self.run_guard()
+        self.assertEqual(printed, [self.line("bucket same, key same (key from backend.hcl); "
+                                             "init -reconfigure -backend-config=backend.hcl"),
+                                   self.RECONFIGURE, "exit=0"])
+
+    def test_a_cache_that_differs_in_region_alone_is_a_match(self) -> None:
+        self.backend_hcl()
+        for region in (None, "us-west-1"):
+            with self.subTest(region=region):
+                self.cache(region=region)
+                printed, _ = self.run_guard()
+                self.assertEqual(printed[1:], [self.RECONFIGURE, "exit=0"])
+
+    def test_a_backend_hcl_with_no_key_reads_the_key_from_versions_tf(self) -> None:
+        self.backend_hcl(key=None)
+        self.cache()
+        printed, _ = self.run_guard()
+        self.assertEqual(printed, [self.line("bucket same, key same (key from versions.tf); "
+                                             "init -reconfigure -backend-config=backend.hcl"),
+                                   self.RECONFIGURE, "exit=0"])
+
+    def test_a_key_moved_in_versions_tf_stops_and_prints_both_keys(self) -> None:
+        self.backend_hcl(key=None)
+        self.versions(self.MOVED)
+        self.cache()
+        printed, _ = self.run_guard()
+        self.assertStops(printed, f"bucket same, key differs (cached {self.KEY}, configured {self.MOVED} from versions.tf)")
+
+    def test_a_key_in_backend_hcl_is_the_one_compared(self) -> None:
+        self.versions(self.MOVED)
+        self.backend_hcl(key=self.KEY)
+        self.cache()
+        printed, _ = self.run_guard()
+        self.assertEqual(printed[1:], [self.RECONFIGURE, "exit=0"])
+        self.versions(self.KEY)
+        self.backend_hcl(key=self.MOVED)
+        printed, _ = self.run_guard()
+        self.assertStops(printed, f"bucket same, key differs (cached {self.KEY}, configured {self.MOVED} from backend.hcl)")
+
+    def test_a_cached_bucket_that_differs_stops(self) -> None:
+        self.backend_hcl()
+        self.cache(bucket=self.OTHER)
+        printed, _ = self.run_guard()
+        self.assertStops(printed, f"bucket differs, key same (cached {self.KEY}, configured {self.KEY} from backend.hcl)")
+
+    def test_a_cached_backend_beside_a_backend_hcl_that_names_no_bucket_stops_naming_the_file(self) -> None:
+        self.cache()
+        printed, _ = self.run_guard()
+        self.assertStops(printed, f"cannot read bucket from {self.ROOT_DIR}/backend.hcl (absent)")
+        self.backend_hcl(bucket=None)
+        printed, _ = self.run_guard()
+        self.assertStops(printed, f"cannot read bucket from {self.ROOT_DIR}/backend.hcl (not set)")
+
+    def test_a_key_neither_file_sets_stops(self) -> None:
+        self.backend_hcl(key=None)
+        (self.root / "versions.tf").write_text('terraform {\n  backend "s3" {\n    encrypt = true\n  }\n}\n')
+        self.cache()
+        printed, _ = self.run_guard()
+        self.assertStops(printed, f"cannot read key from {self.ROOT_DIR}/backend.hcl or {self.ROOT_DIR}/versions.tf (not set)")
+
+    def test_a_cache_that_does_not_parse_stops(self) -> None:
+        self.backend_hcl()
+        for text in ("not json", json.dumps({"backend": {"type": "s3", "config": {"key": self.KEY}}})):
+            with self.subTest(text=text):
+                self.cache(text=text)
+                printed, _ = self.run_guard()
+                self.assertEqual(len(printed), 2, printed)
+                self.assertTrue(printed[0].startswith(self.line("stop, no init: cannot read ")), printed)
+                self.assertIn(f"{self.ROOT_DIR}/.terraform/terraform.tfstate", printed[0])
+                self.assertRegex(printed[1], r"^exit=[1-9]")
+
+    def test_a_failed_init_is_the_exit_shown_prints(self) -> None:
+        self.backend_hcl()
+        printed, _ = self.run_guard(exit_code=3)
+        self.assertEqual(printed[1:], [self.PLAIN, "exit=3"])
+        self.cache()
+        printed, _ = self.run_guard(exit_code=4)
+        self.assertEqual(printed[1:], [self.RECONFIGURE, "exit=4"])
+
+    def test_the_record_holds_the_call_the_line_and_the_exit(self) -> None:
+        self.backend_hcl()
+        self.cache(bucket=self.OTHER)
+        printed, record = self.run_guard()
+        self.assertEqual(record.splitlines(), [f"$ guarded_init {self.ROOT_DIR}"] + printed)
+
+    def test_no_argument_is_a_usage_error_and_runs_nothing(self) -> None:
+        done = self.bash(f"{SOURCE}\n{self.DOUBLE}\nshown guarded_init\n")
+        self.assertEqual(done.stdout.splitlines()[-1], "exit=2", done.stderr)
+        self.assertNotIn("terraform ", done.stdout)
+
+    def test_ns_step_2_names_the_guard_and_no_init_of_its_own(self) -> None:
+        n_section = re.search(r"\*\*N, from nothing.*?(?=\*\*C4, the gate tags\.\*\*)", SKILL_FILES[0].read_text(), re.S)
+        self.assertIsNotNone(n_section)
+        step = re.search(r"^2\. (.*?)(?=^3\. )", n_section.group(0), re.M | re.S)
+        self.assertIsNotNone(step)
+        text = " ".join(step.group(1).split())
+        self.assertIn("`shown guarded_init <root>`", text)
+        self.assertNotIn("shown terraform", text)
+
+
+class WizPassword(Sitting):
+    """`wiz_password <user>` puts a test user's password on the clipboard and nowhere else (#760)."""
+
+    CANARY = "canary-Pw-0123456789"
+    DOUBLES = ('aws() { printf "%s\\n" "$*" >> "$HOME/aws.args"; [ -z "$AWS_FAIL" ] || { echo "An error occurred '
+               '(ParameterNotFound)" >&2; return 254; }; printf "%s\\n" "$AWS_VALUE"; }\n'
+               'pbcopy() { { cat; echo "<end>"; } >> "$HOME/clip"; }\n'
+               'sleep() { echo "$1" >> "$HOME/sleep.args"; }\n')
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.pin(utc_day(-1) + "\n")
+        self.home = self.dir / "home"
+
+    def run_password(self, user: str = "alice", value: str | None = None, fail: bool = False,
+                     shown: bool = False) -> subprocess.CompletedProcess:
+        value = self.CANARY if value is None else value
+        call = f"shown wiz_password {user}" if shown else f"wiz_password {user}"
+        done = self.bash(f"{SOURCE}\n{self.DOUBLES}AWS_VALUE='{value}'\nAWS_FAIL='{'1' if fail else ''}'\n"
+                         f"{call}\necho \"rc=$?\"\nwait\n")
+        for where in (done.stdout, done.stderr):
+            self.assertNotIn(self.CANARY, where)
+        record = (self.repo / PIN).with_name(f"{utc_day(-1)}.log")
+        if record.exists():
+            self.assertNotIn(self.CANARY, record.read_text())
+        return done
+
+    def read(self, name: str) -> str:
+        path = self.home / name
+        return path.read_text() if path.exists() else ""
+
+    def test_the_password_reaches_the_clipboard_and_is_emptied_after_45_seconds(self) -> None:
+        done = self.run_password()
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(self.read("clip"), f"{self.CANARY}<end>\n<end>\n")
+        self.assertEqual(self.read("sleep.args"), "45\n")
+
+    def test_it_prints_only_the_length_and_the_time_the_clipboard_clears(self) -> None:
+        done = self.run_password()
+        printed = done.stdout.splitlines()
+        self.assertEqual(len(printed), 2, printed)
+        self.assertRegex(printed[0], rf"^wiz_password alice: {len(self.CANARY)} characters on the clipboard; "
+                                     r"it clears at [0-2][0-9]:[0-5][0-9]:[0-5][0-9]Z$")
+        self.assertEqual(printed[1], "rc=0")
+
+    def test_it_reads_the_parameter_the_identity_module_writes(self) -> None:
+        module = (ROOT / "infra" / "modules" / "idp-cognito" / "main.tf").read_text()
+        template = re.search(r'password_parameter = \{ for name, _ in local\.users : name => "([^"]+)" \}', module)
+        self.assertIsNotNone(template, "the identity module names no password parameter")
+        name = template.group(1).replace("${var.cell}", "poc").replace("${name}", "bob")
+        self.run_password(user="bob")
+        self.assertEqual(self.read("aws.args"),
+                         f"ssm get-parameter --name {name} --with-decryption --query Parameter.Value --output text\n")
+
+    def test_under_shown_the_record_holds_the_length_and_not_the_password(self) -> None:
+        done = self.run_password(shown=True)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        record = (self.repo / PIN).with_name(f"{utc_day(-1)}.log").read_text().splitlines()
+        self.assertEqual(record[0], "$ wiz_password alice")
+        self.assertRegex(record[1], rf"^wiz_password alice: {len(self.CANARY)} characters on the clipboard")
+
+    def test_a_failed_read_leaves_the_clipboard_alone_and_exits_non_zero(self) -> None:
+        done = self.run_password(fail=True)
+        self.assertIn("rc=1", done.stdout.splitlines())
+        self.assertEqual(self.read("clip"), "")
+        self.assertEqual(self.read("sleep.args"), "")
+        self.assertIn("/test-users/alice", done.stderr)
+
+    def test_an_empty_value_leaves_the_clipboard_alone_and_exits_non_zero(self) -> None:
+        done = self.run_password(value="")
+        self.assertIn("rc=1", done.stdout.splitlines())
+        self.assertEqual(self.read("clip"), "")
+
+    def test_no_user_or_two_is_a_usage_error(self) -> None:
+        for args in ("", "alice bob"):
+            with self.subTest(args=args):
+                done = self.bash(f"{SOURCE}\n{self.DOUBLES}wiz_password {args}\necho \"rc=$?\"\n")
+                self.assertIn("rc=2", done.stdout.splitlines())
+                self.assertEqual(self.read("aws.args"), "")
+
+    def test_the_clearing_job_does_not_hold_the_calls_output_open(self) -> None:
+        # The Bash tool reads a call's output to its end; a job that kept it open would hold the call 45 seconds.
+        doubles = self.DOUBLES.replace('sleep() { echo "$1" >> "$HOME/sleep.args"; }',
+                                       'sleep() { echo "$1" >> "$HOME/sleep.args"; command sleep 3; }')
+        started = datetime.datetime.now()
+        done = self.bash(f"{SOURCE}\n{doubles}AWS_VALUE='{self.CANARY}'\nwiz_password alice\n")
+        took = (datetime.datetime.now() - started).total_seconds()
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertLess(took, 2.5, "the call waited for the clearing job")
+        deadline = datetime.datetime.now() + datetime.timedelta(seconds=10)
+        while self.read("clip").count("<end>") < 2 and datetime.datetime.now() < deadline:
+            subprocess.run(["/bin/sleep", "0.2"], check=False)
+        self.assertEqual(self.read("clip"), f"{self.CANARY}<end>\n<end>\n", "the job did not outlive the call")
 
 
 if __name__ == "__main__":
