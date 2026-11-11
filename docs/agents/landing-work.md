@@ -248,26 +248,38 @@ The session that will launch the overnight run prepares it, and launches `.claud
 
 An overnight run lands through the morning workflow, `.claude/workflows/morning.js` (#78), which a
 session launches with the Workflow tool by `scriptPath`, so the landed file runs and not a session's
-snapshot of it. It has three launches, below in the order a session meets them. Each line is
+snapshot of it. It has four launches, below in the order a session meets them. Each line is
 complete: copy it and change the night's date. `repo` is the main checkout. `wt` is the worktree
 root the overnight run used, the one its own launch was given, outside the repository:
 `<wt>/overnight` is the integration worktree and `<wt>/<owner>-<task id>` each ticket's. The
 Overnight issue's number, as `"issue": <n>`, may stand for `date`.
 
 The morning pass, the morning after the run: it replays the night's pending tracker writes,
-verifies and pushes the integration branch, opens its one pull request, applies the confirmed
-answers and posts the hand-over. A re-run, after a Confirm comment is posted, takes the same line.
+verifies and pushes the integration branch, opens its one pull request and posts the hand-over.
+It applies no answer and files no follow-up: the after pass applies the confirmed answers, and the
+follow-ups pass files the review records' follow-ups. A re-run, once whatever stopped Verify is
+fixed, takes the same line.
 
 ```js
 Workflow({ scriptPath: "/Users/adammedford/Projects/spa-platform/.claude/workflows/morning.js", args: { "repo": "/Users/adammedford/Projects/spa-platform", "date": "2026-10-29", "wt": "/Users/adammedford/.worktrees/overnight-2026-10-29", "after": false } })
 ```
 
 The draft check, before a Confirm comment is posted: `confirmFile` is the draft's absolute path.
-The run sorts the questions the way the morning pass would, prints the result and writes nothing.
+The run sorts the questions the way the after pass would, prints the result and writes nothing.
 It reads no worktree, so `wt` may be left out, and `after` is refused beside it.
 
 ```js
 Workflow({ scriptPath: "/Users/adammedford/Projects/spa-platform/.claude/workflows/morning.js", args: { "repo": "/Users/adammedford/Projects/spa-platform", "date": "2026-10-29", "wt": "/Users/adammedford/.worktrees/overnight-2026-10-29", "confirmFile": "/Users/adammedford/Projects/spa-platform/.scratch/overnight/log/confirm-2026-10-29.md" } })
+```
+
+The follow-ups pass, when the review records' follow-ups should be filed: it reads the pull
+requests into `main` from the last checkpoint, files each follow-up no issue holds, and posts
+`## Follow-ups <date>` on the Overnight issue with the open Apply tickets of every night. When
+coverage is incomplete the checkpoint stays, so the next pass reads the same span again. It reads
+no worktree, so `wt` may be left out, and `after` and `confirmFile` are refused beside it.
+
+```js
+Workflow({ scriptPath: "/Users/adammedford/Projects/spa-platform/.claude/workflows/morning.js", args: { "repo": "/Users/adammedford/Projects/spa-platform", "date": "2026-10-29", "followups": true } })
 ```
 
 The after pass, once `tools/land.sh` has merged the pull request: it refuses until `origin/main`
@@ -275,7 +287,7 @@ contains the integration tip identified from the merged landing pull request, th
 landed tickets, unassigns, removes the worktrees whose tips are on `origin/main`, the integration
 worktree last, and prunes.
 
-The after pass also applies every confirmed answer the morning pass could not. It closes the
+The after pass also applies every confirmed answer. It closes the
 Overnight issue once every question on it is settled: answered no, applied, or held by a ticket
 its `## After <date>` comment names. A commit answer counts as applied only once its commit is on
 `origin/main`; an unlanded commit answer keeps the issue open and is not settled merely by naming
@@ -287,7 +299,7 @@ Workflow({ scriptPath: "/Users/adammedford/Projects/spa-platform/.claude/workflo
 ```
 
 The script's `badArguments` is the arguments' checker, and `morning_tests.mjs` beside it holds these
-three lines to it: a line here missing an argument the checker requires, or carrying one it does
+four lines to it: a line here missing an argument the checker requires, or carrying one it does
 not take, fails that test. The `morning` skill under `~/.claude/skills/synced` is a different,
 unrelated skill of the same name, a personal morning brief; a search for this workflow's launch
 stops here.
