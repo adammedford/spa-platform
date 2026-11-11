@@ -21,7 +21,8 @@
 #
 # --full adds what CI runs and the hook leaves to it: the .NET test suite, tools/smoke.sh on the
 # port the caller names, tools/image-check.sh, `terraform test` for every root and module that has
-# tests, and the test companions the change earns: that of each script in tools/ or .github/ it
+# tests, hadolint over every Dockerfile through tools/dockerfile-lint.sh when the change touches a
+# Dockerfile, .hadolint.yaml or that script (#785), and the test companions the change earns: that of each script in tools/ or .github/ it
 # touches (#134), and that of each script or companion naming a library it touches, followed through
 # the libraries that name that one (#237), and that of each companion declaring, on its
 # `Checkout inputs:` line, a file of the checkout the change touches (#354), so a new pin runs the
@@ -59,9 +60,11 @@
 # no .NET source changed, and Terraform and its tests when nothing under infra/ did, nor the floor's
 # file or its helper. .github/touches.sh says what each half is, and CI's jobs skip by the same
 # classifier, so a green full check predicts CI's verdict on the same diff. CI additionally runs
-# both halves when its workflow, the classifier, tools/smoke.sh or tools/image-check.sh changes;
-# this check does not, so a change to one of those is proved in CI, and tools/image-check.sh by its
-# companion here as well.
+# both halves when its workflow, the classifier, tools/smoke.sh, tools/image-check.sh or the image
+# scan's files change; this check does not, so a change to one of those is proved in CI, and
+# tools/image-check.sh and the image scan by their companions here as well. The image scan itself,
+# tools/image-scan.sh, is CI's alone: it downloads Trivy's database each run, and its verdict moves
+# with the database rather than with the change (#785).
 #
 # Both modes run Terraform at the floor, the version CI runs, when this machine has it, and name the
 # version in the last line either way (#69). Without the floor they run the terraform on PATH and
@@ -297,7 +300,7 @@ fi
 
 # Whether this change touches a half. What counts as a half is .github/touches.sh's to say, and CI
 # reads the same patterns. CI's decision step additionally runs both jobs for changes to the workflow,
-# the classifier, tools/smoke.sh or tools/image-check.sh. With no base to diff against, assume this
+# the classifier, tools/smoke.sh, tools/image-check.sh or the image scan's files. With no base to diff against, assume this
 # change touches both halves: a skipped check has to be earned by a diff that proves it
 # unnecessary. --both-halves asks for both outright; the header says when.
 touches() {
@@ -671,6 +674,37 @@ elif [ -n "$terraform_bin" ]; then
   fi
 else
   missing terraform Terraform
+fi
+
+# --- in full, hadolint over every Dockerfile ----------------------------------------------------
+#
+# Nothing linted a Dockerfile, and hadolint was out of #584's scope (#785). tools/dockerfile-lint.sh
+# runs the pinned hadolint image over every Dockerfile git tracks, with .hadolint.yaml, and says
+# what it fails and why. It runs when the diff touches a Dockerfile, at the top level or at any
+# depth, the configuration or the script, as the image build's companion runs on a change to a
+# Dockerfile (#390), and under --both-halves, which promises no skips. A Dockerfile under
+# tools/bench/ is in neither half, so this is gated on its own paths and not on the build half's. It
+# needs Docker, and the script fails without it, as the header says a full check must. The hook
+# leaves it to the full check and to CI's Documents job, which runs it on every push.
+lints_dockerfiles() {
+  local path
+  $both && return 0
+  for path in ${changed:-}; do
+    case "$path" in
+      Dockerfile | */Dockerfile | .hadolint.yaml | tools/dockerfile-lint.sh) return 0 ;;
+    esac
+  done
+  return 1
+}
+
+if $full; then
+  if lints_dockerfiles; then
+    tools/dockerfile-lint.sh || fail "hadolint failed a Dockerfile, or did not run."
+    elapsed "the Dockerfiles' lint"
+    ran="$ran, the Dockerfiles' lint"
+  else
+    echo "check: the Dockerfiles' lint skipped: no Dockerfile, .hadolint.yaml or tools/dockerfile-lint.sh changed."
+  fi
 fi
 
 # --- in full, the test companions of the scripts the change touches ------------------------------
