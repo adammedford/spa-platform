@@ -11,6 +11,9 @@
   3. **The ramp finishing changes nothing here.** The pending list lives only in `.globalconfig`
      (decision 6), so `grep pending .globalconfig` printing nothing is the finished state, and no
      line of this record restates it.
+  See #619 (merged 2026-10-31 as 6948fec) for CA5359, which decision 13 names as suppressed at
+  `RawClient.To`: it was fixed instead, by `TlsLoadBalancer.PinnedTo` in
+  `tests/e2e/Stack/TlsLoadBalancer.cs`, which accepts only a certificate with the stack's own key.
 - **Date:** 2026-10-30
 - **Deciders:** integrator, on Adam's answers to #589, #590, #591, #592, #593 and #594 (wayfinder
   map #584)
