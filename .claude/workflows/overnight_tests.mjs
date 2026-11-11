@@ -960,7 +960,7 @@ const reportSummary = reportPrompt ? JSON.parse((/^Run results \(JSON\): (.*)$/m
 //     change-request issues are searched before anything is filed; a request is filed ready-for-human, blocking its
 //     ticket; and when GitHub is unreachable a create line is queued in the shape morning.js replays (#433). The
 //     route's body shape is run through tools/ticket_shape.py under ready-for-human, as collect's forecast judges
-//     every listed ticket: without its Owner line it would fail owner-line (#442 Q68). Just before the create, the
+//     every listed ticket: the route's form names its Owner line, which owner-line holds (#442 Q68). Just before the create, the
 //     route runs tools/ticket_shape.py --since from the time its search began, files only on its pass, folds a
 //     duplicate filed since, and queues the line, carrying that time, when nothing was searched (#678).
 {
@@ -1972,6 +1972,10 @@ const forkOf = (prompt) => (/Otherwise fork from [^:]+: forkSha = (\S+?)\. Take 
   for (const c of allPrompts.filter((x) => x.label === 'collect')) {
     if (!c.prompt.includes('Give each ticket in "tickets" the "touches" list of the tool\'s ticket with the same issue number, copied as printed (#665)')) fail('#665: the collect prompt does not copy each ticket\'s touches from tools/overnight_collect.py')
     if (!c.prompt.includes('never read a Touches line yourself')) fail('#665: the collect prompt lets the agent read a Touches line')
+    // #1070: a body with no Owner line is owned by the role its paths derive, which only the tool reads; a lane
+    // keyed by the agent's own reading would run a ws6 ticket in the integrator's lane.
+    if (!c.prompt.includes('Give each ticket in "tickets" the "owner" of the tool\'s ticket with the same issue number, copied as printed, in place of yours (#1070)')) fail('#1070: the collect prompt does not copy each ticket\'s owner from tools/overnight_collect.py')
+    if (!c.prompt.includes('so never derive one yourself; a ticket the tool does not list keeps yours.')) fail('#1070: the collect prompt lets the agent derive an owner from Touches paths')
   }
   // A conflict before any integration gate has passed back-merges the run base, never the branch's tip as read.
   {

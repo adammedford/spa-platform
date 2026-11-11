@@ -30,8 +30,9 @@ The rules, as the collect step states them:
   with sub-issues is a spec, listed under "parents", and never a ticket.
 - id: the `**Plan row:** X` value when it is a plan row id, else `issue-<number>`.
 - owner: the first role the `**Owner:**` line names, by its place in the line, mapped to
-  OWNERSHIP.md's roles; an I-* row is the integrator's. When the line names other roles, "why" says
-  they land in their own pull requests.
+  OWNERSHIP.md's roles; with no Owner line, the one role the Touches paths derive, by
+  tools/ticket_shape.py's derived_owner(); an I-* row is the integrator's, and so is a body neither
+  gives a role. When the line names other roles, "why" says they land in their own pull requests.
 - blockedBy: the open blockers, by id when tonight's set holds them, else `issue-<number>`.
 - status, in this order: foreground (#480) for a `**Touches:** none` line under any of the three
   labels, a tracker edit no lane can make and a grill adds nothing to, so it gets no lane, no
@@ -344,9 +345,11 @@ def ticket_id(issue: Issue) -> str:
     return token if PLAN_ID.match(token) else f"issue-{issue.number}"
 
 
-def owner_of(issue: Issue, tid: str) -> tuple[str, list[str]]:
+def owner_of(issue: Issue, tid: str, rules: list[tuple[str, str]]) -> tuple[str, list[str]]:
     """The ticket's owner, and the other roles its Owner line names, in the line's order. The owner
-    is the first role named, or the integrator for an I-* row or a line naming none."""
+    is the integrator for an I-* row, else the first role named; with no Owner line at all, the one
+    role the Touches paths derive, by ticket_shape.derived_owner() (#1070); else the integrator. A
+    line that is present and names no role is the integrator's, as the shape check fails it."""
     line = OWNER.search(issue.body)
     value = line.group("value").strip().lower() if line else ""
     places = []
@@ -355,8 +358,26 @@ def owner_of(issue: Issue, tid: str) -> tuple[str, list[str]]:
         if found:
             places.append((found.start(), role))
     named = [role for _, role in sorted(places)]
-    owner = "integrator" if tid.startswith("I-") or not named else named[0]
+    if tid.startswith("I-"):
+        owner = "integrator"
+    elif named:
+        owner = named[0]
+    elif line is None:
+        owner = derived_owner(issue, rules) or "integrator"
+    else:
+        owner = "integrator"
     return owner, [role for role in named if role != owner]
+
+
+def derived_owner(issue: Issue, rules: list[tuple[str, str]]) -> str | None:
+    """The one role the ticket's Touches paths derive, as ticket_shape.derived_owner() reads them.
+    A check that cannot read them refuses the answer, as touches_of() does, so a broken check stops
+    the forecast rather than routing the ticket to the integrator."""
+    try:
+        return ticket_shape().derived_owner(issue.body, rules)
+    except (Exception, SystemExit) as error:
+        raise Refused(f"the ticket-shape check could not derive the owner of #{issue.number}: "
+                      f"{type(error).__name__}: {error}") from error
 
 
 def others_land_apart(others: list[str]) -> str:
@@ -564,7 +585,7 @@ def resolve(listings: dict[str, list[dict]], branch_names: list[str], road: dict
     resolved = []
     for n, issue in enumerate(sorted(tickets, key=order), start=1):
         tid = id_of[issue.number]
-        owner, others = owner_of(issue, tid)
+        owner, others = owner_of(issue, tid, rules)
         resolved.append({
             "n": n, "id": tid, "slug": slug_of(issue.title, tid), "issue": issue.number,
             "url": issue.url, "title": issue.title, "status": status[issue.number],
