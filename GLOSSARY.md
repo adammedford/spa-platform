@@ -41,6 +41,14 @@ default project".
 reads that no agent session runs, usually walked through by a wizard. _Avoid_: bare "session", which
 the glossary keeps for agent sessions and the gateway's session records.
 
+**Sitting record** — what a sitting posts for one row of its ticket: one comment on that ticket,
+redacted, giving the row's outcome and naming the commit deployed, the task ids involved, the
+browser where one applies, and each evidence file by its SHA-256; the files stay in the sitting's
+local bundle and are never uploaded. A gate tag message cites a row by its record's URL, and a row
+with no test id has no other proof to cite. _Avoid_: "the evidence" for the comment, which names
+the files it points at, and bare "the record", which the wiz skill says for the sitting's
+unredacted local log.
+
 **Sitting browser** — the headless browser a wizard drives for a sitting's browser steps in place
 of the human's signed-in tab: the process and its browser together, holding one or more profiles.
 What it yields is observation lines; it never yields a screenshot, a cookie, a session's name or a
