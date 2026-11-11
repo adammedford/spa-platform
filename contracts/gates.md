@@ -29,8 +29,9 @@ table, because the gate-evidence route reads every table here and refuses a gate
 
 1. a gates table of one row, Gate | Proves | Exit test | Unblocks | Recorded by, whose Exit test
    cell is the one sentence the gate's tag message quotes;
-2. beneath it, Id | Tiers required: one test id a row, never a range, its tiers `H`, `D` or
-   `H, D`, so the ids are read as data and not parsed from the sentence's prose;
+2. beneath it, Id | Tiers required: one test id a row, never a range, its tiers a list of `H`, `L`
+   and `D`, such as `H`, `H, D` or `L, D`, so the ids are read as data and not parsed from the
+   sentence's prose; a `B-` id takes only `L` and `D` (ADR-0033, "The proof exception");
 3. beneath that, where the gate names acceptance criteria, Criterion | Ids: each criterion with the
    ids of the table above that prove it, `—` for none (#364 Q7).
 
