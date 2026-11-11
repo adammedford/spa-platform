@@ -1658,6 +1658,15 @@ const JQ_LINES = '"\\r\\n|[\\n\\u000b\\f\\r\\u001c-\\u001e\\u0085\\u2028\\u2029]
 // A comment's or a review's index entry (#514), as INDEXED: the lines that look like a record line, a
 // pattern looser than RECORD, which the script applies, so the cut drops no record.
 const JQ_INDEX = (at, state) => `[.[][] | (.body // "") as $b | {url: .html_url, at: (.${at} // ""), association: .author_association, state: ${state}, bytes: ($b | utf8bytelength), hasTable: ($b | contains("${FOLLOW_UP_HEAD_FOUR}")), lines: [$b | splits(${JQ_LINES}) | select(test("Reviewed [0-9a-f]{40} against [0-9a-f]{40}: (merge|hold)"))]} | select(.lines | length > 0)]`
+// The issues already filed from pull request <pr>, cut from the "Raised by #<pr> in:body" listing (#1155).
+// That search matches loosely: 30 issues and about 400 KB for #38 to #40, whole Overnight reports for
+// #475 and #474, so every record reader overflowed and the checkpoint never advanced. This keeps the
+// issues whose body has a "**Raised by:**" line naming #<pr>, as tools/land.sh's filed_jq does, and
+// reads that line as filedAs reads it: a line starts after \n, \r, U+2028 or U+2029 (a JS multiline
+// ^), and runs to the next \n. So it keeps every issue filedAs can hold a follow-up by, and drops only
+// ones filedAs would refuse anyway. U+2028 and U+2029 are written as jq escapes, as JQ_LINES writes
+// them, so the command an agent copies carries no invisible character.
+const JQ_FILED = (pr) => String.raw`[.[] | select((.body // "") | test("(^|[\n\r\u2028\u2029])\\*\\*Raised by:\\*\\*[^\n]*#${pr}([^0-9]|$)"))]`
 
 // The follow-ups pass's first agent (#1082 Q9): the lookup, which takes the issue open or closed, then
 // the window. A date given by issue number alone is the title's, so the run log's directory is named
@@ -1706,7 +1715,7 @@ ${HOUSE(p.mdir)}
 OUTPUT FILE: ${p.mdir}/followups-records-${k}.txt
 RECORDS: ${JSON.stringify(items.map((i) => ({ pr: i.pr, url: i.url })))}
 1. records, one per RECORDS entry, in its order: a comment, its URL ending "#issuecomment-<id>", is \`cd ${REPO} && gh api repos/{owner}/{repo}/issues/comments/<id> --jq '{url: .html_url, at: .created_at, association: .author_association, state: "", body}'\`; a review, its URL ending "#pullrequestreview-<id>", is \`cd ${REPO} && gh api repos/{owner}/{repo}/pulls/<pr>/reviews/<id> --jq '{url: .html_url, at: .submitted_at, association: .author_association, state, body}'\`. Copy bodies byte for byte: the script reads the record and its follow-ups table from them.
-2. filed: for each of #${prs.join(', #')}, \`cd ${REPO} && gh issue list --state all --limit 500 --search "Raised by #<number> in:body" --json number,title,body,url\`, every issue of every listing once, each body verbatim.
+2. filed: the issues already filed from each pull request, one listing each, whose --jq keeps only the issues with a "**Raised by:**" line naming it (#1155): ${prs.map((n) => `#${n}, \`cd ${REPO} && gh issue list --state all --limit 500 --search "Raised by #${n} in:body" --json number,title,body,url --jq '${JQ_FILED(n)}'\``).join('; ')}. filed is every issue of every listing once, each body verbatim; run each command as written, since the search alone matches far more than the follow-ups it is for.
 3. If GitHub cannot be reached, or a record cannot be read, error says so. error is "" when nothing stopped you.
 Write the whole result as JSON to the OUTPUT FILE, then return it.`
 }
