@@ -19,7 +19,7 @@ first lived (ADR-0016 decision 7). This file never freezes.
 lands between gates as prose, under [`README.md`](README.md)'s rule, except that a row whose check
 waits for a gate (one needing a new rule id, say) lands in that gate's integrator commit.
 
-**Numbering.** A new id continues its prefix's sequence: F-24, N-33, P-08 and A-06 are next. A number
+**Numbering.** A new id continues its prefix's sequence: F-24, N-36, P-08 and A-06 are next. A number
 is given only when the row's change request is decided, is never reused and never takes a letter
 suffix. A dropped check keeps its row, its Tier cell reading `retired` and its Recorded by cell
 gaining the decision that retired it, so old merge bodies, tags and review records stay true. An
@@ -54,6 +54,9 @@ table and a Recorded by column naming the ADR, change request or confirmed answe
 | N-30 | Rotation, the purge failing, matrix row F7 (#332): `tests/Gateway.IntegrationTests/Continuity/RotationTests.cs`: `P2_5_F7_with_the_purge_failing_A_refuses_the_old_session_at_once_and_B_serves_it_until_polled` | With the purge failing, A refuses the old session at once (the ticket store's client binding) and B serves it (200) until it is polled, then refuses it | H | #538 (moved from change request P2-5, continuity rows); #345 |
 | N-31 | Rotation with a login in flight, matrix row F9 (#332): `tests/Gateway.IntegrationTests/Continuity/RotationTests.cs`: `P2_5_F9_a_login_started_under_the_old_client_and_called_back_after_convergence_is_refused_and_a_fresh_login_succeeds` | A login started under the old client and called back after convergence ends on the 400 failure page with no session cookie; a fresh login succeeds under the new client | H | #538 (moved from change request P2-5, continuity rows); #345 |
 | N-32 | Replay the pre-logout cookie on the other task; `tests/e2e/Deployed/ContinuityTests.cs`: `ContinuityTests.Row9_a_session_ended_on_one_task_is_refused_by_the_other` | The pre-logout cookie, replayed after a logout on one task, is refused 401 `unauthenticated` by the other, with the same replay just before logout answering 200 as the control | D | change request #539 (deployed continuity rows); #358 |
+| N-33 | Upstream refuses the connection: `tests/Gateway.SecurityTests/Negative/UpstreamFailureTests.cs`: `An_upstream_that_refuses_the_connection_is_502_upstream_unavailable` | 502 with an `application/problem+json` body whose code is `upstream_unavailable`, under no rule id | H | change request #734; #715 |
+| N-34 | Upstream accepts and stays silent before its response headers past the entry's `timeoutSeconds`: `tests/Gateway.SecurityTests/Negative/UpstreamFailureTests.cs`: `An_upstream_silent_before_its_headers_past_the_timeout_is_504_upstream_timeout` | 504 with an `application/problem+json` body whose code is `upstream_timeout`, under no rule id | H | change request #734; #715 |
+| N-35 | The HTTP/1.1 connection bound of one app's API: with the bound's number of connections held open to a controlled upstream, kept open by its response traffic, one more call to the same API: `tests/Gateway.SecurityTests/Negative/UpstreamFailureTests.cs`: `One_call_over_the_connection_bound_is_504_upstream_timeout_before_headers_and_the_upstream_never_sees_it` | 504 with an `application/problem+json` body whose code is `upstream_timeout`, with no upstream headers, within the entry's `timeoutSeconds`; the upstream's peak simultaneous connections is the bound and it never sees the extra call; under no rule id | H | change request #734; #715 |
 
 ## Infrastructure and architecture properties (P)
 
