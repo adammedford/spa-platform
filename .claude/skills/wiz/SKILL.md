@@ -80,8 +80,8 @@ holds it to cases. Sourced, it moves to the main checkout's top level (rule 8), 
 and Region of `tools/aws-project.env`, puts the per-user Docker Desktop on `PATH`, sets the
 owner-only file mask, names the record `R` and the bundle `E` (rule 6) and makes the bundle's
 directory once git confirms it is ignored, and defines `shown`, `captured`, `spactl`, a function so
-`SPACTL` stays unset (Q80), and `sitting_browser`, which D0 and D2 drive. Never copy its commands
-into a call or into this file.
+`SPACTL` stays unset (Q80), `sitting_browser`, which D0 and D2 drive, `wiz_password`, and
+`guarded_init`, which N's step 2 runs. Never copy its commands into a call or into this file.
 
 The record and bundle are named after the sitting's pinned date, never the clock's: a sitting that
 crossed midnight UTC once moved both to the next day mid-sitting, and a test run did nothing.
@@ -484,11 +484,14 @@ line of it:
   `"$RUN/secret"` and to the parameter and never read back, and the post names the parameter's
   version before and after and the count the runbook's last line prints, never a value, a secret's
   id or a client id. A step that signs in, or reads what a signed-in page shows, is the human's:
-  wiz asks, and records the UTC time and what the page showed (signed in, sent to sign in again, a
-  404, a 401, the `index.html` marker's text), never a cookie or a session's name. An app host's
-  `/` is behind the shell gate (`GLOSSARY.md` → Shell gate: an unauthenticated navigation is
-  challenged), so what an app serves is read in the human's signed-in tab, never by a `shown`
-  request.
+  wiz asks, and records the UTC time and what the page showed (signed in with its `expiresAt`, sent
+  to sign in again, a 404, the `index.html` marker's text), never a cookie or a session's name. A
+  session is read on the app page's session panel, which fetches `GET /bff/session`; typed as an
+  address that endpoint answers 403 `origin_rejected`. When the human signs in as a test user,
+  `wiz_password <user>` puts the password on the clipboard and prints only its length and the time
+  the clipboard clears: a background job empties it after 45 seconds. An app host's `/` is behind
+  the shell gate (`GLOSSARY.md` → Shell gate: an unauthenticated navigation is challenged), so what
+  an app serves is read in the human's signed-in tab, never by a `shown` request.
 
 **The setup before walk 1.** A cell seeded once holds one release of app 1, so release rollback's
 step 1 finds no earlier registry version whose release for app 1 differs, and the runbook has
@@ -522,9 +525,11 @@ key, a cookie or a secret:
   the plan's four-step count of `docs/plan/05-infrastructure-and-cost.md` → Rotating a client
   secret, where step 3 points the entry and step 4 deletes the old secret, not by the runbook's
   seven headings; the post cites the file's section headings as they read at the commit walked);
-- ending an app's sessions: `/bff/user` answering 200 before, the host 404 between the removal and
-  the re-add, 401 after the re-add, the purge line step 3 reads through `logs.sh`, and app 2's
-  session answering 200 throughout;
+- ending an app's sessions: app 1's session panel signed in before, with its `expiresAt`; the host
+  404 between the removal and the re-add; a new session after the re-add, shown by a changed
+  `expiresAt` with or without a login prompt, since a live Cognito session signs the browser in
+  again silently; the purge line step 3 reads through `logs.sh`, read again when the first read
+  comes before the line reaches the log; and app 2's session keeping its `expiresAt` throughout;
 - gateway rollback: R's, below.
 
 **The post**, one comment per walk on #244 through the post mode, headed by the walk's name as
@@ -617,11 +622,20 @@ read the file in the ssh login the route names, and then removes it.
 
 1. `shown tools/scripts/certs.sh status`, then `shown tools/scripts/certs.sh import` when ACM holds
    no `*.spa-poc.test`.
-2. The identity root, then the apps root: `shown terraform -chdir=<root> init
-   -backend-config=backend.hcl`, then N's saved plan. Post both apply summaries on
-   #242: this is a new user pool, so new client ids and test user passwords. The apply's Outputs
-   block prints each `clientId`; rule 8 masks it in the post, and the post is read once for any
-   client id in another shape before it goes.
+2. The identity root, then the apps root: `shown guarded_init <root>`, the prelude's function,
+   which runs the root's `init` under a guard. It compares the bucket and key the root is
+   configured with (the bucket from `backend.hcl`; the key from `backend.hcl` when it sets one,
+   otherwise from the `backend "s3"` block of the root's `versions.tf`) with those of the cached
+   backend in the root's `.terraform/terraform.tfstate`, and prints which branch it took and never
+   the bucket's name. With no cached backend it runs `init -backend-config=backend.hcl`. On a
+   match it runs `init -reconfigure -backend-config=backend.hcl` (the state is where `backend.hcl`
+   says, so a cache an earlier sitting left with other settings is rewritten and nothing is
+   migrated). On a difference it runs no `init` and exits non-zero: stop and name the cause, since
+   a moved key would point the root at empty state, and its plan would show only creates, which
+   rule 2 does not stop. Then N's saved plan. Post both apply summaries on #242: this is a new
+   user pool, so new client ids and test user passwords. The apply's Outputs block prints each
+   `clientId`; rule 8 masks it in the post, and the post is read once for any client id in another
+   shape before it goes.
 3. `infra/envs/poc/platform/terraform.tfvars` (git-ignored: on a fresh checkout copy
    `terraform.tfvars.example` to it first): back it up first (`cp -p` to `terraform.tfvars.bak`),
    then `shown tools/scripts/platform-tfvars.sh` (#470), which rewrites `issuers` from the identity

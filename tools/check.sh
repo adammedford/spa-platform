@@ -466,6 +466,22 @@ else
   missing python3 "the analysis guard"
 fi
 
+# --- the endpoint paths -----------------------------------------------------------------------
+#
+# A skill or a runbook that names an endpoint the gateway does not have sends a sitting to a 404 and
+# a wrong post: on 2026-11-03 the wiz skill's `/bff/user` cost three round trips with the human and a
+# post that blamed the runbook (#760). tools/endpoint_paths.py reads every gateway path the skills,
+# the runbooks and the test catalogue name against contracts/http-contract.md's Endpoints table and
+# reserved-paths sentence, and says what it reads and why. It reads the tree, not the diff, so it is
+# never skipped; its exit 2, a contract or a file it could not read, fails here as a finding does.
+if command -v python3 > /dev/null; then
+  python3 -I tools/endpoint_paths.py \
+    || fail "a skill, a runbook or the test catalogue names a path contracts/http-contract.md does not make known, or none was judged."
+  elapsed "the endpoint paths"
+else
+  missing python3 "the endpoint paths"
+fi
+
 # --- duplicated build artifacts ---------------------------------------------------------------
 #
 # iCloud Drive leaves files like "Platform.Abstractions 2.dll" and "project.assets 2.json" in bin/
@@ -547,7 +563,7 @@ elapsed "the file modes"
 # has none yet, and G1a's exit test, which nothing else proves. CI builds Release; this builds the
 # default Debug, as the hook always has, and smokes what it built. Last, the gateway's image, built
 # and started as the header says; it publishes in the image, so it does not use this build.
-ran="A-05, the steering documents, every ticket citation, the ticket numbers, the part-row merges, the full-landing merges, the roadmap, the analysis guard, the artifacts, the file modes"
+ran="A-05, the steering documents, every ticket citation, the ticket numbers, the part-row merges, the full-landing merges, the roadmap, the analysis guard, the endpoint paths, the artifacts, the file modes"
 
 if touches build; then
   command -v dotnet > /dev/null || fail "dotnet is not on PATH."
