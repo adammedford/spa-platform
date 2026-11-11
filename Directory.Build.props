@@ -13,10 +13,11 @@
     <WarningsNotAsErrors>$(WarningsNotAsErrors);NU1901;NU1902;NU1903;NU1904</WarningsNotAsErrors>
   </PropertyGroup>
 
-  <!-- Source analysis in every build, dotnet build, tools/check.sh and CI alike (ADR-0035 decisions 5
-       and 14). Every SDK rule is on, at warning, which TreatWarningsAsErrors makes an error; the root
-       .globalconfig holds the per-id exceptions, a pending rule at suggestion or a decline, and the
-       relaxed tier's relaxations are .editorconfig's last *.cs section.
+  <!-- Source analysis in every build, dotnet build, tools/check.sh, CI and each image's publish alike
+       (ADR-0035 decisions 5 and 14). Every SDK rule is on, at warning, which TreatWarningsAsErrors
+       makes an error; the root .globalconfig holds the per-id exceptions, a pending rule at
+       suggestion or a decline, and the relaxed tier's relaxations are .editorconfig's last *.cs
+       section.
        The level is pinned at 10, not latest, so that global.json's rollForward cannot add rules unseen.
        AnalysisLevelStyle must not equal AnalysisLevel: the SDK's code-style targets add the style
        rules' config only when the two differ (or the modes do, or the style level is 11 or later),
@@ -26,12 +27,12 @@
        generator at the commit its csc names:
        https://github.com/dotnet/dotnet/blob/e34a38d2ae1fc26406a317517196e55c68ff83ab/src/roslyn/src/CodeStyle/Tools/Program.cs#L262-L266
        10.0-all is the same level and bucket as 10-all, written so it differs.
-       The settings apply only where the root .globalconfig is beside this file. Every checkout has
-       it, and tools/analysis_guard.py fails a tree without it, so no build here runs without them;
-       an image build that copies this file and not the analyzer configs, as fixtures/MockApi's and
-       tools/bench/floor's Dockerfiles do, publishes under the SDK's defaults, as before #606, rather
-       than with every rule at error and none of the exceptions. -->
-  <PropertyGroup Condition="Exists('$(MSBuildThisFileDirectory).globalconfig')">
+       The settings carry no condition on the analyzer configs. A build that reads this file without
+       .editorconfig and .globalconfig beside it runs every rule at error with none of the exceptions,
+       and fails, rather than publishing under the SDK's defaults unseen, as a missing banned list
+       below fails the compile. Every Dockerfile copies the two configs with this file, and
+       tools/image_build_tests.py holds each one's build-files line to the gateway's (#673). -->
+  <PropertyGroup>
     <AnalysisLevel>10-all</AnalysisLevel>
     <AnalysisMode>All</AnalysisMode>
     <AnalysisLevelSecurity>10-all</AnalysisLevelSecurity>
@@ -54,14 +55,14 @@
        every AdditionalFile named BannedSymbols.*.txt and reports a use as RS0030, at its default
        warning, which TreatWarningsAsErrors makes an error. The relaxed tier carries none: its code
        never ships, and fixtures/TestIdp and tests/e2e need the primitives.
-       The lists apply where the analysis does, beside the root .globalconfig; the gateway's image
-       copies them with it. No list is guarded by its own Exists: a missing one fails the compile
+       The lists apply in every strict-tier build; every image copies them with the analyzer configs.
+       No list is guarded by its own Exists: a missing one fails the compile
        (CS2001) rather than dropping its bans unseen. The file names, the // comments and the
        T:/N:/M: ids are the analyzer's documented format:
        https://github.com/dotnet/roslyn/blob/main/src/RoslynAnalyzers/Microsoft.CodeAnalysis.BannedApiAnalyzers/BannedApiAnalyzers.Help.md
        That page does not say a namespace ban reaches child namespaces or that a type ban misses
        derived types; #608's throwaway calls showed both, which is why each HMAC subclass is listed. -->
-  <ItemGroup Condition="'$(SpaRelaxedTier)' != 'true' and Exists('$(MSBuildThisFileDirectory).globalconfig')">
+  <ItemGroup Condition="'$(SpaRelaxedTier)' != 'true'">
     <AdditionalFiles Include="$(MSBuildThisFileDirectory)BannedSymbols.Shipping.txt" />
     <AdditionalFiles Include="$(MSBuildThisFileDirectory)BannedSymbols.NotIdentity.txt" Condition="'$(MSBuildProjectName)' != 'Platform.Identity'" />
     <AdditionalFiles Include="$(MSBuildThisFileDirectory)BannedSymbols.NotProxy.txt" Condition="'$(MSBuildProjectName)' != 'Platform.Proxy'" />
@@ -72,27 +73,12 @@
        Each is an unconditional PackageReference rather than a GlobalPackageReference, which the pins
        sweep cannot see; PrivateAssets keeps the analyzer out of every consumer's dependencies. The
        versions are Directory.Packages.props's Analyzers group, and the root .globalconfig holds each
-       package's declines and pending lines.
-       Where the root .globalconfig is not beside this file, as in fixtures/MockApi's and
-       tools/bench/floor's image builds, the target below drops the packages' analyzers from the
-       compile, so those images publish under the SDK's defaults, as the analysis properties above
-       say. Without it the packages' DLL defaults, MA0004 among them, fail those builds under
-       TreatWarningsAsErrors with none of the declines (#607). ExcludeAssets="analyzers" on the
-       references does not do it: the MockApi image build still fails with it (#607). The target
-       runs after the SDK's ResolveLockFileAnalyzers, which adds each package's analyzers as
-       Analyzer items carrying NuGetPackageId, in Microsoft.PackageDependencyResolution.targets:
-       https://github.com/dotnet/sdk/blob/main/src/Tasks/Microsoft.NET.Build.Tasks/targets/Microsoft.PackageDependencyResolution.targets -->
+       package's declines and pending lines. -->
   <ItemGroup>
     <PackageReference Include="Meziantou.Analyzer" PrivateAssets="all" />
     <PackageReference Include="Microsoft.VisualStudio.Threading.Analyzers" PrivateAssets="all" />
     <PackageReference Include="Microsoft.CodeAnalysis.BannedApiAnalyzers" PrivateAssets="all" />
   </ItemGroup>
-  <Target Name="SpaDropAnalyzerPackagesWithoutConfig" AfterTargets="ResolveLockFileAnalyzers"
-          Condition="!Exists('$(MSBuildThisFileDirectory).globalconfig')">
-    <ItemGroup>
-      <Analyzer Remove="@(Analyzer)" Condition="'%(Analyzer.NuGetPackageId)' == 'Meziantou.Analyzer' or '%(Analyzer.NuGetPackageId)' == 'Microsoft.VisualStudio.Threading.Analyzers' or '%(Analyzer.NuGetPackageId)' == 'Microsoft.CodeAnalysis.BannedApiAnalyzers'" />
-    </ItemGroup>
-  </Target>
 
   <!-- A project whose name ends in "Tests" is an xUnit v3 test project, set up as the xUnit template does:
        an executable that references xunit.v3 and runs on Microsoft Testing Platform (see global.json). -->
