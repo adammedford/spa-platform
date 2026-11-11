@@ -49,7 +49,9 @@ OnRedirectToIdentityProvider event (src/Platform.Identity/AuthenticationEvents.c
 reads the provider's discovery document before it raises that event
 (OpenIdConnectHandler.HandleChallengeAsyncInternal,
 https://github.com/dotnet/aspnetcore/blob/v10.0.0/src/Security/Authentication/OpenIdConnect/src/OpenIdConnectHandler.cs).
-With the example's Cognito authority the first app-host fetch is a 500. So each run's network
+With the example's Cognito authority that read fails, and since #908 the fetch is still answered 401,
+on the failure path (src/Platform.Identity/ProviderDiscovery.cs), which is not the event ADR-0033
+times. So each run's network
 namespace is held by a small container that serves a static discovery document on 127.0.0.1:9000,
 and the measured container joins that namespace with `--network container:`. That is the shape of a
 Fargate task, whose containers share one namespace under awsvpc. Both kinds run that way, so the
@@ -88,8 +90,8 @@ line (CODING_STANDARDS.md).
 `SystemExit` from the docker lookup when `docker` is not on PATH, and otherwise the traceback of
 whatever uncaught error stopped it. Those errors include a `RuntimeError` from a failed docker
 command, a failed stand-in seed, a container that never printed its line, a probe that did not
-start or failed, or a gateway 401 that came without a discovery read; an `OSError` when `git` is missing or the `--json` file could not be written; a
-`CalledProcessError` when `git` fails; and a `TimeoutExpired` when the probe outlives its wait. The
+start or failed, or a gateway 401 that came without a discovery read; an `OSError` when `git` is
+missing or the `--json` file could not be written; a `CalledProcessError` when `git` fails; and a `TimeoutExpired` when the probe outlives its wait. The
 `seed` subcommand's version check is a `SystemExit` too, exit 1 inside its container, which the run
 reads as a failed seed. In either mode argparse refuses a usage error, exit 2, before any run starts.
 """
@@ -407,8 +409,9 @@ def gateway_environment(config: dict, endpoint: str, discovery: str, trust_file:
     stand-in and the SDK chain resolved from the environment alone: the endpoint, AWS_REGION (the
     .NET chain reads no other) and a static key pair (docs/research/local-aws-stand-in.md, section
     1). SSL_CERT_FILE is the run's CA, which issued the stand-in's certificate: .NET on Linux reads
-    its root store from that file in place of the image's bundle, and nothing else the gateway
-    reaches here uses TLS."""
+    its root store from that file in place of the image's bundle (getenv(X509_get_default_cert_file_env()),
+    https://github.com/dotnet/runtime/blob/v10.0.0/src/native/libs/System.Security.Cryptography.Native/pal_x509_root.c),
+    and nothing else the gateway reaches here uses TLS."""
     env: Dict[str, str] = {}
 
     def flatten(prefix, value):
