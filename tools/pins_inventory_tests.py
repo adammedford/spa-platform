@@ -391,6 +391,85 @@ class BaseImages(Case):
         self.assertEqual(len(data["baseImages"]), scoped.count("(src/Gateway/Dockerfile, "))
 
 
+class BaseImageDigests(Case):
+    """The registry's answer for each pinned tag, read monthly by the sweep (#1166; #779, answer 5)."""
+
+    MOVED = "sha256:" + "1" * 64
+
+    def gateway(self, data):
+        return {r["stage"]: r for r in data["baseImages"] if r["dockerfile"] == GATEWAY_DOCKERFILE}
+
+    def answer(self, r, sdk=None, aspnet=None):
+        """A recorded registry answer: the sdk tag's digest moved, the aspnet tag's did not."""
+        rows = self.gateway(self.inventory(self.repo()))
+        out = {}
+        if sdk is not None:
+            out["mcr.microsoft.com/dotnet/sdk:10.0-noble"] = sdk
+        if aspnet is not None:
+            out["mcr.microsoft.com/dotnet/aspnet:10.0-noble-chiseled-extra"] = rows["final"]["digest"] if aspnet == "same" else aspnet
+        return out
+
+    def test_a_moved_tag_is_moved_and_an_unmoved_one_is_current(self):
+        r = self.repo()
+        data = self.inventory(r, image_digests=self.answer(r, sdk=self.MOVED, aspnet="same"))
+        rows = self.gateway(data)
+        self.assertEqual(("moved", self.MOVED), (rows["build"]["status"], rows["build"]["current"]))
+        self.assertEqual(("current", rows["final"]["digest"]), (rows["final"]["status"], rows["final"]["current"]))
+        self.assertNotEqual(rows["build"]["digest"], rows["build"]["current"])
+        family = next(f for f in data["families"] if f["id"] == "base-images")
+        self.assertEqual("moved", family["status"])
+
+    def test_both_tags_unmoved_make_the_family_current(self):
+        r = self.repo()
+        rows = self.gateway(self.inventory(self.repo()))
+        data = self.inventory(r, image_digests={"mcr.microsoft.com/dotnet/sdk:10.0-noble": rows["build"]["digest"],
+                                                "mcr.microsoft.com/dotnet/aspnet:10.0-noble-chiseled-extra": rows["final"]["digest"]})
+        self.assertEqual(["current", "current"], [x["status"] for x in self.gateway(data).values()])
+        # Every row is read, the other Dockerfiles' too, since they pin the same two tags.
+        self.assertEqual({"current"}, {x["status"] for x in data["baseImages"]})
+        self.assertEqual("current", next(f for f in data["families"] if f["id"] == "base-images")["status"])
+
+    def test_a_tag_with_no_answer_stays_not_checked_and_the_table_says_it_was_not_read(self):
+        r = self.repo()
+        data = self.inventory(r, image_digests=self.answer(r, aspnet="same"))
+        rows = self.gateway(data)
+        self.assertEqual(("not-checked", ""), (rows["build"]["status"], rows["build"]["current"]))
+        self.assertEqual("current", rows["final"]["status"])
+        # One tag unread holds the family at not-checked: a half-read family is never current.
+        self.assertEqual("not-checked", next(f for f in data["families"] if f["id"] == "base-images")["status"])
+        out = run("render", "--input", r.input("inventory", data))[1]
+        line = next(l for l in out.splitlines() if l.startswith(f"| mcr.microsoft.com/dotnet/sdk:10.0-noble ({GATEWAY_DOCKERFILE}, build)"))
+        cells = [c.strip() for c in line.split(" | ")]
+        self.assertEqual(("?", "not-checked"), (cells[2], cells[3]))
+        self.assertIn("not read", cells[5])
+        self.assertNotIn("current", cells[3])
+
+    def test_an_answer_that_is_not_a_digest_is_not_read(self):
+        r = self.repo()
+        data = self.inventory(r, image_digests=self.answer(r, sdk="", aspnet="not-a-digest"))
+        self.assertEqual(["not-checked", "not-checked"], [x["status"] for x in self.gateway(data).values()])
+
+    def test_the_table_names_the_current_digest_of_a_moved_tag_and_of_a_current_one(self):
+        r = self.repo()
+        data = self.inventory(r, image_digests=self.answer(r, sdk=self.MOVED, aspnet="same"))
+        rows = self.gateway(data)
+        out = run("render", "--input", r.input("inventory", data))[1]
+        self.assertIn(f"| mcr.microsoft.com/dotnet/sdk:10.0-noble ({GATEWAY_DOCKERFILE}, build) | {rows['build']['digest']} | "
+                      f"{self.MOVED} | moved |", out)
+        self.assertIn(f"| mcr.microsoft.com/dotnet/aspnet:10.0-noble-chiseled-extra ({GATEWAY_DOCKERFILE}, final) | "
+                      f"{rows['final']['digest']} | {rows['final']['digest']} | current |", out)
+
+    def test_the_tags_command_lists_each_pinned_tag_once(self):
+        r = self.repo()
+        r.write("fixtures/Other/Dockerfile", "FROM mcr.microsoft.com/dotnet/sdk:10.0-noble AS build\n")
+        r.commit()
+        code, out, err = run("tags", "--repo", str(r.dir))
+        self.assertEqual(0, code, err)
+        # The unpinned FROM names a tag with no digest to compare, so it is not read.
+        self.assertEqual(["mcr.microsoft.com/dotnet/aspnet:10.0-noble-chiseled-extra", "mcr.microsoft.com/dotnet/sdk:10.0-noble"],
+                         out.split())
+
+
 class Rendering(Case):
     def canned(self):
         r = self.repo()
