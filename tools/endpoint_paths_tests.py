@@ -80,6 +80,15 @@ class UnknownPaths(Tree):
                          "endpoint-paths: docs/plan/04-tests.md:1: /readyz/extra is not an endpoint "
                          "contracts/http-contract.md makes known")
 
+    def test_a_path_after_a_host_and_port_with_no_scheme_is_read(self) -> None:
+        # Review of #760: `localhost:5180/bff/user` was taken for a file-system path and skipped.
+        self.write(".claude/skills/x/SKILL.md", "`curl localhost:5180/bff/user`\n`127.0.0.1:5530/readyz/extra`\n")
+        self.assertFails(self.run_check(),
+                         "endpoint-paths: .claude/skills/x/SKILL.md:1: /bff/user is not an endpoint "
+                         "contracts/http-contract.md makes known",
+                         "endpoint-paths: .claude/skills/x/SKILL.md:2: /readyz/extra is not an endpoint "
+                         "contracts/http-contract.md makes known")
+
     def test_a_skill_file_at_any_depth_is_read(self) -> None:
         self.write(".claude/skills/x/deep/more.md", "`GET /bff/sessions`\n")
         self.assertFails(self.run_check(), "endpoint-paths: .claude/skills/x/deep/more.md:1: /bff/sessions is not "
@@ -104,7 +113,17 @@ class KnownPaths(Tree):
         self.write("docs/notes.md", "`/bff/user`\n")
         self.write("docs/runbooks/sub/r.md", "`/bff/user`\n")
         self.write(".claude/skills/x/untracked.md", "`/bff/user`\n", tracked=False)
-        self.assertPasses(self.run_check())
+        self.write(".claude/skills/x/SKILL.md", "`GET /bff/session`\n")
+        done = self.run_check()
+        self.assertPasses(done)
+        self.assertEqual(done.stdout.splitlines()[-1], "endpoint-paths: pass: 1 paths in 1 files")
+
+    def test_a_tree_with_none_of_the_files_it_reads_exits_2(self) -> None:
+        # Review of #760: a listing that matched no file passed as "0 paths in 0 files".
+        self.write("docs/notes.md", "`/bff/user`\n")
+        done = self.run_check()
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertEqual(done.stdout.splitlines()[-1], "endpoint-paths: fail: nothing was judged")
 
     def test_a_filesystem_path_that_holds_api_is_not_an_endpoint(self) -> None:
         self.write(".claude/skills/x/SKILL.md", "`tests/api/fixtures`, `src/bff/x`\n")

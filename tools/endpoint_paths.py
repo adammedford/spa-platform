@@ -15,7 +15,8 @@ It reads the tracked files of the repository it runs in, from the top level: eve
 `/healthz`, ending at the first character that cannot be part of a path, and with any query string
 and trailing full stop dropped. A path counts at the start of a line, after a character that cannot
 end a file-system path segment (so `tests/api/x` is not one), or after a URL's host
-(`https://app1.spa-poc.test/bff/user` is). A bare prefix, `/bff/` or `/api/` with nothing after it
+(`https://app1.spa-poc.test/bff/user` is) or a host and port with no scheme (`localhost:5180/readyz`
+is, since `curl` takes an address with its scheme left out). A bare prefix, `/bff/` or `/api/` with nothing after it
 or only `*`, names the prefix and is not a path.
 
 A path is known when `contracts/http-contract.md` makes it known, which this reads from the
@@ -33,8 +34,8 @@ It prints each unknown path as `endpoint-paths: <file>:<line>: <path> is not an 
 contracts/http-contract.md makes known` on stderr, then one verdict line on stdout,
 `endpoint-paths: pass: <n> paths in <m> files` or `endpoint-paths: fail: ...`, and exits 1 on any
 unknown path. A contract it cannot read, with no Endpoints table or no reserved-paths sentence, or a
-file it cannot list or read, exits 2: a check that read nothing must not pass (CODING_STANDARDS.md,
-"A check fails closed").
+file it cannot list or read, or a listing that holds none of the files it reads, exits 2: a check
+that read nothing must not pass (CODING_STANDARDS.md, "A check fails closed").
 
 Run its companion: python3 -I tools/endpoint_paths_tests.py
 """
@@ -54,7 +55,7 @@ READ = (re.compile(r"\.claude/skills/.+\.md"), re.compile(r"docs/runbooks/[^/]+\
 PATH = re.compile(r"/(?:bff|api)/[A-Za-z0-9_.~{}*/-]*|/(?:readyz|healthz)[A-Za-z0-9_.~{}*/-]*")
 # A character that ends a file-system path segment before a `/`: `tests/api` is a directory.
 SEGMENT = re.compile(r"[A-Za-z0-9_.-]")
-URL_HOST = re.compile(r"[a-z][a-z0-9+.-]*://[^\s/`'\"()<>]+$")
+URL_HOST = re.compile(r"(?:[a-z][a-z0-9+.-]*://[^\s/`'\"()<>]+|[A-Za-z0-9.-]+:[0-9]+)$")
 
 
 class Unreadable(Exception):
@@ -119,6 +120,8 @@ def main() -> int:
         exact, prefixes = known_paths(contract)
         tracked = git("-C", top, "ls-files", "-z").split("\0")
         files = sorted(path for path in tracked if path and any(rule.fullmatch(path) for rule in READ))
+        if not files:
+            raise Unreadable("no tracked skill, runbook or test-catalogue file was found to read")
         unknown = 0
         count = 0
         for name in files:
