@@ -1040,12 +1040,13 @@ class FollowUpsTests(LandTestCase):
     with --unreviewed, are not checked. The merges here fail on purpose at gh, as MergeCallTests'
     do, which is what shows the check let them through.
 
-    A row with the line still owes an issue (#573): the morning files a record's rows from open
-    pull requests only (#514), so before the merge land.sh lists the issues raised by the pull
-    request and names each row no issue answers, matched as morning.js's filedAs matches, the
-    finding as the title once lowercased and its whitespace collapsed. It warns and merges; a row
-    an issue answers, and a record with no row, print nothing, and a listing gh cannot make is
-    said and not held against the merge."""
+    A row with the line still owes an issue (#573): the follow-ups pass files a record's rows
+    from the merged pull requests its window reaches too (#514, #1082), but only when it is next
+    launched, so before the merge land.sh lists the issues raised by the pull request and names
+    each row no issue answers, matched as morning.js's filedAs matches, the finding as the title
+    once lowercased and its whitespace collapsed. It warns and merges; a row an issue answers,
+    and a record with no row, print nothing, and a listing gh cannot make is said and not held
+    against the merge."""
 
     FINDING = "AppDefinitionValidationTests cannot fail on an empty host"
     OTHER_FINDING = "TraceTests reads the span name from the test's own string"
@@ -1082,9 +1083,9 @@ class FollowUpsTests(LandTestCase):
                 self.assertMerged(case, result, f"{self.WITH}\n\n{REVIEWED}", before=READS_FILED,
                                   lines=[self.unfiled(self.FINDING)])
                 line = result.land_lines()[0]
-                # It says what the morning will not do once the merge is made, and how the row is filed.
-                self.assertIn("morning", line)
-                self.assertIn(f"#{PR} merges", line)
+                # It says which pass files the row after the merge, and how the row is filed sooner.
+                self.assertIn("follow-ups pass", line)
+                self.assertIn(f"#{PR}'s record", line)
                 self.assertIn(f"**Raised by:** #{PR}", line)
                 # And what to re-read before filing it, since a carried row is often fixed after
                 # the record (#1111): the description as it reads now, then each closed issue's

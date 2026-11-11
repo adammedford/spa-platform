@@ -101,12 +101,14 @@ merge body, which `docs/agents/landing-work.md` requires anyway, and end the rev
 findings with each carried finding that names no open ticket, in the `## Follow-ups` table the
 review-queue workflow writes, whose `Fails on` cell names the input or state on which the finding
 gives the wrong result; a finding with no such input is a note under its axis, not a row, and files
-nothing. The morning run files each row as an issue of its own while the pull
-request is still open (#292, #514); a row still unfiled when `tools/land.sh` merges is named by its
-`land:` warning (#573), and is filed by hand with the finding as the title and the body
+nothing. The follow-ups pass (`docs/agents/landing-work.md` -> "The morning's launches") files each
+row as an issue of its own, from the latest record on each pull request into `main` that is open,
+merged since its checkpoint or recorded since it (#292, #514, #1082); a row still unfiled when
+`tools/land.sh` merges is named by its `land:` warning (#573), and the next follow-ups pass files
+it, or it is filed by hand first with the finding as the title and the body
 `node .claude/workflows/follow_up_body.mjs <pr> <record-url> <record.md> <row>` prints, whose
-`**Raised by:** #<pr>` line is the shape the morning's `filedAs` reads and whose stderr names the
-label to file it under (#643). Hold when a finding shows the
+`**Raised by:** #<pr>` line is the shape that pass's `filedAs` reads, so it finds the row already
+filed, and whose stderr names the label to file it under (#643). Hold when a finding shows the
 change does not do what it says, or when the test that proves it cannot fail.
 
 ### The review record
