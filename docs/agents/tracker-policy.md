@@ -206,6 +206,13 @@ rule's heading, and its last line is that rule's. Every session posts as `@adamm
 a convention the shared account cannot enforce, as the rule that no agent session writes a
 `Confirm` is (above): the prompts and the reviewer guard it.
 
+The same holds for an approval of a ticket that is no change request, filed `ready-for-human`
+because its scope awaits Adam's approval: it is posted under "A decision Adam gives in a session"
+(above), and the session that posts it relabels the ticket `ready-for-agent` in the same step,
+after testing the relabel with `tools/ticket_shape.py -` on the ticket's JSON with
+`ready-for-agent` in place of `ready-for-human`, as a relabel fires the shape check. A declined
+scope is closed as a decline (Lifecycle, above).
+
 A `Confirm` on the Overnight issue never authorises a change request's edit; only the request's
 decision comment does. `.github/steering.py` reads only a cited comment's author, so it cannot tell
 the two apart, and the reviewer holds a commit whose `Authority:` is a `Confirm` on a change request.
