@@ -458,7 +458,10 @@ function stub(env, scriptArgs, served) {
           edits: edits.map((e) => ({ issue: e.target, comment: `${URL(e.target)}#issuecomment-8`, removed: e.removeBoxes, questions: [e.q] })),
           edges: (unit.edges || []).map((e) => ({ issue: e.target, blockedBy: e.addBlockedBy, questions: [e.q] })),
           candidates: qs.filter((q) => q.kind === 'decision-to-record').map((q) => ({ url: `${URL(q.issue)}#issuecomment-7`, questions: [q.q] })),
-          rewrites: unit.tickets.filter((t) => t.rewrite).map((t) => ({ issue: t.issue, comment: `${URL(t.issue)}#issuecomment-8` })),
+          // served.rewriteNotMade: tickets whose rewrite the applier did not make; served.rewriteFound:
+          // tickets whose rewrite an earlier pass made, which the after pass's applier finds in place
+          // and reports in verified, not as a rewrite it made (#1157).
+          rewrites: unit.tickets.filter((t) => t.rewrite && ![...(served.rewriteNotMade || []), ...(served.rewriteFound || [])].includes(t.issue)).map((t) => ({ issue: t.issue, comment: `${URL(t.issue)}#issuecomment-8` })),
           skipped: [], pushed: { branch: `integrator/morning-${DATE}`, tip: sha('f'), ok: true, reason: '' }, refused: '', unreachable: false,
         }
         // The after pass's applier (#635) also reports each question whose work is in place. A commit
@@ -477,6 +480,7 @@ function stub(env, scriptArgs, served) {
             ...(unit.followUps || []).map((f, i) => ({ q: f.q, effect: URL(600 + i), held: 600 + i, onMain: false })),
             ...qs.filter((q) => q.kind === 'decision-to-record').map((q) => ({ q: q.q, effect: `${URL(q.issue)}#issuecomment-7`, held: 0, onMain: false })),
             ...edits, ...edges,
+            ...unit.tickets.filter((t) => t.rewrite && (served.rewriteFound || []).includes(t.issue)).flatMap((t) => t.questions.filter((q) => q.kind === 'no-repo-change').map((q) => ({ q: q.q, effect: `${URL(t.issue)}#issuecomment-8`, held: (served.rewriteFoundUnheld || []).includes(t.issue) ? 0 : t.issue, onMain: false }))),
           ]
         }
       } else if (label === 'pr-refresh') {
@@ -1198,6 +1202,37 @@ try {
       if (!q1 || !q1.includes(`integrator/morning-${DATE}`) || /held by/.test(q1)) fail(`#635 Q30, ${label}: Q1 is not unsettled on the morning branch: ${JSON.stringify(q1)}\n${text}`)
       if (/^- Q1\b/m.test(section(text, 'Settled'))) fail(`#635 Q30, ${label}: the unlanded commit answer is listed as settled`)
       if (jsonAfter(r.prompt('after-handover'), 'CLOSE') !== false || r.result.issueClosed) fail(`#635 Q30, ${label}: the issue was closed over an unlanded commit answer`)
+    }
+  }
+
+  // 10d2. A no-repo-change answer on a rewritten ticket is held by that ticket once its rewrite is in
+  //       place (#1157): the applier made the rewrite now, or found an earlier pass's still in place
+  //       and listed the answer in verified. While the rewrite is not made, the answer stays unsettled
+  //       and the issue open. Q6 is #302's no-repo-change answer; Q1 has landed, so Q6 alone decides.
+  checks++
+  {
+    for (const [label, served, settles] of [
+      ['rewritten by this pass', { landed: [1], rewrite: [302] }, true],
+      ['rewrite found in place', { landed: [1], rewrite: [302], rewriteFound: [302] }, true],
+      ['rewrite not made', { landed: [1], rewrite: [302], rewriteNotMade: [302] }, false],
+      // A verified entry that names no holder is not #302's rewrite found in place.
+      ['verified entry names no holder', { landed: [1], rewrite: [302], rewriteFound: [302], rewriteFoundUnheld: [302] }, false],
+      // One applier for every ticket: #300's rewrite, made in the same unit, does not hold #302's answer.
+      ['another ticket rewritten in its unit', { landed: [1], rewrite: [300, 302], rewriteNotMade: [302], maxParallel: 1 }, false],
+    ]) {
+      const { maxParallel, ...rest } = served
+      const r = maxParallel ? await execute(newRepo(), { date: DATE, after: true, maxParallel }, { issue: AFTER_NIGHT, kinds: {}, classes: AFTER_CLASSES, ...rest }) : await afterRun(served)
+      const text = afterText(r)
+      const q6 = (/^- Q6\b.*$/m.exec(section(text, settles ? 'Settled' : 'Unsettled')) || [''])[0]
+      if (settles && !/held by #302\b.*rewrite/.test(q6)) fail(`#1157, ${label}: Q6 is not settled as held by its rewritten ticket #302: ${JSON.stringify(q6)}\n${text}`)
+      if (!settles && (!q6 || /held by #302\b/.test(q6) || /^- Q6\b/m.test(section(text, 'Settled')))) fail(`#1157, ${label}: Q6 is not unsettled while #302's rewrite is not made: ${JSON.stringify(q6)}\n${text}`)
+      if (jsonAfter(r.prompt('after-handover'), 'CLOSE') !== settles) fail(`#1157, ${label}: CLOSE is ${jsonAfter(r.prompt('after-handover'), 'CLOSE')}, expected ${settles}\n${text}`)
+      // The applier is told to report the answer once the rewrite is in place, so a relaunch that finds
+      // an earlier pass's rewrite can settle it.
+      const p = (r.calls.find((c) => c.label.startsWith('apply:') && jsonAfter(c.prompt, 'UNIT').tickets.some((t) => t.issue === 302)) || {}).prompt || ''
+      if (!/no-repo-change question of a ticket whose rewrite is in place is listed in verified/.test(p)) fail(`#1157, ${label}: the applier of #302 is not told to list its no-repo-change answer in verified once the rewrite is in place`)
+      // Nor told, a few lines on, that such a question needs nothing at all, which would contradict it.
+      if (/A no-repo-change question needs nothing\./.test(p)) fail(`#1157, ${label}: the applier of #302 is told a no-repo-change question needs nothing, against the verified entry it is asked for`)
     }
   }
 

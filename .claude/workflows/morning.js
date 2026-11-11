@@ -1575,7 +1575,7 @@ summary says in one line what applying it changes. rewrites lists each ticket wh
 // fetches origin/main fresh, finds a commit already landed there, checks each effect is still in place
 // before it skips it (Q24), and reports what is in place as verified, which the settled rule reads (Q29, Q30).
 const afterApplyRules = (issue) => `This is the after pass (#635), run once the landing merged. First \`git -C ${REPO} fetch origin\`, so origin/main is fresh. A commit an earlier pass made may have landed already: look for one whose body cites #${issue} and the question on origin/main too, \`git -C ${REPO} log origin/main --format=%B\`, and when one does, that commit is the question's, made already. Before you skip anything as already done, check that its effect is still in place: the commit on origin/main or on the morning branch, the filed issue still there (\`cd ${REPO} && gh issue view <n> --json number,state\`), the comment still among its ticket's comments, the box still gone, the edge still among the blockers. An effect no longer in place is made again, never skipped.
-verified lists each question of the unit whose work is now in place, made by you or found still in place, as {q, effect, held, onMain}: effect is the commit's full sha, or the URL of the issue filed, the comment posted or the ticket edited; held is the number of the issue that now holds the question's remaining work, the workstream ticket or the follow-up filed for it, and 0 when none does (a commit answer's own ticket never holds it); onMain, for a commit, is whether \`git -C ${REPO} merge-base --is-ancestor <sha> origin/main\` exits 0, and false for anything else. A commit you made on the morning branch now is not on origin/main. A question whose work is not in place is not listed.
+verified lists each question of the unit whose work is now in place, made by you or found still in place, as {q, effect, held, onMain}: effect is the commit's full sha, or the URL of the issue filed, the comment posted or the ticket edited; held is the number of the issue that now holds the question's remaining work, the workstream ticket or the follow-up filed for it, and 0 when none does (a commit answer's own ticket never holds it); onMain, for a commit, is whether \`git -C ${REPO} merge-base --is-ancestor <sha> origin/main\` exits 0, and false for anything else. A commit you made on the morning branch now is not on origin/main. A no-repo-change question of a ticket whose rewrite is in place is listed in verified too, made by you or found still in place (its "## Body rewritten" comment still among the ticket's comments), with effect that comment's URL and held the ticket (#1157). A question whose work is not in place is not listed.
 `
 // The record a body rewrite posts (#968). GitHub keeps every edit of an issue body in the issue's edit
 // history, so the verbatim old body exists without a copy: 142 "## Body before <date>" comments held
@@ -1649,7 +1649,7 @@ FOLLOW-UP TICKETS: the unit's followUps, each with its q, title, blockedBy, file
 3. Only when that exits 0, its last line starting "ticket-shape: pass:", file it: \`cd ${REPO} && gh issue create --title "<its title>" --label needs-triage --body-file <its file>\`, adding --blocked-by <n> for each blockedBy number. It is neither a sub-issue nor a blocker of the ticket that raised it (docs/agents/tracker-policy.md): no --parent. On exit 1 file nothing and list it in skipped with each "ticket-shape: <rule>:" line; on any other exit file nothing and say in skipped that the check did not judge it, quoting its last line. Never reword a body to get past the check: a failure is reported, not repaired. List each one filed in issues with its number, url, title and questions [its q].
 Ticket edits: the unit's edits, each {q, target, removeBoxes} (#320). Read the target, \`cd ${REPO} && gh issue view <target> --json body,subIssuesSummary\`. A spec, an issue with sub-issues, is never edited (#78 grill Q13): list it in skipped. Each line of removeBoxes must be a whole line of the body, byte for byte; when one is not, edit nothing for that q and list it in skipped with the line not found. Otherwise, as a rewrite does, change it by the REWRITE RECORD's four steps below, its new body the current one with exactly those lines removed and no other byte changed, and its comment's question line naming Q<n> of #${issue}. List each in edits {issue: the target, comment: the "## Body rewritten ${date}" comment's URL, removed: the lines removed, questions: [its q]}. The unit's edits run in order, each reading the body the last one left.
 Ticket edges: the unit's edges, each {q, target, addBlockedBy}. Read the target's blockers, \`cd ${REPO} && gh issue view <target> --json blockedBy\`, and add each one missing, \`cd ${REPO} && gh issue edit <target> --add-blocked-by <n>\`, one call per number. List each in edges {issue: the target, blockedBy: the numbers it now carries from addBlockedBy, questions: [its q]}.
-${afterApplyRules(issue)}A no-repo-change question needs nothing. If GitHub cannot be reached, stop writing, set unreachable true and return what was made. refused is "" unless you refused the whole unit, with why.
+${afterApplyRules(issue)}A no-repo-change question needs nothing made, though it is still listed in verified once its ticket's rewrite is in place, as above. If GitHub cannot be reached, stop writing, set unreachable true and return what was made. refused is "" unless you refused the whole unit, with why.
 ${rewriteRecord(date, issue, p.mdir)}`
 }
 
@@ -2009,6 +2009,18 @@ const settleOf = (date, ap) => {
     if (!r) { unsettled.push(`Q${q}: its applier ${c.unit || '(none)'} returned nothing; relaunch the after pass`); continue }
     if (r.refused || r.unreachable) { unsettled.push(`Q${q}: its applier ${c.unit} ${r.refused ? 'refused' : 'could not reach GitHub'}; relaunch the after pass`); continue }
     const v = (r.verified || []).filter((e) => e && e.q === q)
+    // A no-repo-change answer on a rewritten ticket is held by that ticket once its rewrite is in
+    // place (#1157): the applier made the rewrite, or found it in place and listed the answer in
+    // verified. Until then it is unsettled, never read as an applier that reported nothing.
+    if (c.kind === 'no-repo-change') {
+      // A verified entry counts only when it names this ticket as holding the answer, as the applier
+      // prompt asks: one naming no holder, or another, is not this ticket's rewrite found in place.
+      const made = (r.rewrites || []).find((w) => w && w.issue === c.issue)
+      const found = v.find((e) => e.held === c.issue)
+      if (made || found) settled.push(`Q${q}: held by #${c.issue}, its own ticket, whose implementation applies it; its rewrite is in place (${made ? made.comment : found.effect})`)
+      else unsettled.push(`Q${q}: needs nothing once #${c.issue}'s rewrite is in place, which its applier ${c.unit} does not report: rewrite #${c.issue} and relaunch the after pass`)
+      continue
+    }
     if (c.kind === 'integrator-edit') {
       const landed = v.find((e) => FULL.test(e.effect || '') && e.onMain === true)
       const made = v.find((e) => FULL.test(e.effect || ''))
