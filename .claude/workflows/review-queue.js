@@ -1188,11 +1188,15 @@ const laterDateFindings = (inv) => {
 // letter, digit or underscore before it, then an optional colon, any whitespace, # and every digit
 // after it, anywhere in a line and as often as it occurs, each line read on its own. Whitespace is
 // POSIX's space class in the C locale, the set land.sh's [[:space:]] reads. A keyword before
-// owner/repo#n or a bare GitHub issue URL (#806) refuses the description whatever
-// else it holds, naming the form, as land.sh refuses it before it reads a commit; on the first line
-// holding one, the last on that line, which is the match land.sh's greedy prefix finds. GitHub does
-// not document closing by URL: land.sh's comment cites its two pages, says which shapes were
-// observed to close (#1053), and names the forms GitHub closed on that neither copy reads (#1147).
+// owner/repo#n, GH-n in any case (#1147) or a bare GitHub issue URL (#806) refuses the description
+// whatever else it holds, naming the form, as land.sh refuses it before it reads a commit; on the
+// first line holding one, the last on that line, which is the match land.sh's greedy prefix finds.
+// Failing those, a keyword, an optional colon and whitespace, then [ or < refuses it when the
+// description holds a GitHub issue URL on any line (#1147), naming the keyword through its bracket,
+// the last on the first line holding one; no Markdown is parsed, so a code span does not hide it.
+// GitHub does not document closing by URL, by a link or by GH-n: land.sh's comment cites its two
+// pages, says which shapes were observed to close (#1053, #1147), and names the rows of the table
+// that hold them, from "GH-n is refused, not read as #n, though a commit names #26" on.
 // Otherwise each ticket is named unless #n, or issue-n with no letter, digit or underscore before it, appears
 // with no digit after it in the message of a commit whose parent count is an integer below 2, as git
 // log --no-merges keeps; a commit with no parent count does not count, so the check fails closed.
@@ -1200,13 +1204,20 @@ const laterDateFindings = (inv) => {
 // names them.
 const CLOSING_KEYWORD = '(?<![A-Za-z0-9_])(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?):?[ \\t\\n\\v\\f\\r]*'
 const CLOSING_REFERENCE = new RegExp(CLOSING_KEYWORD + '#(\\d+)', 'gi')
-const OTHER_REPOSITORY = new RegExp(CLOSING_KEYWORD + '([^ \\t\\n\\v\\f\\r#/]+/[^ \\t\\n\\v\\f\\r#/]+#\\d+|https?://(?:www[.])?github[.]com/[^ /#\\t\\n\\v\\f\\r]+/[^ /#\\t\\n\\v\\f\\r]+/issues/\\d+)', 'gi')
+const ISSUE_URL_SOURCE = 'https?://(?:www[.])?github[.]com/[^ /#\\t\\n\\v\\f\\r]+/[^ /#\\t\\n\\v\\f\\r]+/issues/\\d+'
+const OTHER_REPOSITORY = new RegExp(CLOSING_KEYWORD + '([^ \\t\\n\\v\\f\\r#/]+/[^ \\t\\n\\v\\f\\r#/]+#\\d+|gh-\\d+|' + ISSUE_URL_SOURCE + ')', 'gi')
+// A link form's match, the lookbehind taking no characters, is the keyword through its `[` or `<`.
+const LINK_FORM = new RegExp(CLOSING_KEYWORD + '[[<]', 'gi')
+const ISSUE_URL = new RegExp(ISSUE_URL_SOURCE, 'i')
 const closingReferences = (inv) => {
-  const lines = String(inv.description || '').split('\n')
+  const description = String(inv.description || '')
+  const lines = description.split('\n')
   for (const line of lines) {
     const forms = [...line.matchAll(OTHER_REPOSITORY)]
-    if (forms.length) return { otherRepository: forms[forms.length - 1][1], unnamed: [] }
+    if (forms.length) return { otherRepository: forms[forms.length - 1][1], link: '', unnamed: [] }
   }
+  const links = lines.map((line) => [...line.matchAll(LINK_FORM)]).find((forms) => forms.length)
+  if (links && ISSUE_URL.test(description)) return { otherRepository: '', link: links[links.length - 1][0], unnamed: [] }
   const tickets = lines.flatMap((line) => [...line.matchAll(CLOSING_REFERENCE)].map((m) => m[1]))
   const messages = (inv.commitMessages || [])
     .filter((c) => c && Number.isInteger(c.parents) && c.parents < 2 && typeof c.message === 'string')
@@ -1215,7 +1226,7 @@ const closingReferences = (inv) => {
     const named = new RegExp('(?:#' + n + '|(?<![A-Za-z0-9_])issue-' + n + ')(?!\\d)')
     return !messages.some((msg) => named.test(msg))
   })
-  return { otherRepository: '', unnamed }
+  return { otherRepository: '', link: '', unnamed }
 }
 
 // ---------------------------------------------------------------- a rebuilt head
@@ -1316,10 +1327,14 @@ const reviewOne = async (n, res, at) => {
   }
 
   // A closing reference land.sh would refuse stops the pull request before any other agent runs (#688).
-  const { otherRepository, unnamed } = closingReferences(inv)
+  const { otherRepository, link, unnamed } = closingReferences(inv)
   if (otherRepository) {
-    log(`#${n}: the description closes ${otherRepository}, the owner/repo#n form or a GitHub issue URL; stopped before the review`)
-    return failed(res, `closes: the description closes ${otherRepository}, the owner/repo#n form or a GitHub issue URL, which tools/land.sh cannot read against the commits and refuses. Write Closes #n for a ticket of this repository; a ticket of another repository is not closed from here`)
+    log(`#${n}: the description closes ${otherRepository}, the owner/repo#n form, the GH-n form or a GitHub issue URL; stopped before the review`)
+    return failed(res, `closes: the description closes ${otherRepository}, the owner/repo#n form, the GH-n form or a GitHub issue URL, which tools/land.sh cannot read against the commits and refuses. Write Closes #n for a ticket of this repository; a ticket of another repository is not closed from here`)
+  }
+  if (link) {
+    log(`#${n}: the description closes through a link, ${link}, beside a GitHub issue URL; stopped before the review`)
+    return failed(res, `closes: the description closes through a link, ${link}, beside a GitHub issue URL, which tools/land.sh cannot read against the commits and refuses. Write Closes #n for a ticket of this repository; a ticket of another repository is not closed from here`)
   }
   if (unnamed.length) {
     const list = unnamed.map((t) => '#' + t).join(', ')

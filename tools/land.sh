@@ -57,7 +57,8 @@
 # names each #n no commit names, and --unreviewed does not lift it. A keyword before `owner/repo#n`,
 # GitHub's form for another repository's ticket, or before a bare GitHub issue URL (#806), is refused
 # outright, because the check cannot tell whether it names a ticket here; the remedy is `Closes #n`.
-# GitHub also closes on forms this does not read, which the rule's comment below names (#1147).
+# So is a keyword before `GH-n`, and one before a `[` or `<` in a description that holds a GitHub
+# issue URL, the link forms GitHub was seen to close on, which the rule's comment below names (#1147).
 #
 # It merges only a body that cites each decision it owes (#530). A closing reference that names a
 # change request decided `ADR: no` closes a request whose why lives nowhere but the merge body, so
@@ -269,9 +270,20 @@ full_sha='^[0123456789abcdef]{40}$'
 # `https://github.com/owner/repo/issues/n` closed its ticket, as it did with a trailing `/` or a
 # `#fragment`, which the pattern reads because it does not anchor the URL's end. `http://`, `www.`
 # and no scheme closed nothing; the pattern still refuses the first two, because a needless refusal
-# costs a rewrite and a missed form merges a ticket no commit names. What GitHub closed on and this
-# does not read is the URL of a Markdown link, `[text](url)` or `[text][ref]`, the URL inside
-# `<url>` or `<a href>`, and `GH-n` (#1147).
+# costs a rewrite and a missed form merges a ticket no commit names. GitHub also closed on the URL
+# of a Markdown link, `[text](url)` or `[text][ref]`, on the URL inside `<url>` or `<a href>`, and
+# on `GH-n` (#1147), and each is refused before a commit is read. `GH-n` in any case is refused as
+# `owner/repo#n` is, and not read as `#n`. A keyword, an optional colon and whitespace, then `[` or
+# `<` refuses the description when it holds a GitHub issue URL on any line, since a reference-style
+# link's target and a link broken over two lines put the URL on another line; the check parses no
+# Markdown, so `Fixes <thing>` beside an unrelated issue URL is refused too, and so is a link inside
+# a code span, which GitHub did not close on: the remedy is to reword it. The link form is looked
+# for once the whole description is read for the forms above, so either of those wins over it, and
+# on the first line holding one the last on that line is named. The rows of
+# .claude/workflows/fixtures/closing-references.json that hold these, from "GH-n is refused, not
+# read as #n, though a commit names #26" on, name each form refused and four that merge: a
+# relative link, the keyword alone on its line and a bold link, none of which closed on GitHub,
+# and a link beside a pull request's URL, which is no issue URL.
 # bash's =~ finds one match, so a line is read from its right end, each match's prefix
 # becoming the next line to read, and the numbers are put back in the line's order. `#n` and
 # `issue-n` are matched in a message only where no digit follows, so #35 is not found inside #352
@@ -291,14 +303,21 @@ caller_lc_all="${LC_ALL-}"
 LC_ALL=C
 keyword='([Cc][Ll][Oo][Ss][Ee]([Ss]|[Dd])?|[Ff][Ii][Xx]([Ee][Ss]|[Ee][Dd])?|[Rr][Ee][Ss][Oo][Ll][Vv][Ee]([Ss]|[Dd])?)'
 # In each match, group 1 is what comes before the keyword, groups 2 to 5 the keyword and its
-# endings, and group 6 the ticket: `n` of `#n`, the whole `owner/repo#n`, or a GitHub issue URL.
+# endings, and group 6 the ticket: `n` of `#n`, the whole `owner/repo#n`, `GH-n` or a GitHub issue
+# URL.
 closing="^(.*[^[:alnum:]_])?${keyword}:?[[:space:]]*#([0-9]+)([^0-9].*)?\$"
 issue_url='[Hh][Tt][Tt][Pp][Ss]?://([Ww][Ww][Ww][.])?[Gg][Ii][Tt][Hh][Uu][Bb][.][Cc][Oo][Mm]/[^[:space:]/#]+/[^[:space:]/#]+/[Ii][Ss][Ss][Uu][Ee][Ss]/[0-9]+'
-other_repository="^(.*[^[:alnum:]_])?${keyword}:?[[:space:]]*([^[:space:]#/]+/[^[:space:]#/]+#[0-9]+|${issue_url})"
+other_repository="^(.*[^[:alnum:]_])?${keyword}:?[[:space:]]*([^[:space:]#/]+/[^[:space:]#/]+#[0-9]+|[Gg][Hh]-[0-9]+|${issue_url})"
+# Group 2 of a link form is the keyword through the `[` or `<` that opens the link.
+link_form="^(.*[^[:alnum:]_])?(${keyword}:?[[:space:]]*[[<])"
 closes=""
+link=""
 while IFS= read -r line; do
   if [[ $line =~ $other_repository ]]; then
-    die "the description of #$pr closes ${BASH_REMATCH[6]}, the owner/repo#n form or a GitHub issue URL, which this check cannot read against the commits here, so it does not merge. Write Closes #n for a ticket of this repository (docs/agents/landing-work.md -> Land it); a ticket of another repository is not closed from here."
+    die "the description of #$pr closes ${BASH_REMATCH[6]}, the owner/repo#n form, the GH-n form or a GitHub issue URL, which this check cannot read against the commits here, so it does not merge. Write Closes #n for a ticket of this repository (docs/agents/landing-work.md -> Land it); a ticket of another repository is not closed from here."
+  fi
+  if [ -z "$link" ] && [[ $line =~ $link_form ]]; then
+    link="${BASH_REMATCH[2]}"
   fi
   in_line=""
   while [[ $line =~ $closing ]]; do
@@ -307,6 +326,9 @@ while IFS= read -r line; do
   done
   closes="$closes$in_line"
 done <<< "$description"
+if [ -n "$link" ] && [[ $description =~ $issue_url ]]; then
+  die "the description of #$pr closes through a link, $link, beside a GitHub issue URL, which this check cannot read against the commits here, so it does not merge. Write Closes #n for a ticket of this repository (docs/agents/landing-work.md -> Land it); a ticket of another repository is not closed from here."
+fi
 if [ -n "$closes" ]; then
   { git cat-file -e "$head^{commit}" 2>/dev/null || git fetch -q origin "$head"; } \
     && messages="$(git log --no-merges --format=%B "origin/$base..$head")" \
