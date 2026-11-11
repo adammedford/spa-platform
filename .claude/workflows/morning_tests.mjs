@@ -1419,6 +1419,49 @@ try {
     if (own.result.apply.dry || !o[1].confirmed || o[2].confirmed || !own.labels.some((l) => l.startsWith('apply:commit'))) fail(`Adam's Confirm Q1 beside an outsider's Confirm Q2: dry ${own.result.apply.dry}, answers ${JSON.stringify(o)}, dispatched ${own.labels.join(', ')}`)
   }
 
+  // 15a. A questions comment counts only from Adam's account too (#1078): it says what a Confirm's
+  //      numbers mean. An outsider's is dropped before the grouping, with no refusal and no hand-over
+  //      line, so it counts towards no parts total and no duplicate number, and adds no question. The
+  //      grilling record's three cases, each against Adam's Q1 and Q2: the same heading holding a new
+  //      Q9 (once refused as a parts count), another heading reusing Q1 (once refused as a duplicate,
+  //      leaving Q2 alone), and another heading adding Q3 (once read as Adam's Q3). readQuestions is
+  //      called directly, from the section confirm_draft.mjs loads, since batchesOf would otherwise
+  //      keep the comment from it; a run then shows batchesOf not fetching any of them.
+  checks++
+  {
+    const outsider = (n, body) => ({ ...comment(n, body, '2026-10-21T07:00:00Z'), author: 'someone-else' })
+    const ADAMS = QUESTIONS[0]
+    const CANARY = 'stranger text'
+    const cases = [
+      ['the same heading holding a new Q9', outsider(50, `## Questions: ${cite(300)}, issue-300, First ticket\n\n**Q9.** ${CANARY}?\nRecommended: Yes.\n${PRE}\n`)],
+      ['another heading reusing Q1', outsider(51, `## Questions: ${cite(302)}, issue-302, Other ticket\n\n**Q1.** ${CANARY}?\nRecommended: Yes.\n${PRE}\n`)],
+      ['another heading adding a new Q3', outsider(52, `## Questions: ${cite(302)}, issue-302, Other ticket\n\n**Q3.** ${CANARY}?\nRecommended: Yes.\n${PRE}\n`)],
+    ]
+    const src = fs.readFileSync(scriptPath, 'utf8')
+    const section = (/^\/\/ -+ the questions, read here\n([\s\S]*?)\n\/\/ -+ /m.exec(src) || [])[1]
+    const adam = (/^const ADAM = .*$/m.exec(src) || [])[0]
+    if (!section || !adam) fail('#1078: morning.js has no "the questions, read here" section or no ADAM line to call')
+    else {
+      const { readQuestions } = new Function(`${adam}\n${section}\nreturn { readQuestions }`)()
+      for (const [what, theirs] of cases) {
+        for (const order of [[ADAMS, theirs], [theirs, ADAMS]]) {
+          const r = readQuestions(order)
+          const qs = r.questions.map((q) => q.q).join()
+          if (qs !== '1,2' || r.refusals.length || r.questions.some((q) => q.text.includes(CANARY))) fail(`#1078: an outsider's questions comment, ${what}${order[0] === theirs ? ', listed first' : ''}: readQuestions returned ${qs}, refusals ${JSON.stringify(r.refusals)}`)
+        }
+      }
+    }
+    const confirm = comment(59, 'Confirm Q1 to Q4 as pre-accepted.', '2026-10-21T08:00:00Z')
+    // A head of blanks is read whole when Adam wrote it (the batch index's check below); an outsider's is
+    // not, since neither reader reads it.
+    const blank = outsider(53, ' '.repeat(250) + `\n## Questions: ${cite(303)}, issue-303, Far down\n\n**Q5.** ${CANARY}?\n`)
+    const run = await execute(newRepo(), { date: DATE }, { issue: issueWith([...QUESTIONS, ...cases.map(([, c]) => c), blank, confirm]) })
+    const fetched = (/\.comments\[([\d,]+)\]/.exec(run.prompt('comments-batch:1')) || ['', ''])[1]
+    if (fetched !== '0,1,2,8') fail(`#1078: with four outsiders' comments, the batch reads ${fetched}, expected 0,1,2,8: batchesOf fetched a comment the readers drop`)
+    if (Object.keys(run.result.apply.answers).join() !== '1,2,3,4' || run.result.refusals.length) fail(`#1078: with three outsiders' questions comments, answers ${Object.keys(run.result.apply.answers).join()}, refusals ${JSON.stringify(run.result.refusals)}`)
+    if (run.result.handover.text.includes('someone-else') || run.result.handover.text.includes(CANARY)) fail('#1078: the hand-over names an outsider\'s questions comment')
+  }
+
   // 17. Follow-ups (#292). The morning reads the follow-ups table of the latest review record on each
   //     open pull request into main and files each row no issue already holds, with a Raised-by line
   //     naming the pull request and a link to the record, as neither a sub-issue nor a blocker. #287's
@@ -2025,7 +2068,7 @@ try {
     const at = (k) => (/\.comments\[([\d,]+)\]/.exec(wide.prompt(`comments-batch:${k}`)) || ['', ''])[1]
     if (at(1) !== '0,1' || at(2) !== '2' || at(3) !== '3') fail(`a 50 KB night: batches read ${[1, 2, 3].map(at).join(' | ')}, expected 0,1 | 2 | 3: a 30 KB comment rides alone`)
     if (!wide.result.apply.answers[3]) fail('a 50 KB night: the questions of a later batch were not read')
-    // The index picks with the readers' own predicates (headingOf, isConfirm), so what they would
+    // The index picks with the readers' own predicates (isQuestions, isConfirm), so what they would
     // read is never left out unread: a heading line ending \r, a heading after leading spaces, a
     // Confirm after blank lines. A Confirm by anyone but Adam and a note are not read, so not fetched.
     const crlf = { ...big(1, 0), body: big(1, 0).body.replace(/\n/g, '\r\n') }

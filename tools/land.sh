@@ -79,7 +79,9 @@
 # issues titled `Overnight <date>` for `## Questions:` comments naming this pull request's number
 # or a number its description closes, and this script prints each such question as one `land:`
 # line: the Overnight issue, the Q number, whether a Confirm comment on that issue covers it, and
-# its first line. It only reports: nothing it finds stops the merge, and when the reader fails one
+# its first line. It reads only the questions comments the human's account wrote (#1078): one
+# another account wrote that names such a number is one `land:` line with its login and URL and
+# none of its text. It only reports: nothing it finds stops the merge, and when the reader fails one
 # line says so and the merge proceeds, with the reader's own words above it.
 #
 # --unreviewed "<reason>" is the one escape: for a red main that cannot wait, or no session free to

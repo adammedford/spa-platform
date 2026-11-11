@@ -36,6 +36,14 @@ posts untagged, with the night-wide number alone: a status note's question and a
 question (.claude/workflows/overnight.js step 1b, #632) are listed only when their own text names
 a given number.
 
+**Only the human's account is read** (#1078; CODING_STANDARDS.md -> "An authorisation is read
+from its author"). The run posts its questions comments as that account, the same login a Confirm
+comment is judged by below, and anyone signed in can comment on the repository. A questions comment
+another account wrote is dropped before the parts are grouped, so one under a heading the run used
+is neither read nor joined to the run's parts; an entry with no author is not the account's. No
+control character is stripped from what is printed: after this check only the run's own text is,
+so a strip would defend against a writer who is no longer read.
+
 A Confirm comment is one by the human's account whose body begins `Confirm`, read as
 .claude/workflows/morning.js reads it ("the questions, read here", readConfirmations): its first
 sentence, up to the first full stop followed by whitespace or the end of the line, names the
@@ -55,6 +63,12 @@ questions are listed:
 The first line is the text after the mark, up to the question's first line break. A question naming
 several of the given numbers has one line, with the first of them in the order given; land.sh gives
 the pull request's number first, so that is the number reported whenever the question names it.
+After an issue's questions, one line for each questions comment another account wrote whose text
+below its heading names a given number (the first of them, as above), with its login and URL and
+none of its text, so the person landing sees the attempt:
+
+    #<issue> Overnight <date>: a questions comment by <login> names #<number> and is not read: <url>
+
 Exit 0 with those lines, or with none when no question matches. Exit 2, with the reason on standard
 error, when the input cannot be read: wrong arguments, a gh call that failed (its own message passes
 through), or input not in GitHub's shape. land.sh prints its lines prefixed `land: `, and on a 2
@@ -189,15 +203,21 @@ class Question:
         self.first_line = text.split("\n", 1)[0].strip()
 
 
-def read_questions(comments: list[dict]) -> list[Question]:
-    """Every question the issue's questions comments carry, parts joined, in listing order."""
+def heading_of(entry: dict):
+    """The questions heading on the comment's first line, or None."""
+    return HEADING.match(body_of(entry).partition("\n")[0].strip())
+
+
+def read_questions(comments: list[dict], login: str) -> list[Question]:
+    """Every question the account's questions comments carry, parts joined, in listing order. The
+    author is checked before the grouping, so an outsider's comment under a heading the run used is
+    neither read nor joined to the run's parts (#1078); an entry with no author is not the account's."""
     groups: dict[str, dict] = {}
     for entry in comments:
-        body = body_of(entry)
-        first, _, rest = body.partition("\n")
-        heading = HEADING.match(first.strip())
-        if not heading:
+        heading = heading_of(entry)
+        if not heading or author_of(entry) != login:
             continue
+        rest = body_of(entry).partition("\n")[2]
         part = PART.search(heading.group(3))
         title = PART.sub("", heading.group(3))
         key = f"{heading.group(1)}|{heading.group(2)}|{title}"
@@ -240,18 +260,38 @@ def names(text: str, number: str) -> bool:
     return re.search(rf"(?<![A-Za-z0-9_&])#{number}(?![0-9])", text) is not None
 
 
+def unread_notices(comments: list[dict], login: str, numbers: list[str]) -> list[tuple[str, str, str]]:
+    """(login, first given number named, URL) of each questions comment another account wrote whose
+    text below its heading names a given number. Only the login and the URL are kept: the text is
+    the hazard (#1078). An entry with no author has no login to print, and is dropped silently."""
+    found = []
+    for entry in comments:
+        author = author_of(entry)
+        if not heading_of(entry) or author is None or author == login:
+            continue
+        text = body_of(entry).partition("\n")[2]
+        named = [number for number in numbers if names(text, number)]
+        if named:
+            url = entry.get("html_url")
+            found.append((author, named[0], url if isinstance(url, str) else "no URL"))
+    return found
+
+
 def report(numbers: list[str], issues: list[tuple[int, str]], comments_of, login: str) -> list[str]:
     lines = []
     for issue, title in issues:
         comments = entries(comments_of(issue), f"the comments of #{issue}")
         covered = covered_questions(comments, login)
-        for question in read_questions(comments):
+        for question in read_questions(comments, login):
             named = [number for number in numbers if names(question.text, number)]
             if not named:
                 continue
             verdict = "a Confirm covers it" if question.number in covered else "no Confirm covers it"
             lines.append(f"#{issue} {title} Q{question.number} names #{named[0]}, {verdict}: "
                          f"{question.first_line}")
+        for author, number, url in unread_notices(comments, login, numbers):
+            lines.append(f"#{issue} {title}: a questions comment by {author} names #{number} and is "
+                         f"not read: {url}")
     return lines
 
 
