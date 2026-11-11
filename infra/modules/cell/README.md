@@ -9,7 +9,7 @@ name carries `var.cell`.
 | File | Task | Holds |
 | --- | --- | --- |
 | `network.tf` | 1.2 | The VPC, two public subnets in two zones, the internet gateway, one route table, the two security groups, and the VPC's default security group, adopted with no rule |
-| `storage.tf` | 1.5 | The platform bucket and its policy, and the two image repositories |
+| `storage.tf` | 1.5, #784 | The platform bucket and its policy, and the two image repositories, each scanning on push at the basic level with a lifecycle policy that keeps the five most recent tagged images, so `rollback.sh`'s previous digest survives |
 | `alb.tf` | 1.3 | The internal load balancer, its one HTTPS listener, its one target group, and the lookup of the imported wildcard certificate |
 | `ecs.tf` | 1.4a | The ECS cluster, the log group, the task environment, the two container definitions, the task definition and the service |
 | `iam.tf` | 1.4a | The two roles: the ECS agent's execution role and the gateway process's task role |
