@@ -2499,7 +2499,8 @@ if (FOLLOWUPS_PASS) {
         const lost = toFile.filter((f) => !told.some((t) => t && t.pr === f.pr && sameFinding(t.title, f.title)))
         if (lost.length && !fd.unreachable && !fd.reason) refusals.push(`the follow-ups filer returned ${named(lost)} neither filed nor skipped; relaunch to file them`)
         if (fd.unreachable || fd.reason) refusals.push(`the follow-ups filer stopped: ${fd.reason || 'GitHub could not be reached'}; relaunch to file the rest`)
-        // Filed or found already filed, or the checkpoint stays (Q12): a refused or unaccounted row is not.
+        // Filed, found already filed or found already fixed (#1111), or the checkpoint stays (Q12): a
+        // refused or unaccounted row is none of these.
         if (fd.refused.length) unprocessed.push(`not filed, tools/ticket_shape.py failed them: ${named(fd.refused)}`)
         if (lost.length) unprocessed.push(`not filed${fd.unreachable || fd.reason ? ` (the filer stopped: ${fd.reason || 'GitHub could not be reached'})` : ', the filer accounted for none of them'}: ${named(lost)}`)
       }
