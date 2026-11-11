@@ -1,0 +1,4 @@
+{
+  "about": "Findings the image scan accepts (#785, #779 answer 2). tools/image_scan.py reads this file and its docstring holds the rules: each entry is {\"id\": the finding's id, \"package\": the package it is in, \"issue\": the number of the issue that tracks it, \"accepted\": the day it was accepted, \"expires\": at most 30 days later, \"reason\": why it can wait}. An accepted finding passes through its expiry day and fails the scan from the day after.",
+  "accepted": []
+}

@@ -175,6 +175,18 @@ class WorkflowDecisionTests(unittest.TestCase):
         self.assertEqual({"build": "true", "terraform": "true"},
                          self.decide(["tools/image-check.sh"], event="pull_request"))
 
+    def test_a_change_to_the_image_scan_runs_both_jobs(self):
+        # Only the build job runs the scan, so an accepted finding, a policy change or the script
+        # itself must run it (#785); a near name must not.
+        for path in ("tools/image-scan.sh", "tools/image_scan.py", ".github/image-scan-accepted.json"):
+            with self.subTest(path=path):
+                self.assertEqual({"build": "true", "terraform": "true"},
+                                 self.decide([path], event="pull_request"))
+        for path in ("tools/image_scan_tests.py", "docs/image-scan-accepted.json"):
+            with self.subTest(path=path):
+                self.assertEqual({"build": "false", "terraform": "false"},
+                                 self.decide([path], event="pull_request"))
+
     def test_an_unresolvable_base_runs_both_jobs(self):
         self.assertEqual({"build": "true", "terraform": "true"},
                          self.decide(["docs/note.md"], missing_base=True))

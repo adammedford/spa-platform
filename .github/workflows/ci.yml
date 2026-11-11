@@ -12,8 +12,13 @@
 # for build inputs, and the Terraform roots validate, at the floor .terraform-version names, for
 # infra/ and the floor's own file and helper. The hook shares these path patterns
 # through .github/touches.sh. CI's decision step also runs both jobs, and the workflow companions,
-# for changes to its workflow, the classifier, tools/smoke.sh or tools/image-check.sh, or when the
-# base cannot be resolved.
+# for changes to its workflow, the classifier, tools/smoke.sh, tools/image-check.sh or the image
+# scan's script, policy and accepted findings, or when the base cannot be resolved.
+#
+# The Build job also scans the gateway's and the mock API's images with Trivy, and fails on a HIGH or
+# CRITICAL finding with a fix that is not accepted (#785; #779 answers 1 and 2). The scan is a step
+# of that job, so it runs under the job's `if` and skips with it, for the reason the next paragraph
+# gives; the Documents job lints every Dockerfile with hadolint on every push.
 #
 # A job skipped that way still satisfies main's protection, which requires `Documents`, `Build and
 # test` and `Terraform` by name -- every check the protection listed as required when this sentence
@@ -91,8 +96,10 @@ jobs:
         # meanwhile. The two jobs below read the answer, and so does this job's step that runs the
         # workflow scripts' test companions (#276). Every job runs when there is no base to
         # diff against -- a push whose `before` GitHub does not have -- and when the files that make
-        # this decision changed: this workflow, .github/touches.sh, or tools/smoke.sh and
-        # tools/image-check.sh, which only the build job exercises. A decision cannot vouch for a
+        # this decision changed: this workflow, .github/touches.sh, or tools/smoke.sh,
+        # tools/image-check.sh and the image scan's tools/image-scan.sh, tools/image_scan.py and
+        # .github/image-scan-accepted.json, which only the build job exercises (#785): accepting a
+        # finding, or a policy change, must run the scan it changes. A decision cannot vouch for a
         # change to itself. The base it resolved is an output too, empty when there was none, for
         # the steering check's authority rule, which judges the commits from it to HEAD: one place
         # decides the range, not two.
@@ -116,8 +123,8 @@ jobs:
             resolved="$base"
             changed="$(git diff --name-only "$base"...HEAD)"
             # Consume all paths so pipefail cannot turn an early match into a SIGPIPE failure.
-            if printf '%s\n' "$changed" | grep -E '^\.github/(workflows/ci\.yml|touches\.sh)$|^tools/(smoke|image-check)\.sh$' > /dev/null; then
-              echo "::notice::the workflow, the halves, the smoke test or the image check changed, so every job runs."
+            if printf '%s\n' "$changed" | grep -E '^\.github/(workflows/ci\.yml|touches\.sh|image-scan-accepted\.json)$|^tools/(smoke|image-check|image-scan)\.sh$|^tools/image_scan\.py$' > /dev/null; then
+              echo "::notice::the workflow, the halves, the smoke test, the image check or the image scan changed, so every job runs."
             else
               printf '%s\n' "$changed" | .github/touches.sh build || build=false
               printf '%s\n' "$changed" | .github/touches.sh terraform || terraform=false
@@ -471,6 +478,25 @@ jobs:
         # cut and an unknown session id, which must exit non-zero and name the folder it searched.
         run: python3 -I tools/session_tail_tests.py
 
+      - name: Every tracked Dockerfile passes hadolint, at the pin and with the rules .hadolint.yaml turns off
+        # Nothing linted a Dockerfile, and hadolint was out of #584's scope (#785). The script runs
+        # the pinned hadolint image over every Dockerfile git tracks, with .hadolint.yaml, whose
+        # comments give each rule it turns off its reason. Here on every push, since a Dockerfile
+        # under tools/bench/ is in neither half; tools/check.sh --full runs it when a change touches
+        # a Dockerfile, the configuration or the script. Its companion runs first, with a docker
+        # double, so the script is seen to refuse before it is trusted to pass.
+        run: |
+          python3 -I tools/dockerfile_lint_tests.py
+          tools/dockerfile-lint.sh
+
+      - name: The image scan's policy fails a HIGH or CRITICAL finding with a fix that is not accepted, and a scan that read nothing
+        # tools/image_scan.py decides what the Build job's scan reports (#785; #779 answers 1 and 2),
+        # and tools/image-scan.sh feeds it. The companion plants each boundary in Trivy's own report
+        # shape -- a fixed HIGH and CRITICAL, an unfixed one, a MEDIUM, an acceptance before and after
+        # its expiry, one that breaks the 30-day rule, a report with no package list -- and runs the
+        # script with a docker double, so it needs no image, no Trivy and no network.
+        run: python3 -I tools/image_scan_tests.py
+
       - name: An image build sends no secret or host build output, and the runtime user can read the image
         # A workstation's image build sent the local CA's private key, the scratch directory and
         # its own bin/ and obj/ to the builder, and the gateway it built could not read its own
@@ -703,6 +729,17 @@ jobs:
         # the tree, builds src/Gateway/Dockerfile without pushing, and starts the image as its own
         # user (#210). The runner's Docker builds for its own architecture; the script says why.
         run: tools/image-check.sh
+
+      - name: The gateway's and the mock API's images carry no HIGH or CRITICAL finding with a fix that is not accepted
+        # #779 chose Trivy in CI and answer 2 the threshold:
+        # https://github.com/adammedford/spa-platform/issues/779#issuecomment-6767167834. The script
+        # builds both images for the runner's architecture, scans each with the pinned Trivy, and
+        # hands the reports to tools/image_scan.py, which fails a report that read no package list, a
+        # finding at the threshold that .github/image-scan-accepted.json does not accept, or one whose
+        # acceptance has expired. A step of this job, with no `if` of its own, so it runs under the
+        # job's and skips with it (#785). Trivy's database is downloaded fresh, so a finding published
+        # since the last run fails the next pull request that builds, until it is fixed or accepted.
+        run: tools/image-scan.sh
 
   terraform:
     name: Terraform

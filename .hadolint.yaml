@@ -1,0 +1,15 @@
+# hadolint's configuration (#785). Owner: integrator. tools/dockerfile-lint.sh passes it with
+# --config, and tools/check.sh --full runs that script on a change to a Dockerfile, to this file or
+# to the script. The keys are hadolint's
+# (https://github.com/hadolint/hadolint/blob/v2.15.1/README.md#configure).
+#
+# Every finding fails, info included, which is hadolint's default stated outright, so a rule is
+# quiet only when it is turned off below. A rule turned off carries its reason on its own line, and
+# tools/dockerfile_lint_tests.py fails one without. Turning a rule off here turns it off for all
+# three Dockerfiles: two of them, fixtures/MockApi/Dockerfile and tools/bench/floor/Dockerfile, are
+# other owners', so an exception goes here rather than as a pragma in their files.
+failure-threshold: info
+
+ignored:
+  - DL3059 # Consecutive RUN: the chmod after publish is its own step, which every Dockerfile here copies from the gateway's character for character (#204, #233) and tools/image_build_tests.py runs alone.
+  - DL3066 # USER $APP_UID: the chiseled base sets APP_UID to its own numeric user, which hadolint cannot read through the variable (https://github.com/dotnet/dotnet-docker/blob/main/documentation/ubuntu-chiseled.md).
