@@ -78,6 +78,18 @@ const FIXTURE = {
   sdk: { trialScope: [], smoke: false, pins: [] },
   terraform: { trialScope: ['infra/envs/poc', 'infra/modules/cell'], smoke: false, pins: [pin('hashicorp/aws', '6.68.0', '6.69.1')] },
 }
+// The base images as tools/pins_inventory.py lists them: the gateway's and the mock API's two stages,
+// each on the same two tags. served.imageDigests is the registry's answer, {"<image>:<tag>": digest};
+// a tag it leaves out was not read. served.imageRows replaces the rows outright, to serve a liar.
+const SDK_REF = 'mcr.microsoft.com/dotnet/sdk:10.0-noble'
+const ASP_REF = 'mcr.microsoft.com/dotnet/aspnet:10.0-noble-chiseled-extra'
+const PINNED = { [SDK_REF]: 'sha256:' + 'a'.repeat(64), [ASP_REF]: 'sha256:' + 'c'.repeat(64) }
+const MOVED = 'sha256:' + 'd'.repeat(64)
+const imageRows = (served) => served.imageRows || ['src/Gateway/Dockerfile', 'fixtures/MockApi/Dockerfile'].flatMap((dockerfile) => [[SDK_REF, 'build'], [ASP_REF, 'final']].map(([ref, stage]) => {
+  const [image, tag] = [ref.slice(0, ref.lastIndexOf(':')), ref.slice(ref.lastIndexOf(':') + 1)]
+  const current = (served.imageDigests || {})[ref] || ''
+  return { dockerfile, stage, image, tag, digest: PINNED[ref], current, status: !current ? 'not-checked' : current === PINNED[ref] ? 'current' : 'moved' }
+}))
 const familyRecord = (id, served) => {
   const f = JSON.parse(JSON.stringify(FIXTURE[id]))
   const extra = (served.pins || {})[id]
@@ -122,7 +134,7 @@ const commands = (prompt) => {
 // -X and --method are flags only after a space: a temporary directory's random name can hold "-X".
 const GH_WRITE = /\bgh\s+(issue\s+(create|edit|comment|close|reopen|delete|lock|transfer|pin)|label|api\b[^`]*\s(-X|--method)\b|pr\s+(create|edit|comment|merge|close))/
 
-// served: { halt, listFails, pins: {family: {pinId: fields}}, sdkRow, openIssues, closedIssues,
+// served: { halt, listFails, pins: {family: {pinId: fields}}, sdkRow, openIssues, closedIssues, imageDigests, imageRows,
 //           report: {number, statuses}, checks: {family: fields}, trials: {family: 'red'|'not-run'}, ghDown }
 function stub(env, served) {
   const calls = []
@@ -142,7 +154,7 @@ function stub(env, served) {
       if (label === 'inventory') {
         const scope = dataLine(prompt, 'FAMILIES IN SCOPE') || []
         if (served.halt) {
-          out = { outcome: 'halt', reason: 'python3 -I tools/pins_inventory.py inventory exited 3: pins-inventory: halt: nuget.org unreachable', base: '', sdk: '', inventoryFile: '', listed: false, families: [], sdkRow: { floor: '', latestSdk: '', latestRuntime: '', frameworkRuntime: '', securityRelease: '', status: 'not-checked' }, openIssues: [], closedIssues: [], report: { number: 0, statuses: [] } }
+          out = { outcome: 'halt', reason: 'python3 -I tools/pins_inventory.py inventory exited 3: pins-inventory: halt: nuget.org unreachable', base: '', sdk: '', inventoryFile: '', listed: false, families: [], sdkRow: { floor: '', latestSdk: '', latestRuntime: '', frameworkRuntime: '', securityRelease: '', status: 'not-checked' }, openIssues: [], closedIssues: [], report: { number: 0, statuses: [] }, baseImages: [] }
         } else {
           write(`${LOG}/inventory.json`, '{}\n')
           out = {
@@ -151,6 +163,7 @@ function stub(env, served) {
             sdkRow: { floor: '10.0.100', latestSdk: '10.0.402', latestRuntime: '10.0.13', frameworkRuntime: '10.0.12', securityRelease: '', status: 'behind-patch', ...(served.sdkRow || {}) },
             openIssues: served.listFails ? [] : served.openIssues || [], closedIssues: served.listFails ? [] : served.closedIssues || [],
             report: served.report || { number: 0, statuses: [] },
+            baseImages: imageRows(served),
           }
         }
       } else if (label.startsWith('check-')) {
@@ -184,7 +197,7 @@ function stub(env, served) {
         const writesList = dataLine(prompt, 'WRITES') || []
         const report = dataLine(prompt, 'REPORT ISSUE')
         env.filings = filings
-        for (const f of filings) write(f.bodyFile, block(prompt, `ISSUE ${f.family}`) || '')
+        for (const f of filings) write(f.bodyFile, block(prompt, `ISSUE ${f.key}`) || '')
         for (const w of writesList) if (w.kind !== 'create') write(`${LOG}/comment-${w.key}.md`, block(prompt, `COMMENT ${w.key}`) || '')
         const table = '| Pin | Pinned | Newest | Status | Referencing projects | Why |\n| --- | --- | --- | --- | --- | --- |\n'
         write(report.bodyFile, (block(prompt, 'REPORT') || '').replace('TABLE: pending', table))
@@ -232,6 +245,7 @@ const loadMeta = () => {
   return m ? new Function(`return (${m[1]})`)() : null
 }
 const recordOf = (result, family) => (result.files || []).find((f) => f.family === family)
+const recordByKey = (result, key) => (result.files || []).find((f) => f.key === key)
 const bodyOf = (env, family) => {
   const f = `${env.repo}/${LOG_REL}/${DATE}/issue-${family}.md`
   return fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : ''
@@ -254,7 +268,7 @@ try {
     if (titles.join() !== 'Inventory,Check,Trial,File,Report') fail(`meta phases ${titles.join(', ')}`)
     const src = fs.readFileSync(scriptPath, 'utf8')
     const known = (/^const KNOWN_ARGS = (\[.*\])$/m.exec(src) || [])[1]
-    if (known !== "['repo', 'wt', 'date', 'families', 'maxParallel', 'maxIssues', 'maxAgents', 'dryRun', 'terraform', 'moves']") fail(`KNOWN_ARGS is ${known}`)
+    if (known !== "['repo', 'wt', 'date', 'families', 'maxParallel', 'maxIssues', 'maxAgents', 'dryRun', 'terraform', 'moves', 'baseImages']") fail(`KNOWN_ARGS is ${known}`)
     for (const [label, a] of [
       ['an unknown argument', (e) => argsFor(e, { scope: 'all' })],
       ['no repo', (e) => ({ wt: e.wt, date: DATE })],
@@ -267,6 +281,7 @@ try {
       ['maxParallel zero', (e) => argsFor(e, { maxParallel: 0 })],
       ['dryRun as a string', (e) => argsFor(e, { dryRun: 'true' })],
       ['terraform as a string', (e) => argsFor(e, { terraform: 'yes' })],
+      ['baseImages as a string', (e) => argsFor(e, { baseImages: 'true' })],
       ['moves not an object', (e) => argsFor(e, { families: ['yarp'], moves: ['yarp'] })],
       ['moves naming a family out of scope', (e) => argsFor(e, { families: ['yarp'], moves: { 'aws-sdk': '4.0.104.4' } })],
       ['moves naming the report-only SDK', (e) => argsFor(e, { families: ['sdk'], moves: { sdk: '10.0.402' } })],
@@ -276,7 +291,7 @@ try {
       if (!result || !/bad launch/.test(result.halted || '') || calls.length) fail(`${label}: ${calls.length} agent(s) ran; returned ${JSON.stringify(result)}`)
     }
     const env = newEnv()
-    const { result } = await execute(env, argsFor(env, { families: ['yarp'], maxParallel: 2, maxIssues: 1, maxAgents: 4, dryRun: true, terraform: false, moves: { yarp: '2.4.0' } }))
+    const { result } = await execute(env, argsFor(env, { families: ['yarp'], maxParallel: 2, maxIssues: 1, maxAgents: 4, dryRun: true, terraform: false, moves: { yarp: '2.4.0' }, baseImages: false }))
     if (result.halted) fail(`every argument at once was refused: ${result.halted}`)
   }
 
@@ -581,6 +596,86 @@ try {
     if (!housed.length) fail('no prompt carries the house rules, so the edit-rule search read nothing')
     for (const c of housed) if (!c.prompt.includes(EDIT_RULE)) fail(`the ${c.label} prompt's house rules lack the edit rule of #109`)
     for (const c of allCalls) if (/Change a file with Edit only after/.test(c.prompt)) fail(`the ${c.label} prompt still carries the Edit-only line #109 replaced`)
+  }
+
+  // 17. The base images (#1166): a run with baseImages reads each pinned tag's digest in the Inventory
+  //     agent, files one issue for each tag whose digest moved, dedupes on the current digest, writes
+  //     only to the log under dryRun, and never reads an unread tag as unmoved.
+  checks++
+  {
+    const SDK_KEY = 'base-images-mcr.microsoft.com-dotnet-sdk-10.0-noble'
+    const ASP_KEY = 'base-images-mcr.microsoft.com-dotnet-aspnet-10.0-noble-chiseled-extra'
+    const answer = { [SDK_REF]: MOVED, [ASP_REF]: PINNED[ASP_REF] }
+    const src = fs.readFileSync(scriptPath, 'utf8')
+    const header = src.slice(0, src.indexOf('const A = args'))
+    if (!/^\/\/\s+baseImages\s+optional\s+boolean/m.test(header) || !/[Rr]un monthly \(#779, answer 5\)/.test(header) || !/imagetools inspect/.test(header)) fail('the header does not say how a run asks for the base-image read, or that it runs monthly citing #779')
+    // The read is in the Inventory agent: the budget is unchanged.
+    const on = newEnv()
+    const r = await execute(on, argsFor(on, { families: ['yarp'], baseImages: true }), { imageDigests: answer })
+    const p = r.prompt('inventory')
+    if (!/tags --repo/.test(p) || !/export PATH="\$HOME\/\.docker\/bin:\$PATH" && docker buildx imagetools inspect --format '\{\{json \.Manifest\}\}' <ref>/.test(p) || !/--image-digests \S+image-digests\.json/.test(p)) fail('the Inventory prompt does not read each tag with imagetools and pass the answer to the companion')
+    if (r.result.agentCount !== 1 + 1 + 4 + 1 || r.labels.filter((l) => /image|base/.test(l)).length) fail(`the base-image read changed the agent budget: ${r.result.agentCount}, ${r.labels.join(', ')}`)
+    const sdk = recordByKey(r.result, SDK_KEY)
+    if (!sdk || sdk.action !== 'created' || sdk.label !== 'ready-for-human' || sdk.family !== 'base-images') fail(`the moved sdk tag: ${JSON.stringify(sdk)}`)
+    if (recordByKey(r.result, ASP_KEY)) fail('the unmoved aspnet tag was filed')
+    if (r.result.files.filter((f) => f.family === 'base-images').length !== 1) fail(`one moved tag filed ${r.result.files.filter((f) => f.family === 'base-images').length} issues`)
+    if (!/^Pins: base image mcr\.microsoft\.com\/dotnet\/sdk:10\.0-noble moved to sha256:d{12}$/.test((sdk || {}).title || '')) fail(`the base-image title is ${(sdk || {}).title}`)
+    const body = bodyOf(on, SDK_KEY)
+    for (const want of [`**Pins image:** ${SDK_REF}`, `**Pins move:** ${SDK_REF} ${PINNED[SDK_REF]} -> ${MOVED}`, `| src/Gateway/Dockerfile | build | ${PINNED[SDK_REF]} | ${MOVED} |`, `| fixtures/MockApi/Dockerfile | build | ${PINNED[SDK_REF]} | ${MOVED} |`]) if (!body.includes(want)) fail(`the base-image body lacks ${want}`)
+    if (body.includes(PINNED[ASP_REF])) fail('the sdk tag\'s body names the aspnet tag\'s digest')
+    if (!on.gh.some((c) => c.includes('gh issue create') && c.includes(`issue-${SDK_KEY}.md`) && c.includes('--label ready-for-human'))) fail('the moved tag\'s issue was not created')
+    const shape = spawnSync('python3', ['-I', path.join(top, 'tools', 'ticket_shape.py'), '-'], { encoding: 'utf8', input: JSON.stringify({ number: 1, body, labels: [{ name: 'ready-for-human' }], subIssuesSummary: { total: 0 }, blockedBy: { nodes: [] } }) })
+    if (shape.status !== 0) fail(`the base-image issue fails tools/ticket_shape.py: ${(shape.stdout + shape.stderr).trim().split('\n').join(' | ')}`)
+    const comment = fs.readFileSync(path.join(on.repo, LOG_REL, DATE, 'report-comment.md'), 'utf8')
+    if (!comment.includes(`- Base images: moved: ${SDK_REF}; current: ${ASP_REF}; not read: none.`)) fail(`the report comment's base-image line: ${comment}`)
+    // Dedupe: an open issue naming the same current digest stands; one naming another is updated; one
+    // for the other tag is not this tag's.
+    const issue = (n, ref, cur) => ({ number: n, title: `Pins: base image ${ref}`, marker: 'base-images', move: `${ref} ${PINNED[ref]} -> ${cur}`, labels: ['ready-for-human'] })
+    for (const [label, open, action, number] of [
+      ['the same current digest', [issue(701, SDK_REF, MOVED)], 'stands', 701],
+      ['the same current digest from other pins', [{ ...issue(701, SDK_REF, MOVED), move: `${SDK_REF} sha256:${'e'.repeat(64)} -> ${MOVED}` }], 'stands', 701],
+      ['another current digest', [issue(701, SDK_REF, 'sha256:' + 'f'.repeat(64))], 'updated', 701],
+      ['the other tag\'s issue', [issue(702, ASP_REF, MOVED)], 'created', 900],
+    ]) {
+      const env = newEnv()
+      const x = await execute(env, argsFor(env, { families: ['yarp'], baseImages: true }), { imageDigests: answer, openIssues: open })
+      const rec = recordByKey(x.result, SDK_KEY)
+      if (!rec || rec.action !== action || rec.number !== number) fail(`base-image dedupe, ${label}: ${JSON.stringify(rec)}, expected ${action} ${cite(number)}`)
+      const created = env.gh.filter((c) => c.includes('gh issue create') && c.includes(`issue-${SDK_KEY}.md`))
+      if ((action === 'created') !== (created.length === 1)) fail(`base-image dedupe, ${label}: ${created.length} create(s)`)
+      if (action === 'stands' && (!env.gh.some((c) => c.includes('gh issue comment 701')) || env.gh.some((c) => c.includes('gh issue edit 701')))) fail(`base-image dedupe, ${label}: no stands comment, or an edit`)
+    }
+    // dryRun: the would-be issue is in the log, and no GitHub write is asked for or made.
+    const dry = newEnv()
+    const dr = await execute(dry, argsFor(dry, { families: ['yarp'], baseImages: true, dryRun: true }), { imageDigests: answer })
+    const dsdk = recordByKey(dr.result, SDK_KEY)
+    if (!dsdk || dsdk.action !== 'would-create' || !dsdk.bodyFile.startsWith(path.join(dry.repo, LOG_REL, DATE) + '/') || !fs.readFileSync(dsdk.bodyFile, 'utf8').includes(`**Pins image:** ${SDK_REF}`)) fail(`the dry base-image issue is not in the log: ${JSON.stringify(dsdk)}`)
+    for (const c of dr.calls) for (const cmd of commands(c.prompt)) if (GH_WRITE.test(cmd)) fail(`a dry base-image run's ${c.label} prompt asks for ${cmd}`)
+    if (dry.gh.some((c) => GH_WRITE.test(c))) fail(`a dry base-image run wrote: ${dry.gh.join(' | ')}`)
+    // An unread tag: no issue, named as not read, and never current, even when a row claims it.
+    const unread = newEnv()
+    const u = await execute(unread, argsFor(unread, { families: ['yarp'], baseImages: true }), { imageDigests: { [ASP_REF]: PINNED[ASP_REF] } })
+    if (u.result.files.some((f) => f.family === 'base-images')) fail('an unread tag was filed')
+    if (u.result.baseImages.notRead.join() !== SDK_REF || u.result.baseImages.current.join() !== ASP_REF) fail(`the unread run's return: ${JSON.stringify(u.result.baseImages)}`)
+    const liar = newEnv()
+    const rows = imageRows({ imageDigests: { [SDK_REF]: '', [ASP_REF]: MOVED } }).map((x) => ({ ...x, status: 'current' }))
+    const l = await execute(liar, argsFor(liar, { families: ['yarp'], baseImages: true }), { imageRows: rows })
+    if (l.result.baseImages.current.includes(SDK_REF) || !l.result.baseImages.notRead.includes(SDK_REF)) fail(`a row claiming current with no digest read was counted current: ${JSON.stringify(l.result.baseImages)}`)
+    if (!recordByKey(l.result, ASP_KEY)) fail('a row claiming current over a moved digest was not filed')
+    // No pinned row returned: nothing was judged, so the report never reads as a clean month (#1166 review;
+    // CODING_STANDARDS.md, "A check fails closed").
+    const none = newEnv()
+    const nr = await execute(none, argsFor(none, { families: ['yarp'], baseImages: true }), { imageRows: [] })
+    const noneComment = fs.readFileSync(path.join(none.repo, LOG_REL, DATE, 'report-comment.md'), 'utf8')
+    if (nr.result.baseImages.rows !== 0 || !noneComment.includes('- Base images: not read: the inventory returned no pinned base-image row.') || /Base images: moved: none/.test(noneComment)) fail(`no pinned row returned reads as a clean read: ${JSON.stringify(nr.result.baseImages)}`)
+    // The report's header line names the base-image statuses it now carries.
+    if (!fs.readFileSync(path.join(on.repo, LOG_REL, DATE, 'report.md'), 'utf8').includes('The base-image rows were read at their registry (#1166)')) fail('the report body does not say the base-image rows were read')
+    // baseImages off: no registry read is asked for, nothing is filed, and the report says so.
+    const off = newEnv()
+    const o = await execute(off, argsFor(off, { families: ['yarp'] }), { imageDigests: answer })
+    if (/imagetools/.test(o.prompt('inventory')) || /--image-digests/.test(o.prompt('inventory'))) fail('baseImages off still reads the registry')
+    if (o.result.files.some((f) => f.family === 'base-images') || o.result.baseImages.read !== false) fail(`baseImages off filed a base image: ${JSON.stringify(o.result.baseImages)}`)
+    if (!fs.readFileSync(path.join(off.repo, LOG_REL, DATE, 'report-comment.md'), 'utf8').includes('- Base images: not read this run (baseImages false).')) fail('baseImages off: the report comment does not say the images were not read')
   }
 } catch (e) {
   console.error(`pins-sweep tests: the script did not run: ${e && e.stack ? e.stack : e}`)

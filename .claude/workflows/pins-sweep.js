@@ -37,11 +37,20 @@ export const meta = {
 //   terraform    optional  boolean, default false: add the Terraform provider family.
 //   moves        optional  {family: "version"} or {family: {"<package id>": "version"}}: replaces the
 //                          Check phase's candidate for that family, so a named bump is trialled.
+//   baseImages   optional  boolean, default false: read each base-image tag the Dockerfiles pin by digest.
+//                          The Inventory agent asks the registry for each tag's digest today (`docker
+//                          buildx imagetools inspect`, the command docs/dependencies.md gives), so it
+//                          adds no agent to the budget; the script files one issue for each tag whose
+//                          digest moved, which counts toward maxIssues after the families' filings, and
+//                          the File agent writes it under the same dryRun and dedupe rules. A tag that
+//                          could not be read stays not-checked, and the return and the report comment
+//                          name it as not read. Run monthly (#779, answer 5): one run a month passes
+//                          baseImages: true beside that month's group of families (#1166).
 // The documented invocation names a group and rotates (#82 -> "Arguments"): the framework group
 // [aspnetcore, mvc-testing, fake-clock, sdk], the identity-and-proxy group [duende, yarp, playwright],
 // and the rest [aws-sdk, opentelemetry, xunit, schema-validator, analyzers]; analyzers joined under #607.
 const A = args || {}
-const KNOWN_ARGS = ['repo', 'wt', 'date', 'families', 'maxParallel', 'maxIssues', 'maxAgents', 'dryRun', 'terraform', 'moves']
+const KNOWN_ARGS = ['repo', 'wt', 'date', 'families', 'maxParallel', 'maxIssues', 'maxAgents', 'dryRun', 'terraform', 'moves', 'baseImages']
 // The families of tools/pins_inventory.py, by id; the companion holds the two lists equal.
 const FAMILIES = ['aspnetcore', 'duende', 'yarp', 'aws-sdk', 'opentelemetry', 'xunit', 'playwright', 'schema-validator', 'fake-clock', 'mvc-testing', 'analyzers', 'sdk']
 const TERRAFORM = 'terraform'
@@ -60,7 +69,7 @@ const badArguments = (a) => {
   for (const [k, min, def] of [['maxParallel', 1, 3], ['maxIssues', 0, 4], ['maxAgents', 1, 10]]) {
     if (a[k] !== undefined && !(Number.isInteger(a[k]) && a[k] >= min)) bad.push(`${k}: an integer, ${min} or more (default ${def})`)
   }
-  for (const k of ['dryRun', 'terraform']) if (a[k] !== undefined && typeof a[k] !== 'boolean') bad.push(`${k}: true or false, a boolean (the string "true" is refused)`)
+  for (const k of ['dryRun', 'terraform', 'baseImages']) if (a[k] !== undefined && typeof a[k] !== 'boolean') bad.push(`${k}: true or false, a boolean (the string "true" is refused)`)
   if (a.moves !== undefined) {
     if (!(a.moves && typeof a.moves === 'object' && !Array.isArray(a.moves))) bad.push('moves: an object from family id to a version, or to {"<package id>": "<version>"}')
     else {
@@ -89,6 +98,7 @@ const MAX_PAR = A.maxParallel || 3
 const MAX_ISSUES = A.maxIssues === undefined ? 4 : A.maxIssues
 const MAX_AGENTS = A.maxAgents || 10
 const DRY = A.dryRun === true
+const IMAGES = A.baseImages === true
 const MOVES = A.moves || {}
 for (const f of Object.keys(MOVES)) {
   if (!SCOPE.includes(f)) return { halted: `bad launch; no agent started. moves names ${f}, which is not in this run's families (${SCOPE.join(', ')})`, agents: 0 }
@@ -154,6 +164,9 @@ const PIN = {
   required: ['id', 'pinned', 'newest', 'newestInBound', 'hold', 'comment', 'status', 'referencedBy', 'evidence', 'documents', 'advisories'],
 }
 const LISTED_ISSUE = { type: 'object', properties: { number: { type: 'integer' }, title: { type: 'string' }, marker: { type: 'string' }, move: { type: 'string' }, labels: { type: 'array', items: { type: 'string' } } }, required: ['number', 'title', 'marker', 'move', 'labels'] }
+// A row of the inventory's baseImages (tools/pins_inventory.py): current is the digest the tag names
+// today, "" when it was not read.
+const BASE_ROW = { type: 'object', properties: { dockerfile: { type: 'string' }, stage: { type: 'string' }, image: { type: 'string' }, tag: { type: 'string' }, digest: { type: 'string' }, current: { type: 'string' }, status: { type: 'string', enum: ['moved', 'current', 'not-checked'] } }, required: ['dockerfile', 'stage', 'image', 'tag', 'digest', 'current', 'status'] }
 const INVENTORY = {
   type: 'object',
   properties: {
@@ -167,8 +180,9 @@ const INVENTORY = {
     openIssues: { type: 'array', items: LISTED_ISSUE },
     closedIssues: { type: 'array', items: LISTED_ISSUE },
     report: { type: 'object', properties: { number: { type: 'integer' }, statuses: { type: 'array', items: { type: 'object', properties: { pin: { type: 'string' }, status: { type: 'string' } }, required: ['pin', 'status'] } } }, required: ['number', 'statuses'] },
+    baseImages: { type: 'array', items: BASE_ROW },
   },
-  required: ['outcome', 'reason', 'base', 'sdk', 'inventoryFile', 'listed', 'families', 'sdkRow', 'openIssues', 'closedIssues', 'report'],
+  required: ['outcome', 'reason', 'base', 'sdk', 'inventoryFile', 'listed', 'families', 'sdkRow', 'openIssues', 'closedIssues', 'report', 'baseImages'],
 }
 const MOVE = { type: 'object', properties: { id: { type: 'string' }, from: { type: 'string' }, to: { type: 'string' } }, required: ['id', 'from', 'to'] }
 const TIE = { type: 'object', properties: { path: { type: 'string' }, line: { type: 'integer' }, why: { type: 'string' } }, required: ['path', 'line', 'why'] }
@@ -235,11 +249,12 @@ TERRAFORM: ${JSON.stringify(!!A.terraform)}
 5. GitHub's advisory database, one query per PackageVersion in ${BASE_WT}/Directory.Packages.props: \`cd ${REPO} && gh api "/advisories?ecosystem=nuget&affects=<id>@<version>" > ${LOG}/advisories-<id>.json\`, then \`jq -s add ${LOG}/advisories-*.json > ${LOG}/advisories.json\`.
 6. Microsoft's release index for the SDK's channel (the major.minor of global.json's sdk.version): \`curl -fsS https://builds.dotnet.microsoft.com/dotnet/release-metadata/<channel>/releases.json -o ${LOG}/releases.json\`.
 ${A.terraform ? `7. The provider versions, for each provider a .terraform.lock.hcl names: \`curl -fsS https://registry.terraform.io/v1/providers/<namespace>/<name>/versions | jq '{"<namespace>/<name>": [.versions[].version]}' > ${LOG}/provider-<name>.json\`, then \`jq -s add ${LOG}/provider-*.json > ${LOG}/provider-versions.json\`.` : '7. Terraform is off: read no lock file and fetch no provider version.'}
-8. The companion: \`python3 -I ${COMPANION} inventory --repo ${BASE_WT} --commit <base> --vulnerable ${LOG}/vulnerable.json --advisories ${LOG}/advisories.json --releases ${LOG}/releases.json${A.terraform ? ` --terraform --provider-versions ${LOG}/provider-versions.json` : ''} > ${LOG}/inventory.json\`. It fetches each version list from nuget.org; exit 3 means nuget.org is unreachable.
+${IMAGES ? `7b. The base images' registry read (#1166). The tags: \`python3 -I ${COMPANION} tags --repo ${BASE_WT} --commit <base> > ${LOG}/image-tags.txt\`. For each line <ref> of that file, numbered from 1 as <n>: \`export PATH="$HOME/.docker/bin:$PATH" && docker buildx imagetools inspect --format '{{json .Manifest}}' <ref> > ${LOG}/manifest-<n>.json\`; only when it exits 0, \`jq -n --arg r <ref> --arg d "$(jq -r .digest ${LOG}/manifest-<n>.json)" '{($r): $d}' > ${LOG}/digest-<n>.json\`. A tag whose read fails gets no digest file: never write one empty or guessed, since its rows must stay not-checked. Then \`echo '{}' > ${LOG}/digest-0.json\` and \`jq -s add ${LOG}/digest-*.json > ${LOG}/image-digests.json\`. A failed read is no halt; reason names each tag not read and its error's last line.` : '7b. Base images are off: read no registry, and pass the companion no digests file.'}
+8. The companion: \`python3 -I ${COMPANION} inventory --repo ${BASE_WT} --commit <base> --vulnerable ${LOG}/vulnerable.json --advisories ${LOG}/advisories.json --releases ${LOG}/releases.json${A.terraform ? ` --terraform --provider-versions ${LOG}/provider-versions.json` : ''}${IMAGES ? ` --image-digests ${LOG}/image-digests.json` : ''} > ${LOG}/inventory.json\`. It fetches each version list from nuget.org; exit 3 means nuget.org is unreachable.
 9. A halt (nuget.org unreachable at step 3, 4 or 8): \`git -C ${REPO} worktree remove --force ${BASE_WT}\`, then return outcome halt, reason the failing command and its error, and nothing else. The run ends there: a quiet run must never read as a clean one.
 10. The tracker. Open issues: \`cd ${REPO} && gh issue list --state open --limit 500 --json number,title,labels,body > ${LOG}/open-issues.json\`; closed ones whose title starts "Pins:": \`cd ${REPO} && gh issue list --state closed --limit 500 --search "Pins: in:title" --json number,title,labels,body > ${LOG}/closed-issues.json\`. For each issue return {number, title, marker: the text after "**Pins family:**" on its body's line starting so, else "", move: the text after "**Pins move:**" likewise, else "", labels: their names}. openIssues lists the open issues that have a marker or whose title is "${REPORT_TITLE}"; closedIssues the closed ones with a marker. listed is true only when both commands exited 0; if either fails, listed false: an empty listing from a failed command is not an empty tracker, and the run stops on it.
 11. report: the open issue titled exactly "${REPORT_TITLE}": number, and statuses, one {pin, status} per row of the table in its body (the first and fourth cells). None open: number 0, statuses [].
-Return outcome ok, base, sdk, inventoryFile ${LOG}/inventory.json, listed, and from that file: families, those in scope only, each {id, status, trialScope, smoke, pins: its pins with id, pinned, newest, newestInBound, hold, comment, status, referencedBy, evidence and documents as {path, line}, advisories}; and sdkRow from its "sdk". reason is "" when nothing failed.`
+Return outcome ok, base, sdk, inventoryFile ${LOG}/inventory.json, listed, and from that file: families, those in scope only, each {id, status, trialScope, smoke, pins: its pins with id, pinned, newest, newestInBound, hold, comment, status, referencedBy, evidence and documents as {path, line}, advisories}; sdkRow from its "sdk"; and baseImages, its "baseImages" rows as they are, each {dockerfile, stage, image, tag, digest, current, status}. reason is "" when nothing failed.`
 
 const checkPrompt = (ctx, fam, phaseFile) => `Check ${fam.id}: decide this family's recommendation from the vendor's own sources (#82 -> "Phases" -> Check). You read; you write only your phase file.
 
@@ -388,8 +403,26 @@ const issueBody = (d, ctx) => {
   L.push('', '_Filed by the pins-sweep workflow (#82)._')
   return L.join('\n')
 }
-const standsBody = (d, ctx) => `The pins sweep of ${ctx.date} at origin/main ${ctx.base} makes the same recommendation: ${moveLine(d.moves)}. The body is unchanged.`
-const changedBody = (d, prev, ctx) => `The pins sweep of ${ctx.date} at origin/main ${ctx.base} replaced the body: the move was "${prev}" and is now "${moveLine(d.moves)}", labelled ${d.label}.`
+// A moved base-image tag's issue (#1166). Its Dockerfiles have their own owners (OWNERSHIP.md), and two
+// of them hold their FROM lines equal to the gateway's, so the move is one issue per tag, routed by the
+// integrator, ready-for-human: no trial builds the image on the new digest.
+const IMAGE_FAMILY = 'base-images'
+const SHA = /^sha256:[0-9a-f]{64}$/
+const shortDigest = (d) => d.slice(0, 'sha256:'.length + 12)
+const imageBody = (d, ctx) => {
+  const L = ['**Owner:** integrator', `**Pins family:** ${IMAGE_FAMILY}`, `**Pins image:** ${d.ref}`, `**Pins move:** ${d.move}`, '']
+  L.push(`**Label:** ready-for-human, because ${d.reasons.join('; ')}.`, '')
+  L.push(`Swept on ${ctx.date} at origin/main ${ctx.base}, reported on the "${REPORT_TITLE}" issue. The registry names ${d.current} for ${d.ref} today, read with \`docker buildx imagetools inspect --format '{{json .Manifest}}' ${d.ref}\`.`, '')
+  L.push('## Pins', '', '| Dockerfile | Stage | Pinned digest | Current digest |', '| --- | --- | --- | --- |')
+  for (const r of d.rows) L.push(`| ${r.dockerfile} | ${r.stage || '(unnamed)'} | ${r.digest} | ${r.current} |`)
+  L.push('', '## Acceptance criteria', '')
+  for (const r of d.rows) L.push(`- [ ] ${r.dockerfile}'s ${r.stage ? `${r.stage} stage` : 'FROM'} pins ${d.ref}@${d.current}.`)
+  L.push('- [ ] `tools/check.sh --full` passes.', '', 'The change that lands this cites this issue, so the registry read behind the move is one hop away.')
+  L.push('', '_Filed by the pins-sweep workflow (#82, #1166)._')
+  return L.join('\n')
+}
+const standsBody = (d, ctx) => `The pins sweep of ${ctx.date} at origin/main ${ctx.base} makes the same recommendation: ${d.family === IMAGE_FAMILY ? d.move : moveLine(d.moves)}. The body is unchanged.`
+const changedBody = (d, prev, ctx) => `The pins sweep of ${ctx.date} at origin/main ${ctx.base} replaced the body: the move was "${prev}" and is now "${d.family === IMAGE_FAMILY ? d.move : moveLine(d.moves)}", labelled ${d.label}.`
 
 // ---------------------------------------------------------------- run
 phase('Inventory')
@@ -474,30 +507,66 @@ for (const id of scoped) {
   d.move = norm(id === 'sdk' ? `runtime ${ctx.sdkRow.frameworkRuntime} -> ${ctx.sdkRow.securityRelease}` : moveLine(d.moves))
   d.advisory = advisories.length > 0
   d.distance = distanceOf(moves)
+  d.key = id
+  d.name = FAMILY_NAMES[id]
   decisions.push(d)
 }
 decisions.sort((a, b) => (a.advisory === b.advisory ? 0 : a.advisory ? -1 : 1) || cmpDistance(a.distance, b.distance) || (a.family < b.family ? -1 : 1))
+
+// The base images (#1166): one decision per pinned tag whose digest moved, after the families, so the
+// families keep their order for the cap. The script holds each row to the registry's digest itself: a
+// row is moved only when its current is a digest and differs from its pin, whatever status it carries.
+// A row with no current digest was not read, and is never counted as unmoved.
+const imageRows = IMAGES ? inv.baseImages.filter((r) => SHA.test(r.digest || '') && r.tag) : []
+const refOf = (r) => `${r.image}:${r.tag}`
+const imageRefs = [...new Set(imageRows.map(refOf))].sort()
+// rows counts the pinned rows the Inventory agent returned: none means nothing was judged, and the
+// report says so rather than reading as a month with nothing moved (CODING_STANDARDS.md, "A check fails closed").
+const images = { read: IMAGES, rows: imageRows.length, moved: [], current: [], notRead: [] }
+for (const ref of imageRefs) {
+  const rows = imageRows.filter((r) => refOf(r) === ref)
+  const read = rows.filter((r) => SHA.test(r.current || ''))
+  if (read.length < rows.length) images.notRead.push(ref)
+  const moved = read.filter((r) => r.current !== r.digest)
+  if (!moved.length) { if (read.length === rows.length) images.current.push(ref); continue }
+  images.moved.push(ref)
+  const current = moved[0].current
+  const d = {
+    family: IMAGE_FAMILY, key: `${IMAGE_FAMILY}-${ref.replace(/[^A-Za-z0-9.-]+/g, '-')}`, name: `Base image ${ref}`, ref, current, rows: moved,
+    moves: [], advisories: [], label: 'ready-for-human',
+    reasons: ['no trial ran: the sweep builds no image, so neither the build nor tools/image-check.sh has run on the new digest', 'each Dockerfile that pins the tag has its owner (OWNERSHIP.md), and the integrator splits the move by owner or lands the FROM lines together where a test holds them equal'],
+  }
+  d.move = norm(`${ref} ${[...new Set(moved.map((r) => r.digest))].sort().join(', ')} -> ${current}`)
+  d.title = `Pins: base image ${ref} moved to ${shortDigest(current)}`.replace(/[`$"\\]/g, '')
+  decisions.push(d)
+}
+const currentOf = (move) => norm(move).split('->').pop().trim()
 
 // #82 -> "Dedupe": the marker line, matched locally against the listing, never GitHub's search
 // index. Creations and body updates count toward maxIssues; a stands comment does not.
 let counted = 0
 const writes = []
 for (const d of decisions) {
-  const open = inv.openIssues.filter((i) => norm(i.marker) === d.family).sort((a, b) => b.number - a.number)[0]
-  const closed = inv.closedIssues.filter((i) => norm(i.marker) === d.family).sort((a, b) => b.number - a.number)[0]
-  d.body = issueBody(d, ctx)
-  d.bodyFile = `${LOG}/issue-${d.family}.md`
-  if (open && norm(open.move) === d.move) { d.action = 'stands'; d.issue = open.number }
-  else if (!open && closed && closed.labels.includes('wontfix') && norm(closed.move) === d.move) { d.action = 'declined'; d.issue = closed.number }
+  // A base-image issue is its tag's: the marker names the family, and the move line starts with the
+  // tag. It stands while its move names the same current digest, whatever the pins were (#1166).
+  const isImage = d.family === IMAGE_FAMILY
+  const mine = (i) => norm(i.marker) === d.family && (!isImage || norm(i.move).startsWith(`${d.ref} `))
+  const same = (i) => (isImage ? currentOf(i.move) === d.current : norm(i.move) === d.move)
+  const open = inv.openIssues.filter(mine).sort((a, b) => b.number - a.number)[0]
+  const closed = inv.closedIssues.filter(mine).sort((a, b) => b.number - a.number)[0]
+  d.body = isImage ? imageBody(d, ctx) : issueBody(d, ctx)
+  d.bodyFile = `${LOG}/issue-${d.key}.md`
+  if (open && same(open)) { d.action = 'stands'; d.issue = open.number }
+  else if (!open && closed && closed.labels.includes('wontfix') && same(closed)) { d.action = 'declined'; d.issue = closed.number }
   else if (counted >= MAX_ISSUES) { d.action = 'skipped-cap'; d.issue = open ? open.number : 0 }
   else if (open) { counted++; d.action = DRY ? 'would-update' : 'updated'; d.issue = open.number; d.previous = open.move; d.oldLabels = open.labels }
   else { counted++; d.action = DRY ? 'would-create' : 'created'; d.issue = 0 }
-  if (d.action === 'stands') writes.push({ key: d.family, kind: 'comment', issue: d.issue, bodyFile: `${LOG}/comment-${d.family}.md`, body: standsBody(d, ctx) })
+  if (d.action === 'stands') writes.push({ key: d.key, kind: 'comment', issue: d.issue, bodyFile: `${LOG}/comment-${d.key}.md`, body: standsBody(d, ctx) })
   if (d.action === 'updated') {
     const drop = (d.oldLabels || []).filter((l) => ['ready-for-agent', 'ready-for-human'].includes(l) && l !== d.label)
-    writes.push({ key: d.family, kind: 'update', issue: d.issue, bodyFile: d.bodyFile, label: d.label, drop, commentFile: `${LOG}/comment-${d.family}.md`, comment: changedBody(d, d.previous, ctx) })
+    writes.push({ key: d.key, kind: 'update', issue: d.issue, bodyFile: d.bodyFile, label: d.label, drop, commentFile: `${LOG}/comment-${d.key}.md`, comment: changedBody(d, d.previous, ctx) })
   }
-  if (d.action === 'created') writes.push({ key: d.family, kind: 'create', title: d.title, bodyFile: d.bodyFile, label: d.label })
+  if (d.action === 'created') writes.push({ key: d.key, kind: 'create', title: d.title, bodyFile: d.bodyFile, label: d.label })
 }
 
 // The standing report issue (#82): found by title in the listing, created only when absent; each run
@@ -507,10 +576,10 @@ const nowStatus = []
 for (const id of scoped) for (const p of famById.get(id).pins) nowStatus.push({ pin: p.id, status: p.status })
 if (scoped.includes('sdk')) nowStatus.push({ pin: 'SDK (global.json)', status: ctx.sdkRow.status })
 const changed = inv.report.number ? nowStatus.filter((s) => prevStatus.has(s.pin) && prevStatus.get(s.pin) !== s.status).map((s) => `${s.pin}: ${prevStatus.get(s.pin)} -> ${s.status}`) : []
-const actionText = (d) => `${FAMILY_NAMES[d.family]}: ${d.action}${d.issue ? ` #${d.issue}` : d.action === 'created' ? ` NUMBER(${d.family})` : ''}, ${d.label}`
+const actionText = (d) => `${d.name}: ${d.action}${d.issue ? ` #${d.issue}` : d.action === 'created' ? ` NUMBER(${d.key})` : ''}, ${d.label}`
 const reportBody = [
   `## ${REPORT_TITLE}`, '',
-  `Swept on ${ctx.date} at origin/main ${ctx.base}. Families checked: ${scoped.join(', ')}. A row outside them reads not-checked. Precedence: advisory, blocked-by-evidence, held-by-decision, behind-minor, behind-patch, current.`, '',
+  `Swept on ${ctx.date} at origin/main ${ctx.base}. Families checked: ${scoped.join(', ')}. A row outside them reads not-checked. Precedence: advisory, blocked-by-evidence, held-by-decision, behind-minor, behind-patch, current.${IMAGES ? ' The base-image rows were read at their registry (#1166): moved, current, or not-checked for a tag not read.' : ''}`, '',
   'TABLE: pending', '',
   '_Refreshed by the pins-sweep workflow (#82); each run adds one comment._',
 ].join('\n')
@@ -520,6 +589,7 @@ const reportComment = [
   `- Rows whose status changed: ${changed.length ? changed.join('; ') : inv.report.number ? 'none' : 'the first run, nothing to compare'}.`,
   `- Filed: ${decisions.length ? decisions.map(actionText).join('; ') : 'nothing to decide'}.`,
   `- Not trialled or not checked: ${leftovers.length ? leftovers.map((l) => `${l.family} (${l.why})`).join('; ') : 'none'}.`,
+  `- Base images: ${IMAGES && !imageRows.length ? 'not read: the inventory returned no pinned base-image row' : IMAGES ? `moved: ${images.moved.join(', ') || 'none'}; current: ${images.current.join(', ') || 'none'}; not read: ${images.notRead.join(', ') || 'none'}` : 'not read this run (baseImages false)'}.`,
 ].join('\n')
 const report = { mode: DRY ? 'dry' : inv.report.number ? 'edit' : 'create', issue: inv.report.number, bodyFile: `${LOG}/report.md`, commentFile: `${LOG}/report-comment.md` }
 
@@ -534,20 +604,20 @@ ${HOUSE}
 
 PHASE FILE: ${LOG}/file-record.json
 Write your return value to the PHASE FILE as JSON before you return.
-FILINGS: ${JSON.stringify(decisions.map((d) => ({ family: d.family, action: d.action, issue: d.issue, title: d.title, label: d.label, bodyFile: d.bodyFile })))}
+FILINGS: ${JSON.stringify(decisions.map((d) => ({ key: d.key, family: d.family, action: d.action, issue: d.issue, title: d.title, label: d.label, bodyFile: d.bodyFile })))}
 WRITES: ${JSON.stringify(writes.map((w) => ({ key: w.key, kind: w.kind, issue: w.issue || 0 })))}
 REPORT ISSUE: ${JSON.stringify(report)}
 
-1. Write each would-be issue first: the text between BEGIN ISSUE <family> and END ISSUE <family>, without the markers, to its bodyFile; then each comment's text between BEGIN COMMENT <family> and END COMMENT <family> to ${LOG}/comment-<family>.md. Then \`jq -n --argjson f '${JSON.stringify(decisions.map((d) => ({ family: d.family, action: d.action, issue: d.issue, title: d.title, label: d.label })))}' '$f' > ${LOG}/would-file.json\`.
+1. Write each would-be issue first: the text between BEGIN ISSUE <key> and END ISSUE <key>, without the markers, to its bodyFile; then each comment's text between BEGIN COMMENT <key> and END COMMENT <key> to ${LOG}/comment-<key>.md. Then \`jq -n --argjson f '${JSON.stringify(decisions.map((d) => ({ key: d.key, family: d.family, action: d.action, issue: d.issue, title: d.title, label: d.label })))}' '$f' > ${LOG}/would-file.json\`.
 2. The table: \`python3 -I ${COMPANION} render --input ${LOG}/inventory.json --families ${scoped.join(',')} > ${LOG}/table.md\`. Write the text between BEGIN REPORT and END REPORT to ${report.bodyFile} with its line "TABLE: pending" replaced by the contents of ${LOG}/table.md, and the text between BEGIN REPORT COMMENT and END REPORT COMMENT to ${report.commentFile}. table is the table's text.
-${DRY ? '3. Post nothing. Every write is done false, number 0, url "".' : `3. The writes, in order. For a create, number and url are the new issue's; then replace NUMBER(<family>) in ${report.commentFile} with #<number>.
+${DRY ? '3. Post nothing. Every write is done false, number 0, url "".' : `3. The writes, in order. For a create, number and url are the new issue's; then replace NUMBER(<key>) in ${report.commentFile} with #<number>.
 ${writes.map((w) => `- ${w.key}: ${ghLines(w).join(', then ')}`).join('\n') || '- none'}
 4. The report issue: ${report.mode === 'edit' ? `\`cd ${REPO} && gh issue edit ${report.issue} --body-file ${report.bodyFile}\`` : `\`cd ${REPO} && gh issue create --title "${REPORT_TITLE}" --body-file ${report.bodyFile}\``}, then \`cd ${REPO} && gh issue comment <its number> --body-file ${report.commentFile}\`. report is {number, url}.
 If GitHub cannot be reached, stop writing: the would-be issues stay in the log, each write not made is done false, and reason says so. There is no replay file; the next run re-derives everything.`}
 5. Clean up: \`git -C ${REPO} worktree remove --force ${BASE_WT}\`, then \`git -C ${REPO} worktree prune\`. worktreesLeft: each path \`git -C ${REPO} worktree list --porcelain\` names under ${WT}/pins-sweep-${DATE}-.
 6. The checkout: trackedChanged, each tracked file \`git -C ${REPO} status --porcelain --untracked-files=no\` shows that ${LOG}/checkout-at-start.txt does not; newUntracked, each untracked path \`git -C ${REPO} status --porcelain --untracked-files=all\` shows that is not in that file and not under ${LOG}/; headMoved, whether \`git -C ${REPO} rev-parse HEAD\` differs from ${LOG}/head-at-start.txt; refsChanged, each line of \`git -C ${REPO} for-each-ref --format='%(refname) %(objectname)'\` not in ${LOG}/refs-at-start.txt, outside refs/remotes/.
 Return writes (one per WRITE, {key, done, number, url}), table, report, checkout and reason ("" when nothing failed).
-${decisions.map((d) => `BEGIN ISSUE ${d.family}\n${d.body}\nEND ISSUE ${d.family}`).join('\n')}
+${decisions.map((d) => `BEGIN ISSUE ${d.key}\n${d.body}\nEND ISSUE ${d.key}`).join('\n')}
 ${writes.filter((w) => w.kind !== 'create').map((w) => `BEGIN COMMENT ${w.key}\n${w.kind === 'comment' ? w.body : w.comment}\nEND COMMENT ${w.key}`).join('\n')}
 BEGIN REPORT
 ${reportBody}
@@ -560,14 +630,14 @@ const filed = await run(filePrompt(), { label: 'file', phase: 'File', schema: FI
 phase('Report')
 const done = new Map(((filed && filed.writes) || []).map((w) => [w.key, w])) // empty-ok: a null File is named in reason below, and each real write then reads not-written
 const records = decisions.map((d) => {
-  const w = writes.find((x) => x.key === d.family)
+  const w = writes.find((x) => x.key === d.key)
   const r = w ? done.get(w.key) : null
   let action = d.action
   // A dry run makes no write, so its action is the one the script chose; a real run's write that the
   // File agent did not report done was not made.
   if (w && !DRY && (!r || !r.done)) action = 'not-written'
   const number = w && w.kind === 'create' ? (r && r.done ? r.number : 0) : d.issue
-  return { family: d.family, action, number, url: (r && r.url) || '', label: d.label, title: d.title, bodyFile: d.bodyFile }
+  return { family: d.family, key: d.key, action, number, url: (r && r.url) || '', label: d.label, title: d.title, bodyFile: d.bodyFile }
 })
 const checkout = (filed && filed.checkout) || { trackedChanged: ['the File agent returned nothing'], newUntracked: [], headMoved: false, refsChanged: [], worktreesLeft: [] }
 const trialLeft = [...trials.values()].filter((t) => !t.worktreeRemoved && t.outcome !== 'not-run').map((t) => trialWt(t.family))
@@ -576,7 +646,7 @@ return {
   table: (filed && filed.table) || '', files: records,
   report: { number: filed && filed.report ? filed.report.number : 0, url: filed && filed.report ? filed.report.url : '', action: report.mode },
   trials: [...trials.values()].map((t) => ({ family: t.family, outcome: t.outcome, verdictLine: t.verdictLine, logPath: t.logPath })),
-  leftovers, worktreesLeft: [...new Set([...checkout.worktreesLeft, ...trialLeft])],
+  baseImages: images, leftovers, worktreesLeft: [...new Set([...checkout.worktreesLeft, ...trialLeft])],
   mainCheckoutClean: !!filed && !checkout.trackedChanged.length && !checkout.newUntracked.length && !checkout.headMoved && !checkout.refsChanged.length,
   reason: (filed && filed.reason) || (filed ? '' : 'the File agent returned nothing'),
   agentCount: AGENT_COUNT, maxAgents: MAX_AGENTS, agents: agentsRun,

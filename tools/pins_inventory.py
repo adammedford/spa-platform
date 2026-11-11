@@ -9,6 +9,7 @@ the workflow's agents read vendors and judge.
     python3 -I tools/pins_inventory.py families
     python3 -I tools/pins_inventory.py inventory --repo <checkout> [--commit <rev>] [inputs...]
     python3 -I tools/pins_inventory.py render --input <inventory.json> [--families a,b]
+    python3 -I tools/pins_inventory.py tags --repo <checkout> [--commit <rev>]
 
 **families** prints the family table below as JSON, so the workflow can be held to the same ids.
 
@@ -27,8 +28,9 @@ never the checkout"). It reads:
   and never proposed for a move;
 - every tracked file named `Dockerfile`: each `FROM` that names an image, with its tag and the
   `@sha256:` digest beside it, into `baseImages`, as the `base-images` family (#781). The family is
-  report-only, like the SDK's: a digest is moved by a commit to its Dockerfile, and no registry is
-  read here, so each row is `not-checked`. A `FROM` with no digest is a finding, `unpinned-base-image`,
+  report-only, like the SDK's: a digest is moved by a commit to its Dockerfile, which no trial makes.
+  No registry is read here: given `--image-digests`, each row is held to the digest its tag names
+  today, `moved` or `current`, and a row it does not name stays `not-checked` (#1166). A `FROM` with no digest is a finding, `unpinned-base-image`,
   since its tag floats and two builds of one commit can build on different layers. A `FROM` naming
   an earlier stage, or `scratch`, names no base. The `families` command leaves this family out, as
   the sweep's arguments do: no Check or Trial agent reads it, and the table carries its rows;
@@ -61,6 +63,16 @@ Every network input can be supplied from a file, so the tests need no network:
   SDK row is not checked.
 - `--terraform` with `--provider-versions F`: {"hashicorp/aws": ["6.68.0", ...]}, the registry's
   version list; each `.terraform.lock.hcl` becomes a row per provider.
+- `--image-digests F`: {"<image>:<tag>": "sha256:<hex>"}, the digest each pinned tag names at its
+  registry today, one entry per reference the `tags` command prints. The sweep reads each with
+  `docker buildx imagetools inspect --format '{{json .Manifest}}' <image>:<tag>`, whose `digest` is
+  the reference's own descriptor, the manifest list's for a multi-platform tag
+  (https://docs.docker.com/reference/cli/docker/buildx/imagetools/inspect/, as
+  tools/scripts/platform-tfvars.sh reads it), which is the digest the Dockerfiles pin. A tag it could
+  not read is left out of the file, never written empty, and its rows stay `not-checked`.
+
+**tags** prints each distinct `image:tag` a tracked Dockerfile pins by digest, one per line: the
+references the sweep asks the registry about (#1166).
 
 A pin's status is #82's precedence, highest first: `advisory`, then, for a pin behind its newest
 stable release, `blocked-by-evidence`, `held-by-decision`, `behind-minor` (a minor or major step)
@@ -85,7 +97,8 @@ import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
 
-PRECEDENCE = ["advisory", "blocked-by-evidence", "held-by-decision", "behind-minor", "behind-patch",
+# `moved` is a base image's alone: its tag names another digest than the pinned one (#1166).
+PRECEDENCE = ["advisory", "blocked-by-evidence", "held-by-decision", "behind-minor", "behind-patch", "moved",
               "current", "not-checked"]
 EVIDENCE_PREFIXES = ("docs/adr/",)
 
@@ -129,7 +142,8 @@ FAMILIES = [
     {"id": "sdk", "name": "The SDK", "frameworkWide": False, "reportOnly": True, "members": {}},
 ]
 # Not in FAMILIES, which the pins-sweep workflow is held to: the base images are read from the
-# Dockerfiles, not the pins file, and nothing in the sweep checks or trials them (#781).
+# Dockerfiles, not the pins file, and no Check or Trial agent reads them (#781). A run asks for their
+# registry read by its own argument, and the File agent files each moved tag (#1166).
 BASE_IMAGE_FAMILY = {"id": "base-images", "name": "Base images", "frameworkWide": False, "reportOnly": True, "members": {}}
 TERRAFORM_FAMILY = {"id": "terraform", "name": "Terraform providers", "frameworkWide": False, "reportOnly": False, "members": {}}
 FRAMEWORK_PIN = "Microsoft.AspNetCore.Authentication.OpenIdConnect"
@@ -505,6 +519,40 @@ def split_reference(ref: str):
     return name, "", digest
 
 
+DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
+
+
+def read_digests(rows, answer):
+    """Each pinned row against the registry's answer, {"<image>:<tag>": "sha256:..."}: `moved` when the
+    tag now names another digest, `current` when it names the pinned one. A row the answer does not
+    name, or names with anything but a digest, was not read and stays `not-checked`: it is never
+    reported as unmoved (CODING_STANDARDS.md, "A check fails closed"; #1166)."""
+    for r in rows:
+        r["current"] = ""
+        if not r["digest"] or not r["tag"]:
+            continue
+        now = (answer or {}).get(f"{r['image']}:{r['tag']}")
+        if not isinstance(now, str) or not DIGEST.match(now):
+            continue
+        r["current"] = now
+        r["status"] = "current" if now == r["digest"] else "moved"
+
+
+def base_status(rows) -> str:
+    """The family's status: moved when any row moved, else not-checked when any row was not read."""
+    statuses = {r["status"] for r in rows}
+    if "moved" in statuses:
+        return "moved"
+    if not rows or "not-checked" in statuses:
+        return "not-checked"
+    return "current"
+
+
+def pinned_tags(rows):
+    """Each distinct `image:tag` a FROM pins by digest: the references the sweep asks the registry for."""
+    return sorted({f"{r['image']}:{r['tag']}" for r in rows if r["digest"] and r["tag"]})
+
+
 def base_images(tree: Tree):
     """Each base image every tracked Dockerfile names, and a finding for each with no digest."""
     rows, findings = [], []
@@ -609,6 +657,7 @@ def inventory(a):
                          "status": min(statuses, key=PRECEDENCE.index) if statuses else "not-checked"})
     images, unpinned = base_images(tree)
     findings.extend(unpinned)
+    read_digests(images, load_json(a.image_digests) if a.image_digests else {})
     out = {"commit": tree.commit, "pins": pins, "families": families, "transitives": transitives,
            "findings": findings, "spikes": spikes(tree), "sdk": sdk_row(tree, releases, framework),
            "baseImages": images}
@@ -618,6 +667,7 @@ def inventory(a):
     base = next(f for f in families if f["id"] == BASE_IMAGE_FAMILY["id"])
     base["members"] = [f"{r['image']}:{r['tag']}" if r["tag"] else r["image"] for r in images]
     base["trialScope"] = sorted({r["dockerfile"] for r in images})
+    base["status"] = base_status(images)
     if a.terraform:
         out["terraform"] = lock_files(tree, load_json(a.provider_versions) if a.provider_versions else {})
         tf = next(f for f in families if f["id"] == "terraform")
@@ -664,8 +714,17 @@ def render(data, scope=None) -> str:
     for b in data.get("baseImages", []) or []:
         ref = f"{b['image']}:{b['tag']}" if b.get("tag") else b["image"]
         where = f"{b['dockerfile']}, {b['stage']}" if b.get("stage") else b["dockerfile"]
-        note = "no registry read; the digest moves with a commit to the Dockerfile" if b.get("digest") else "unpinned: the tag floats"
-        rows.append(f"| {cell(ref)} ({cell(where)}) | {cell(b.get('digest') or 'unpinned')} | ? | {b.get('status', 'not-checked')} | "
+        status = b.get("status", "not-checked")
+        if not b.get("digest"):
+            note = "unpinned: the tag floats"
+        elif status == "moved":
+            note = f"the tag now names {b['current']}; the digest moves with a commit to the Dockerfile"
+        elif status == "current":
+            note = "the tag still names the pinned digest"
+        else:
+            note = "not read: no registry answer for this tag; the digest moves with a commit to the Dockerfile"
+        current = b.get("current") if status in ("moved", "current") and b.get("current") else "?"
+        rows.append(f"| {cell(ref)} ({cell(where)}) | {cell(b.get('digest') or 'unpinned')} | {cell(current)} | {status} | "
                     f"{cell(posixpath.dirname(b['dockerfile']))} | {cell(note)} |")
     for t in data.get("terraform", []) or []:
         status = t["status"] if scope is None or "terraform" in scope else "not-checked"
@@ -680,9 +739,12 @@ def main(argv) -> int:
     inv = sub.add_parser("inventory")
     inv.add_argument("--repo", required=True)
     inv.add_argument("--commit", default="HEAD")
-    for name in ("versions", "vulnerable", "advisories", "releases", "provider-versions"):
+    for name in ("versions", "vulnerable", "advisories", "releases", "provider-versions", "image-digests"):
         inv.add_argument("--" + name)
     inv.add_argument("--terraform", action="store_true")
+    tags = sub.add_parser("tags")
+    tags.add_argument("--repo", required=True)
+    tags.add_argument("--commit", default="HEAD")
     ren = sub.add_parser("render")
     ren.add_argument("--input", required=True)
     ren.add_argument("--families")
@@ -692,6 +754,9 @@ def main(argv) -> int:
             print(json.dumps([{k: v for k, v in f.items()} for f in FAMILIES + [TERRAFORM_FAMILY]], indent=2))
         elif a.command == "inventory":
             print(json.dumps(inventory(a), indent=2, sort_keys=True))
+        elif a.command == "tags":
+            for ref in pinned_tags(base_images(Tree(a.repo, a.commit))[0]):
+                print(ref)
         else:
             scope = set(a.families.split(",")) if a.families else None
             sys.stdout.write(render(load_json(a.input), scope))
