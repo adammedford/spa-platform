@@ -46,6 +46,21 @@ public sealed class ContractIndexTests
         Assert.Contains("ADR-0013", text);
     }
 
+    [Fact]
+    public void The_resource_tags_contract_names_the_gateway_as_the_key_rings_ManagedBy_and_cites_274()
+    {
+        // The gateway writes the key ring's parameters at run time and tags each one ManagedBy =
+        // gateway (#274; src/Platform.Hosting/KeyRing.cs, infra/modules/cell/iam.tf). A ManagedBy
+        // row naming only terraform and certs.sh reads as if the ring broke the contract (#1016).
+        string row = ContractFiles.ReadText("resource-tags.md")
+            .Split('\n')
+            .Single(line => line.StartsWith("| `ManagedBy` |", StringComparison.Ordinal));
+
+        Assert.Contains("`gateway`", row, StringComparison.Ordinal);
+        Assert.Contains("/spa-platform/<cell>/data-protection/", row, StringComparison.Ordinal);
+        Assert.Contains("#274", row, StringComparison.Ordinal);
+    }
+
     public static TheoryData<string> EveryProseContract() => new(
         "pipeline.md", "http-contract.md", "request-gate.md", "upstream-contract.md", "s3-layout.md",
         "telemetry.md", "resource-tags.md");
