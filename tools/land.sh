@@ -45,11 +45,11 @@
 # which is cut off here; #966), and a merge body with no line
 # beginning `Outstanding:` is then refused before the merge, naming the rows (#521). A record with
 # no such row is not checked, and nor is an --unreviewed landing, which reads no record.
-# Each such row also names, before the merge, whether an issue has filed it (#573): the morning
-# files a record's rows from open pull requests only (#514), so once this merges nobody files a row
-# still open. A row no issue answers (one titled with the finding, with a `**Raised by:** #<pr>`
-# line, as .claude/workflows/morning.js's filedAs reads one) is printed as a `land:` warning that
-# says so; nothing is refused for it.
+# Each such row also names, before the merge, whether an issue has filed it (#573): the follow-ups
+# pass files a record's rows from the merged pull requests its window reaches too (#514, #1082), but
+# only when it is next launched. A row no issue answers (one titled with the finding, with a
+# `**Raised by:** #<pr>` line, as .claude/workflows/morning.js's filedAs reads one) is printed as a
+# `land:` warning that says so; nothing is refused for it.
 #
 # It merges only a description whose every closing reference, `Closes #n` or any other keyword
 # GitHub documents (#578), names a ticket some non-merge commit between the base and that head
@@ -438,18 +438,18 @@ if [ -n "${follow_ups:-}" ]; then
     die "the review record that clears #$pr carries follow-ups (${rows#; }) and the merge body has no Outstanding: line, so it does not merge. Add one saying what the merge carries, and pass the body with --body-file; docs/agents/review.md -> Landing or holding."
   fi
 
-  # A carried row also owes an issue, and the morning files a record's rows from open pull requests
-  # only (#514), so a row still unfiled when this merges is nobody's to file unless somebody is
-  # told (#573): on 2026-10-29 #568's two rows reached #569 and #570 only because the session read
-  # the record before it merged. So each row no issue answers is named here, and the merge goes on;
-  # this warns and refuses nothing. A row is answered as .claude/workflows/morning.js's filedAs
-  # answers it: an issue whose title is the finding, the two compared lowercased with each run of
-  # whitespace one space and none at the ends, and whose body has a `**Raised by:**` line naming
-  # #<pr> with no digit after it. The issues are the listing the morning takes, every state, and
-  # the --jq keeps the ones whose Raised-by line names this pull request and prints their titles;
-  # the match on the title is made here, with awk's tolower and its field splitting, which
-  # collapses blanks and trims them. A listing gh cannot make is said, and the rows are not
-  # checked: a warning that cannot be computed is not a reason to hold a merge a record clears.
+  # A carried row also owes an issue, and the follow-ups pass files it only when it is next launched
+  # (#514, #1082), so somebody is told (#573): on 2026-10-29 #568's two rows reached #569 and #570
+  # only because the session read the record before it merged. So each row no issue answers is named
+  # here, and the merge goes on; this warns and refuses nothing. A row is answered as
+  # .claude/workflows/morning.js's filedAs answers it: an issue whose title is the finding, the two
+  # compared lowercased with each run of whitespace one space and none at the ends, and whose body
+  # has a `**Raised by:**` line naming #<pr> with no digit after it. The issues are the listing the
+  # follow-ups pass takes, every state, and the --jq keeps the ones whose Raised-by line names this
+  # pull request and prints their titles; the match on the title is made here, with awk's tolower
+  # and its field splitting, which collapses blanks and trims them. A listing gh cannot make is
+  # said, and the rows are not checked: a warning that cannot be computed is not a reason to hold a
+  # merge a record clears.
   # A row is often fixed after the record that carried it, and filed fixed (#1111: #816, #823, #977,
   # #842 to #846, #931), so the warning tells the filer to re-read #<pr>'s description and the latest
   # ## Answer on each issue it closes first and file nothing for a row they already fix; whether one
@@ -465,7 +465,7 @@ if [ -n "${follow_ups:-}" ]; then
         if [ "$title" = "$wanted" ]; then answered=1; break; fi
       done <<< "$filed_titles"
       [ -n "$answered" ] \
-        || printf 'land: the review record that clears #%s carries a follow-up no issue has filed: %s. Once #%s merges, no morning run files it, because the morning reads the records of open pull requests only (#514). Before filing it, re-read #%s'"'"'s description as it reads now and the latest ## Answer comment on each issue it closes, and file nothing if either already fixes it (#1111); otherwise file it by hand, with that finding as the title and a **Raised by:** #%s line (docs/agents/review.md -> Landing or holding).\n' "$pr" "$finding" "$pr" "$pr" "$pr" >&2
+        || printf 'land: the review record that clears #%s carries a follow-up no issue has filed: %s. The next follow-ups pass files it from #%s'"'"'s record (#514, #1082); to file it sooner, re-read #%s'"'"'s description as it reads now and the latest ## Answer comment on each issue it closes, and file nothing if either already fixes it (#1111); otherwise file it by hand, with that finding as the title and a **Raised by:** #%s line (docs/agents/review.md -> Landing or holding).\n' "$pr" "$finding" "$pr" "$pr" "$pr" >&2
     done <<< "$follow_ups"
   else
     printf 'land: could not list the issues raised by #%s, so whether each carried follow-up has been filed is not checked; gh says why above. The merge goes on; read the record'"'"'s Follow-ups table yourself.\n' "$pr" >&2
