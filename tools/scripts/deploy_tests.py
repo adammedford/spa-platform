@@ -590,10 +590,13 @@ class DeployFailsUnlessTheAppliedGatewayRuns(cell.CompanionTestCase):
         self.failed(world, "is not the applied gateway")
 
     def test_an_index_with_no_linux_arm64_image_fails(self):
-        world = seeded_world()
-        world["faults"]["index_platform"] = {"os": "linux", "architecture": "amd64"}
-        case = self.failed(world, "holds no linux/arm64 image")
-        self.assertEqual([], case.aws("ecs list-tasks"), "the running tasks were read after the index read failed")
+        # Each half of the platform on its own: another architecture, and arm64 for another os.
+        for platform in ({"os": "linux", "architecture": "amd64"}, {"os": "windows", "architecture": "arm64"}):
+            with self.subTest(platform=platform):
+                world = seeded_world()
+                world["faults"]["index_platform"] = platform
+                case = self.failed(world, "holds no linux/arm64 image")
+                self.assertEqual([], case.aws("ecs list-tasks"), "the running tasks were read after the index read failed")
 
     def test_an_index_with_two_linux_arm64_images_fails(self):
         world = seeded_world()

@@ -1071,8 +1071,10 @@ def batch_get_image(world: dict, options: dict):
             or options.get("accepted-media-types") != ACCEPTED_MEDIA_TYPES):
         raise Unexpected(f"batch-get-image {options}")
     digest = wanted[len("imageDigest="):]
+    # The query's null as `--output text` prints it: the CLI's text formatter writes str() of a
+    # scalar, so a null is the word None, not nothing (awscli/text.py, as text() above says).
     if digest not in repository.values() or world["faults"].get("manifest_missing"):
-        return None
+        return "None"
     # "manifest_text": what the registry answers instead, for a manifest the scripts cannot read.
     if "manifest_text" in world["faults"]:
         return world["faults"]["manifest_text"]

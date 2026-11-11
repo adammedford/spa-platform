@@ -69,7 +69,9 @@
 # sourced, after `terraform init -backend-config=backend.hcl` in each root. It needs the AWS CLI,
 # Terraform, python3, Docker with buildx (decision D-2 in docs/dependencies.md), the .NET SDK for
 # spactl, or SPACTL naming a spactl to run instead (cell-common.sh), and the Session Manager plugin
-# for the wait's tunnel unless --url is given.
+# for the wait's tunnel unless --url is given. Docker's own builder, the docker driver, builds the
+# attestations of step 2 only with the containerd image store on, and fails the build without it:
+# the classic store holds no image index (https://docs.docker.com/build/metadata/attestations/).
 #
 # It redacts two kinds of value, and Docker's and Terraform's output pass through the filter that
 # does it (cell-common.sh's redact_stream):
