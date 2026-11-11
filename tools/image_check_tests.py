@@ -14,7 +14,12 @@ one as it is, one without the `.dockerignore`, one without the Dockerfile's chmo
 image runs as root. Each copy is a git repository of its own, because the script copies what git
 tracks. Three more hold the hardened shape #781 gave the image, each by taking one part out: the
 full Ubuntu base back in the runtime stage, which carries /bin/sh; no `DOTNET_EnableDiagnostics`
-line; and no `LABEL` line.
+line; and no `LABEL` line. One more plants a write outside /tmp as the gateway starts, which the
+first start allows and the read-only start #1169 added refuses.
+
+The read-only starts (#1169) are held mostly against a fake docker that records every call: the
+flags of each `run`, the verdict of each read-only failure, and that `cleanup()` removes every
+container and image the script made.
 
 **Docker is required, not optional.** A case that skipped without it would pass on the machine
 that cannot run it, the failure CODING_STANDARDS.md names. The cases find Docker as the script
@@ -44,6 +49,15 @@ spec.loader.exec_module(runner)
 SCRIPT = ROOT / "tools" / "image-check.sh"
 DOCKERFILE = "src/Gateway/Dockerfile"
 SETTINGS = "src/Gateway/appsettings.json"
+
+# The read-only starts' verdicts (#1169), each naming its image and the read-only root.
+GATEWAY_THREW = ("image-check: fail: on a read-only root with a tmpfs at /tmp, the gateway image threw or "
+                 "stopped before it logged Application started; a write outside /tmp as it starts is one cause.")
+MOCK_STOPPED = ("image-check: fail: on a read-only root, the mock API image threw or stopped before both its "
+                "listeners printed listening on; a write as it starts is one cause, and #780 names no "
+                "writable path for it.")
+MOCK_SILENT = ("image-check: fail: on a read-only root, the mock API image did not print both its listening "
+               "on lines within 60s.")
 
 # Docker Desktop's own install puts its CLI and the credential helper its config names here, which
 # is where this Mac has them; a Linux runner has docker on PATH.
@@ -119,7 +133,13 @@ class ImageCheckTests(unittest.TestCase):
         self.assertRegex(last_line(result.stdout),
                          r"^image-check: pass: the gateway image built from a tree with a host obj/ and an "
                          r"owner-only appsettings\.json, and the gateway started as user \d+, past "
-                         r"WebApplication\.CreateBuilder\.$")
+                         r"WebApplication\.CreateBuilder; then the gateway and mock API images both came up "
+                         r"on a read-only root\.$")
+        # Both read-only starts ran and came up (#1169), the gateway's with its tmpfs.
+        self.assertIn("image-check: read-only: the gateway image came up on a read-only root with a tmpfs "
+                      "at /tmp.\n", result.stdout)
+        self.assertIn("image-check: read-only: the mock API image came up on a read-only root, both "
+                      "listeners listening.\n", result.stdout)
         # The runtime the image runs, read inside it the way a workstation and CI read theirs, so a
         # log says which patch of the shared framework the image carries (#273). A base image the
         # daemon cached before a patch shows here as the older version.
@@ -208,6 +228,24 @@ class ImageCheckTests(unittest.TestCase):
                 self.assertEqual(f"image-check: fail: the gateway image has no org.opencontainers.image.{label} "
                                  "label; the Dockerfile's final stage sets it from a build argument.",
                                  last_line(result.stderr))
+
+    def test_a_gateway_that_writes_outside_tmp_as_it_starts_fails_the_read_only_start(self):
+        """The planted write: the copy's src/Gateway/Program.cs writes /home/app/image-check-write
+        before WebApplication.CreateBuilder. /home/app is the chiseled base's home for the image's
+        user, owned by that user (1654), so the write succeeds on the first start's writable root;
+        /app is not such a path, since the Dockerfile's chmod leaves it writable by root alone. On
+        the read-only root the write throws, because the tmpfs covers /tmp and nothing else."""
+        tree = Tree(self)
+        tree.replace_line("src/Gateway/Program.cs", "WebApplicationBuilder builder = ",
+                          'System.IO.File.WriteAllText("/home/app/image-check-write", "planted");\n'
+                          "WebApplicationBuilder builder = WebApplication.CreateBuilder(args);\n")
+        tree.git("commit", "-q", "-am", "A write outside /tmp as the gateway starts")
+        result = tree.run()
+        self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+        # The first start passed, and every check of it after.
+        self.assertRegex(result.stdout, r"(?m)^image-check: hardened: ")
+        self.assertIn("Read-only file system", result.stderr)
+        self.assertEqual(GATEWAY_THREW, last_line(result.stderr))
 
     def test_without_docker_it_fails_rather_than_passing(self):
         tree = Tree(self)
@@ -398,6 +436,194 @@ class ImageCheckShellListingTests(unittest.TestCase):
                          "app/Gateway.dll, so it cannot show whether the image has a shell.",
                          last_line(result.stderr))
         self.assertNotIn("image-check: pass:", result.stdout)
+
+
+# A docker that takes the script through both read-only starts (#1169), and records each call's
+# arguments, one line each, in CALLS. Its first gateway passes every check: the export at EXPORT lists
+# app/Gateway.dll and no shell, its environment sets DOTNET_EnableDiagnostics=0, and every label
+# answers. The read-only gateway logs as GATEWAY says ("starts", or "throws" an unhandled exception);
+# the mock API as MOCK says: "two" listener lines, "one" and no second, or "stops" with neither.
+# Kestrel's own "Now listening on:" lines come first, one per listener, as the real mock API's do.
+FAKE_DOCKER_READ_ONLY = """#!/bin/bash
+printf '%s\\n' "$*" >> CALLS
+for last in "$@"; do :; done
+case "$1" in
+  image)
+    case "$4" in
+      *Env*) echo "DOTNET_EnableDiagnostics=0" ;;
+      *Labels*) echo set ;;
+      *) echo 1654 ;;
+    esac
+    exit 0 ;;
+  run)
+    for arg in "$@"; do
+      if [ "$arg" = --list-runtimes ]; then
+        echo "Microsoft.NETCore.App 10.0.14 [/usr/share/dotnet/shared/Microsoft.NETCore.App]"
+        exit 0
+      fi
+    done
+    echo fake-container; exit 0 ;;
+  inspect)
+    case "$last" in
+      *-mock) [ MOCK = stops ] && echo false || echo true ;;
+      *) echo true ;;
+    esac
+    exit 0 ;;
+  logs)
+    case "$2" in
+      *-readonly)
+        if [ GATEWAY = throws ]; then
+          echo "Unhandled exception. System.IO.IOException: Read-only file system : '/home/app/image-check-write'"
+        else
+          echo "Application started. Press Ctrl+C to shut down."
+        fi ;;
+      *-mock)
+        echo "      Now listening on: http://127.0.0.1:5080"
+        echo "      Now listening on: http://127.0.0.1:5081"
+        [ MOCK = stops ] && exit 0
+        echo "orders listening on http://127.0.0.1:5080/, audience https://orders.spa-poc.test, clients image-check-app1"
+        [ MOCK = one ] && exit 0
+        echo "reports listening on http://127.0.0.1:5081/, audience (none), clients image-check-app2" ;;
+      *) echo "Application started. Press Ctrl+C to shut down." ;;
+    esac
+    exit 0 ;;
+  export) cat EXPORT; exit 0 ;;
+  *) exit 0 ;;
+esac
+"""
+
+
+class ImageCheckReadOnlyStartTests(unittest.TestCase):
+    """The read-only starts (#1169), against a fake docker. Its `sleep` returns at once, so a wait that
+    runs to STARTUP_SECONDS takes no time. Mutations, each run on its own: the gateway's second `run`
+    without `--read-only`, or without `--tmpfs /tmp`, fails the flags case; the mock API's `run` with
+    `--tmpfs /tmp` added fails it too; the mock API's wait counting one `listening on` line rather
+    than two lets the one-line case pass; a count on "listening on" without its trailing space takes
+    Kestrel's two lines for the listeners and lets it pass too; a wait that no longer ends on an
+    unhandled exception, or on a stopped container, ends the throwing gateway's and the stopped mock
+    API's cases on the timeout's verdict instead; and each `rm -f` or `image rm` taken out of
+    cleanup() fails a cleanup case."""
+
+    def run_with(self, gateway: str, mock: str) -> tuple[subprocess.CompletedProcess, list[list[str]]]:
+        tree = Tree(self)
+        scratch = tempfile.TemporaryDirectory()
+        self.addCleanup(scratch.cleanup)
+        root = pathlib.Path(scratch.name)
+        bin_dir = root / "bin"
+        bin_dir.mkdir()
+        for tool in ("git", "tar", "mktemp", "rm", "chmod", "mkdir", "cat", "grep", "tail", "awk"):
+            found = shutil.which(tool)
+            self.assertIsNotNone(found, f"{tool} is not on PATH")
+            (bin_dir / tool).symlink_to(found)
+        (bin_dir / "sleep").write_text("#!/bin/bash\nexit 0\n")
+        (bin_dir / "sleep").chmod(0o755)
+        (root / "content" / "app").mkdir(parents=True)
+        (root / "content" / "app" / "Gateway.dll").write_text("the gateway\n")
+        export = root / "export.tar"
+        subprocess.run(["tar", "-cf", str(export), "-C", str(root / "content"), "app/Gateway.dll"], check=True)
+        calls = root / "calls"
+        docker = bin_dir / "docker"
+        docker.write_text(FAKE_DOCKER_READ_ONLY.replace("CALLS", shlex.quote(str(calls)))
+                          .replace("EXPORT", shlex.quote(str(export)))
+                          .replace("GATEWAY", gateway).replace("MOCK", mock))
+        docker.chmod(0o755)
+        env = {"PATH": str(bin_dir), "HOME": scratch.name, "LC_ALL": "C"}
+        result = subprocess.run(["/bin/bash", str(SCRIPT)], cwd=tree.dir, env=env, capture_output=True,
+                                text=True, stdin=subprocess.DEVNULL, timeout=60)
+        recorded = [line.split(" ") for line in calls.read_text().splitlines()] if calls.exists() else []
+        return result, recorded
+
+    def started(self, calls: list[list[str]]) -> dict[str, list[str]]:
+        """Each `run -d` call by the name it gave its container."""
+        runs = {}
+        for call in calls:
+            if call[:2] == ["run", "-d"]:
+                runs[call[call.index("--name") + 1]] = call
+        return runs
+
+    def assert_cleaned_up(self, calls: list[list[str]]):
+        """Every container the script started, and every image it built, is removed after the last
+        call that used it."""
+        built = [call[call.index("-t") + 1] for call in calls if call[0] == "build"]
+        started = list(self.started(calls))
+        self.assertTrue(built, calls)
+        self.assertTrue(started, calls)
+        for container in started:
+            removals = [i for i, call in enumerate(calls) if call == ["rm", "-f", container]]
+            self.assertTrue(removals, f"cleanup() does not remove the container {container}")
+            uses = [i for i, call in enumerate(calls) if container in call]
+            self.assertEqual(max(uses), max(removals), f"{container} is used after its removal")
+        for image in built:
+            self.assertIn(["image", "rm", image], calls, f"cleanup() does not remove the image {image}")
+
+    def test_a_pass_starts_both_images_read_only_with_their_flags_and_cleans_up(self):
+        result, calls = self.run_with("starts", "two")
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertRegex(last_line(result.stdout), r"^image-check: pass: .*; then the gateway and mock API "
+                                                   r"images both came up on a read-only root\.$")
+        runs = self.started(calls)
+        self.assertEqual(3, len(runs), runs)
+        first, readonly, mock = runs.values()
+        # The first start stays as it was: no read-only root and no tmpfs.
+        self.assertNotIn("--read-only", first)
+        self.assertNotIn("--tmpfs", first)
+        # The gateway's second start: the same image, a read-only root and a tmpfs at /tmp.
+        self.assertEqual(first[-1], readonly[-1])
+        self.assertIn("--read-only", readonly)
+        self.assertEqual("/tmp", readonly[readonly.index("--tmpfs") + 1])
+        # The mock API's: the image built from its own Dockerfile, a read-only root, no tmpfs, and
+        # the three values its Dockerfile leaves empty.
+        mock_builds = [call for call in calls if call[0] == "build" and any(
+            arg.endswith("/fixtures/MockApi/Dockerfile") for arg in call)]
+        self.assertEqual(1, len(mock_builds), calls)
+        self.assertEqual(mock_builds[0][mock_builds[0].index("-t") + 1], mock[-1])
+        self.assertIn("--read-only", mock)
+        self.assertNotIn("--tmpfs", mock)
+        given = {mock[i + 1].split("=", 1)[0]: mock[i + 1].split("=", 1)[1]
+                 for i, arg in enumerate(mock) if arg == "-e"}
+        self.assertEqual({"MockApi__Issuer", "MockApi__App1Client", "MockApi__App2Client"}, set(given))
+        self.assertTrue(all(given.values()), given)
+        # As each image's own user, which is what ECS runs.
+        for call in runs.values():
+            self.assertNotIn("--user", call)
+            self.assertFalse(any(arg.startswith("--user=") or arg == "-u" for arg in call), call)
+        self.assert_cleaned_up(calls)
+
+    def test_a_read_only_gateway_that_throws_ends_on_its_verdict(self):
+        result, calls = self.run_with("throws", "two")
+        self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+        self.assertIn("Read-only file system", result.stderr)
+        self.assertEqual(GATEWAY_THREW, last_line(result.stderr))
+        self.assertNotIn("image-check: pass:", result.stdout)
+        self.assert_cleaned_up(calls)
+
+    def test_a_read_only_mock_api_that_stops_ends_on_its_verdict_and_cleans_up(self):
+        result, calls = self.run_with("starts", "stops")
+        self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+        self.assertEqual(MOCK_STOPPED, last_line(result.stderr))
+        self.assertNotIn("image-check: pass:", result.stdout)
+        # Every container started and both images built, removed on a failure as on a pass.
+        self.assertEqual(3, len(self.started(calls)), calls)
+        self.assertEqual(2, len([call for call in calls if call[0] == "build"]), calls)
+        self.assert_cleaned_up(calls)
+
+    def test_a_read_only_mock_api_with_one_listener_ends_on_its_verdict(self):
+        result, calls = self.run_with("starts", "one")
+        self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+        self.assertEqual(MOCK_SILENT, last_line(result.stderr))
+        self.assertNotIn("image-check: pass:", result.stdout)
+        self.assert_cleaned_up(calls)
+
+    def test_the_read_only_verdicts_differ_from_the_first_starts(self):
+        first = ("image-check: fail: the gateway failed before it started; a file the runtime user cannot "
+                 "read is one cause, which the Dockerfile's chmod clears.",
+                 "image-check: fail: the gateway did not log that it started within 60s.")
+        for verdict in (GATEWAY_THREW, MOCK_STOPPED, MOCK_SILENT):
+            self.assertIn("read-only root", verdict)
+            self.assertNotIn(verdict, first)
+        self.assertIn("gateway image", GATEWAY_THREW)
+        self.assertIn("mock API image", MOCK_STOPPED)
+        self.assertIn("mock API image", MOCK_SILENT)
 
 
 if __name__ == "__main__":
