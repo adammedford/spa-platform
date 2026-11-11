@@ -662,6 +662,14 @@ try {
     const l = await execute(liar, argsFor(liar, { families: ['yarp'], baseImages: true }), { imageRows: rows })
     if (l.result.baseImages.current.includes(SDK_REF) || !l.result.baseImages.notRead.includes(SDK_REF)) fail(`a row claiming current with no digest read was counted current: ${JSON.stringify(l.result.baseImages)}`)
     if (!recordByKey(l.result, ASP_KEY)) fail('a row claiming current over a moved digest was not filed')
+    // No pinned row returned: nothing was judged, so the report never reads as a clean month (#1166 review;
+    // CODING_STANDARDS.md, "A check fails closed").
+    const none = newEnv()
+    const nr = await execute(none, argsFor(none, { families: ['yarp'], baseImages: true }), { imageRows: [] })
+    const noneComment = fs.readFileSync(path.join(none.repo, LOG_REL, DATE, 'report-comment.md'), 'utf8')
+    if (nr.result.baseImages.rows !== 0 || !noneComment.includes('- Base images: not read: the inventory returned no pinned base-image row.') || /Base images: moved: none/.test(noneComment)) fail(`no pinned row returned reads as a clean read: ${JSON.stringify(nr.result.baseImages)}`)
+    // The report's header line names the base-image statuses it now carries.
+    if (!fs.readFileSync(path.join(on.repo, LOG_REL, DATE, 'report.md'), 'utf8').includes('The base-image rows were read at their registry (#1166)')) fail('the report body does not say the base-image rows were read')
     // baseImages off: no registry read is asked for, nothing is filed, and the report says so.
     const off = newEnv()
     const o = await execute(off, argsFor(off, { families: ['yarp'] }), { imageDigests: answer })

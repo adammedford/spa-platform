@@ -520,7 +520,9 @@ decisions.sort((a, b) => (a.advisory === b.advisory ? 0 : a.advisory ? -1 : 1) |
 const imageRows = IMAGES ? inv.baseImages.filter((r) => SHA.test(r.digest || '') && r.tag) : []
 const refOf = (r) => `${r.image}:${r.tag}`
 const imageRefs = [...new Set(imageRows.map(refOf))].sort()
-const images = { read: IMAGES, moved: [], current: [], notRead: [] }
+// rows counts the pinned rows the Inventory agent returned: none means nothing was judged, and the
+// report says so rather than reading as a month with nothing moved (CODING_STANDARDS.md, "A check fails closed").
+const images = { read: IMAGES, rows: imageRows.length, moved: [], current: [], notRead: [] }
 for (const ref of imageRefs) {
   const rows = imageRows.filter((r) => refOf(r) === ref)
   const read = rows.filter((r) => SHA.test(r.current || ''))
@@ -577,7 +579,7 @@ const changed = inv.report.number ? nowStatus.filter((s) => prevStatus.has(s.pin
 const actionText = (d) => `${d.name}: ${d.action}${d.issue ? ` #${d.issue}` : d.action === 'created' ? ` NUMBER(${d.key})` : ''}, ${d.label}`
 const reportBody = [
   `## ${REPORT_TITLE}`, '',
-  `Swept on ${ctx.date} at origin/main ${ctx.base}. Families checked: ${scoped.join(', ')}. A row outside them reads not-checked. Precedence: advisory, blocked-by-evidence, held-by-decision, behind-minor, behind-patch, current.`, '',
+  `Swept on ${ctx.date} at origin/main ${ctx.base}. Families checked: ${scoped.join(', ')}. A row outside them reads not-checked. Precedence: advisory, blocked-by-evidence, held-by-decision, behind-minor, behind-patch, current.${IMAGES ? ' The base-image rows were read at their registry (#1166): moved, current, or not-checked for a tag not read.' : ''}`, '',
   'TABLE: pending', '',
   '_Refreshed by the pins-sweep workflow (#82); each run adds one comment._',
 ].join('\n')
@@ -587,7 +589,7 @@ const reportComment = [
   `- Rows whose status changed: ${changed.length ? changed.join('; ') : inv.report.number ? 'none' : 'the first run, nothing to compare'}.`,
   `- Filed: ${decisions.length ? decisions.map(actionText).join('; ') : 'nothing to decide'}.`,
   `- Not trialled or not checked: ${leftovers.length ? leftovers.map((l) => `${l.family} (${l.why})`).join('; ') : 'none'}.`,
-  `- Base images: ${IMAGES ? `moved: ${images.moved.join(', ') || 'none'}; current: ${images.current.join(', ') || 'none'}; not read: ${images.notRead.join(', ') || 'none'}` : 'not read this run (baseImages false)'}.`,
+  `- Base images: ${IMAGES && !imageRows.length ? 'not read: the inventory returned no pinned base-image row' : IMAGES ? `moved: ${images.moved.join(', ') || 'none'}; current: ${images.current.join(', ') || 'none'}; not read: ${images.notRead.join(', ') || 'none'}` : 'not read this run (baseImages false)'}.`,
 ].join('\n')
 const report = { mode: DRY ? 'dry' : inv.report.number ? 'edit' : 'create', issue: inv.report.number, bodyFile: `${LOG}/report.md`, commentFile: `${LOG}/report-comment.md` }
 
