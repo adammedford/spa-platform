@@ -18,9 +18,10 @@ partial instead of never starting. This reads one issue and fails it, naming the
   word `none` says the ticket writes nothing, as a run ticket does (#87, #255): it passes, and the
   owner is then the Owner line's one role, as for a body with no Touches line (#284);
 - owner-line: its `**Owner:**` line names other than exactly the role those paths derive, by
-  tools/overnight_collect.py's ROLES. A body with no Touches line derives no role, so its Owner line
-  must name exactly one; the tickets filed before #227 have none, and they are judged by what they
-  have rather than failed wholesale;
+  tools/overnight_collect.py's ROLES; a body with no Owner line takes the role the paths derive
+  (rule 5), by derived_owner(). A body with no Touches line derives no role, so its Owner line must
+  name exactly one; the tickets filed before #227 have none, and they are judged by what they have
+  rather than failed wholesale;
 - sitting-or-landing: under `ready-for-agent`, an open `- [ ]` box using a word of SITTING_OR_LANDING
   (rules 2 and 3), as a word of prose only: not in a code span, a file name, a path or a
   hyphenated compound (#482). A word list still misfires on prose; the escape is to reword the box,
@@ -46,9 +47,10 @@ Two more are notes, failing nothing (#970), by form_notes(): `heading:` for a `#
 the body's set, TICKET_HEADINGS for a ticket and REQUEST_HEADINGS for an issue labelled
 `change-request`, naming the heading of the set a drifted one stands for (`## Done when` is
 `## Acceptance criteria`) or else the set; and `derived-owner:` for an `**Owner:**` line beside a
-Touches line that names a path, since rule 5 derives the owner. Owner-line still holds that line to
-the derived role, and the collect step routes by it, so the note says what the line repeats and
-asks no one to drop it. A change request's form names both lines, so its Owner line is no note.
+Touches line that names a path, since rule 5 derives the owner. Owner-line holds a line that is
+present to the derived role, and the collect step routes a body without one by its paths, so the
+note asks for the line to go. A change request's form names both lines, so its Owner line is no
+note.
 
     python3 -I tools/ticket_shape.py <number>    read the issue through gh
     python3 -I tools/ticket_shape.py -            read `gh issue view --json` output on stdin
@@ -450,8 +452,29 @@ def form_notes(issue: Issue, parsed: list[tuple[str, str]] | None = None) -> lis
     if not request and read and read[0] and collect().OWNER.search(issue.body):
         notes.append("derived-owner: the `**Owner:**` line stands beside a Touches line that names "
                      "a path, and rule 5 derives the owner from those paths, so the line repeats it; "
-                     "the form expected is the role the paths derive, which owner-line holds it to")
+                     "the form expected is no Owner line, and one that stays must name the role the "
+                     "paths derive")
     return notes
+
+
+def derived_owner(body: str, parsed: list[tuple[str, str]] | None = None) -> str | None:
+    """The one role of tools/overnight_collect.py's ROLES that the Touches paths derive (rule 5),
+    which a body with no Owner line takes (#1070). None when there is no Touches line, when it names
+    no path or says `none`, when it has a token left unread (the line cannot then be fully judged),
+    when its paths have more than one owner, and when a path is owned by no role of ROLES, as a path
+    no line of OWNERSHIP.md matches is."""
+    parsed = ownership().rules() if parsed is None else parsed
+    read = read_touches(body, parsed)
+    if read is None:
+        return None
+    paths, unread = read
+    if not paths or unread:
+        return None
+    owners = {owner_of(path, parsed) for path in paths}
+    roles = {role for role, _ in collect().ROLES}
+    if len(owners) != 1 or not owners <= roles:
+        return None
+    return owners.pop()
 
 
 def judge(issue: Issue, parsed: list[tuple[str, str]] | None = None,
@@ -475,7 +498,10 @@ def judge(issue: Issue, parsed: list[tuple[str, str]] | None = None,
     if len(by_owner) > 1:
         failures.append(Failure("one-owner", "the Touches paths have " + "; ".join(
             f"{owner}: {', '.join(paths)}" for owner, paths in sorted(by_owner.items()))))
-    else:
+    # A body with no Owner line whose paths derive one role takes that role (#1070); a line that is
+    # present, empty or naming no role included, is held to the derived role as before.
+    elif (collect().OWNER.search(issue.body) is not None
+          or derived_owner(issue.body, parsed) is None):
         named = roles_named(issue.body)
         derived = next(iter(by_owner), None)
         if derived is not None and named != [derived]:

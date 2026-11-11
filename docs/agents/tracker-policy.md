@@ -33,16 +33,17 @@ ADR-0020 records the decision and its reasons. What it adds to `docs/agents/issu
   role where there is no Touches line or it says `none`; under `ready-for-agent`, an open box in
   the words of a sitting or a landing, an open box that requires another ticket's commit on this
   ticket's branch, a `**Session:** foreground` line or a sub-issue; and a "Blocked by #N", "after
-  #N" or "once #N lands" where #N is an open issue with no blocked-by edge. A #N that is a closed
-  issue or a pull request is stale prose: the check prints it as a note and fails nothing. A
-  "Blocked by" list that names the ticket itself ("and this ticket", or its own #N) describes
-  another ticket's wait and is not read. It also prints as a note, failing nothing, a `##` heading
-  outside the ticket's set (`Parent`, `What to build`, `Acceptance criteria`, `Blocked by`) and an
-  `**Owner:**` line beside a Touches line that names a path, since rule 5 derives the owner.
-  `.github/workflows/ticket-shape.yml` runs it when an issue carrying `ready-for-agent` is opened,
-  edited or labelled, and on a failure swaps that label for `needs-triage` and comments the failing
-  rule. The words are a list, and a list misfires. The escape is to reword the box, or to make it a
-  ready-for-human ticket blocked by the ticket that builds what it runs; then relabel.
+  #N" or "once #N lands" where #N is an open issue with no blocked-by edge. A body whose Touches
+  line names a path needs no Owner line: the paths derive it, and the collect step routes by them.
+  A #N that is a closed issue or a pull request is stale prose: the check prints it as a note and
+  fails nothing. A "Blocked by" list that names the ticket itself ("and this ticket", or its own
+  #N) describes another ticket's wait and is not read. It also prints as a note, failing nothing, a
+  `##` heading outside the ticket's set (`Parent`, `What to build`, `Acceptance criteria`, `Blocked
+  by`) and an `**Owner:**` line beside a Touches line that names a path, since rule 5 derives the
+  owner. `.github/workflows/ticket-shape.yml` runs it when an issue carrying `ready-for-agent` is
+  opened, edited or labelled, and on a failure swaps that label for `needs-triage` and comments the
+  failing rule. The words are a list, and a list misfires. The escape is to reword the box, or to
+  make it a ready-for-human ticket blocked by the ticket that builds what it runs; then relabel.
 - **A ticket is filed after a search for what was filed since its subject was last searched.**
   Another session on the same account can file the same ticket while one drafts: #558 duplicated
   #547, filed two and a half hours earlier. Just before `gh issue create`, run

@@ -771,6 +771,84 @@ class OwnerLine(unittest.TestCase):
         self.assertIn("owner-line", rules_broken(209, body))
 
 
+def lineless(touches_line: str | None, owner_line: str | None = None) -> str:
+    """A ticket body with the Touches line given (none when None) and the Owner line given (none
+    when None), as #1070's Round 5 table writes them."""
+    head = "\n".join(line for line in (owner_line, touches_line) if line is not None)
+    return f"{head}\n\n## What to build\n\nIt.\n\n## Acceptance criteria\n\n- [ ] Its tests pass.\n"
+
+
+def owner_rules(body: str, parsed: list[tuple[str, str]] | None = None) -> list[str]:
+    """The rules a ready-for-agent body with no blocker breaks, judged in process."""
+    issue = shape.issue_of(drafted(body, "ready-for-agent"))
+    return [failure.rule for failure in shape.judge(issue, parsed, states={})]
+
+
+class DerivedOwner(unittest.TestCase):
+    """#1070: a body with no Owner line takes the one role its Touches paths derive (rule 5); a line
+    that is present is held to that role as before. Each case is a row of the grilling record's
+    Round 5 table."""
+
+    E2E = "**Touches:** `tests/e2e/x.ts`"
+
+    def test_derived_owner_is_the_one_role_the_paths_derive(self):
+        for touches_line, expected in (
+            (self.E2E, "ws6-verification"),
+            ("**Touches:** `tools/check.sh`", "integrator"),
+            ("**Touches:** `tests/e2e/x.ts`, tests/e2e/y.ts", "ws6-verification"),
+            # No role: two owners, an unread token, `none`, no path, and no Touches line at all.
+            ("**Touches:** `tests/e2e/x.ts`, `tools/check.sh`", None),
+            ("**Touches:** Gateway, `tests/e2e/x.ts`", None),
+            ("**Touches:** none", None),
+            ("**Touches:** to be decided", None),
+            (None, None),
+        ):
+            with self.subTest(touches_line=touches_line):
+                self.assertEqual(expected, shape.derived_owner(lineless(touches_line)))
+
+    def test_a_path_no_line_owns_derives_no_role(self):
+        # OWNERSHIP.md's catch-all owns every path, so the rule set here leaves it out.
+        parsed = [rule for rule in shape.ownership().rules() if rule[0] != "*"]
+        self.assertEqual(None, shape.derived_owner(lineless("**Touches:** `tools/check.sh`"), parsed))
+        self.assertEqual("ws6-verification", shape.derived_owner(lineless(self.E2E), parsed))
+        self.assertEqual(["owner-line"],
+                         owner_rules(lineless("**Touches:** `tools/check.sh`"), parsed))
+
+    def test_an_owner_outside_the_roles_derives_no_role(self):
+        # An OWNERSHIP.md line naming an owner ROLES does not know, as a role renamed in one and
+        # not the other would be: no lane is that owner's, so the body is held to its Owner line.
+        parsed = shape.ownership().rules() + [("/tools/odd/", "ws9-unknown")]
+        body = lineless("**Touches:** `tools/odd/x.py`")
+        self.assertEqual(None, shape.derived_owner(body, parsed))
+        self.assertEqual(["owner-line"], owner_rules(body, parsed))
+
+    def test_a_path_with_no_owner_line_passes_with_no_note(self):
+        body = lineless(self.E2E)
+        self.assertEqual([], owner_rules(body))
+        self.assertEqual([], shape.form_notes(shape.issue_of(drafted(body, "ready-for-agent"))))
+
+    def test_the_derived_role_on_the_line_still_passes(self):
+        self.assertEqual([], owner_rules(lineless(self.E2E, "**Owner:** ws6-verification")))
+
+    def test_a_present_line_naming_other_than_the_derived_role_fails(self):
+        for owner_line in ("**Owner:** integrator", "**Owner:** the human", "**Owner:**"):
+            with self.subTest(owner_line=owner_line):
+                self.assertEqual(["owner-line"], owner_rules(lineless(self.E2E, owner_line)))
+
+    def test_paths_of_two_owners_with_no_line_fail_one_owner_only(self):
+        body = lineless("**Touches:** `tests/e2e/x.ts`, `tools/check.sh`")
+        self.assertEqual(["one-owner"], owner_rules(body))
+
+    def test_an_unread_token_with_no_line_fails_touches_and_owner_line(self):
+        body = lineless("**Touches:** Gateway, `tests/e2e/x.ts`")
+        self.assertEqual(["touches", "owner-line"], owner_rules(body))
+
+    def test_none_or_no_touches_line_with_no_owner_line_fails(self):
+        for touches_line in ("**Touches:** none", None):
+            with self.subTest(touches_line=touches_line):
+                self.assertEqual(["owner-line"], owner_rules(lineless(touches_line)))
+
+
 class SittingOrLanding(unittest.TestCase):
     """Rules 2 and 3: under ready-for-agent, no open box needs a sitting, a push or a landing."""
 
@@ -1380,7 +1458,8 @@ class CommandLine(unittest.TestCase):
             "expected is `## Acceptance criteria`",
             "ticket-shape: note: derived-owner: the `**Owner:**` line stands beside a Touches line "
             "that names a path, and rule 5 derives the owner from those paths, so the line repeats "
-            "it; the form expected is the role the paths derive, which owner-line holds it to"],
+            "it; the form expected is no Owner line, and one that stays must name the role the "
+            "paths derive"],
             done.stdout)
         self.assertTrue(self.last_line(done).startswith("ticket-shape: pass: #970"), done.stdout)
 
@@ -1416,7 +1495,8 @@ class CommandLine(unittest.TestCase):
 
     def test_a_body_in_the_set_gets_none(self):
         for body in (
-            # A path-bearing Touches line fails owner-line without its Owner line, so `none` here.
+            # An Owner line beside a path-bearing Touches line is a derived-owner note, so `none`
+            # here, where the line is the owner.
             "## Parent\n\n#1\n\n**Owner:** integrator\n**Touches:** none\n\n## What to build\n\nIt.\n\n"
             "## Acceptance criteria\n\n- [ ] Done.\n\n## Blocked by\n\n- #1\n",
             # An Owner line where no path derives one is the owner, and no note.

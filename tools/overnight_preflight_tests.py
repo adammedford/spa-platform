@@ -953,9 +953,9 @@ class ShapeTests(PreflightTestCase):
         self.assertEqual([view_call(n) for n in (10, 11, 12, 358)], [call["argv"] for call in views])
         self.assertEqual({str(case.checkout)}, {call["cwd"] for call in views})
 
-    def test_a_needs_triage_ticket_with_no_owner_line_is_listed_with_owner_line_and_skipped(self):
+    def test_a_needs_triage_ticket_with_a_wrong_owner_line_is_listed_with_owner_line_and_skipped(self):
         case = Case(self)
-        case.issue(358, "needs-triage", "**Touches:** `tools/overnight_collect.py`\n\n"
+        case.issue(358, "needs-triage", "**Owner:** ws2-hosting\n**Touches:** `tools/overnight_collect.py`\n\n"
                                         "## Acceptance criteria\n\n- [ ] A test proves it\n")
         result = case.run()
         self.assertOnlyFails(result)
@@ -963,6 +963,17 @@ class ShapeTests(PreflightTestCase):
                                   "these fail and are skip candidates: 6.9 (#358: owner-line)"),
                          result.row("shape"))
         self.assertEqual(["6.9"], result.arguments()["skip"])
+
+    def test_a_ticket_with_no_owner_line_beside_a_path_is_no_skip_candidate(self):
+        # #1070: the paths derive the owner, so a body without the line passes the shape check.
+        case = Case(self)
+        case.issue(358, "needs-triage", "**Touches:** `tools/overnight_collect.py`\n\n"
+                                        "## Acceptance criteria\n\n- [ ] A test proves it\n")
+        result = case.run()
+        self.assertOnlyFails(result)
+        self.assertEqual(("pass", "4 ready-for-agent and needs-triage tickets judged as ready-for-agent; "
+                                  "none fails"), result.row("shape"))
+        self.assertEqual([], result.arguments()["skip"])
 
     def test_a_needs_triage_ticket_is_judged_under_ready_for_agent_so_its_box_words_count(self):
         # Under its own label the word list does not fire; under ready-for-agent it does.

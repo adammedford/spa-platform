@@ -332,6 +332,42 @@ class Rules(unittest.TestCase):
                 found = by_issue(resolved(agent=[issue(7, body(owner=line))]))[7]
                 self.assertEqual("ready-for-agent with no open blocker", found["why"])
 
+    def test_a_body_with_no_owner_line_is_owned_by_the_role_its_paths_derive(self):
+        """#1070: rule 5 derives the owner from the Touches paths, so a body with no Owner line is
+        routed by them, as tools/ticket_shape.py's derived_owner() reads them."""
+        for line, row, expected in (
+            ("**Touches:** `tests/e2e/x.ts`\n", "none", "ws6-verification"),
+            ("**Touches:** `fixtures/MockApi/Program.cs`\n", "none", "ws5-fixtures"),
+            # An I-* row stays the integrator's whatever its paths.
+            ("**Touches:** `tests/e2e/x.ts`\n", "I-7", "integrator"),
+            # Paths of two owners derive no role.
+            ("**Touches:** `tests/e2e/x.ts`, `tools/check.sh`\n", "none", "integrator"),
+            # A line present that names no role is not absent: the integrator's, as before.
+            ("**Owner:** the human\n**Touches:** `tests/e2e/x.ts`\n", "none", "integrator"),
+            # Neither an Owner line nor a Touches line.
+            ("", "none", "integrator"),
+        ):
+            with self.subTest(line=line, row=row):
+                text = f"{line}**Plan row:** {row}\n\n## Acceptance\n- [ ] one\n"
+                found = by_issue(resolved(agent=[issue(7, text)]))[7]
+                self.assertEqual(expected, found["owner"])
+                self.assertEqual("ready-for-agent with no open blocker", found["why"])
+
+    def test_an_owner_derivation_that_cannot_read_refuses_the_answer(self):
+        """A check fails closed: a derivation that throws is no owner, so nothing is printed, and
+        the ticket is not routed to the integrator for it."""
+        shape = collect.ticket_shape()
+        kept = shape.derived_owner
+        def broken(body, parsed=None):
+            raise RuntimeError("derivation broken on purpose")
+        shape.derived_owner = broken
+        try:
+            with self.assertRaises(collect.Refused) as refused:
+                resolved(agent=[issue(36, "**Touches:** `tests/e2e/x.ts`\n\n- [ ] one\n")])
+        finally:
+            shape.derived_owner = kept
+        self.assertIn("could not derive the owner of #36", str(refused.exception))
+
     def test_the_status_takes_the_first_rule_that_fires(self):
         answer = by_issue(resolved(
             agent=[issue(1, body(), assignees=("adam",)),
