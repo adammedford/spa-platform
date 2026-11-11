@@ -574,12 +574,16 @@ function stub(env, scriptArgs, served) {
         // a rerun on the same checkout reads it back as filed; one that fails is refused, never filed.
         // served.filerDrops: the titles the filer returns neither filed nor skipped, as a filer that
         // lost one would. served.filerUnreachable: a filer that could not reach GitHub and filed nothing.
+        // served.filerFixed: the titles the filer's re-read finds already fixed by the pull request's
+        // description or an origin's later Answer (#1111), returned in fixed and filed by nobody.
         const items = served.filerUnreachable ? [] : (jsonAfter(prompt, 'FOLLOW-UPS') || []).filter((it) => !(served.filerDrops || []).includes(it.title))
         env.filed = env.filed || []
         env.shaped = []
         const filed = []
         const refused = []
+        const fixed = []
         for (const it of items) {
+          if ((served.filerFixed || []).includes(it.title)) { fixed.push({ pr: it.pr, title: it.title, why: `#${it.pr}'s description: "fixed in this pull request"` }); continue }
           const shape = shapeOf(it.body, it.label)
           env.shaped.push({ title: it.title, label: it.label, ...shape })
           if (shape.status !== 0 || !shape.last.startsWith('ticket-shape: pass:')) { refused.push({ pr: it.pr, title: it.title, why: [...shape.failures, shape.last].join('; ') }); continue }
@@ -588,7 +592,7 @@ function stub(env, scriptArgs, served) {
           env.filed.push(issue)
           filed.push({ pr: it.pr, title: it.title, number, url: issue.url })
         }
-        out = served.filerUnreachable ? { filed: [], skipped: [], refused: [], unreachable: true, reason: 'GitHub could not be reached' } : { filed, skipped: [], refused, unreachable: false, reason: '' }
+        out = served.filerUnreachable ? { filed: [], skipped: [], fixed: [], refused: [], unreachable: true, reason: 'GitHub could not be reached' } : { filed, skipped: [], fixed, refused, unreachable: false, reason: '' }
       } else if (label === 'draft-read') {
         // The draft check's one agent (#302) reads the issue and the draft file and returns them verbatim.
         const issue = served.issue === undefined ? issueWith([...QUESTIONS, CONFIRM]) : served.issue
@@ -1585,6 +1589,42 @@ try {
     // names it, never reads the silence as done (CODING_STANDARDS.md -> "A check fails closed").
     const lost = await execute(newRepo(), FU_ARGS, { followUps: FU287, filerDrops: [FINDING_Q9] })
     if (!lost.result.refusals.some((r) => /neither filed nor skipped/.test(r) && r.includes(FINDING_Q9))) fail(`follow-ups: a follow-up the filer dropped is not named: ${JSON.stringify(lost.result.refusals)}`)
+  }
+
+  // 17a. Re-read before filing (#1111). The filer's step after its look again, and before its shape
+  //      check, reads the reviewed pull request's description as it reads now and then the latest
+  //      "## Answer" on each issue that description closes, and files nothing for a row either
+  //      already fixes, listing it in FILED's required fixed array of {pr, title, why}. A fixed row is
+  //      accounted for: it is named in the comment with its why, never read as lost, and holds no
+  //      checkpoint.
+  checks++
+  {
+    const base = await execute(newRepo(), FU_ARGS, { followUps: FU287 })
+    const steps = base.prompt('followups-file').split(/\n(?=\d+\. )/)
+    const at = (re) => steps.findIndex((s) => re.test(s))
+    const look = at(/^2\. Look again before filing/)
+    const reread = at(/gh pr view <its pr> --json body/)
+    const shape = at(/tools\/ticket_shape\.py -/)
+    if (look < 0 || reread !== look + 1 || shape !== reread + 1) fail(`#1111: the filer's re-read step is not the one after its look again and before its shape check: look ${look}, re-read ${reread}, shape ${shape}`)
+    const step = reread < 0 ? '' : steps[reread]
+    const pv = step.indexOf('gh pr view <its pr> --json body')
+    if (pv < 0 || step.indexOf('## Answer') < pv) fail(`#1111: the re-read step does not read the latest "## Answer" after the pull request's description: ${JSON.stringify(step)}`)
+    if (!/file nothing, and list it in fixed/.test(step)) fail(`#1111: the re-read step does not file nothing for a fixed row and list it in fixed: ${JSON.stringify(step)}`)
+    const schema = (base.calls.find((c) => c.label === 'followups-file') || {}).schema || {}
+    if (!(schema.required || []).includes('fixed')) fail(`#1111: the follow-ups filing schema does not require fixed: ${JSON.stringify(schema.required)}`)
+    const item = (((schema.properties || {}).fixed || {}).items) || {}
+    if (JSON.stringify(item.required) !== JSON.stringify(['pr', 'title', 'why'])) fail(`#1111: a fixed entry does not require pr, title and why: ${JSON.stringify(item.required)}`)
+    if (!validate(schema, { filed: [], skipped: [], refused: [], unreachable: false, reason: '' }).some((b) => /\.fixed: missing/.test(b))) fail('#1111: the follow-ups filing schema accepts a return with no fixed array')
+    // One row found fixed, the other filed: the fixed one is named with its why and is not lost.
+    const fx = await execute(newRepo(), FU_ARGS, { followUps: FU287, filerFixed: [FINDING_Q9] })
+    const got = (fx.result.followUps || {}).fixed || []
+    if (got.length !== 1 || got[0].pr !== 287 || got[0].title !== FINDING_Q9) fail(`#1111: the return does not list the fixed row: ${JSON.stringify(got)}`)
+    if (!((fx.result.followUps || {}).filed || []).some((f) => f.title === FINDING_CI)) fail('#1111: the row nothing fixes was not filed beside the fixed one')
+    if (fx.result.refusals.some((r) => /neither filed nor skipped/.test(r))) fail(`#1111: a fixed row is reported as lost by the filer: ${JSON.stringify(fx.result.refusals)}`)
+    const sec = fx.result.comment.text.split(/^### /m).find((s) => s.startsWith('Follow-ups not filed: already fixed')) || ''
+    if (!sec.includes(FINDING_Q9) || !sec.includes("#287's description")) fail(`#1111: the comment does not list the fixed row with its why under "Follow-ups not filed: already fixed":\n${fx.result.comment.text}`)
+    if (((fx.result.followUps || {}).window || {}).complete !== ((base.result.followUps || {}).window || {}).complete) fail(`#1111: a fixed row changed the coverage: ${JSON.stringify((fx.result.followUps || {}).window)}`)
+    if (!((base.result.followUps || {}).window || {}).complete) fail('#1111: the baseline run left the coverage incomplete, so the fixed run\'s coverage proves nothing')
   }
 
   // 17b. Owner and Touches (#479). Each follow-up carries a Touches line derived from the finding's

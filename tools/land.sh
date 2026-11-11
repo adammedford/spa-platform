@@ -450,6 +450,10 @@ if [ -n "${follow_ups:-}" ]; then
   # the match on the title is made here, with awk's tolower and its field splitting, which
   # collapses blanks and trims them. A listing gh cannot make is said, and the rows are not
   # checked: a warning that cannot be computed is not a reason to hold a merge a record clears.
+  # A row is often fixed after the record that carried it, and filed fixed (#1111: #816, #823, #977,
+  # #842 to #846, #931), so the warning tells the filer to re-read #<pr>'s description and the latest
+  # ## Answer on each issue it closes first and file nothing for a row they already fix; whether one
+  # does is the filer's judgement, so the match below is unchanged.
   filed_jq='.[] | select(any(.body | split("\n")[]; startswith("**Raised by:**") and test("#'"$pr"'([^0-9]|$)"))) | .title'
   if filed="$(gh issue list --state all --limit 500 --search "Raised by #$pr in:body" --json number,title,body --jq "$filed_jq")"; then
     filed_titles="$(printf '%s\n' "$filed" | awk '{ $0 = tolower($0); $1 = $1; print }')"
@@ -461,7 +465,7 @@ if [ -n "${follow_ups:-}" ]; then
         if [ "$title" = "$wanted" ]; then answered=1; break; fi
       done <<< "$filed_titles"
       [ -n "$answered" ] \
-        || printf 'land: the review record that clears #%s carries a follow-up no issue has filed: %s. Once #%s merges, no morning run files it, because the morning reads the records of open pull requests only (#514); file it by hand, with that finding as the title and a **Raised by:** #%s line (docs/agents/review.md -> Landing or holding).\n' "$pr" "$finding" "$pr" "$pr" >&2
+        || printf 'land: the review record that clears #%s carries a follow-up no issue has filed: %s. Once #%s merges, no morning run files it, because the morning reads the records of open pull requests only (#514). Before filing it, re-read #%s'"'"'s description as it reads now and the latest ## Answer comment on each issue it closes, and file nothing if either already fixes it (#1111); otherwise file it by hand, with that finding as the title and a **Raised by:** #%s line (docs/agents/review.md -> Landing or holding).\n' "$pr" "$finding" "$pr" "$pr" "$pr" >&2
     done <<< "$follow_ups"
   else
     printf 'land: could not list the issues raised by #%s, so whether each carried follow-up has been filed is not checked; gh says why above. The merge goes on; read the record'"'"'s Follow-ups table yourself.\n' "$pr" >&2

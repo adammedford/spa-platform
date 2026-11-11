@@ -1086,6 +1086,15 @@ class FollowUpsTests(LandTestCase):
                 self.assertIn("morning", line)
                 self.assertIn(f"#{PR} merges", line)
                 self.assertIn(f"**Raised by:** #{PR}", line)
+                # And what to re-read before filing it, since a carried row is often fixed after
+                # the record (#1111): the description as it reads now, then each closed issue's
+                # latest Answer, and a row either already fixes is filed by nobody.
+                described = line.find(f"re-read #{PR}'s description as it reads now")
+                answered = line.find("the latest ## Answer comment on each issue it closes")
+                self.assertGreaterEqual(described, 0, line)
+                self.assertGreater(answered, described, line)
+                self.assertIn("file nothing if either already fixes it", line)
+                self.assertLess(answered, line.find("file it by hand"), line)
                 self.assertNotIn("\t", line)
                 self.assertNotIn("unremarked", line)
 
