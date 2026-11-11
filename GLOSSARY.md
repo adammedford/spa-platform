@@ -62,8 +62,10 @@ the agent that drives it. Several live at once when a step needs more than one s
 session.
 
 **Observation line** — one line of a sitting browser's output: what the page showed, as a token,
-with a UTC time, the profile and named fields, never free text but the marker's. _Avoid_:
-"read-back", which the glossary keeps for AWS's own API report, and "screenshot".
+with a UTC time, the profile and named fields. A line carries at most one free text, always last:
+the marker's text, the session state an app's page shows on an `other` line, or the AWS CLI's
+message when an AWS call fails. _Avoid_: "read-back", which the glossary keeps for AWS's own API
+report, and "screenshot".
 
 **Observation box** — an acceptance box whose evidence is a count reported by a later run's retro,
 such as #109's per-run refusal count. A ticket whose open boxes are all observation boxes is an
