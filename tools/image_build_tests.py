@@ -323,5 +323,36 @@ class TheRuntimeUserReadsThePublishedTree(unittest.TestCase):
                                  f"{dockerfile}: a data file became executable")
 
 
+class EveryImageBuildsUnderTheAnalysis(unittest.TestCase):
+    """Directory.Build.props runs the analysis wherever it is read, so an image whose build copies it
+    without .editorconfig and .globalconfig fails its publish with every rule at error (#606, #673).
+    No CI job builds the mock API's or the startup floor's image, so each Dockerfile's build-files
+    line, the one COPY that carries the props, is held here to the gateway's own, character for
+    character, as the chmod step is (#233)."""
+
+    GATEWAY = "src/Gateway/Dockerfile"
+
+    @staticmethod
+    def build_files(dockerfile: str) -> str:
+        lines = [rest for keyword, rest in instructions(dockerfile)
+                 if keyword == "COPY" and "Directory.Build.props" in shlex.split(rest)]
+        if len(lines) != 1:
+            raise AssertionError(f"{dockerfile} has {len(lines)} COPY lines carrying "
+                                 "Directory.Build.props, where one is the build-files line")
+        return lines[0]
+
+    def test_the_gateways_build_files_carry_the_analyzer_configs(self):
+        sources = shlex.split(self.build_files(self.GATEWAY))
+        for config in (".editorconfig", ".globalconfig"):
+            self.assertIn(config, sources, f"{self.GATEWAY}'s build-files line does not copy {config}")
+
+    def test_every_dockerfile_copies_the_gateways_build_files(self):
+        gateway = self.build_files(self.GATEWAY)
+        for dockerfile in DOCKERFILES:
+            with self.subTest(dockerfile=dockerfile):
+                self.assertEqual(self.build_files(dockerfile), gateway,
+                                 f"{dockerfile}'s build-files line differs from {self.GATEWAY}'s")
+
+
 if __name__ == "__main__":
     unittest.main()
