@@ -1664,8 +1664,9 @@ const JQ_INDEX = (at, state) => `[.[][] | (.body // "") as $b | {url: .html_url,
 // issues whose body has a "**Raised by:**" line naming #<pr>, as tools/land.sh's filed_jq does, and
 // reads that line as filedAs reads it: a line starts after \n, \r, U+2028 or U+2029 (a JS multiline
 // ^), and runs to the next \n. So it keeps every issue filedAs can hold a follow-up by, and drops only
-// ones filedAs would refuse anyway.
-const JQ_FILED = (pr) => String.raw`[.[] | select((.body // "") | test("(^|[\n\r  ])\\*\\*Raised by:\\*\\*[^\n]*#${pr}([^0-9]|$)"))]`
+// ones filedAs would refuse anyway. U+2028 and U+2029 are written as jq escapes, as JQ_LINES writes
+// them, so the command an agent copies carries no invisible character.
+const JQ_FILED = (pr) => String.raw`[.[] | select((.body // "") | test("(^|[\n\r\u2028\u2029])\\*\\*Raised by:\\*\\*[^\n]*#${pr}([^0-9]|$)"))]`
 
 // The follow-ups pass's first agent (#1082 Q9): the lookup, which takes the issue open or closed, then
 // the window. A date given by issue number alone is the title's, so the run log's directory is named

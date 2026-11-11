@@ -1585,10 +1585,11 @@ try {
     if (JSON.stringify(sent2) !== JSON.stringify([FINDING_CI])) fail(`follow-ups: with ${FINDING_Q9} filed by hand, the filer was given ${JSON.stringify(sent2)}`)
     // #1155: the record reader's listing of the issues filed from #287 carries a --jq, run here by the
     // real jq on issues as gh lists them, that keeps the issues whose Raised-by line names #287 and no
-    // other: not one naming 2870, a number beginning 287, not one naming #287 in prose or on another line (an Overnight report), not a
-    // Raised-by line beginning mid-line. A line starts as filedAs reads one, after \n, \r or U+2028, and
-    // a null body is no match. The loose search served 30 issues and about 400 KB for #38 to #40, so
-    // every record reader overflowed and the checkpoint never advanced.
+    // other: not one naming 2870, a number beginning 287, not one naming #287 in prose or on another
+    // line (an Overnight report), not a Raised-by line beginning mid-line. A line starts as filedAs
+    // reads one, after \n, \r, U+2028 or U+2029, and a null body is no match. The loose search served
+    // 30 issues and about 400 KB for #38 to #40, so every record reader overflowed and the checkpoint
+    // never advanced.
     {
       const rp = byHand.prompt('followups-batch:1')
       const cut = /--search "Raised by #287 in:body" --json number,title,body,url --jq '([^']+)'/.exec(rp)
@@ -1603,16 +1604,21 @@ try {
           { number: 6, body: 'x\r**Raised by:** #287' },
           { number: 7, body: '## Overnight\n\n**Raised by:** #1082, Q7\n\n- #287 merged; #287 carried two follow-ups' },
           { number: 8, body: null },
-          { number: 9, body: 'x **Raised by:** #287.' },
+          { number: 9, body: 'x\u2028**Raised by:** #287.' },
+          { number: 10, body: 'x\u2029**Raised by:** #287' },
           ISSUE_288,
         ].map((i) => ({ title: `t${i.number}`, url: URL(i.number), ...i }))
         const jr = spawnSync('jq', ['-c', cut[1]], { input: JSON.stringify(loose), encoding: 'utf8' })
         if (jr.error || jr.status !== 0) fail(`#1155: jq could not run the record reader's filter: ${jr.error ? jr.error.message : jr.stderr}`)
         else {
           const kept = JSON.parse(jr.stdout)
-          if (kept.map((i) => i.number).join() !== '1,4,6,9,288') fail(`#1155: the record reader's filter keeps ${kept.map((i) => i.number).join()} of a loose listing, expected 1,4,6,9,288`)
-          // It keeps exactly the issues filedAs reads as naming #287, so it drops none a follow-up is held by.
-          const held = loose.filter((i) => new RegExp('^\\*\\*Raised by:\\*\\*[^\\n]*#287(?!\\d)', 'm').test(String(i.body || ''))).map((i) => i.number)
+          if (kept.map((i) => i.number).join() !== '1,4,6,9,10,288') fail(`#1155: the record reader's filter keeps ${kept.map((i) => i.number).join()} of a loose listing, expected 1,4,6,9,10,288`)
+          // It keeps exactly the issues filedAs reads as naming #287, so it drops none a follow-up is held by:
+          // filedAs itself, taken from the script's section, so a change to its reading moves this check too.
+          const read = (/^\/\/ -+ follow-ups, read here\n([\s\S]*?)\n\/\/ -+ /m.exec(fs.readFileSync(scriptPath, 'utf8')) || [])[1]
+          if (!read) fail('#1155: the script has no "follow-ups, read here" section to take filedAs from')
+          const filedAs = read ? new Function(`${read}\nreturn filedAs`)() : () => null
+          const held = loose.filter((i) => filedAs([i], 287, i.title)).map((i) => i.number)
           if (kept.map((i) => i.number).join() !== held.join()) fail(`#1155: the filter keeps ${kept.map((i) => i.number).join()}, filedAs's reading holds ${held.join()}`)
           if (kept.some((i) => !['number', 'title', 'body', 'url'].every((k) => k in i))) fail('#1155: the filter drops a field the records schema requires')
         }
