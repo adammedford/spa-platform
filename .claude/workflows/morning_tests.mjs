@@ -3537,7 +3537,9 @@ try {
     for (const [label, a, state] of [['open, by date', FU_ARGS, 'OPEN'], ['closed, by date', FU_ARGS, 'CLOSED'], ['closed, by issue', { issue: ISSUE, followups: true }, 'CLOSED']]) {
       const r = await execute(newRepo(), a, { listing: [{ number: ISSUE, title: `Overnight ${DATE}`, state }], followUps: FU801 })
       const L = r.labels
-      if (r.result.halted || r.result.mode !== 'followups' || r.result.issue !== ISSUE || r.result.date !== DATE) fail(`#1082 Q9, ${label}: ${JSON.stringify(r.result.halted || { mode: r.result.mode, issue: r.result.issue, date: r.result.date })}`)
+      // A refused pass returns no comment or refusals to read below, so it is a failure here and not a
+      // crash that would end the companion as "cannot run" (exit 2) rather than on its verdict.
+      if (r.result.halted || r.result.mode !== 'followups' || r.result.issue !== ISSUE || r.result.date !== DATE) { fail(`#1082 Q9, ${label}: ${JSON.stringify(r.result.halted || { mode: r.result.mode, issue: r.result.issue, date: r.result.date })}`); continue }
       if (L[0] !== 'followups-window' || L[L.length - 1] !== 'followups-post' || L.some((l) => OTHER.test(l))) fail(`#1082, ${label}: the follow-ups pass dispatched ${L.join(', ')}`)
       const text = (/BEGIN COMMENT\n([\s\S]*)\nEND COMMENT/.exec(r.prompt('followups-post')) || [])[1] || ''
       if (!text.startsWith(`## Follow-ups ${DATE}\n`) || text !== r.result.comment.text || !r.result.comment.posted) fail(`#1082 Q16, ${label}: the follow-ups comment is not posted as "## Follow-ups ${DATE}":\n${text}`)
