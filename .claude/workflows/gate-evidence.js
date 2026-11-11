@@ -570,6 +570,7 @@ const rowDone = (row, state, audit, waits, idState) => {
   const why = []
   if (state !== 'landed') why.push(state === 'part-landed' ? 'part-landed: no merge names it as landed' : `not landed (${state || 'unknown'})`)
   if (audit) {
+    if (!audit.merges.length) why.push('the audit read no merge naming it')
     const out = audit.merges.flatMap((m) => m.outstanding)
     if (out.length) why.push(`outstanding: ${out.join('; ')}`)
     for (const m of audit.merges) if (m.ownership !== 'pass') why.push(`the ownership check ${m.ownership === 'fail' ? 'fails' : 'could not run'} on ${m.sha.slice(0, 7)}${m.ownershipDetail ? `: ${m.ownershipDetail}` : ''}`)
@@ -696,7 +697,7 @@ WORKTREE: ${wt}
 ROWS: ${JSON.stringify(rows)}
 
 1. Record \`git -C ${REPO} status --porcelain --untracked-files=no\`.
-2. Per row: its merges, each commit of \`git -C ${REPO} log --first-parent --format=%H%x09%s ${ctx.base}\` whose subject names the row's task; form, landed for "Merge task <id>" or GitHub's subject naming the task branch, part for "Merge part of task <id>", other for anything else; outstanding, every line of \`git -C ${REPO} log -1 --format=%B <merge>\` that begins "Outstanding:" or "Outstanding test ids:", verbatim.
+2. Per row: its merges, each commit of \`git -C ${REPO} log --merges --format=%H%x09%s ${ctx.base}\` whose subject names the row's task; form, landed for "Merge task <id>" or GitHub's subject naming the task branch, part for "Merge part of task <id>", other for anything else; outstanding, every line of \`git -C ${REPO} log -1 --format=%B <merge>\` that begins "Outstanding:" or "Outstanding test ids:", verbatim. A merge into the task's own branch, whose subject is "Merge <from> into task/<branch>", is not the row's merge: leave it out.
 3. Per merge, the ownership check between its first parent and it, read-only, in a throwaway worktree: \`git -C ${REPO} worktree add --detach ${wt} <merge>\`, then in ${wt} \`python3 -I .github/path-ownership.py <merge>^1 <merge>\`. ownership is pass when it exits 0, fail otherwise, could-not-run when it cannot be run, with ownershipDetail its last line. Remove the worktree after each merge: \`git -C ${REPO} worktree remove --force ${wt}\` and \`git -C ${REPO} worktree prune\`.
 4. why: one sentence on anything you could not read.
 5. cleanup: worktreeRemoved, and checkoutChanged, each tracked path whose status line differs from step 1.
