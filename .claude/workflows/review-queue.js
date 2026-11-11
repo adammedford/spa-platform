@@ -177,7 +177,8 @@ export const meta = {
 // ticket no commit with fewer than two parents names fails the pull request at stage closes, before
 // any range or axis agent runs, with each #n named and land.sh's remedy (name it in the commit that
 // did its work; a ticket the branch only advances takes Ticket: #n in place of Closes #n), and the
-// owner/repo#n form or a GitHub issue URL (#806) fails it there too, naming the form and asking for
+// owner/repo#n form, GH-n or a GitHub issue URL (#806, #1147), or a link form in a description that
+// holds a GitHub issue URL (#1147), fails it there too, naming the form and asking for
 // Closes #n. A missing parent count counts as a merge, so the check fails closed. Nothing is
 // posted, and once the head or description is fixed the review runs again on the final head.
 // land.sh stays the gate, since a description can change after a review. The copy of land.sh's rule
