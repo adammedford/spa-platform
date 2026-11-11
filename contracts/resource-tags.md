@@ -30,13 +30,11 @@ without the author remembering to. `certs.sh` tags in the same API call that imp
 certificate: an untagged certificate is invisible to both the script's own lookup and teardown's
 query, and a retry would import a second copy.
 
-The gateway is the writer of the data-protection key ring's parameters, which it creates at run time
-under `/spa-platform/<cell>/data-protection/` and no Terraform state holds (ADR-0025). It tags each
+The gateway is the writer of the data-protection key ring's parameters (ADR-0025), which it creates
+at run time under `/spa-platform/<cell>/data-protection/` and no Terraform state holds. It tags each
 one with all three on the put that creates it, `ManagedBy = gateway` because Terraform does not
 manage them, as #274 decided: the constants are in `src/Platform.Hosting/KeyRing.cs`, and
 `infra/modules/cell` grants the task role tagging on create only with exactly those three tags.
-Teardown deletes the prefix before its emptiness check (P2-2 decision 17), so a ring it failed to
-delete answers the platform query instead of surviving unseen.
 
 ## The query is an exact value match
 
