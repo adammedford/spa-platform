@@ -105,9 +105,30 @@ class DeployBuildsPushesAppliesAndAsserts(cell.CompanionTestCase):
             self.assertIn("--push", argv)
             self.assertEqual(str(case.repo), argv[-1])
             self.assertTrue(call["tag"].startswith(repository + ":"), call["tag"])
-            # One manifest, so the digest pushed is the digest a task reports.
-            self.assertIn("--provenance=false", argv)
-            self.assertIn("--sbom=false", argv)
+            # BuildKit's SBOM and provenance attestations, pushed with the image in one image index
+            # (#779, answer 3). Each option is asserted whole, so turning either off fails here.
+            self.assertIn("--sbom=true", argv)
+            self.assertIn("--provenance=mode=max", argv)
+            self.assertEqual([], [a for a in argv if a in ("--sbom=false", "--provenance=false")], argv)
+
+    def test_the_index_is_read_from_ecr_by_the_digest_applied(self):
+        case, _ = self.deployed()
+        applied = next(c for c in case.calls("terraform") if c.get("command") == "apply")["vars"]["gateway_image"]
+        reads = case.aws("ecr batch-get-image")
+        self.assertEqual([f"imageDigest={applied.rpartition('@')[2]}"], [r["options"]["image-ids"] for r in reads])
+        self.assertEqual([cell.GATEWAY_REPOSITORY], [r["options"]["repository-name"] for r in reads])
+
+    def test_the_manual_says_why_the_build_attests_citing_779_and_each_option_s_vendor_page(self):
+        # #783's third box. As prose, whatever the line breaks.
+        manual = (cell.SCRIPTS / SCRIPT).read_text().split("\n# Owner:")[0]
+        text = " ".join(" ".join(line.lstrip("#").split()) for line in manual.splitlines())
+        self.assertIn("#779, answer 3", text)
+        self.assertIn("https://github.com/adammedford/spa-platform/issues/779#issuecomment-6767167834", text)
+        self.assertIn("--sbom=true attaches BuildKit's SBOM attestation, an SPDX document", text)
+        self.assertIn("(https://docs.docker.com/build/metadata/attestations/sbom/)", text)
+        self.assertIn("--provenance=mode=max attaches its SLSA provenance attestation", text)
+        self.assertIn("(https://docs.docker.com/build/metadata/attestations/slsa-provenance/)", text)
+        self.assertNotIn("No provenance or SBOM attestation", (cell.SCRIPTS / SCRIPT).read_text())
 
     def test_each_build_pulls_its_base_image_afresh(self):
         # #288: both Dockerfiles pin their bases by digest (#781, #782), so this holds only for a
@@ -541,6 +562,64 @@ class DeployFailsUnlessTheAppliedGatewayRuns(cell.CompanionTestCase):
         world = seeded_world()
         world["faults"]["running_digest"] = "sha256:" + "e" * 64
         self.failed(world, "is not the applied gateway")
+
+    # #783: with the attestations on, the run's tag names an image index, which holds the linux/arm64
+    # image and an attestation manifest for it. Whether ECS reports the index's digest for a running
+    # container or the image's is what #788 observes on a cell, so the assertion takes either, both
+    # read from the index in ECR, and nothing else.
+
+    def test_a_running_task_that_reports_the_index_s_arm64_image_passes(self):
+        world = seeded_world()
+        world["faults"]["running_platform"] = True
+        case = cell.Case(self, outputs=True, world=world)
+        result = case.run(SCRIPT)
+        self.assertEqual(0, result.status, result.output)
+        self.assertNoUnexpectedCall(case)
+        world = case.load()
+        applied = next(c for c in case.calls("terraform") if c.get("command") == "apply")["vars"]["gateway_image"]
+        index = world["manifests"][applied.rpartition("@")[2]]
+        arm64 = [m["digest"] for m in index["manifests"] if m.get("platform") == {"os": "linux", "architecture": "arm64"}]
+        self.assertEqual([arm64[0]], [task["gatewayDigest"] for task in world["tasks"]])
+        self.assertNotEqual(applied.rpartition("@")[2], arm64[0])
+        self.assertIn("pass:", result.stdout)
+
+    def test_a_running_task_that_reports_the_attestation_manifest_fails(self):
+        # The attestation manifest is in the index too, and is not an image a container runs.
+        world = seeded_world()
+        world["faults"]["running_attestation"] = True
+        self.failed(world, "is not the applied gateway")
+
+    def test_an_index_with_no_linux_arm64_image_fails(self):
+        world = seeded_world()
+        world["faults"]["index_platform"] = {"os": "linux", "architecture": "amd64"}
+        case = self.failed(world, "holds no linux/arm64 image")
+        self.assertEqual([], case.aws("ecs list-tasks"), "the running tasks were read after the index read failed")
+
+    def test_an_index_with_two_linux_arm64_images_fails(self):
+        world = seeded_world()
+        world["faults"]["index_twice"] = True
+        self.failed(world, "holds 2 linux/arm64 images")
+
+    def test_an_image_ecr_no_longer_holds_fails(self):
+        # BatchGetImage answers a digest it does not hold under failures, not as an error:
+        # https://docs.aws.amazon.com/AmazonECR/latest/APIReference/API_BatchGetImage.html
+        world = seeded_world()
+        world["faults"]["manifest_missing"] = True
+        case = self.failed(world, "the registry holds no manifest")
+        self.assertEqual([], case.aws("ecs list-tasks"), "the running tasks were read after the index read failed")
+
+    def test_a_manifest_that_is_not_an_image_or_an_index_of_digests_fails(self):
+        nameless = {"schemaVersion": 2, "mediaType": "application/vnd.oci.image.index.v1+json",
+                    "manifests": [{"mediaType": "application/vnd.oci.image.manifest.v1+json",
+                                   "platform": {"os": "linux", "architecture": "arm64"}}]}
+        for answer, fragment in (("{not json", "the image's manifest is not JSON"),
+                                 (json.dumps({"schemaVersion": 2, "mediaType": "application/vnd.oci.empty.v1+json"}),
+                                  "neither an image manifest nor an image index"),
+                                 (json.dumps(nameless), "names its linux/arm64 image by no digest")):
+            with self.subTest(fragment=fragment):
+                world = seeded_world()
+                world["faults"]["manifest_text"] = answer
+                self.failed(world, fragment)
 
     def test_the_service_never_stable(self):
         world = seeded_world()

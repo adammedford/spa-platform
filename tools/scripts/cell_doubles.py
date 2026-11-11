@@ -187,6 +187,9 @@ def default_world() -> dict:
         "objects": [],
         "registry": None,
         "repositories": {GATEWAY_REPOSITORY: {}, MOCK_API_REPOSITORY: {}},
+        # The image indexes the registry holds, by digest; a digest a repository holds that is not
+        # here is a single image manifest, as a build without attestations pushes one.
+        "manifests": {},
         "task_definitions": {first: {"status": "ACTIVE", "containers": {
             GATEWAY: {"image": SAMPLE_IMAGE, "environment": environment()}}}},
         "service": {"taskDefinition": first, "rolloutState": "COMPLETED", "deployments": 1},
@@ -270,7 +273,7 @@ def text(value) -> str:
     return f"{value}\n"
 
 
-MULTI_VALUED = {"tasks", "services", "tag-filters", "task-definitions", "target-group-arns", "resource-type-filters",
+MULTI_VALUED = {"accepted-media-types", "tasks", "services", "tag-filters", "task-definitions", "target-group-arns", "resource-type-filters",
                 "clusters", "names", *(entry[0] for entry in EC2_DESCRIBES.values()),
                 *(entry[0] for entry in EC2_STATE_DESCRIBES.values())}
 
@@ -356,6 +359,8 @@ def aws_answer(world: dict, words: list[str], options: dict, case: pathlib.Path,
             if stream.startswith(prefix):
                 stdout.write(f"2026-10-21T02:14:07.123000+00:00 {stream} {message}\n")
         return None
+    if command == "ecr batch-get-image":
+        return batch_get_image(world, options)
     if command == "ecr describe-images":
         repository = world["repositories"].get(options["repository-name"])
         if repository is None:
@@ -940,9 +945,17 @@ def apply_platform(world: dict, variables: dict):
     digest = variables["gateway_image"].split("@")[1] if "@" in variables["gateway_image"] else "sha256:none"
     # "running_definition": a task running the applied digest under another revision, as one started
     # from a task definition another apply registered with the same image would.
+    # "running_platform": ECS reports the image index's linux/arm64 image for the container, not
+    # the index; "running_attestation": the index's attestation manifest (#783, #788).
+    index = world.get("manifests", {}).get(digest)
+    if index and world["faults"].get("running_platform"):
+        digest = next(m["digest"] for m in index["manifests"] if m.get("platform") == ARM64)
+    running = digest
+    if index and world["faults"].get("running_attestation"):
+        running = next(m["digest"] for m in index["manifests"] if "annotations" in m)
     world["tasks"] = [{"id": f"{world['next_task']:032x}", "lastStatus": "RUNNING",
                        "taskDefinition": previous if world["faults"].get("running_definition") else name,
-                       "gatewayDigest": world["faults"].get("running_digest", digest)}]
+                       "gatewayDigest": world["faults"].get("running_digest", running)}]
     # "extra_tasks": more tasks of the applied deployment, each with its own healthy target, as a
     # cell that runs more than one task has (P2-4).
     for _ in range(world["faults"].get("extra_tasks", 0)):
@@ -1020,6 +1033,56 @@ def destroy_root(world: dict, root: str, stdout):
         stdout.write("Destroy complete! Resources: 0 destroyed.\n")
 
 
+OCI_INDEX = "application/vnd.oci.image.index.v1+json"
+OCI_MANIFEST = "application/vnd.oci.image.manifest.v1+json"
+ARM64 = {"os": "linux", "architecture": "arm64"}
+# The media types deploy.sh and rollback.sh accept from BatchGetImage (cell-common.sh's image_digests).
+ACCEPTED_MEDIA_TYPES = [OCI_INDEX, "application/vnd.docker.distribution.manifest.list.v2+json",
+                        OCI_MANIFEST, "application/vnd.docker.distribution.manifest.v2+json"]
+
+
+def attested_index(world: dict, tag: str) -> dict:
+    """The image index buildx pushes for one platform with an SBOM or provenance attestation on: the
+    platform's image, and an attestation manifest for it, unknown/unknown, whose annotations name the
+    image it attests. https://docs.docker.com/build/metadata/attestations/attestation-storage/
+    faults["index_platform"] gives the image another platform; faults["index_twice"] lists two."""
+    image = digest_of(tag + "#image")
+    platform = world["faults"].get("index_platform", ARM64)
+    manifests = [{"mediaType": OCI_MANIFEST, "digest": image, "size": 1611, "platform": platform}]
+    if world["faults"].get("index_twice"):
+        manifests.append({"mediaType": OCI_MANIFEST, "digest": digest_of(tag + "#again"), "size": 1611,
+                          "platform": platform})
+    manifests.append({"mediaType": OCI_MANIFEST, "digest": digest_of(tag + "#attestation"), "size": 839,
+                      "annotations": {"vnd.docker.reference.digest": image,
+                                      "vnd.docker.reference.type": "attestation-manifest"},
+                      "platform": {"os": "unknown", "architecture": "unknown"}})
+    return {"schemaVersion": 2, "mediaType": OCI_INDEX, "manifests": manifests}
+
+
+def batch_get_image(world: dict, options: dict):
+    """`aws ecr batch-get-image --query 'images[0].imageManifest'` by one digest. A digest the
+    repository does not hold comes back under failures, not as an error, so the query answers None:
+    https://docs.aws.amazon.com/AmazonECR/latest/APIReference/API_BatchGetImage.html"""
+    repository = world["repositories"].get(options["repository-name"])
+    if repository is None:
+        raise ServiceError("RepositoryNotFoundException", "BatchGetImage")
+    wanted = options["image-ids"]
+    if (not wanted.startswith("imageDigest=") or options.get("query") != "images[0].imageManifest"
+            or options.get("accepted-media-types") != ACCEPTED_MEDIA_TYPES):
+        raise Unexpected(f"batch-get-image {options}")
+    digest = wanted[len("imageDigest="):]
+    if digest not in repository.values() or world["faults"].get("manifest_missing"):
+        return None
+    # "manifest_text": what the registry answers instead, for a manifest the scripts cannot read.
+    if "manifest_text" in world["faults"]:
+        return world["faults"]["manifest_text"]
+    if digest in world["manifests"]:
+        return json.dumps(world["manifests"][digest], indent=3)
+    return json.dumps({"schemaVersion": 2, "mediaType": OCI_MANIFEST,
+                       "config": {"mediaType": "application/vnd.oci.image.config.v1+json", "digest": digest_of(digest),
+                                  "size": 4000}, "layers": []}, indent=3)
+
+
 def imagetools_inspect(world: dict, args: list[str], record: dict) -> int:
     """`docker buildx imagetools inspect --format '{{json .Manifest}}' <reference>`, which
     platform-tfvars.sh reads the sample image's current digest with (#470). The format prints the
@@ -1078,7 +1141,12 @@ def docker_double(argv: list[str], case: pathlib.Path) -> int:
             sys.stderr.write(f"ERROR: tag invalid: The image tag '{image_tag}' already exists in the '{name}' repository and cannot be overwritten because the tag is immutable.\n")
             status = 1
         else:
-            world["repositories"][name][image_tag] = digest_of(tag)
+            digest = digest_of(tag)
+            world["repositories"][name][image_tag] = digest
+            # BuildKit attaches an attestation unless its option is false; with either on, the tag
+            # names an image index (https://docs.docker.com/build/metadata/attestations/).
+            if "--sbom=false" not in argv or "--provenance=false" not in argv:
+                world["manifests"][digest] = attested_index(world, tag)
             sys.stdout.write(f"#12 pushing {tag} with docker\n#12 DONE 4.2s\n")
     elif argv[:3] == ["buildx", "imagetools", "inspect"]:
         try:

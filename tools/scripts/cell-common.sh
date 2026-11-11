@@ -380,6 +380,28 @@ apply_images() {
 ROLLOUT_READS=40
 ROLLOUT_POLL_SECONDS=15
 
+# The digests a running container of the image $1, repository@sha256:<hex>, can report, one a line,
+# read from the manifest ECR holds for it. deploy.sh's build attaches BuildKit's SBOM and provenance
+# attestations (#779, answer 3), so its tag names an image index, which holds the linux/arm64 image
+# and an attestation manifest for it; a build from before #783, which rollback.sh can go back to, is
+# one image manifest. Whether ECS reports an index's digest for the container or its image's is what
+# #788 observes on a cell, so for an index both are taken, and nothing else: never the attestation
+# manifest, which is no image a container runs (cell_documents.py digests).
+# https://docs.aws.amazon.com/AmazonECR/latest/APIReference/API_BatchGetImage.html
+# https://docs.docker.com/build/metadata/attestations/attestation-storage/
+# linux/arm64 is the task's platform (infra/modules/cell/ecs.tf's runtime_platform).
+image_digests() {
+  local image="$1" repository="${1%@*}"
+  aws_read "the manifest of $(redact "$image")" ecr batch-get-image --repository-name "${repository#*/}" \
+    --image-ids "imageDigest=${image##*@}" \
+    --accepted-media-types application/vnd.oci.image.index.v1+json \
+    application/vnd.docker.distribution.manifest.list.v2+json application/vnd.oci.image.manifest.v1+json \
+    application/vnd.docker.distribution.manifest.v2+json \
+    --query 'images[0].imageManifest'
+  documents digests "$OUT" "${image##*@}" linux/arm64 ||
+    fail "the gateway image $(redact "$image") is not one image for linux/arm64."
+}
+
 # Wait for a steady service, then assert that what runs is what was applied: $1 the gateway image
 # by digest, repository@sha256:<hex>.
 wait_and_assert() {
@@ -427,6 +449,12 @@ wait_and_assert() {
   [ "$placed" = "$gateway" ] ||
     fail "the service runs task definition $(revision_of "$definition"), whose gateway image is $(redact "$placed"), not the one applied. The circuit breaker rolled it back, or another apply ran."
 
+  # What a running gateway container may report for the applied image: its digest, and for an image
+  # index the linux/arm64 image in it (image_digests, #783). Spaces around each, for the match below.
+  local accepted
+  accepted="$(image_digests "$gateway")" || exit 1
+  accepted=" $(printf '%s' "$accepted" | tr '\n' ' ') "
+
   # Every running task's gateway container, by the digest ECS resolved when it started it, and the
   # task's private address, which is its target's id: the task runs in awsvpc mode and the target
   # group's target type is ip (infra/modules/cell/ecs.tf, alb.tf), whose target id is the address.
@@ -440,11 +468,15 @@ wait_and_assert() {
   [ "$#" -gt 0 ] || fail "${SERVICE} is stable with no running task."
   aws_read "the tasks of ${SERVICE}" ecs describe-tasks --cluster "$CLUSTER" --tasks "$@" \
     --query "tasks[].[taskArn, lastStatus, taskDefinitionArn, containers[?name=='${GATEWAY_CONTAINER}'] | [0].imageDigest, containers[?name=='${GATEWAY_CONTAINER}'] | [0].networkInterfaces[0].privateIpv4Address]"
-  local arn status task_definition running address wrong="" addresses=""
+  local arn status task_definition running address matched wrong="" addresses=""
   while IFS="$(printf '\t')" read -r arn status task_definition running address; do
     [ -n "$arn" ] || continue
     addresses="${addresses} ${arn##*/}=${address}"
-    if [ "$status" != "RUNNING" ] || [ "$task_definition" != "$definition" ] || [ "$running" != "$digest" ]; then
+    case "$accepted" in
+      *" ${running} "*) matched=1 ;;
+      *) matched=0 ;;
+    esac
+    if [ "$status" != "RUNNING" ] || [ "$task_definition" != "$definition" ] || [ "$matched" != 1 ]; then
       wrong="${wrong}  task ${arn##*/}: ${status}, $(revision_of "$task_definition"), gateway digest ${running}"$'\n'
     fi
   done < "$OUT"
