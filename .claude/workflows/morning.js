@@ -918,15 +918,20 @@ const preAcceptedOf = (text) => {
   return { rest: keep.join('\n'), rows, unnumbered }
 }
 // What makes a comment one the readers read, said once: batchesOf picks the comments to fetch with
-// these two functions, on the head of each body, so it cannot pick a narrower set than the readers do.
+// these functions, on the head of each body, so it cannot pick a narrower set than the readers do.
+// Both kinds count only from Adam's account (CODING_STANDARDS.md -> "An authorisation is read from its
+// author"): a Confirm names numbers, and the questions comment says what they mean, so an outsider's
+// questions comment is dropped before the grouping, as an outsider's Confirm is, with no refusal: it
+// counts towards no parts total and no duplicate number, and adds no question (#1078).
 const headingOf = (body) => HEADING.exec(String(body || '').split('\n')[0].trim())
+const isQuestions = (author, body) => author === ADAM && headingOf(body)
 const isConfirm = (author, body) => author === ADAM && /^Confirm\b/.test(String(body || '').trimStart())
 const readQuestions = (comments) => {
   const groups = new Map()
   for (const c of comments) {
     const body = String(c.body || '')
     const nl = body.indexOf('\n')
-    const m = headingOf(body)
+    const m = isQuestions(c.author, body)
     if (!m) continue
     const pm = PART.exec(m[3])
     const title = m[3].replace(PART, '')
@@ -1442,7 +1447,7 @@ Return comments and error.`
 // classifier (see the header), and nothing on #659 shows size is what trips it.
 const BATCH_BYTES = 24000
 // The comments Apply reads (readQuestions, readConfirmations), picked from the index in order by
-// the readers' own predicates (headingOf, isConfirm) run on each comment's head, and packed into
+// the readers' own predicates (isQuestions, isConfirm) run on each comment's head, and packed into
 // batches of at most BATCH_BYTES. A head the readers' pattern cannot be judged on is not skipped: the
 // comment is read whole and the readers decide, so a comment they would read is never dropped unread.
 // Two heads cannot be judged. One is full length with less than MIN_VISIBLE characters of it after
@@ -1493,7 +1498,9 @@ const batchesOf = (indexed) => {
   let cur = null
   indexed.forEach((c, i) => {
     const head = String(c.head || '')
-    if (!undecidableHead(head) && !headingOf(head) && !isConfirm(c.author, head)) return
+    // Neither reader reads another account's comment, whatever its head (#1078), so none is fetched.
+    if (c.author !== ADAM) return
+    if (!undecidableHead(head) && !isQuestions(c.author, head) && !isConfirm(c.author, head)) return
     if (!cur || cur.bytes + (c.bytes || 0) > BATCH_BYTES) { cur = { at: [], urls: [], bytes: 0 }; out.push(cur) }
     cur.at.push(i); cur.urls.push(c.url); cur.bytes += c.bytes || 0
   })
