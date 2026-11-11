@@ -478,7 +478,7 @@ function stub(env, scriptArgs, served) {
             ...(unit.followUps || []).map((f, i) => ({ q: f.q, effect: URL(600 + i), held: 600 + i, onMain: false })),
             ...qs.filter((q) => q.kind === 'decision-to-record').map((q) => ({ q: q.q, effect: `${URL(q.issue)}#issuecomment-7`, held: 0, onMain: false })),
             ...edits, ...edges,
-            ...unit.tickets.filter((t) => t.rewrite && (served.rewriteFound || []).includes(t.issue)).flatMap((t) => t.questions.filter((q) => q.kind === 'no-repo-change').map((q) => ({ q: q.q, effect: `${URL(t.issue)}#issuecomment-8`, held: t.issue, onMain: false }))),
+            ...unit.tickets.filter((t) => t.rewrite && (served.rewriteFound || []).includes(t.issue)).flatMap((t) => t.questions.filter((q) => q.kind === 'no-repo-change').map((q) => ({ q: q.q, effect: `${URL(t.issue)}#issuecomment-8`, held: (served.rewriteFoundUnheld || []).includes(t.issue) ? 0 : t.issue, onMain: false }))),
           ]
         }
       } else if (label === 'pr-refresh') {
@@ -1120,6 +1120,8 @@ try {
       ['rewritten by this pass', { landed: [1], rewrite: [302] }, true],
       ['rewrite found in place', { landed: [1], rewrite: [302], rewriteFound: [302] }, true],
       ['rewrite not made', { landed: [1], rewrite: [302], rewriteNotMade: [302] }, false],
+      // A verified entry that names no holder is not #302's rewrite found in place.
+      ['verified entry names no holder', { landed: [1], rewrite: [302], rewriteFound: [302], rewriteFoundUnheld: [302] }, false],
       // One applier for every ticket: #300's rewrite, made in the same unit, does not hold #302's answer.
       ['another ticket rewritten in its unit', { landed: [1], rewrite: [300, 302], rewriteNotMade: [302], maxParallel: 1 }, false],
     ]) {
@@ -1134,6 +1136,8 @@ try {
       // an earlier pass's rewrite can settle it.
       const p = (r.calls.find((c) => c.label.startsWith('apply:') && jsonAfter(c.prompt, 'UNIT').tickets.some((t) => t.issue === 302)) || {}).prompt || ''
       if (!/no-repo-change question of a ticket whose rewrite is in place is listed in verified/.test(p)) fail(`#1157, ${label}: the applier of #302 is not told to list its no-repo-change answer in verified once the rewrite is in place`)
+      // Nor told, a few lines on, that such a question needs nothing at all, which would contradict it.
+      if (/A no-repo-change question needs nothing\./.test(p)) fail(`#1157, ${label}: the applier of #302 is told a no-repo-change question needs nothing, against the verified entry it is asked for`)
     }
   }
 

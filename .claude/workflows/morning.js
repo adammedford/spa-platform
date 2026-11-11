@@ -1599,7 +1599,7 @@ FOLLOW-UP TICKETS: the unit's followUps, each with its q, title, blockedBy, file
 3. Only when that exits 0, its last line starting "ticket-shape: pass:", file it: \`cd ${REPO} && gh issue create --title "<its title>" --label needs-triage --body-file <its file>\`, adding --blocked-by <n> for each blockedBy number. It is neither a sub-issue nor a blocker of the ticket that raised it (docs/agents/tracker-policy.md): no --parent. On exit 1 file nothing and list it in skipped with each "ticket-shape: <rule>:" line; on any other exit file nothing and say in skipped that the check did not judge it, quoting its last line. Never reword a body to get past the check: a failure is reported, not repaired. List each one filed in issues with its number, url, title and questions [its q].
 Ticket edits: the unit's edits, each {q, target, removeBoxes} (#320). Read the target, \`cd ${REPO} && gh issue view <target> --json body,subIssuesSummary\`. A spec, an issue with sub-issues, is never edited (#78 grill Q13): list it in skipped. Each line of removeBoxes must be a whole line of the body, byte for byte; when one is not, edit nothing for that q and list it in skipped with the line not found. Otherwise, as a rewrite does, change it by the REWRITE RECORD's four steps below, its new body the current one with exactly those lines removed and no other byte changed, and its comment's question line naming Q<n> of #${issue}. List each in edits {issue: the target, comment: the "## Body rewritten ${date}" comment's URL, removed: the lines removed, questions: [its q]}. The unit's edits run in order, each reading the body the last one left.
 Ticket edges: the unit's edges, each {q, target, addBlockedBy}. Read the target's blockers, \`cd ${REPO} && gh issue view <target> --json blockedBy\`, and add each one missing, \`cd ${REPO} && gh issue edit <target> --add-blocked-by <n>\`, one call per number. List each in edges {issue: the target, blockedBy: the numbers it now carries from addBlockedBy, questions: [its q]}.
-${after ? afterApplyRules(issue) : ''}A no-repo-change question needs nothing. If GitHub cannot be reached, stop writing, set unreachable true and return what was made. refused is "" unless you refused the whole unit, with why.
+${after ? afterApplyRules(issue) : ''}A no-repo-change question needs nothing made${after ? ', though it is still listed in verified once its ticket\'s rewrite is in place, as above' : ''}. If GitHub cannot be reached, stop writing, set unreachable true and return what was made. refused is "" unless you refused the whole unit, with why.
 ${rewriteRecord(date, issue, p.mdir)}`
 }
 
@@ -1895,8 +1895,11 @@ const settleOf = (date, ap) => {
     // place (#1157): the applier made the rewrite, or found it in place and listed the answer in
     // verified. Until then it is unsettled, never read as an applier that reported nothing.
     if (c.kind === 'no-repo-change') {
+      // A verified entry counts only when it names this ticket as holding the answer, as the applier
+      // prompt asks: one naming no holder, or another, is not this ticket's rewrite found in place.
       const made = (r.rewrites || []).find((w) => w && w.issue === c.issue)
-      if (made || v.length) settled.push(`Q${q}: held by #${c.issue}, its own ticket, whose implementation applies it; its rewrite is in place (${made ? made.comment : v[0].effect})`)
+      const found = v.find((e) => e.held === c.issue)
+      if (made || found) settled.push(`Q${q}: held by #${c.issue}, its own ticket, whose implementation applies it; its rewrite is in place (${made ? made.comment : found.effect})`)
       else unsettled.push(`Q${q}: needs nothing once #${c.issue}'s rewrite is in place, which its applier ${c.unit} does not report: rewrite #${c.issue} and relaunch the after pass`)
       continue
     }
