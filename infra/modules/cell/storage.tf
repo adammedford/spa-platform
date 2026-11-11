@@ -247,8 +247,67 @@ locals {
   # The names contracts/infra-outputs.example.json shows under ecrGateway and
   # ecrMockApi: spa-{cell}/gateway and spa-{cell}/mock-api.
   repositories = toset(["gateway", "mock-api"])
+
+  # How many tagged images each repository keeps (#784). rollback.sh applies the previous task
+  # definition's images and refuses one the repository no longer holds, so the running image and the
+  # previous one must both survive. deploy.sh pushes one tag per run before its apply, so a run whose
+  # apply failed, or whose deployment the circuit breaker rolled back, adds a tagged image that never
+  # ran: at a count of two, one such run expires the previous task definition's image. Five leaves
+  # room for three of them between two good deploys.
+  kept_tagged_images = 5
+
+  # The rules, as a local so that tests/module.tftest.hcl decodes the planned policy and compares
+  # its structure. Rule properties: https://docs.aws.amazon.com/AmazonECR/latest/userguide/lifecycle_policy_parameters.html
+  #
+  #   1. An untagged image expires a day after its push. deploy.sh pushes an image index under its
+  #      run's tag (#783), and the index's children, the linux/arm64 image and BuildKit's attestation
+  #      manifest, are untagged. They are kept for as long as the index is, by the vendor's rule: "If
+  #      an image is referenced by a manifest list, it cannot be expired or archived without the
+  #      manifest list being deleted or archived first"
+  #      (https://docs.aws.amazon.com/AmazonECR/latest/userguide/LifecyclePolicies.html). So no
+  #      attestation of a kept image expires; once rule 2 expires an index, its children follow on a
+  #      later evaluation. By age and not by count, so a child pushed moments before its index is
+  #      never a candidate while the push is still under way.
+  #   2. A tagged image is kept by count, the newest kept_tagged_images, and never by age: an age
+  #      rule would expire the running image of a cell nobody has deployed for that long. The
+  #      pattern "*" counts every tag, deploy.sh's and any pushed by hand.
+  #
+  # No rule selects tagStatus "any": it would count the untagged children among the images kept.
+  lifecycle_rules = [
+    {
+      rulePriority = 1
+      description  = "Expire an untagged image a day after its push, once no kept image index references it"
+      selection = {
+        tagStatus   = "untagged"
+        countType   = "sinceImagePushed"
+        countUnit   = "days"
+        countNumber = 1
+      }
+      action = { type = "expire" }
+    },
+    {
+      rulePriority = 2
+      description  = "Keep the five most recently pushed tagged images: rollback.sh applies the previous task definition's"
+      selection = {
+        tagStatus      = "tagged"
+        tagPatternList = ["*"]
+        countType      = "imageCountMoreThan"
+        countNumber    = local.kept_tagged_images
+      }
+      action = { type = "expire" }
+    },
+  ]
 }
 
+# Cost: storage only. ECR's pricing page: "You pay only for the amount of data you store in your
+# public or private repositories and for data transferred to the internet"
+# (https://aws.amazon.com/ecr/pricing/). Basic scanning is not one of those, so it is free; the
+# enhanced level is Amazon Inspector's and priced on its page (https://aws.amazon.com/inspector/pricing/),
+# which is why this module stays at basic. Storage is the "S3 and ECR storage" line of
+# docs/plan/05-infrastructure-and-cost.md, cents per GB and under $0.50 a month, which the lifecycle
+# policy below keeps true as deploys accumulate.
+#
+# Encryption is ECR's default, AES256, which needs no key managed here (#779, answer 6).
 resource "aws_ecr_repository" "repository" {
   for_each = local.repositories
 
@@ -259,10 +318,30 @@ resource "aws_ecr_repository" "repository" {
   # be moved underneath it.
   image_tag_mutability = "IMMUTABLE"
 
+  # Every pushed image is scanned at the basic level, the registry's default scan type (#779,
+  # answer 1: https://github.com/adammedford/spa-platform/issues/779#issuecomment-6767167834).
+  # Set on the repository, not by a registry scanning configuration: that one is a single setting
+  # for the whole account and Region, which a module instantiated once per cell cannot own. ECR's
+  # API reference marks the repository-level call as being deprecated in favour of the registry's
+  # (https://docs.aws.amazon.com/AmazonECR/latest/APIReference/API_PutImageScanningConfiguration.html);
+  # if it stops being honoured, the scan moves to a registry rule filtered on spa-{cell}/*.
+  image_scanning_configuration {
+    scan_on_push = true
+  }
+
   # Teardown destroys the roots in reverse order and proves the account is empty by
   # tag query (P-05). A repository with images in it refuses to be destroyed, so the
   # proof would never pass.
   force_delete = true
 
   tags = { Name = "spa-${var.cell}/${each.key}" }
+}
+
+# One policy for each repository: rollback.sh applies the previous gateway image and the mock API
+# image deployed with it, so both repositories keep the same images. The rules are above.
+resource "aws_ecr_lifecycle_policy" "repository" {
+  for_each = local.repositories
+
+  repository = aws_ecr_repository.repository[each.key].name
+  policy     = jsonencode({ rules = local.lifecycle_rules })
 }
