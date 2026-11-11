@@ -49,15 +49,29 @@ OnRedirectToIdentityProvider event (src/Platform.Identity/AuthenticationEvents.c
 reads the provider's discovery document before it raises that event
 (OpenIdConnectHandler.HandleChallengeAsyncInternal,
 https://github.com/dotnet/aspnetcore/blob/v10.0.0/src/Security/Authentication/OpenIdConnect/src/OpenIdConnectHandler.cs).
-With the example's Cognito authority the first app-host fetch is a 500. So each run's network
+With the example's Cognito authority that read fails, and since #908 the fetch is still answered 401,
+on the failure path (src/Platform.Identity/ProviderDiscovery.cs), which is not the event ADR-0033
+times. So each run's network
 namespace is held by a small container that serves a static discovery document on 127.0.0.1:9000,
-the one plain-HTTP authority SharedOidc admits (src/Platform.Identity/IssuerDirectory.cs), and the
-measured container joins that namespace with `--network container:`. That is the shape of a Fargate
-task, whose containers share one namespace under awsvpc. Both kinds run that way, so the floor and
-the gateway see the same network.
+and the measured container joins that namespace with `--network container:`. That is the shape of a
+Fargate task, whose containers share one namespace under awsvpc. Both kinds run that way, so the
+floor and the gateway see the same network.
+
+The stand-in's authority is https://127.0.0.1:9000 (#1112). The platform configuration schema admits
+only an https authority, and once the gateway validates its configuration at start-up (#544) a
+plain-http one would stop it before any clock: ADR-0033's reversal trigger for this stand-in. So at
+`up` the run issues its own CA and, under it, a certificate for IP 127.0.0.1 (the `trust`
+subcommand, in the moto image, into a Docker volume of the run's own, removed at `down`); the
+stand-in serves TLS with it, and the gateway trusts that CA alone through SSL_CERT_FILE, as a
+deployed gateway trusts the image's bundle to reach Cognito. The issuing happens once, before any
+start, so no clock includes it; the gateway's first discovery fetch now includes a TLS handshake and
+a chain build, as a deployed one's does. Since #908 a fetch is answered 401 even when discovery
+cannot be read, so a gateway that failed to trust the stand-in would still stop the app-host clock,
+on its failure path: the stand-in prints a line each time it serves the document, and a gateway
+start whose 401 came without that line stops the run (`check_discovery_read`).
 
 The same file runs inside the containers, mounted read-only at /bench, as the subcommands `probe`,
-`seed` and `stand-in`; their interpreter is the moto image's python, so nothing else is pulled.
+`seed`, `trust` and `stand-in`; their interpreter is the moto image's python, so nothing else is pulled.
 
 **The verdict mode** (`--verdict`, ADR-0033 Decision, the assertion; #175 Q7; #176 Q3 and Q6) is how
 a `B-` id is proved on tier L. The max of N=10 per budgeted gateway clock must be at or under its
@@ -75,9 +89,9 @@ line (CODING_STANDARDS.md).
 `--json` file when it was given one, exits 0, whatever its marks say. One that stops first exits 1:
 `SystemExit` from the docker lookup when `docker` is not on PATH, and otherwise the traceback of
 whatever uncaught error stopped it. Those errors include a `RuntimeError` from a failed docker
-command, a failed stand-in seed, a container that never printed its line, or a probe that did not
-start or failed; an `OSError` when `git` is missing or the `--json` file could not be written; a
-`CalledProcessError` when `git` fails; and a `TimeoutExpired` when the probe outlives its wait. The
+command, a failed stand-in seed, a container that never printed its line, a probe that did not
+start or failed, or a gateway 401 that came without a discovery read; an `OSError` when `git` is
+missing or the `--json` file could not be written; a `CalledProcessError` when `git` fails; and a `TimeoutExpired` when the probe outlives its wait. The
 `seed` subcommand's version check is a `SystemExit` too, exit 1 inside its container, which the run
 reads as a failed seed. In either mode argparse refuses a usage error, exit 2, before any run starts.
 """
@@ -96,6 +110,7 @@ import platform
 import re
 import shutil
 import socket
+import ssl
 import statistics
 import subprocess
 import sys
@@ -105,6 +120,11 @@ from typing import Dict, List, NamedTuple, Optional
 
 MOTO_IMAGE = "motoserver/moto:5.2.4"   # the research's pin (#170)
 DISCOVERY_PORT = 9000
+# https, because the platform configuration schema admits no other authority (#1112, ADR-0033's
+# reversal trigger): the gateway validating its configuration at start-up (#544) would refuse a plain
+# http one, and the benchmark would time a gateway that never starts.
+DISCOVERY_AUTHORITY = f"https://127.0.0.1:{DISCOVERY_PORT}"
+TRUST_MOUNT = "/bench-trust"           # the run's CA and the stand-in's certificate, a volume of the run's own
 APP_PORT = 8080                        # ASPNETCORE_HTTP_PORTS in both Dockerfiles
 ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 
@@ -382,13 +402,16 @@ def verdict(runs: List[dict], budgets_ms: Dict[str, float], floor_load_ms: float
 # --- the gateway's environment ---------------------------------------------------------------------
 
 
-def gateway_environment(config: dict, endpoint: str, discovery: str) -> Dict[str, str]:
+def gateway_environment(config: dict, endpoint: str, discovery: str, trust_file: str) -> Dict[str, str]:
     """The task environment infra/modules/cell/ecs.tf builds, flattened from a platform
     configuration file the way the configuration binder reads it back (Policy:AllowedUpstreams:0 is
     Policy__AllowedUpstreams__0, every value a string), with every issuer pointed at the discovery
     stand-in and the SDK chain resolved from the environment alone: the endpoint, AWS_REGION (the
     .NET chain reads no other) and a static key pair (docs/research/local-aws-stand-in.md, section
-    1)."""
+    1). SSL_CERT_FILE is the run's CA, which issued the stand-in's certificate: .NET on Linux reads
+    its root store from that file in place of the image's bundle (getenv(X509_get_default_cert_file_env()),
+    https://github.com/dotnet/runtime/blob/v10.0.0/src/native/libs/System.Security.Cryptography.Native/pal_x509_root.c),
+    and nothing else the gateway reaches here uses TLS."""
     env: Dict[str, str] = {}
 
     def flatten(prefix, value):
@@ -405,19 +428,19 @@ def gateway_environment(config: dict, endpoint: str, discovery: str) -> Dict[str
     for issuer in config.get("Issuers", {}):
         env[f"Issuers__{issuer}__Authority"] = discovery
     env.update({"AWS_ENDPOINT_URL": endpoint, "AWS_REGION": "us-east-1",
-                "AWS_ACCESS_KEY_ID": "bench", "AWS_SECRET_ACCESS_KEY": "bench"})
+                "AWS_ACCESS_KEY_ID": "bench", "AWS_SECRET_ACCESS_KEY": "bench",
+                "SSL_CERT_FILE": trust_file})
     return env
 
 
 # --- in-container subcommands ----------------------------------------------------------------------
 
 
-def serve_discovery() -> None:
-    """The namespace holder: a static discovery document and an empty key set on loopback. Enough
-    for the handler to build a challenge, which the gateway's event then turns into the 401; no
-    login can complete against it, and none is attempted."""
-    authority = f"http://127.0.0.1:{DISCOVERY_PORT}"
-    documents = {
+def discovery_documents(authority: str) -> Dict[str, dict]:
+    """A static discovery document and an empty key set. Enough for the handler to build a
+    challenge, which the gateway's event then turns into the 401; no login can complete against it,
+    and none is attempted."""
+    return {
         "/.well-known/openid-configuration": {
             "issuer": authority,
             "authorization_endpoint": authority + "/authorize",
@@ -431,6 +454,17 @@ def serve_discovery() -> None:
         "/jwks": {"keys": []},
     }
 
+
+DISCOVERY_SERVED = "stand-in: served /.well-known/openid-configuration"
+
+
+def discovery_server(authority: str, port: int, cert_file, key_file,
+                     on_request=None) -> http.server.ThreadingHTTPServer:
+    """The discovery documents over TLS on loopback, with the certificate the run's CA issued.
+    `on_request` hears DISCOVERY_SERVED each time the discovery document is answered, which happens
+    only after a client completed the handshake, so only a client that trusted the run's CA."""
+    documents = discovery_documents(authority)
+
     class Handler(http.server.BaseHTTPRequestHandler):
         def log_message(self, *args):
             pass
@@ -443,10 +477,90 @@ def serve_discovery() -> None:
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+            if on_request and self.path == "/.well-known/openid-configuration":
+                on_request(DISCOVERY_SERVED)
 
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", DISCOVERY_PORT), Handler)
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(str(cert_file), str(key_file))
+    server.socket = context.wrap_socket(server.socket, server_side=True)
+    return server
+
+
+def serve_discovery(trust: pathlib.Path) -> None:
+    """The namespace holder: the discovery stand-in on 127.0.0.1:9000, over TLS."""
+    server = discovery_server(DISCOVERY_AUTHORITY, DISCOVERY_PORT, trust / "leaf.pem", trust / "leaf.key",
+                              on_request=lambda line: print(line, flush=True))
     print("ready", flush=True)
     server.serve_forever()
+
+
+def check_discovery_read(kind: str, marks: Dict[str, dict], stand_in_log: str) -> None:
+    """Refuses a gateway start whose app-host 401 came without the stand-in serving discovery. Since
+    #908 a fetch is answered 401 whether or not the document could be read
+    (src/Platform.Identity/ProviderDiscovery.cs), so a gateway that could not reach or trust the
+    stand-in would stop the clock on its failure path, which is not the clock ADR-0033 times: the 401
+    the OpenID Connect handler's event writes once discovery is read. An unreached clock is the
+    verdict's breach already, and the floor reads no discovery."""
+    app_host = marks.get("app_host")
+    if kind != "gateway" or not app_host or app_host.get("at_ns") is None:
+        return
+    if DISCOVERY_SERVED not in stand_in_log:
+        raise RuntimeError("the gateway answered the app host 401 without reading the discovery stand-in "
+                           "(did it trust the run's CA?), so its 401 is not the clock ADR-0033 times")
+
+
+def issue_trust(out: pathlib.Path) -> None:
+    """The run's own CA and, under it, the stand-in's certificate for IP 127.0.0.1, written to `out`
+    (the run's trust volume). Runs in the moto image, which ships the `cryptography` package; the host
+    needs nothing for it. Both keys are throwaway and never leave the run: the volume is removed with
+    the run's containers. The CA's certificate is world-readable, for the gateway's non-root user;
+    the keys are the root stand-in's alone."""
+    import datetime
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    lifetime = (now - datetime.timedelta(hours=1), now + datetime.timedelta(days=1))
+
+    def name(text):
+        return x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, text)])
+
+    ca_key = ec.generate_private_key(ec.SECP256R1())
+    ca = (x509.CertificateBuilder().subject_name(name("spa-bench run CA")).issuer_name(name("spa-bench run CA"))
+          .public_key(ca_key.public_key()).serial_number(x509.random_serial_number())
+          .not_valid_before(lifetime[0]).not_valid_after(lifetime[1])
+          .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
+          .add_extension(x509.KeyUsage(digital_signature=True, key_cert_sign=True, crl_sign=True,
+                                       content_commitment=False, key_encipherment=False, data_encipherment=False,
+                                       key_agreement=False, encipher_only=False, decipher_only=False), critical=True)
+          .add_extension(x509.SubjectKeyIdentifier.from_public_key(ca_key.public_key()), critical=False)
+          .sign(ca_key, hashes.SHA256()))
+    leaf_key = ec.generate_private_key(ec.SECP256R1())
+    leaf = (x509.CertificateBuilder().subject_name(name("127.0.0.1")).issuer_name(ca.subject)
+            .public_key(leaf_key.public_key()).serial_number(x509.random_serial_number())
+            .not_valid_before(lifetime[0]).not_valid_after(lifetime[1])
+            .add_extension(x509.SubjectAlternativeName([x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]), critical=False)
+            .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+            .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]), critical=False)
+            .add_extension(x509.AuthorityKeyIdentifier.from_issuer_public_key(ca_key.public_key()), critical=False)
+            .sign(ca_key, hashes.SHA256()))
+
+    out.mkdir(parents=True, exist_ok=True)
+    out.chmod(0o755)
+    pem = serialization.Encoding.PEM
+    files = {
+        "ca.pem": (ca.public_bytes(pem), 0o644),
+        "leaf.pem": (leaf.public_bytes(pem), 0o644),
+        "leaf.key": (leaf_key.private_bytes(pem, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()), 0o600),
+    }
+    for file_name, (content, mode) in files.items():
+        path = out / file_name
+        path.write_bytes(content)
+        path.chmod(mode)
+    print(f"trust: a run CA and the stand-in's certificate for 127.0.0.1 in {out}", flush=True)
 
 
 def seed(endpoint: str, repo: pathlib.Path) -> None:
@@ -524,11 +638,13 @@ class Bench:
         self.target_ip = str(hosts[19])
         self.created: List[str] = []
         self.network: Optional[str] = None
+        self.trust: Optional[str] = None
         registry = json.loads((ROOT / "contracts" / "registry.example.json").read_text())
         self.app_host = registry["apps"][0]["host"]
         self.environment = gateway_environment(
             json.loads((ROOT / "contracts" / "platform-config.example.json").read_text()),
-            endpoint=f"http://{self.moto_ip}:5000", discovery=f"http://127.0.0.1:{DISCOVERY_PORT}")
+            endpoint=f"http://{self.moto_ip}:5000", discovery=DISCOVERY_AUTHORITY,
+            trust_file=f"{TRUST_MOUNT}/ca.pem")
 
     def images(self) -> Dict[str, str]:
         """Builds both images from the commit, not the working tree, so the commit measured is exact
@@ -555,9 +671,18 @@ class Bench:
             mounts += ["-v", f"{ROOT / 'contracts'}:/repo/contracts:ro", "-v", f"{ROOT / 'fixtures'}:/repo/fixtures:ro"]
         return mounts
 
+    def trust_mount(self, read_only: bool = True) -> List[str]:
+        return ["-v", f"{self.trust}:{TRUST_MOUNT}" + (":ro" if read_only else "")]
+
     def up(self) -> None:
         self.docker("network", "create", "--subnet", self.subnet, self.prefix)
         self.network = self.prefix
+        # The run's trust, issued once before any start, so no clock pays for it: a named volume
+        # rather than a host directory, so no key is ever written to the host's disk.
+        self.docker("volume", "create", self.prefix)
+        self.trust = self.prefix
+        print(self.docker("run", "--rm", *self.mounts(), *self.trust_mount(read_only=False), "--entrypoint",
+                          "python3", MOTO_IMAGE, "/bench/startup.py", "trust", "--out", TRUST_MOUNT), flush=True)
         self.track(self.docker("run", "-d", "--name", f"{self.prefix}-moto", "--network", self.network,
                                "--ip", self.moto_ip, MOTO_IMAGE))
         # The seed is also moto's warm-up, so moto's own first requests are not inside a gateway
@@ -589,6 +714,8 @@ class Bench:
         self.remove(*list(self.created))
         if self.network:
             self.docker.run("network", "rm", self.network)
+        if self.trust:
+            self.docker.run("volume", "rm", self.trust)
 
     def wait_for_line(self, container: str, text: str, timeout_s: float = 30) -> None:
         end = time.monotonic() + timeout_s
@@ -609,7 +736,8 @@ class Bench:
         name = f"{self.prefix}-{kind}-{'c' if constrained else 'u'}{index}"
         holder = self.track(self.docker(
             "run", "-d", "--name", f"{name}-netns", "--network", self.network, "--ip", self.target_ip,
-            *self.mounts(), "--entrypoint", "python3", MOTO_IMAGE, "-u", "/bench/startup.py", "stand-in"))
+            *self.mounts(), *self.trust_mount(), "--entrypoint", "python3", MOTO_IMAGE, "-u", "/bench/startup.py",
+            "stand-in", "--trust", TRUST_MOUNT))
         target = None
         prober = None
         try:
@@ -617,8 +745,9 @@ class Bench:
             limits = ["--cpus", self.options.cpus, "--memory", self.options.memory] if constrained else []
             env = [arg for key, value in (self.environment.items() if kind == "gateway" else [])
                    for arg in ("-e", f"{key}={value}")]
+            trust = self.trust_mount() if kind == "gateway" else []
             target = self.track(self.docker("create", "--name", name, "--network", f"container:{holder}",
-                                            *limits, *env, image))
+                                            *limits, *env, *trust, image))
             prober = self.docker.popen(
                 "run", "--rm", "--name", f"{name}-probe", "--network", self.network, *self.mounts(),
                 "--entrypoint", "python3", MOTO_IMAGE, "-u", "/bench/startup.py", "probe",
@@ -639,6 +768,7 @@ class Bench:
             started_ns = docker_time_ns(self.docker("inspect", "-f", "{{.State.StartedAt}}", target))
             marks["listening_log"] = {"at_ns": self.log_line_ns(target, "Now listening on"),
                                       "after_ns": None, "attempts": 0, "status": None}
+            check_discovery_read(kind, marks, self.docker.run("logs", holder).stdout.decode())
             return {"kind": kind, "constrained": constrained, "index": index, "started_ns": started_ns,
                     "start_cli_ms": start_cli_ms, "marks": marks}
         finally:
@@ -781,7 +911,11 @@ def parse_args(argv: List[str]):
     seed_cmd.add_argument("--endpoint", required=True)
     seed_cmd.add_argument("--repo", default="/repo")
 
-    sub.add_parser("stand-in", help="(inside the bench network) hold the namespace and serve discovery")
+    stand_in_cmd = sub.add_parser("stand-in", help="(inside the bench network) hold the namespace and serve discovery")
+    stand_in_cmd.add_argument("--trust", required=True, help="the directory `trust` wrote")
+
+    trust_cmd = sub.add_parser("trust", help="(in the moto image) issue the run's CA and the stand-in's certificate")
+    trust_cmd.add_argument("--out", required=True)
 
     options = parser.parse_args(argv)
     options.budgets_ms = dict(options.budget)
@@ -806,7 +940,10 @@ def main(argv: List[str]) -> int:
         seed(options.endpoint, pathlib.Path(options.repo))
         return 0
     if options.command == "stand-in":
-        serve_discovery()
+        serve_discovery(pathlib.Path(options.trust))
+        return 0
+    if options.command == "trust":
+        issue_trust(pathlib.Path(options.out))
         return 0
     if not options.verdict:
         return run_bench(options)

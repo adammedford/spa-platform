@@ -1,15 +1,15 @@
 export const meta = {
   name: 'morning',
-  description: 'Land the mechanical half of an overnight run: replay its pending tracker writes, verify and push its integration branch, open its one pull request, apply the confirmed answers, and hand over what only Adam runs',
-  whenToUse: 'The morning after an overnight run, in a foreground session, launched by scriptPath; copy the launch line, with every argument, from docs/agents/landing-work.md -> "The morning\'s launches": the morning pass, the draft Confirm check, and the pass once Adam has landed the pull request',
+  description: 'Land the mechanical half of an overnight run in three passes: the morning pass replays its pending tracker writes, verifies and pushes its integration branch, opens its one pull request and hands over what only Adam runs; the after pass, once the landing merged, cleans up, applies the confirmed answers and closes the night; the follow-ups pass files the review records\' follow-ups',
+  whenToUse: 'The morning after an overnight run, in a foreground session, launched by scriptPath; copy the launch line, with every argument, from docs/agents/landing-work.md -> "The morning\'s launches": the morning pass, the draft Confirm check, the follow-ups pass, and the pass once Adam has landed the pull request',
   phases: [
-    { title: 'Replay', detail: 'one agent: finds the one open Overnight <date> issue, checks for the pending-writes file first, then applies it in order, recording each line, and renames it when every line is applied; it returns no comment' },
-    { title: 'Verify', detail: 'one agent, first the merged-PR check (#661): a landing pull request already merged is reported as such, and none of the steps below runs; otherwise eight steps each a stop: the main checkout, the base, the lane worktrees, the check, the push with the hook, one pull request, CI on the exact head, a review record naming it; then, when the open pull request\'s description names an older head, one agent writes the description the script refreshed' },
-    { title: 'Apply', detail: 'one index of the Overnight issue\'s comments, one body reader per batch of the questions and Confirm comments, one classifier, then at most maxParallel appliers: the chain (commit appliers on integrator/morning-<date>, and those that edit a ticket body another may write) one at a time, tracker-only appliers in parallel; follow-ups an answer asks for are filed, edits to other tickets applied; dry with no Confirm comment' },
-    { title: 'Follow-ups', detail: 'one agent reads the discovery start and the checkpoint the earlier hand-overs recorded; one reads the pull requests into main the window reaches (open, merged since, recorded since; every one with no checkpoint) as an index of their records, and the open Apply tickets of every night; one record reader per batch returns the latest records\' bodies and the follow-ups already filed; the script reads each follow-ups table, one filer files the rows no issue holds, and the hand-over records the new checkpoint only when every read and filing completed' },
-    { title: 'Hand-over', detail: 'one reader of the earlier hand-overs of the night, when Apply\'s index shows one (#969); then one agent posts the hand-over the script wrote as ## Morning <date> on the Overnight issue, every open Apply ticket a step of its own, oldest first: whole the first time, as ## Morning <date> (delta) with only the changed sections on a later pass, and not at all when identical to the latest' },
+    { title: 'Replay', detail: 'the morning pass: one agent finds the one open Overnight <date> issue, checks for the pending-writes file first, then applies it in order, recording each line, and renames it when every line is applied; it returns no comment' },
+    { title: 'Verify', detail: 'the morning pass: one agent, first the merged-PR check (#661): a landing pull request already merged is reported as such, and none of the steps below runs; otherwise eight steps each a stop: the main checkout, the base, the lane worktrees, the check, the push with the hook, one pull request, CI on the exact head, a review record naming it; then, when the open pull request\'s description names an older head, one agent writes the description the script refreshed' },
+    { title: 'Hand-over', detail: 'the morning pass: one index of the Overnight issue\'s comments and one reader of the earlier hand-overs of the night when it shows one (#969); then one agent posts the hand-over the script wrote as ## Morning <date> on the Overnight issue: whole the first time, as ## Morning <date> (delta) with only the changed sections on a later pass, and not at all when identical to the latest. It applies nothing and files no follow-up: it names the after pass\'s and the follow-ups pass\'s launches (#1082). The after pass\'s own Hand-over posts ## After <date> by the same rule' },
     { title: 'Check', detail: 'confirmFile only, one read agent: returns the issue\'s comments and the draft Confirm; the script sorts the questions with Apply\'s own code, prints the counts and lists, and stops (#302)' },
-    { title: 'After', detail: 'after: true only (#635): one agent refuses a closed Overnight issue, and refuses until the merged landing pull request\'s head, matched to the head the morning verified, is in a fresh origin/main; then it closes, unassigns and removes worktrees whose tips are on origin/main, the integration worktree last, and prunes. Apply follows as in the morning pass, gated on the landed head\'s review record and CI, then one agent posts ## After <date>, a delta of it or nothing by the Hand-over rule (#969), and closes the issue once every question is settled and the pass refused nothing' },
+    { title: 'After', detail: 'after: true only (#635): one agent refuses a closed Overnight issue, and refuses until the merged landing pull request\'s head, matched to the head the morning verified, is in a fresh origin/main; then it closes, unassigns and removes worktrees whose tips are on origin/main, the integration worktree last, and prunes. Apply follows, gated on the landed head\'s review record and CI, then one agent posts ## After <date>, a delta of it or nothing by the Hand-over rule (#969), and closes the issue once every question is settled and the pass refused nothing' },
+    { title: 'Apply', detail: 'the after pass: one index of the Overnight issue\'s comments, one body reader per batch of the questions and Confirm comments, one classifier, then at most maxParallel appliers: the chain (commit appliers on integrator/morning-<date>, and those that edit a ticket body another may write) one at a time, tracker-only appliers in parallel; follow-ups an answer asks for are filed, edits to other tickets applied; nothing is classified with no Confirm comment' },
+    { title: 'Follow-ups', detail: 'followups: true only (#1082): one agent finds the Overnight <date> issue, open or closed, then reads the discovery start and the checkpoint the earlier ## Morning and ## Follow-ups comments recorded; one reads the pull requests into main the window reaches (open, merged since, recorded since; every one with no checkpoint) as an index of their records, and the open Apply tickets of every night; one record reader per batch returns the latest records\' bodies and the follow-ups already filed; the script reads each follow-ups table, and one filer files the rows no issue holds. Then one index of the issue\'s comments, one reader of the night\'s earlier follow-ups comments when it shows one, and one agent posts ## Follow-ups <date>, which records the new checkpoint only when every read and filing completed: whole the first time, as ## Follow-ups <date> (delta) later, and not at all when the checkpoint was kept and only the discovery clock differs' },
   ],
 }
 
@@ -23,8 +23,17 @@ export const meta = {
 // appliers run and which run together, and the hand-over's text. The judgement and every tool call
 // stay in the agents. Test companion: morning_tests.mjs beside this file.
 //
+// Four passes (#1082). The morning pass is Replay, Verify (with the description refresh) and the
+// hand-over: what the morning is for, and cheap. It applies no answer and files no follow-up, also when
+// Verify finds the landing already merged; its hand-over names the after pass's and the follow-ups
+// pass's launches instead. The after pass applies the confirmed answers, gated on the landed head. The
+// follow-ups pass files the review records' follow-ups on demand, and posts what it did as
+// "## Follow-ups <date>" on the night's Overnight issue. The draft check sorts a draft Confirm. On
+// 2026-11-05 (#1071) a morning that stopped at Verify still ran Apply dry with nine agents and
+// Follow-ups with 44, 80% of the run's tokens, and Follow-ups still ended incomplete.
+//
 // Launch (Workflow tool), by scriptPath so the landed file runs and not a session's snapshot: the
-// three launch lines, each complete, are in docs/agents/landing-work.md -> "The morning's launches"
+// four launch lines, each complete, are in docs/agents/landing-work.md -> "The morning's launches"
 // (#489), and morning_tests.mjs holds them to badArguments below, so they are not copied here.
 // Arguments (#78 -> "Arguments"), and no others: an unknown one is refused, so a misspelt `after`
 // can never run the wrong mode.
@@ -36,12 +45,16 @@ export const meta = {
 //                          <wt>/overnight is the integration worktree, <wt>/<owner>-<task id> each
 //                          ticket's (#136; <wt>/<owner> on runs before it).
 //   after        optional  boolean, default false: the post-landing mode (#78 grill Q10).
-//   maxParallel  optional  positive integer, default 3: agents in flight at once, and the most
-//                          appliers Apply dispatches (#78 -> "Agent budget").
+//   maxParallel  optional  positive integer, default 3: agents in flight at once, the most appliers
+//                          Apply dispatches, and the bound on the record readers (#78 -> "Agent budget").
 //   confirmFile  optional  an absolute path to a draft Confirm comment (#302). The run is then the
 //                          draft check alone: it reads the issue and the file, sorts the questions
-//                          the way Apply would, prints the result and stops. wt is not needed for it,
-//                          and after is refused beside it.
+//                          the way the after pass's Apply would, prints the result and stops. wt is
+//                          not needed for it, and after is refused beside it.
+//   followups    optional  boolean, default false: the follow-ups pass (#1082). It reads no worktree,
+//                          so wt may be left out, and wt and after: false beside it are accepted and
+//                          ignored; after: true and confirmFile are refused beside it. false runs the
+//                          morning pass.
 //
 // The draft check (#302). A Confirm is read by its first sentence and by the first word of each
 // "Q<n>:" line, and nothing showed the human what a draft would do until it was posted: on 2026-10-22
@@ -52,35 +65,36 @@ export const meta = {
 // verify agent and writes nothing. It fails only on a question number no questions comment yields; a
 // leading "no" is a normal override, listed and never a failure.
 //
-// Agent budget (#78 -> "Agent budget"): Replay 1, Verify 1, Apply 1 comments index, the body
-// readers, 1 classifier and at most maxParallel appliers, Follow-ups 1 window reader (#514), 1
-// reader, one record reader per batch of the latest records it indexed, and at most 1 filer (#292),
-// Hand-over 1, or none when the hand-over is identical to the latest earlier one (#969): eleven at
-// the default, besides the body readers and their re-reads, at most
-// READ_RETRIES for each comment a reader returned changed (#724), the record readers, and the one
-// reader of the night's earlier hand-overs when there is one (#969). The body
-// readers' cost rule (#661 Q24): the questions and Confirm comments are packed in order toward a
-// 24,000-byte body budget (BATCH_BYTES), one reader per batch, and a comment larger than that is
-// read alone; no total cap on the readers is imposed here. That is a packing target, not a hard
-// bound on a return's size, and not an exact one-reader-per-24-KB formula. A night reads one batch
-// of records or none; a backfill, with no checkpoint, about twenty (#514: 455 KB of latest records
-// with a table on 2026-10-31). The issue lookup is the Replay agent's first step, not an agent of
-// its own. A re-run whose open pull request's description names an older head than the branch's
-// adds one, the description writer (#300), so such a run may take twelve. A morning whose landing
-// pull request is already merged (#661) takes the same eleven at most: Verify reports the merge in
-// place of steps 1 to 8, no description writer runs, and Apply's classifier and appliers are the
-// after pass's, in the same bounded grouping. The after pass (#635 Q27): 1 cleanup agent, whose
-// first step is the lookup, then Apply's 1 comments index, the body readers, 1 classifier and at
-// most maxParallel appliers in the same bounded grouping, and 1 agent for the After comment and the
-// close, none when the comment is identical and the issue stays open: seven at the default, besides
-// the body readers and their re-reads, and the reader of the night's earlier After comments and its
-// re-reads when there are any (#969).
+// Agent budget (#78 -> "Agent budget"). The morning pass (#1082): Replay 1, Verify 1, and Hand-over
+// 1 comments index (#969) and 1 poster, or none when the hand-over is identical to the latest earlier
+// one: four, besides the one reader of the night's earlier hand-overs when there is one and its
+// re-reads, at most READ_RETRIES for each comment a reader returned changed (#724). The issue lookup
+// is the Replay agent's first step, not an agent of its own. A re-run whose open pull request's
+// description names an older head than the branch's adds one, the description writer (#300). A
+// morning whose landing pull request is already merged (#661) takes the same four at most: Verify
+// reports the merge in place of steps 1 to 8, and no description writer runs. The after pass (#635
+// Q27): 1 cleanup agent, whose first step is the lookup, then Apply's 1 comments index, the body
+// readers, 1 classifier and at most maxParallel appliers in the bounded grouping, and 1 agent for the
+// After comment and the close, none when the comment is identical and the issue stays open: seven at
+// the default, besides the body readers and their re-reads, and the reader of the night's earlier
+// After comments and its re-reads when there are any (#969). The body readers' cost rule (#661 Q24):
+// the questions and Confirm comments are packed in order toward a 24,000-byte body budget
+// (BATCH_BYTES), one reader per batch, and a comment larger than that is read alone; no total cap on
+// the readers is imposed here. That is a packing target, not a hard bound on a return's size, and not
+// an exact one-reader-per-24-KB formula. The follow-ups pass (#1082): 1 window reader, whose first
+// step is the lookup (#514), 1 reader, one record reader per batch of the latest records it indexed,
+// at most 1 filer (#292), then 1 comments index, and 1 poster, or none when the follow-ups comment is
+// identical with the discovery clock masked: six, besides the record readers and the one reader of the
+// night's earlier follow-ups comments when there is one, and its re-reads. A night reads one batch of
+// records or none; a backfill, with no checkpoint, about twenty (#514: 455 KB of latest records with a
+// table on 2026-10-31).
 //
 // A second hand-over on one night (#969). A pass run twice posted its whole hand-over twice: #799
 // carries a "## Morning 2026-11-04" of 46 KB and a second of 42 KB, and 15 comments across the tracker
-// were byte-for-byte copies of an earlier one. So before it posts, a pass looks in Apply's index for
-// Adam's comments headed exactly "## Morning <date>" (the after pass: "## After <date>") or that with
-// " (delta)", and reads the latest whole one and the latest delta after it in one reader. The first
+// were byte-for-byte copies of an earlier one. So before it posts, a pass looks in its index of the
+// issue's comments for Adam's comments headed exactly "## Morning <date>" (the after pass: "## After
+// <date>"; the follow-ups pass: "## Follow-ups <date>") or that with " (delta)", and reads the latest
+// whole one and the latest delta after it in one reader. The first
 // hand-over of a night is posted whole. A later one is diffed against the latest whole one, section by
 // section ("### " blocks, and the opening as "Opening"), and posted as "<heading> (delta)": a link to
 // the whole comment it extends, each changed section whole, each unchanged one as "### <title>
@@ -100,9 +114,9 @@ export const meta = {
 // outcome merged, which is not a stop. judgeVerify refuses a malformed or ambiguous report and judges
 // the rest with the after pass's own checks (judgeLanding, judgeEvidence): the merged head matched to
 // the head an earlier morning verified, contained in a fresh origin/main, and its review record and
-// CI. Apply then runs as the after pass runs it, and the hand-over calls the pull request merged,
-// names the evidence or the reason Apply did not run, carries no landing or review command, and
-// leaves the cleanup, the settlement and the close to the after pass.
+// CI. The morning applies nothing over it (#1082 Q4): the hand-over calls the pull request merged,
+// names the evidence the after pass's Apply needs or the reason it will not run, carries no landing or
+// review command, and names the after pass's launch, which applies, cleans up, settles and closes.
 //
 // The after pass (#635, from #659 Q22 to Q33). A Confirm posted after the landing had no applier,
 // and nothing closed an Overnight issue: on 2026-10-29 nine stood open, #129 with 24 answers never
@@ -135,9 +149,9 @@ export const meta = {
 //
 // Follow-ups (#292). A finding a review carries rather than holds on gets filed as a ticket. The
 // review-queue workflow ends a record's findings with a follow-ups table of the carried findings that
-// name no open ticket; the morning reads the table of the latest record on each pull request into main
-// its window reaches (open, merged since its checkpoint, or recorded since it; see "follow-ups, the
-// window", #514), and files each row no issue already holds, with a "**Raised by:** #<pr>" line and a link
+// name no open ticket; the follow-ups pass (#1082) reads the table of the latest record on each pull
+// request into main its window reaches (open, merged since its checkpoint, or recorded since it; see
+// "follow-ups, the window", #514), and files each row no issue already holds, with a "**Raised by:** #<pr>" line and a link
 // to the record, as neither a sub-issue nor a blocker (docs/agents/tracker-policy.md). Neither Verify's
 // verdict nor a Confirm comment gates it: the review decided the finding, and the night did not. Each
 // carries the "**Touches:**" line its place derives and no "**Owner:**" line, since those paths derive
@@ -145,10 +159,19 @@ export const meta = {
 // has no Touches line, and is filed only when tools/ticket_shape.py passes its body (#479).
 //
 // Open Apply tickets (#481). The same reader lists the open "Apply Q<n> of Overnight <date> to #<m>"
-// tickets of every night, and the hand-over lists each, with this morning's, oldest first, as a step
-// of its own: its target and its Confirm URL. See "open Apply tickets" below.
+// tickets of every night, and the follow-ups comment lists each, oldest first, as a step of its own:
+// its target and its Confirm URL (#1082 Q2). See "open Apply tickets" below.
+//
+// The follow-ups pass (#1082). Its first agent finds the Overnight <date> issue, open or closed (Q9):
+// it posts on a closed one without reopening it, and refuses only a date with no such issue, before
+// any other agent runs. The comment it posts, "## Follow-ups <date>" (Q16: the follow-ups comment, not
+// a hand-over), holds the Follow-ups window line last, what was filed and the open Apply tickets; the
+// next pass's window reads the checkpoint from it and from the earlier "## Morning" comments alike (Q7,
+// Q10). A later one on the same night follows #969's rule as "## Follow-ups <date> (delta)", except
+// that a pass that kept the checkpoint compares its text with the discovery clock masked, so a re-run
+// whose only change is the clock posts nothing, and a pass that advanced it always posts (Q10).
 const A = args || {}
-const KNOWN_ARGS = ['date', 'issue', 'repo', 'wt', 'after', 'maxParallel', 'confirmFile']
+const KNOWN_ARGS = ['date', 'issue', 'repo', 'wt', 'after', 'maxParallel', 'confirmFile', 'followups']
 const badArguments = (a) => {
   const bad = []
   const abs = (p) => typeof p === 'string' && p.startsWith('/') && p.length > 1
@@ -160,7 +183,11 @@ const badArguments = (a) => {
   if (!abs(a.repo)) bad.push('repo: the main checkout as an absolute path, e.g. /Users/adammedford/Projects/spa-platform')
   if (a.confirmFile !== undefined && !abs(a.confirmFile)) bad.push('confirmFile: the draft Confirm comment\'s file as an absolute path')
   if (a.confirmFile !== undefined && a.after === true) bad.push('confirmFile: the draft check runs alone; drop after, or drop confirmFile')
-  if (a.confirmFile !== undefined && a.wt === undefined) { /* the draft check makes and reads no worktree */ } else if (!abs(a.wt)) bad.push('wt: the worktree root the run used, an absolute path, e.g. /Users/adammedford/.worktrees/overnight-2026-10-21')
+  if (a.followups !== undefined && typeof a.followups !== 'boolean') bad.push('followups: true or false, a boolean (the string "true" is refused)')
+  if (a.followups === true && a.after === true) bad.push('followups: the follow-ups pass runs alone; drop after, or drop followups')
+  if (a.followups === true && a.confirmFile !== undefined) bad.push('followups: the follow-ups pass runs alone; drop confirmFile, or drop followups')
+  // The follow-ups pass reads no worktree, so wt beside it is accepted and ignored (#1082 Q15).
+  if (a.followups === true) { /* no worktree is read or made */ } else if (a.confirmFile !== undefined && a.wt === undefined) { /* the draft check makes and reads no worktree */ } else if (!abs(a.wt)) bad.push('wt: the worktree root the run used, an absolute path, e.g. /Users/adammedford/.worktrees/overnight-2026-10-21')
   else if (abs(a.repo) && (a.wt === a.repo || a.wt.startsWith(a.repo.replace(/\/+$/, '') + '/'))) bad.push('wt: must lie outside repo; no worktree is made under the repository')
   if (a.after !== undefined && typeof a.after !== 'boolean') bad.push('after: true or false, a boolean (the string "true" is refused)')
   if (a.maxParallel !== undefined && !count(a.maxParallel)) bad.push('maxParallel: a positive integer (default 3)')
@@ -172,7 +199,9 @@ if (BAD_LAUNCH.length) {
   return { halted: 'bad launch; no agent started. Fix each argument and relaunch with all of them:\n- ' + BAD_LAUNCH.join('\n- ') }
 }
 const REPO = A.repo.replace(/\/+$/, '')
-const WTROOT = (A.wt || '').replace(/\/+$/, '')
+const FOLLOWUPS_PASS = A.followups === true
+// The follow-ups pass ignores a wt it is given (#1082 Q15): its prompts name no worktree.
+const WTROOT = FOLLOWUPS_PASS ? '' : (A.wt || '').replace(/\/+$/, '')
 const CHECK = A.confirmFile !== undefined
 const AFTER = A.after === true
 const MAX_PAR = A.maxParallel || 3
@@ -248,20 +277,22 @@ const HOUSE = (mdir) => `House rules (a morning session; Adam reads the hand-ove
 - Only two branches may be pushed, each with the pre-push hook running: the integration branch and the morning branch. Before a push, compare the remote tip with the local one: equal, skip the push; not an ancestor of the local tip, stop, because someone else pushed and the morning never force-pushes.
 - Begin every Bash command that touches a worktree with \`cd <worktree> &&\`, and use \`git -C <path>\` for every git command. A bare \`git commit\` lands on Adam's branch.
 - To change an existing file with Edit or Write, open it with the Read tool first in this session, not with \`cat\`, \`head\` or \`sed -n\`: for a file you will change, this rule overrides the auto-mode advice to read with Bash. Open it with Read again after anything else wrote it (a script, the check, a merge, \`git\`). Otherwise make the change with a short script written to a file under your scratchpad and run by its path. Edit and Write refuse a file not read since its last write: 16 calls went to that refusal on 2026-10-18 and 16 over the four launches from 2026-10-19 to 2026-10-21 (#109).
-- Worktrees live under ${WTROOT}. Never create one under the repo.
+${WTROOT ? `- Worktrees live under ${WTROOT}. Never create one under the repo.` : '- This pass reads and makes no worktree: never create one, under the repo or anywhere else.'}
 - AGENTS.md's rules hold: owner paths only (OWNERSHIP.md); never log a secret, token, cookie, code or state value.
 - Commit messages end with the attribution line "${TRAILER}" (or the one this session's own attribution reminder names, if it differs).
-- Write each OUTPUT FILE and PHASE FILE line's path exactly as given, and no other file outside a worktree under ${WTROOT} but a script the edit rule above has you write under your scratchpad.`
+- Write each OUTPUT FILE and PHASE FILE line's path exactly as given, and no other file ${WTROOT ? `outside a worktree under ${WTROOT} ` : ''}but a script the edit rule above has you write under your scratchpad.`
 
 // The lookup every first agent does before anything else (#78 user story 38): the run is one open
 // issue titled exactly "Overnight <date>", or nothing happens. The script judges the listing the
 // agent returns again, so the refusal does not rest on the agent alone.
 // open: the after pass's lookup (#635 Q31), which lists closed issues too and stops on one, so a
 // closed Overnight issue is refused by name before anything else is read.
+// any: the follow-ups pass's lookup (#1082 Q9), which lists closed issues too and takes one, open or
+// closed: it posts on it without reopening it, and refuses only a date with no such issue.
 const CLOSED_STOP = ' A closed Overnight issue is refused (#635 Q31): its comments are not read, and nothing is replayed, applied or cleaned up; a later change of mind goes to a new ticket.'
-const LOOKUP = (then, open = false) => (A.issue
-  ? `1. The issue. Run \`cd ${REPO} && gh issue view ${A.issue} --json number,title,state,url\`. listing is a one-element list of {number, title, state} from it. Unless its title is exactly "Overnight YYYY-MM-DD"${A.date ? ` with the date ${A.date}` : ''}${open ? ' and its state is OPEN' : ''}, stop here: return the listing with everything else empty or zero, and read, write and replay nothing more.${open ? CLOSED_STOP : ''} ${then}`
-  : `1. The issue. Run \`cd ${REPO} && gh issue list --state ${open ? 'all' : 'open'} --search "Overnight ${A.date} in:title" --json number,title,state --limit 100\`. listing is its output, verbatim. Unless exactly one issue in it is titled exactly "Overnight ${A.date}"${open ? ' and its state is OPEN' : ''}, stop here: return the listing with everything else empty or zero, and read, write and replay nothing more.${open ? CLOSED_STOP : ''} ${then}`)
+const LOOKUP = (then, open = false, any = false) => (A.issue
+  ? `1. The issue. Run \`cd ${REPO} && gh issue view ${A.issue} --json number,title,state,url\`. listing is a one-element list of {number, title, state} from it. Unless its title is exactly "Overnight YYYY-MM-DD"${A.date ? ` with the date ${A.date}` : ''}${open ? ' and its state is OPEN' : ''}, stop here: return the listing with everything else empty or zero, and read, write and replay nothing more.${open ? CLOSED_STOP : ''}${any ? ' Its state, open or closed, does not stop you.' : ''} ${then}`
+  : `1. The issue. Run \`cd ${REPO} && gh issue list --state ${open || any ? 'all' : 'open'} --search "Overnight ${A.date} in:title" --json number,title,state --limit 100\`. listing is its output, verbatim. Unless exactly one issue in it is titled exactly "Overnight ${A.date}"${open ? ' and its state is OPEN' : ''}, stop here: return the listing with everything else empty or zero, and read, write and replay nothing more.${open ? CLOSED_STOP : ''}${any ? ' Its state, open or closed, does not stop you.' : ''} ${then}`)
 
 // ---------------------------------------------------------------- schemas
 const COUNTS = { type: 'object', properties: { applied: { type: 'integer' }, skipped: { type: 'integer' }, failed: { type: 'integer' } }, required: ['applied', 'skipped', 'failed'] }
@@ -362,18 +393,20 @@ const APPLIED = {
   },
   required: ['unit', 'commits', 'issues', 'candidates', 'rewrites', 'edits', 'edges', 'skipped', 'pushed', 'refused', 'unreachable'],
 }
-// The follow-ups window reader (#514): the discovery start and the "Follow-ups window:" lines of every
-// "## Morning" comment on an Overnight issue, cut by its jq so no body is carried.
+// The follow-ups window reader (#514): the lookup (#1082 Q9), the discovery start and the "Follow-ups
+// window:" lines of every "## Morning" and "## Follow-ups" comment on an Overnight issue (#1082 Q7),
+// cut by its jq so no body is carried.
 const WINDOW_READ = {
   type: 'object',
   properties: {
+    listing: { type: 'array', items: { type: 'object', properties: { number: { type: 'integer' }, title: { type: 'string' }, state: { type: 'string' } }, required: ['number', 'title', 'state'] } },
     startedAt: { type: 'string' },
     issues: { type: 'object', properties: { count: { type: 'integer' }, limit: { type: 'integer' }, numbers: { type: 'array', items: { type: 'integer' } }, error: { type: 'string' } }, required: ['count', 'limit', 'numbers', 'error'] },
     handovers: { type: 'array', items: { type: 'object', properties: { issue: { type: 'integer' }, url: { type: 'string' }, author: { type: 'string' }, createdAt: { type: 'string' }, lines: { type: 'array', items: { type: 'string' } } }, required: ['issue', 'url', 'author', 'createdAt', 'lines'] } },
     unread: { type: 'array', items: { type: 'object', properties: { issue: { type: 'integer' }, error: { type: 'string' } }, required: ['issue', 'error'] } },
     error: { type: 'string' },
   },
-  required: ['startedAt', 'issues', 'handovers', 'unread', 'error'],
+  required: ['listing', 'startedAt', 'issues', 'handovers', 'unread', 'error'],
 }
 // One comment or review as the follow-ups reader's jq indexes it (#514): its record-like lines, size and
 // whether it holds the follow-ups table's header, never its body; the record readers return the bodies.
@@ -403,7 +436,10 @@ const RECORDS_READ = {
 }
 const ISSUED = { type: 'array', items: { type: 'object', properties: { pr: { type: 'integer' }, title: { type: 'string' }, number: { type: 'integer' }, url: { type: 'string' } }, required: ['pr', 'title', 'number', 'url'] } }
 const SHAPE_REFUSED = { type: 'array', items: { type: 'object', properties: { pr: { type: 'integer' }, title: { type: 'string' }, why: { type: 'string' } }, required: ['pr', 'title', 'why'] } }
-const FILED = { type: 'object', properties: { filed: ISSUED, skipped: ISSUED, refused: SHAPE_REFUSED, unreachable: { type: 'boolean' }, reason: { type: 'string' } }, required: ['filed', 'skipped', 'refused', 'unreachable', 'reason'] }
+// A row the reviewed pull request's description, or the latest Answer on an issue it closes, already
+// fixes (#1111): filed by nobody, each with why naming the text that fixes it.
+const ALREADY_FIXED = { type: 'array', items: { type: 'object', properties: { pr: { type: 'integer' }, title: { type: 'string' }, why: { type: 'string' } }, required: ['pr', 'title', 'why'] } }
+const FILED = { type: 'object', properties: { filed: ISSUED, skipped: ISSUED, fixed: ALREADY_FIXED, refused: SHAPE_REFUSED, unreachable: { type: 'boolean' }, reason: { type: 'string' } }, required: ['filed', 'skipped', 'fixed', 'refused', 'unreachable', 'reason'] }
 const HANDED = { type: 'object', properties: { url: { type: 'string' }, posted: { type: 'boolean' }, reason: { type: 'string' } }, required: ['url', 'posted', 'reason'] }
 const REFRESHED = { type: 'object', properties: { edited: { type: 'boolean' }, reason: { type: 'string' } }, required: ['edited', 'reason'] }
 const RECORDED = { type: 'object', properties: { verdict: { type: 'string', enum: ['merge', 'hold', 'none'] }, head: { type: 'string' }, url: { type: 'string' }, reader: { type: 'string' } }, required: ['verdict', 'head', 'url', 'reader'] }
@@ -439,7 +475,8 @@ const TITLE = /^Overnight (\d{4}-\d{2}-\d{2})$/
 // state the lookup returned, so the refusal does not rest on the agent's stop alone.
 const isOpen = (i) => String(i.state).toUpperCase() === 'OPEN'
 const CLOSED_SAID = 'is closed, so the after pass read no question and replayed, applied and cleaned up nothing; a later change of mind goes to a new ticket (#635 Q31)'
-const judgeLookup = (listing, open = false) => {
+// any: the follow-ups pass (#1082 Q9), which takes the one issue of that title whatever its state.
+const judgeLookup = (listing, open = false, any = false) => {
   const list = Array.isArray(listing) ? listing : []
   if (A.issue) {
     const it = list.find((i) => i.number === A.issue)
@@ -450,6 +487,10 @@ const judgeLookup = (listing, open = false) => {
     return { issue: A.issue, date: m[1] }
   }
   const named = list.filter((i) => i.title === `Overnight ${A.date}`)
+  if (any) {
+    if (named.length !== 1) return { refused: `found ${named.length} issues, open or closed, titled "Overnight ${A.date}"${named.length ? ` (${named.map((i) => '#' + i.number).join(', ')})` : ''}, and the follow-ups pass posts on exactly one; nothing was read, filed or posted` }
+    return { issue: named[0].number, date: A.date }
+  }
   const hits = named.filter(isOpen)
   if (open && !hits.length && named.length) return { refused: `${named.map((i) => '#' + i.number).join(', ')}, "Overnight ${A.date}", ${CLOSED_SAID}` }
   if (hits.length !== 1) return { refused: `found ${hits.length} open issues titled "Overnight ${A.date}"${hits.length ? ` (${hits.map((i) => '#' + i.number).join(', ')})` : ''}, and the morning runs against exactly one; nothing was replayed, verified or applied` }
@@ -673,15 +714,16 @@ const followUpsToFile = (read, mdir) => {
 // the reader listed only the open ones (#38, #39, #40, #494 and #568 were filed by hand). So the reader
 // also reads those merged since a durable checkpoint and those in any state that received a record since
 // it (Q9 to Q17 of #599, confirmed at https://github.com/adammedford/spa-platform/issues/599#issuecomment-6526553163).
-// - The checkpoint. A workflow script reads no clock, so the window reader's first command is the UTC
-//   clock read, before any listing; that is the discovery start. When the morning's coverage completes,
-//   its hand-over's last "Follow-ups window:" line opens "checkpoint advanced to <discovery start>", and
-//   the next morning's window opens at the latest such boundary any of Adam's "## Morning" comments on an
-//   Overnight issue records. A boundary is the discovery start, never the posting time, so windows
-//   overlap, and filedAs absorbs the overlap. With none recorded the morning backfills every pull request
-//   into main. Only Adam's comments count (CODING_STANDARDS.md -> "An authorisation is read from its
-//   author"), only a comment's last window line, so text a refusal quotes above it cannot set one, and
-//   a "kept at" line records none.
+// - The checkpoint. A workflow script reads no clock, so the window reader's first command after the
+//   lookup is the UTC clock read, before any listing; that is the discovery start. When a pass's coverage
+//   completes, its comment's last "Follow-ups window:" line opens "checkpoint advanced to <discovery
+//   start>", and the next pass's window opens at the latest such boundary any of Adam's "## Morning"
+//   comments (before #1082) or "## Follow-ups" comments (since) on an Overnight issue records. A boundary
+//   is the discovery start, never the posting time, so windows overlap, and filedAs absorbs the overlap.
+//   With none recorded the pass backfills every pull request into main; none has been recorded, and none
+//   is seeded (#1082 Q7). Only Adam's comments count (CODING_STANDARDS.md -> "An authorisation is read
+//   from its author"), only a comment's last window line, so text a refusal quotes above it cannot set
+//   one, and a "kept at" line records none.
 // - Discovery. One listing of every pull request into main gives the open ones, those merged since and
 //   those updated since; a record submitted as a COMMENTED review bumps its pull request's updatedAt and
 //   is found that way, since no repository-wide listing serves reviews; the issue comments since the
@@ -696,7 +738,7 @@ const followUpsToFile = (read, mdir) => {
 //   pull requests (the only ones filedAs is asked about).
 // - Failing closed (Q12). What was returned is filed; every listing, pull request or record not read and
 //   every finding not filed is named on the window line, and then the checkpoint is kept, so the next
-//   morning reads the same span again. A malformed or missing state or timestamp is such a gap (Q17).
+//   pass reads the same span again. A malformed or missing state or timestamp is such a gap (Q17).
 const UTC = /^\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\dZ$/
 const isUtc = (s) => typeof s === 'string' && UTC.test(s)
 const WINDOW_LINE = 'Follow-ups window: '
@@ -812,7 +854,7 @@ const judgeRecords = (batches, got) => {
   })
   return { prs, filed, unread }
 }
-// The hand-over's window line (Q15): the checkpoint first, so the next morning reads it at the line's
+// The follow-ups comment's window line (Q15): the checkpoint first, so the next pass reads it at the line's
 // start, then the window, its source, the discovery start, the coverage, the count from each discovery
 // source and the work left. One line: whitespace an agent's error carried is folded.
 const windowLineOf = (w) => (WINDOW_LINE + [
@@ -829,11 +871,12 @@ const windowLineOf = (w) => (WINDOW_LINE + [
 // An answer the morning cannot state as an edit is filed as "Apply Q<n> of Overnight <date> to #<m>",
 // and the part an edit leaves unstated as "The rest of Q<n> of Overnight <date> on #<m>" (planOf).
 // Each waited for a launch prep to find it: on 2026-10-28 #476's found nine open, three of them three
-// days old. So the hand-over lists every open one, from any night, as a step of its own, oldest first
-// (by number, which GitHub gives in filing order), each with its target and the Confirm comment its
-// Raised-by line names (followUpTicket). Two sources, one parser: the follow-ups reader's listing of
-// the open issues, and the tickets this morning's appliers filed, which a listing taken minutes later
-// may not show yet. A ticket the listing names as closed is not listed. A listed ticket counts only when
+// days old. So the follow-ups comment lists every open one, from any night, as a step of its own, oldest
+// first (by number, which GitHub gives in filing order), each with its target and the Confirm comment its
+// Raised-by line names (followUpTicket); the morning hand-over listed them before #1082 (Q2). Two
+// sources, one parser: the follow-ups reader's listing of the open issues, and the tickets a pass's
+// appliers filed, which a listing taken minutes later may not show yet; the follow-ups pass runs no
+// applier, so it passes an empty list (Q15). A ticket the listing names as closed is not listed. A listed ticket counts only when
 // Adam's account opened it, as the morning's appliers do: a title and a Raised-by line are all it takes
 // to read as a step, so an issue anyone else opened in that shape is never handed over as one
 // (CODING_STANDARDS.md -> "An authorisation is read from its author").
@@ -918,15 +961,20 @@ const preAcceptedOf = (text) => {
   return { rest: keep.join('\n'), rows, unnumbered }
 }
 // What makes a comment one the readers read, said once: batchesOf picks the comments to fetch with
-// these two functions, on the head of each body, so it cannot pick a narrower set than the readers do.
+// these functions, on the head of each body, so it cannot pick a narrower set than the readers do.
+// Both kinds count only from Adam's account (CODING_STANDARDS.md -> "An authorisation is read from its
+// author"): a Confirm names numbers, and the questions comment says what they mean, so an outsider's
+// questions comment is dropped before the grouping, as an outsider's Confirm is, with no refusal: it
+// counts towards no parts total and no duplicate number, and adds no question (#1078).
 const headingOf = (body) => HEADING.exec(String(body || '').split('\n')[0].trim())
+const isQuestions = (author, body) => author === ADAM && headingOf(body)
 const isConfirm = (author, body) => author === ADAM && /^Confirm\b/.test(String(body || '').trimStart())
 const readQuestions = (comments) => {
   const groups = new Map()
   for (const c of comments) {
     const body = String(c.body || '')
     const nl = body.indexOf('\n')
-    const m = headingOf(body)
+    const m = isQuestions(c.author, body)
     if (!m) continue
     const pm = PART.exec(m[3])
     const title = m[3].replace(PART, '')
@@ -1003,7 +1051,7 @@ const readConfirmations = (comments) => {
 const verdictOf = (answer) => (/^yes\b/i.test(answer) ? 'yes' : /^no\b/i.test(answer) ? 'no' : (!answer || /^open\b/i.test(answer)) ? 'open' : 'answered')
 // The sort Apply runs and the draft check prints (#302): each question's answer (its override, or the
 // night's), whether a Confirm confirmed it, and where it goes. Without a Confirm comment (dry) only a
-// "yes" goes on, to the would-do list; with one, a question no Confirm names or overrides, or answered
+// "yes" goes on, and the after pass then classifies nothing (#1082 Q14); with one, a question no Confirm names or overrides, or answered
 // open, stays open, one answered no is recorded and applies nothing, and any other opening is applied
 // as written.
 const sortAnswers = (questions, conf, dry) => {
@@ -1442,7 +1490,7 @@ Return comments and error.`
 // classifier (see the header), and nothing on #659 shows size is what trips it.
 const BATCH_BYTES = 24000
 // The comments Apply reads (readQuestions, readConfirmations), picked from the index in order by
-// the readers' own predicates (headingOf, isConfirm) run on each comment's head, and packed into
+// the readers' own predicates (isQuestions, isConfirm) run on each comment's head, and packed into
 // batches of at most BATCH_BYTES. A head the readers' pattern cannot be judged on is not skipped: the
 // comment is read whole and the readers decide, so a comment they would read is never dropped unread.
 // Two heads cannot be judged. One is full length with less than MIN_VISIBLE characters of it after
@@ -1493,16 +1541,18 @@ const batchesOf = (indexed) => {
   let cur = null
   indexed.forEach((c, i) => {
     const head = String(c.head || '')
-    if (!undecidableHead(head) && !headingOf(head) && !isConfirm(c.author, head)) return
+    // Neither reader reads another account's comment, whatever its head (#1078), so none is fetched.
+    if (c.author !== ADAM) return
+    if (!undecidableHead(head) && !isQuestions(c.author, head) && !isConfirm(c.author, head)) return
     if (!cur || cur.bytes + (c.bytes || 0) > BATCH_BYTES) { cur = { at: [], urls: [], bytes: 0 }; out.push(cur) }
     cur.at.push(i); cur.urls.push(c.url); cur.bytes += c.bytes || 0
   })
   return out
 }
 
-const classifyPrompt = (date, issue, questions, dry, phaseKey) => {
+const classifyPrompt = (date, issue, questions, phaseKey) => {
   const p = paths(date)
-  return `Classify the ${dry ? 'provisional (pre-accepted, not yet confirmed)' : 'confirmed'} answers of the overnight run of ${date} (Overnight #${issue}) for Apply (#78 -> "Apply"). You write nothing but your phase file: you classify, and the appliers act.
+  return `Classify the confirmed answers of the overnight run of ${date} (Overnight #${issue}) for Apply (#78 -> "Apply"). You write nothing but your phase file: you classify, and the appliers act.
 
 ${HOUSE(p.mdir)}
 
@@ -1521,9 +1571,9 @@ Every question carries target, removeBoxes, addBlockedBy, unstated and followUp;
 summary says in one line what applying it changes. rewrites lists each ticket whose answers say its body is rewritten before an agent takes it (#78 grill Q3), with the questions that say so; a spec (GLOSSARY.md -> Spec) is never rewritten by the morning (Q13). Return the questions in the order given, each with q, issue, task and answer as given.`
 }
 
-// after: the after pass's applier (#635), which runs once the landing merged: it fetches origin/main
-// fresh, finds a commit already landed there, checks each effect is still in place before it skips
-// it (Q24), and reports what is in place as verified, which the settled rule reads (Q29, Q30).
+// The after pass's applier (#635), the only one since #1082 Q14, which runs once the landing merged: it
+// fetches origin/main fresh, finds a commit already landed there, checks each effect is still in place
+// before it skips it (Q24), and reports what is in place as verified, which the settled rule reads (Q29, Q30).
 const afterApplyRules = (issue) => `This is the after pass (#635), run once the landing merged. First \`git -C ${REPO} fetch origin\`, so origin/main is fresh. A commit an earlier pass made may have landed already: look for one whose body cites #${issue} and the question on origin/main too, \`git -C ${REPO} log origin/main --format=%B\`, and when one does, that commit is the question's, made already. Before you skip anything as already done, check that its effect is still in place: the commit on origin/main or on the morning branch, the filed issue still there (\`cd ${REPO} && gh issue view <n> --json number,state\`), the comment still among its ticket's comments, the box still gone, the edge still among the blockers. An effect no longer in place is made again, never skipped.
 verified lists each question of the unit whose work is now in place, made by you or found still in place, as {q, effect, held, onMain}: effect is the commit's full sha, or the URL of the issue filed, the comment posted or the ticket edited; held is the number of the issue that now holds the question's remaining work, the workstream ticket or the follow-up filed for it, and 0 when none does (a commit answer's own ticket never holds it); onMain, for a commit, is whether \`git -C ${REPO} merge-base --is-ancestor <sha> origin/main\` exits 0, and false for anything else. A commit you made on the morning branch now is not on origin/main. A no-repo-change question of a ticket whose rewrite is in place is listed in verified too, made by you or found still in place (its "## Body rewritten" comment still among the ticket's comments), with effect that comment's URL and held the ticket (#1157). A question whose work is not in place is not listed.
 `
@@ -1576,14 +1626,14 @@ for a1, a2, b1, b2 in hunks:
 const rewriteRecord = (date, issue, mdir) => `REWRITE RECORD: a ticket's body is changed in four steps (#968). 1. Save its current body, \`cd ${REPO} && gh issue view <n> --json body --jq .body > <a file under ${mdir}/>\`, and write the new body to another file under ${mdir}/. 2. Diff the two, \`python3 -I ${mdir}/body-diff.py <the current body's file> <the new body's file>\`: body-diff.py is the program between the lines "BEGIN body-diff.py" and "END body-diff.py" below, written to that path byte for byte when it is not there, and its output is the changed paragraphs as a unified diff, old lines and new. 3. Post a comment whose lines are, in order: "## Body rewritten ${date}"; "Applied: Q<n> of #${issue}." naming every question number applied, as "Applied: Q<n>, Q<m> of #${issue}."; "${EDIT_HISTORY}"; "~~~diff"; the diff's output, every line; "~~~" (\`cd ${REPO} && gh issue comment <n> --body-file <its file>\`). The comment carries no copy of the old body. 4. Edit the body, \`cd ${REPO} && gh issue edit <n> --body-file <the new body's file>\`.
 BEGIN body-diff.py
 ${BODY_DIFF}END body-diff.py`
-const applyPrompt = (date, issue, unit, phaseKey, after = false) => {
+const applyPrompt = (date, issue, unit, phaseKey) => {
   const p = paths(date)
   const commits = unit.kind === 'commit'
   return `Apply the confirmed answers of the overnight run of ${date} (Overnight #${issue}) for ${unit.tickets.map((t) => '#' + t.issue).join(', ')} (#78 -> "Apply"). Every answer below was confirmed by the Confirm comment named as its authority; act on nothing else.
 
 ${HOUSE(p.mdir)}
 
-PHASE FILE: ${p.mdir}/${after ? 'after' : 'apply'}/${unit.key}.json INPUTS: ${phaseKey}
+PHASE FILE: ${p.mdir}/after/${unit.key}.json INPUTS: ${phaseKey}
 Write {"inputs": "${phaseKey}", "result": <your return value>} to the PHASE FILE as JSON before you return.
 UNIT: ${JSON.stringify(unit)}
 
@@ -1599,7 +1649,7 @@ FOLLOW-UP TICKETS: the unit's followUps, each with its q, title, blockedBy, file
 3. Only when that exits 0, its last line starting "ticket-shape: pass:", file it: \`cd ${REPO} && gh issue create --title "<its title>" --label needs-triage --body-file <its file>\`, adding --blocked-by <n> for each blockedBy number. It is neither a sub-issue nor a blocker of the ticket that raised it (docs/agents/tracker-policy.md): no --parent. On exit 1 file nothing and list it in skipped with each "ticket-shape: <rule>:" line; on any other exit file nothing and say in skipped that the check did not judge it, quoting its last line. Never reword a body to get past the check: a failure is reported, not repaired. List each one filed in issues with its number, url, title and questions [its q].
 Ticket edits: the unit's edits, each {q, target, removeBoxes} (#320). Read the target, \`cd ${REPO} && gh issue view <target> --json body,subIssuesSummary\`. A spec, an issue with sub-issues, is never edited (#78 grill Q13): list it in skipped. Each line of removeBoxes must be a whole line of the body, byte for byte; when one is not, edit nothing for that q and list it in skipped with the line not found. Otherwise, as a rewrite does, change it by the REWRITE RECORD's four steps below, its new body the current one with exactly those lines removed and no other byte changed, and its comment's question line naming Q<n> of #${issue}. List each in edits {issue: the target, comment: the "## Body rewritten ${date}" comment's URL, removed: the lines removed, questions: [its q]}. The unit's edits run in order, each reading the body the last one left.
 Ticket edges: the unit's edges, each {q, target, addBlockedBy}. Read the target's blockers, \`cd ${REPO} && gh issue view <target> --json blockedBy\`, and add each one missing, \`cd ${REPO} && gh issue edit <target> --add-blocked-by <n>\`, one call per number. List each in edges {issue: the target, blockedBy: the numbers it now carries from addBlockedBy, questions: [its q]}.
-${after ? afterApplyRules(issue) : ''}A no-repo-change question needs nothing made${after ? ', though it is still listed in verified once its ticket\'s rewrite is in place, as above' : ''}. If GitHub cannot be reached, stop writing, set unreachable true and return what was made. refused is "" unless you refused the whole unit, with why.
+${afterApplyRules(issue)}A no-repo-change question needs nothing made, though it is still listed in verified once its ticket's rewrite is in place, as above. If GitHub cannot be reached, stop writing, set unreachable true and return what was made. refused is "" unless you refused the whole unit, with why.
 ${rewriteRecord(date, issue, p.mdir)}`
 }
 
@@ -1608,24 +1658,37 @@ const JQ_LINES = '"\\r\\n|[\\n\\u000b\\f\\r\\u001c-\\u001e\\u0085\\u2028\\u2029]
 // A comment's or a review's index entry (#514), as INDEXED: the lines that look like a record line, a
 // pattern looser than RECORD, which the script applies, so the cut drops no record.
 const JQ_INDEX = (at, state) => `[.[][] | (.body // "") as $b | {url: .html_url, at: (.${at} // ""), association: .author_association, state: ${state}, bytes: ($b | utf8bytelength), hasTable: ($b | contains("${FOLLOW_UP_HEAD_FOUR}")), lines: [$b | splits(${JQ_LINES}) | select(test("Reviewed [0-9a-f]{40} against [0-9a-f]{40}: (merge|hold)"))]} | select(.lines | length > 0)]`
+// The issues already filed from pull request <pr>, cut from the "Raised by #<pr> in:body" listing (#1155).
+// That search matches loosely: 30 issues and about 400 KB for #38 to #40, whole Overnight reports for
+// #475 and #474, so every record reader overflowed and the checkpoint never advanced. This keeps the
+// issues whose body has a "**Raised by:**" line naming #<pr>, as tools/land.sh's filed_jq does, and
+// reads that line as filedAs reads it: a line starts after \n, \r, U+2028 or U+2029 (a JS multiline
+// ^), and runs to the next \n. So it keeps every issue filedAs can hold a follow-up by, and drops only
+// ones filedAs would refuse anyway. U+2028 and U+2029 are written as jq escapes, as JQ_LINES writes
+// them, so the command an agent copies carries no invisible character.
+const JQ_FILED = (pr) => String.raw`[.[] | select((.body // "") | test("(^|[\n\r\u2028\u2029])\\*\\*Raised by:\\*\\*[^\n]*#${pr}([^0-9]|$)"))]`
 
-const windowPrompt = (date) => {
-  const p = paths(date)
-  return `Follow-ups window: read the moment discovery starts, and the checkpoints the earlier mornings' hand-overs recorded (#514). Read and report; you write nothing but the OUTPUT FILE, and the script decides the window.
+// The follow-ups pass's first agent (#1082 Q9): the lookup, which takes the issue open or closed, then
+// the window. A date given by issue number alone is the title's, so the run log's directory is named
+// for <date> until the lookup reads it.
+const windowPrompt = () => {
+  const p = paths(A.date || '<date>')
+  return `Follow-ups window: find the night's Overnight issue, then read the moment discovery starts, and the checkpoints the earlier "## Morning" and "## Follow-ups" comments recorded (#514, #1082). Read and report; you write nothing but the OUTPUT FILE, and the script decides the window.
 
 ${HOUSE(p.mdir)}
 
 OUTPUT FILE: ${p.mdir}/followups-window.txt
-1. Before any other command: \`date -u +%Y-%m-%dT%H:%M:%SZ\`. startedAt is what it prints, exactly: the discovery start, which the hand-over records as the next checkpoint.
-2. The Overnight issues: \`cd ${REPO} && gh issue list --state all --limit 2000 --json number,title --jq '{count: length, numbers: [.[] | select(.title | test("^Overnight [0-9]{4}-[0-9]{2}-[0-9]{2}$")) | .number]}'\`. issues is {count, numbers} as it prints them, limit 2000, and error, "" or why it failed. It lists without --search, whose index can miss an issue filed minutes ago.
-3. For each of those numbers: \`cd ${REPO} && gh api --paginate --slurp repos/{owner}/{repo}/issues/<number>/comments | jq '[.[][] | select((.body // "") | startswith("## Morning ")) | {url: .html_url, author: .user.login, createdAt: .created_at, lines: [(.body // "") | splits(${JQ_LINES}) | select(startswith("${WINDOW_LINE}"))]}]'\`. Each entry it prints, with issue set to that number, is one of handovers, in the order printed; an issue whose read failed is one of unread, {issue, error}.
-4. If GitHub cannot be reached, error says so. error is "" when nothing stopped you.
+${LOOKUP(`The date${A.date ? ` is ${A.date}` : ' is the one in that title'}; call it <date> above and below.`, false, true)}
+2. Before any other command after the lookup: \`date -u +%Y-%m-%dT%H:%M:%SZ\`. startedAt is what it prints, exactly: the discovery start, which the follow-ups comment records as the next checkpoint.
+3. The Overnight issues: \`cd ${REPO} && gh issue list --state all --limit 2000 --json number,title --jq '{count: length, numbers: [.[] | select(.title | test("^Overnight [0-9]{4}-[0-9]{2}-[0-9]{2}$")) | .number]}'\`. issues is {count, numbers} as it prints them, limit 2000, and error, "" or why it failed. It lists without --search, whose index can miss an issue filed minutes ago.
+4. For each of those numbers: \`cd ${REPO} && gh api --paginate --slurp repos/{owner}/{repo}/issues/<number>/comments | jq '[.[][] | select((.body // "") | startswith("## Morning ") or startswith("## Follow-ups ")) | {url: .html_url, author: .user.login, createdAt: .created_at, lines: [(.body // "") | splits(${JQ_LINES}) | select(startswith("${WINDOW_LINE}"))]}]'\`. Each entry it prints, with issue set to that number, is one of handovers, in the order printed; an issue whose read failed is one of unread, {issue, error}.
+5. If GitHub cannot be reached, error says so. error is "" when nothing stopped you.
 Write the whole result as JSON to the OUTPUT FILE, then return it.`
 }
 
 const followupsPrompt = (date, since) => {
   const p = paths(date)
-  const window = since ? `the pull requests into main the window since ${since} reaches` : 'every pull request into main (no checkpoint is recorded, so this morning backfills)'
+  const window = since ? `the pull requests into main the window since ${since} reaches` : 'every pull request into main (no checkpoint is recorded, so this pass backfills)'
   return `Follow-ups: read ${window}, each one's review records as an index, the open Apply tickets and OWNERSHIP.md (#292, #514). Read and report; you file nothing, and the script decides what is read further and filed.
 
 ${HOUSE(p.mdir)}
@@ -1652,7 +1715,7 @@ ${HOUSE(p.mdir)}
 OUTPUT FILE: ${p.mdir}/followups-records-${k}.txt
 RECORDS: ${JSON.stringify(items.map((i) => ({ pr: i.pr, url: i.url })))}
 1. records, one per RECORDS entry, in its order: a comment, its URL ending "#issuecomment-<id>", is \`cd ${REPO} && gh api repos/{owner}/{repo}/issues/comments/<id> --jq '{url: .html_url, at: .created_at, association: .author_association, state: "", body}'\`; a review, its URL ending "#pullrequestreview-<id>", is \`cd ${REPO} && gh api repos/{owner}/{repo}/pulls/<pr>/reviews/<id> --jq '{url: .html_url, at: .submitted_at, association: .author_association, state, body}'\`. Copy bodies byte for byte: the script reads the record and its follow-ups table from them.
-2. filed: for each of #${prs.join(', #')}, \`cd ${REPO} && gh issue list --state all --limit 500 --search "Raised by #<number> in:body" --json number,title,body,url\`, every issue of every listing once, each body verbatim.
+2. filed: the issues already filed from each pull request, one listing each, whose --jq keeps only the issues with a "**Raised by:**" line naming it (#1155): ${prs.map((n) => `#${n}, \`cd ${REPO} && gh issue list --state all --limit 500 --search "Raised by #${n} in:body" --json number,title,body,url --jq '${JQ_FILED(n)}'\``).join('; ')}. filed is every issue of every listing once, each body verbatim; run each command as written, since the search alone matches far more than the follow-ups it is for.
 3. If GitHub cannot be reached, or a record cannot be read, error says so. error is "" when nothing stopped you.
 Write the whole result as JSON to the OUTPUT FILE, then return it.`
 }
@@ -1669,9 +1732,10 @@ ${items.map((f) => `OUTPUT FILE: ${f.file}`).join('\n')}
 For each follow-up, in order:
 1. Write its body, exactly, to its file.
 2. Look again before filing, since a rerun or a person may have filed it since the read: \`cd ${REPO} && gh issue list --state all --limit 100 --search "<its title> in:title" --json number,title,body,url\`. An issue whose title is the follow-up's title and whose body's Raised-by line names #<its pr> holds it: file nothing, and list it in skipped.
-3. Check its shape as the overnight run checks a new ticket, under the label it will be filed with (#479): \`cd ${REPO} && python3 -I -c 'import json,sys; print(json.dumps({"number": 0, "body": open(sys.argv[1]).read(), "labels": [{"name": sys.argv[2]}], "subIssuesSummary": {"total": 0}, "blockedBy": {"nodes": []}}))' <its file> <its label> | python3 -I tools/ticket_shape.py -\`. Only when that exits 0 with its last line starting "ticket-shape: pass:" go on to step 4. On exit 1 file nothing, and list it in refused with its pr, title and why, each "ticket-shape: <rule>:" line it printed joined by "; "; on any other exit file nothing, and list it in refused with why "the check did not judge it: " and its last line. Never reword a body to get past the check: a failure is reported, not repaired.
-4. File it: \`cd ${REPO} && gh issue create --title "<its title>" --label <its label> --body-file <its file>\`, with its label exactly as given (needs-triage, or ready-for-human for one whose place names no path or two owners' paths). A follow-up is filed as neither a sub-issue nor a blocker of anything (docs/agents/tracker-policy.md -> "An issue is held open by its own scope"): no parent, and no blocked-by edge either way. List it in filed with its pr, title, the new number and URL.
-If GitHub cannot be reached, stop filing: unreachable true, reason the error, and return what was filed. reason is "" when nothing stopped you; refused is [] when the check refused none.`
+3. Re-read what may already fix it, since a finding is often fixed after the record that carried it (#1111): the reviewed pull request's description as it reads now, \`cd ${REPO} && gh pr view <its pr> --json body --jq .body\`, and, for each issue that description closes (each #<n> on a Closes, Fixes or Resolves line), the latest comment on it whose first line is "## Answer", from \`cd ${REPO} && gh issue view <n> --json comments\`. Whether either fixes the follow-up's finding is your judgement on reading them, not a title match. When either already fixes it, file nothing, and list it in fixed with its pr, title and why, why quoting the text that fixes it and naming where it stands (#<its pr>'s description, or the Answer's URL).
+4. Check its shape as the overnight run checks a new ticket, under the label it will be filed with (#479): \`cd ${REPO} && python3 -I -c 'import json,sys; print(json.dumps({"number": 0, "body": open(sys.argv[1]).read(), "labels": [{"name": sys.argv[2]}], "subIssuesSummary": {"total": 0}, "blockedBy": {"nodes": []}}))' <its file> <its label> | python3 -I tools/ticket_shape.py -\`. Only when that exits 0 with its last line starting "ticket-shape: pass:" go on to step 5. On exit 1 file nothing, and list it in refused with its pr, title and why, each "ticket-shape: <rule>:" line it printed joined by "; "; on any other exit file nothing, and list it in refused with why "the check did not judge it: " and its last line. Never reword a body to get past the check: a failure is reported, not repaired.
+5. File it: \`cd ${REPO} && gh issue create --title "<its title>" --label <its label> --body-file <its file>\`, with its label exactly as given (needs-triage, or ready-for-human for one whose place names no path or two owners' paths). A follow-up is filed as neither a sub-issue nor a blocker of anything (docs/agents/tracker-policy.md -> "An issue is held open by its own scope"): no parent, and no blocked-by edge either way. List it in filed with its pr, title, the new number and URL.
+If GitHub cannot be reached, stop filing: unreachable true, reason the error, and return what was filed. reason is "" when nothing stopped you; fixed is [] when nothing already fixed one; refused is [] when the check refused none.`
 }
 
 const handoverPrompt = (date, issue, text) => {
@@ -1688,6 +1752,23 @@ reason is "" unless the post failed, and then the error.
 BEGIN HAND-OVER
 ${text}
 END HAND-OVER`
+}
+// The follow-ups pass's poster (#1082): the follow-ups comment (Q16), on the Overnight issue open or
+// closed, which it never reopens (Q9).
+const followupsPostPrompt = (date, issue, text) => {
+  const p = paths(date)
+  return `Follow-ups comment: post the follow-ups pass's comment on the Overnight issue (#1082). The text between the markers is the comment, written by the script; post it exactly, adding and removing nothing. The issue may be closed: post on it as it is, and never reopen it or change its state.
+
+${HOUSE(p.mdir)}
+
+OUTPUT FILE: ${p.mdir}/followups.md
+1. Write the text between the markers, without the markers, to ${p.mdir}/followups.md.
+2. Read the issue's comments, \`cd ${REPO} && gh issue view ${issue} --json comments\`. If a comment headed "## Follow-ups ${date}" or "## Follow-ups ${date} (delta)" already has exactly this text, post nothing: url is that comment's URL and posted false.
+3. Otherwise post it, \`cd ${REPO} && gh issue comment ${issue} --body-file ${p.mdir}/followups.md\`; url is the new comment's URL and posted true.
+reason is "" unless the post failed, and then the error.
+BEGIN COMMENT
+${text}
+END COMMENT`
 }
 
 const refreshPrompt = (date, pr, head, body) => {
@@ -1752,6 +1833,11 @@ END HAND-OVER`}`
 // The report's per-ticket morning steps (#971), as the reader gives them from its ## Tickets table, or the
 // Morning steps of a report of an earlier night's shape.
 const STEPS_TITLE = 'Morning steps the report gives'
+// The launch lines a hand-over names (#1082 Q4, Q11), in the doc's form, so a session can copy them:
+// its args object is JSON, and morning_tests.mjs holds it to badArguments.
+const launchArgs = (o) => `{${Object.entries(o).map(([k, v]) => `${JSON.stringify(k)}: ${JSON.stringify(v)}`).join(', ')}}`
+const passLaunch = (o) => `the Workflow tool with scriptPath ${REPO}/.claude/workflows/morning.js and args ${launchArgs({ repo: REPO, ...o })}`
+const PASSES_SAID = 'Apply runs in the after pass, and Follow-ups in the follow-ups pass'
 const handoverText = (s) => {
   const p = paths(s.date)
   const v = s.verify
@@ -1761,20 +1847,21 @@ const handoverText = (s) => {
     if (items.length) items.forEach((i) => L.push(`- ${i}`)); else L.push(none)
   }
   L.push(`## Morning ${s.date}`, '')
+  const afterLaunch = passLaunch({ date: s.date, wt: WTROOT, after: true })
   // A merged landing pull request (#661 Q25, Q28), keyed on the script's verdict, never the agent's
   // outcome, so a refused report prints no merged line. The pull request is merged and its rows are
   // landed; no landing or review command is given; the record and the CI appear only as the evidence
-  // that permitted Apply or as the reason it did not run; what is left goes to the after pass.
+  // the after pass's Apply needs or as the reason it will not run; the morning applies nothing over it
+  // (#1082 Q4), and names the after pass's launch, which does what is left.
   const m = s.verdict && s.verdict.merged ? s.verdict : null
   const refusedMerge = !!(s.verdict && s.verdict.kind === 'merged')
   if (m) {
-    const ap = s.apply
-    L.push(`Overnight #${s.issue}; pull request #${m.pr} from ${p.intBranch} is merged into main, merge commit ${m.commit}, at head ${m.head}. Apply: ${ap.ran ? 'applied' : 'not run'}.`)
+    L.push(`Overnight #${s.issue}; pull request #${m.pr} from ${p.intBranch} is merged into main, merge commit ${m.commit}, at head ${m.head}. ${PASSES_SAID}.`)
     list('Refusals', s.refusals)
     list('Landing', [
       `Pull request #${m.pr} is merged: merge commit ${m.commit}${m.mergedAt ? ` at ${m.mergedAt}` : ''}, head ${m.head}; the rows it carries are landed (${m.url})`,
-      m.evidence ? `Apply did not run: ${m.evidence}` : `Apply permitted: the review record of ${m.head} says merge (${m.record.url}), and CI is green on ${m.head} (${m.ciUrl || 'no run URL'})`,
-      `${ap.ran ? 'Apply ran in this pass: each effect listed under Applied is completed, and the after pass checks it is still in place rather than making it again' : `Apply made nothing in this pass${s.skipped ? `: ${s.skipped}` : ''}`}. The cleanup (closing the landed rows' issues still open, unassigning the partial rows' issues, removing the worktrees whose tips are on origin/main), the settlement of each question and the close of Overnight #${s.issue} are the after pass's: launch it with after: true, as docs/agents/landing-work.md -> "The morning's launches" gives the line`,
+      m.evidence ? `The after pass's Apply will not run until this clears: ${m.evidence}` : `The after pass may apply: the review record of ${m.head} says merge (${m.record.url}), and CI is green on ${m.head} (${m.ciUrl || 'no run URL'})`,
+      `Apply, the cleanup (closing the landed rows' issues still open, unassigning the partial rows' issues, removing the worktrees whose tips are on origin/main), the settlement of each question and the close of Overnight #${s.issue} are the after pass's. Launch it now: ${afterLaunch}`,
     ])
     list('Pull request description', [`#${m.pr} is merged, so its description is not compared or refreshed`])
     const lanes = (v && v.lanes) || [] // empty-ok: Verify's lanes are only reported here
@@ -1787,7 +1874,7 @@ const handoverText = (s) => {
     const same = v && v.forkPoint && v.forkPoint === v.base
     const fork = !v ? ''
       : `, fork point ${v.forkPoint ? `${v.forkPoint} (its merge base with origin/main${same ? ', the night\'s base' : ''})` : 'not read'}${v.base && !same ? `; the night's base ${v.base}` : ''}`
-    L.push(`Overnight #${s.issue}; integration branch ${p.intBranch}${v && v.head ? ` at ${v.head}` : ''}${fork}. Apply: ${s.apply.ran ? (s.apply.dry ? 'dry, no Confirm comment' : 'applied') : 'not run'}.`)
+    L.push(`Overnight #${s.issue}; integration branch ${p.intBranch}${v && v.head ? ` at ${v.head}` : ''}${fork}. ${PASSES_SAID}.`)
     list('Refusals', s.refusals)
     const prN = v && v.pr && v.pr.number
     const land = []
@@ -1816,18 +1903,12 @@ const handoverText = (s) => {
     list(STEPS_TITLE, (v && v.steps) || []) // empty-ok: a null Verify is named in Refusals by judgeVerify; these lists are only reported
     list('Failed lanes\' branches, kept', lanes.filter((l) => l.outcome === 'failed').map((l) => `#${l.issue} (${l.task})`))
   }
-  const mb = s.apply.morning
-  list('Morning branch', mb.commits ? [`${p.morningBranch}: ${mb.commits} commit(s), ${mb.pushed ? 'pushed' : `not pushed (${mb.reason})`}. Its pull request is yours to open: gh pr create --base main --head ${p.morningBranch}`] : [], 'no commits')
-  list('Applied', s.apply.done, 'nothing')
-  // #481: each open Apply ticket, from any night, a step of its own for the session that holds the context.
-  const at = s.applyTickets || { unread: 'not passed to the hand-over', open: [] }
-  list('Open Apply tickets, oldest first: apply each, then close it', [
-    ...(at.unread ? [`earlier nights' Apply tickets not read: ${at.unread}; only this morning's are listed`] : []),
-    ...at.open.map((t) => `#${t.number}: ${t.title}: apply it to #${t.target}, as the answer confirmed at ${t.confirm || 'no Confirm URL on its Raised-by line'} says (${t.url})`),
+  // The passes this one leaves the rest to (#1082 Q4, Q11): their launch lines, whatever Verify said.
+  // The follow-ups pass runs on demand, and the review-queue relaunch above stays (Q12).
+  list('The other passes', [
+    ...(m ? [] : [`The after pass, once the landing has merged the pull request: it cleans up, applies the confirmed answers and closes Overnight #${s.issue} once every question is settled: ${afterLaunch}`]),
+    `The follow-ups pass, when the review records' follow-ups should be filed: it files them and lists the open Apply tickets on Overnight #${s.issue} as ## Follow-ups ${s.date}: ${passLaunch({ date: s.date, followups: true })}`,
   ])
-  list('Would do, once confirmed', s.apply.wouldDo, 'nothing')
-  list('Open questions', s.apply.open.length ? [s.apply.open.map((q) => 'Q' + q).join(', ')] : [])
-  list('Answered no, untouched', s.apply.no.length ? [s.apply.no.map((q) => 'Q' + q).join(', ')] : [])
   const c = s.replay.counts || {}
   // A stop is a failed line (#319), or a pending file left unrenamed (#895): only a stop (replayStop)
   // says "stopped"; a reason the agent gave with neither is kept as its note, never read as a stop.
@@ -1836,16 +1917,53 @@ const handoverText = (s) => {
   list('Replay', [VERBS.map((a) => `${a} ${(c[a] || {}).applied || 0} applied, ${(c[a] || {}).skipped || 0} skipped, ${(c[a] || {}).failed || 0} failed`).join('; ') + (s.replay.renamed ? `; renamed to ${s.replay.renamed}` : '') + (stopped ? `; stopped at ${stopped}: ${s.replay.reason || 'no reason given'}` : '') + (!stopped && s.replay.reason ? `; the agent noted: ${s.replay.reason}` : '') + (none ? '; nothing was replayed' : ''), ...createLines(s.replay)])
   if (!m) list('main', [v && v.mainMoved ? 'origin/main has moved past the base; nothing was merged in or rebased' : 'origin/main has not moved past the base'])
   if (v && v.findings && v.findings.length) list('Findings', v.findings)
-  const fu = s.followUps || { filed: [], already: [], refused: [], forHuman: [] }
+  return L.join('\n').replace(/`/g, "'")
+}
+// The follow-ups comment (#1082 Q2, Q16): what the follow-ups pass read, filed and found open, posted as
+// "## Follow-ups <date>" on the night's Overnight issue. Like the hand-over, it carries no backtick span.
+const followupsText = (s) => {
+  const L = []
+  const list = (title, items, none = 'none') => {
+    L.push('', `### ${title}`, '')
+    if (items.length) items.forEach((i) => L.push(`- ${i}`)); else L.push(none)
+  }
+  const fu = s.followUps
+  L.push(`## Follow-ups ${s.date}`, '')
+  L.push(`Overnight #${s.issue}; the follow-ups pass read the review records of the pull requests into main its window reaches and filed each follow-up no issue holds. Coverage ${fu.window.complete ? 'complete, so the checkpoint advanced' : 'incomplete, so the checkpoint stays'}.`)
+  list('Refusals', s.refusals)
   // By number and title only (#972): GitHub links the number, and the ticket's body holds the rest,
   // a ready-for-human one's why on its "Filed ready-for-human" line.
   list('Follow-ups filed', fu.filed.map((f) => `#${f.number} from #${f.pr}: ${f.title}`), 'none')
   if ((fu.forHuman || []).length) list('Follow-ups filed ready-for-human', fu.forHuman.map((f) => `#${f.number} from #${f.pr}: ${f.title}`))
   if ((fu.refused || []).length) list('Follow-ups not filed: tools/ticket_shape.py failed them', fu.refused.map((f) => `from #${f.pr}: ${f.title}: ${f.why}`))
   if (fu.already.length) list('Follow-ups already filed', fu.already.map((f) => `#${f.number} from #${f.pr}: ${f.title}`))
-  // Last, so its line is the comment's last window line, the one the next morning reads (#514).
-  if (fu.window) L.push('', '### Follow-ups window', '', fu.window.line)
+  // #1111: each row the filer found already fixed, with the text that fixes it, so a reader can
+  // check the judgement rather than read silence as "none carried".
+  if ((fu.fixed || []).length) list('Follow-ups not filed: already fixed', fu.fixed.map((f) => `from #${f.pr}: ${f.title}: ${f.why}`))
+  // #481: each open Apply ticket, from any night, a step of its own for the session that holds the context.
+  const at = s.applyTickets
+  list('Open Apply tickets, oldest first: apply each, then close it', [
+    ...(at.unread ? [`the open Apply tickets were not read: ${at.unread}; none is listed`] : []),
+    ...at.open.map((t) => `#${t.number}: ${t.title}: apply it to #${t.target}, as the answer confirmed at ${t.confirm || 'no Confirm URL on its Raised-by line'} says (${t.url})`),
+  ])
+  // Last, so its line is the comment's last window line, the one the next pass reads (#514).
+  L.push('', '### Follow-ups window', '', fu.window.line)
   return L.join('\n').replace(/`/g, "'")
+}
+// The discovery clock, masked (#1082 Q10): a pass that kept the checkpoint compares its comment with the
+// latest earlier one this way, so a re-run that only read the clock again posts nothing.
+const maskClock = (t) => String(t || '').replace(/\bdiscovery started [^;\n]*/g, 'discovery started <masked>')
+// What the follow-ups pass posts, by #969's rule with Q10's: a pass that advanced the checkpoint
+// always posts, as a delta when an earlier one is there; one that kept it posts nothing when its text
+// and the latest earlier one are the same with the clock masked.
+const followupsPost = (text, earlier, advanced) => {
+  if (earlier && !advanced) {
+    const mask = (c) => ({ ...c, body: maskClock(c.body) })
+    const masked = handoverPost(maskClock(text), { whole: mask(earlier.whole), latest: mask(earlier.latest) })
+    if (masked.mode === 'identical') return { ...masked, note: `this follow-ups comment differs from the latest earlier one, ${earlier.latest.url}, only in the discovery clock, and the checkpoint was kept, so nothing was posted` }
+  }
+  const post = handoverPost(text, earlier)
+  return post.mode === 'identical' ? { mode: 'whole', body: text, extends: '', url: '', note: 'the checkpoint advanced, so the follow-ups comment was posted whole although it reads as the latest earlier one' } : post
 }
 
 // ---------------------------------------------------------------- the after pass, judged here (#635)
@@ -2000,14 +2118,14 @@ const handoverPost = (text, earlier) => {
   if (latestIsWhole ? !changed : sameText(earlier.latest.body, body)) return identical
   return { mode: 'delta', body, extends: earlier.whole.url, url: '', note: '' }
 }
-// The night's earlier hand-overs, found in Apply's index of the comments (index: null when it was not
+// The night's earlier hand-overs, found in the pass's index of the comments (index: null when it was not
 // read): Adam's comments whose first line is heading exactly, or heading with " (delta)" (CODING_STANDARDS.md
 // -> "An authorisation is read from its author"). The latest whole one, and the latest delta when one
 // follows it, are read by one reader and checked against the index as Apply's readers' bodies are: a
 // body's trailing newlines given back, and one still changed read again alone, READ_RETRIES times.
 // Returns {earlier, failed, note}: failed names a read that did not come back as the index shows it.
-const earlierHandovers = async (issue, index, heading) => {
-  if (!index) return { earlier: null, failed: 'Apply\'s index of the comments was not read', note: '' }
+const earlierHandovers = async (issue, index, heading, phase = 'Hand-over') => {
+  if (!index) return { earlier: null, failed: 'the index of the comments was not read', note: '' }
   const firstLine = (c) => String((c && c.head) || '').replace(/\r\n/g, '\n').split('\n')[0]
   const at = []
   index.forEach((c, i) => { if (c && c.author === ADAM && (firstLine(c) === heading || firstLine(c) === heading + DELTA)) at.push(i) })
@@ -2018,7 +2136,7 @@ const earlierHandovers = async (issue, index, heading) => {
   const last = at[at.length - 1]
   const read = last === w ? [w] : [w, last]
   const urls = read.map((i) => index[i].url)
-  const r = await run(batchPrompt(issue, read, 'for the hand-over (#969). You read; the script compares this pass\'s hand-over with them.'), { label: 'handover-read', phase: 'Hand-over', schema: COMMENTS_BATCH })
+  const r = await run(batchPrompt(issue, read, 'for the hand-over (#969). You read; the script compares this pass\'s hand-over with them.'), { label: 'handover-read', phase, schema: COMMENTS_BATCH })
   const got = r && !r.error ? r.comments || [] : []
   const why = !r ? 'the reader returned nothing'
     : r.error ? r.error
@@ -2031,7 +2149,7 @@ const earlierHandovers = async (issue, index, heading) => {
     let c = restoreTail(got[j], index[read[j]])
     let fault = bodyFault(c, index[read[j]], got[j])
     for (let tries = 1; fault && tries <= READ_RETRIES; tries++) {
-      const again = await run(batchPrompt(issue, [read[j]], 'for the hand-over (#969). You read; the script compares this pass\'s hand-over with them.') + RETRY_NOTE, { label: `handover-read-retry${tries}`, phase: 'Hand-over', schema: COMMENTS_BATCH })
+      const again = await run(batchPrompt(issue, [read[j]], 'for the hand-over (#969). You read; the script compares this pass\'s hand-over with them.') + RETRY_NOTE, { label: `handover-read-retry${tries}`, phase, schema: COMMENTS_BATCH })
       const rc = again && !again.error && (again.comments || []).length === 1 && again.comments[0].url === urls[j] ? again.comments[0] : null
       if (rc) { c = restoreTail(rc, index[read[j]]); fault = bodyFault(c, index[read[j]], rc) }
     }
@@ -2044,8 +2162,8 @@ const earlierHandovers = async (issue, index, heading) => {
 // The earlier hand-overs read, for either pass: before the pass judges its close and writes its text, so
 // a read that failed is a refusal like any other, which keeps an After pass's issue open and is named in
 // the hand-over (docs/agents/landing-work.md, the after pass).
-const readHandovers = async (issue, index, heading, refusals) => {
-  const prior = await earlierHandovers(issue, index, heading)
+const readHandovers = async (issue, index, heading, refusals, phase = 'Hand-over') => {
+  const prior = await earlierHandovers(issue, index, heading, phase)
   if (prior.failed) refusals.push(`the earlier hand-over was not read as the index shows it (${prior.failed}), so this one was posted whole`)
   return prior
 }
@@ -2057,7 +2175,7 @@ const decideHandover = (text, prior) => {
   return { ...post, note }
 }
 
-// ---------------------------------------------------------------- Apply, for both passes
+// ---------------------------------------------------------------- Apply, for the after pass
 // The phase files a pass may reuse, by name and inputs; done says whether a result is a finished phase.
 const reuser = (phaseFiles) => {
   const files = new Map((phaseFiles || []).map((f) => [f.name, f]))
@@ -2069,35 +2187,42 @@ const reuser = (phaseFiles) => {
   }
   return { reuse, reused }
 }
-// Apply (#78 -> "Apply"), run by the morning pass behind Verify and by the after pass behind the
-// landing's evidence (#635). gate is "" when the head is cleared, else why it is not. The after pass
-// reuses no applier's phase file and classifies nothing without a Confirm comment, since a would-do
-// list is the morning's. byQ maps each classified question to its kind, ticket and applier's result,
-// for the after pass's settled rule.
-const applyAnswers = async ({ date, issue, gate, refusals, reuse, after = false }) => {
-  const P = paths(date)
-  // The comments, read here by the phase that uses them (#319), whatever Verify said: the hand-over's open
-  // lists come from them too. A read that failed is named and nothing is sorted or applied, never read
-  // as an issue with no questions and no Confirm comment (CODING_STANDARDS.md -> "A check fails closed").
-  const cr = await run(commentsPrompt(issue), { label: 'comments', phase: 'Apply', schema: COMMENTS_INDEX })
-  let commentsRefusal = !cr ? `the comments reader returned nothing: no question or Confirm comment of #${issue} was read, so nothing was sorted or applied; relaunch to apply`
-    : cr.error ? `the comments reader could not read the comments of #${issue}: ${cr.error}; nothing was sorted or applied`
-      : cr.issue.number !== issue ? `the comments reader read the comments of #${cr.issue.number}, not #${issue}; nothing was sorted or applied`
+// The comments index (#319), read by the pass that needs it: the after pass's Apply, and the morning's and
+// the follow-ups pass's hand-over reads (#969, #1082 Q5). A read that failed is named, with what it
+// leaves undone (consequence), and the index is null, never read as an issue with no comments
+// (CODING_STANDARDS.md -> "A check fails closed").
+const readIndex = async (issue, phase, consequence) => {
+  const cr = await run(commentsPrompt(issue), { label: 'comments', phase, schema: COMMENTS_INDEX })
+  let refusal = !cr ? `the comments reader returned nothing: no comment of #${issue} was read, so ${consequence}`
+    : cr.error ? `the comments reader could not read the comments of #${issue}: ${cr.error}; ${consequence}`
+      : cr.issue.number !== issue ? `the comments reader read the comments of #${cr.issue.number}, not #${issue}; ${consequence}`
         : ''
-  if (!commentsRefusal) {
+  if (!refusal) {
     const faults = tailFaults(cr.issue.comments || [])
-    if (faults.length) commentsRefusal = `the comments index of #${issue} gives no count of a body's trailing newlines to restore: ${faults.join('; ')}; nothing was sorted or applied; relaunch to apply`
+    if (faults.length) refusal = `the comments index of #${issue} gives no count of a body's trailing newlines to restore: ${faults.join('; ')}; ${consequence}`
   }
+  return { index: refusal ? null : cr.issue.comments || [], refusal }
+}
+// Apply (#78 -> "Apply"), run by the after pass behind the landing's evidence (#635), and by no other
+// pass since #1082 Q14. gate is "" when the head is cleared, else why it is not. It reuses the
+// classification by its inputs and no applier's phase file, and classifies nothing without a Confirm
+// comment. byQ maps each classified question to its kind, ticket and applier's result, for the settled
+// rule.
+const applyAnswers = async ({ date, issue, gate, refusals, reuse }) => {
+  const P = paths(date)
+  // The comments, read here by the phase that uses them (#319). A read that failed is named and nothing
+  // is sorted or applied.
+  const ix = await readIndex(issue, 'Apply', 'nothing was sorted or applied; relaunch to apply')
+  let commentsRefusal = ix.refusal
   // The index, kept for the hand-over, which finds the night's earlier hand-overs in it (#969).
-  const index = commentsRefusal ? null : cr.issue.comments || []
+  const index = ix.index
   // Every batch is read whole or the read fails: a body missing, or one from another comment than the
   // index named there, is named, and nothing is sorted from a partial read.
   let comments = []
   if (!commentsRefusal) {
-    const batches = batchesOf(cr.issue.comments || [])
+    const batches = batchesOf(index)
     const got = await parallel(batches.map((b, k) => () => run(batchPrompt(issue, b.at), { label: `comments-batch:${k + 1}`, phase: 'Apply', schema: COMMENTS_BATCH })))
     const bad = []
-    const index = cr.issue.comments || []
     for (let k = 0; k < batches.length; k++) {
       const b = batches[k]
       const g = got[k]
@@ -2132,15 +2257,14 @@ const applyAnswers = async ({ date, issue, gate, refusals, reuse, after = false 
   const conf = readConfirmations(comments)
   const dry = conf.confirms.length === 0
   // A question a Confirm comment names or overrides that no questions comment yielded is a read that
-  // missed something: nothing is applied over it, and the hand-over says which.
+  // missed something: nothing is applied over it, and the After comment says which.
   const unread = unreadOf(read.questions, conf)
   if (unread.length) refusals.push(`the Confirm comments name ${unread.map((q) => 'Q' + q).join(', ')}, which no "## Questions:" comment yielded; nothing is applied until every confirmed question is read`)
-  const apply = { ran: false, dry, done: [], wouldDo: [], open: [], no: [], answers: {}, filed: [], morning: { commits: 0, pushed: false, reason: '' } }
+  const apply = { ran: false, dry, done: [], open: [], no: [], answers: {}, morning: { commits: 0, pushed: false, reason: '' } }
   const byQ = new Map()
   const refusedQs = new Set()
   let skipped = ''
-  // Without a Confirm comment the pre-accepted answers are classified for the would-do list and acted
-  // on by nobody (#78 grill Q1); with one, only what it confirms is classified and applied.
+  // Only what a Confirm comment confirms is classified and applied (#78 grill Q1); without one nothing is.
   const sorted = sortAnswers(read.questions, conf, dry)
   Object.assign(apply, { answers: sorted.answers, open: sorted.open, no: sorted.no })
   const toClassify = sorted.toClassify
@@ -2148,20 +2272,21 @@ const applyAnswers = async ({ date, issue, gate, refusals, reuse, after = false 
     skipped = 'the comments were not read'
     log('Apply skipped: the comments were not read')
   } else if (gate) {
-    // Any Verify stop goes to the hand-over: nothing is applied over a head no record clears (#78 ->
-    // "Verify" step 8; the morning resumes once a record exists).
+    // Nothing is applied over a landed head no record or CI clears (#635 Q23).
     skipped = gate
     log(`Apply skipped: ${gate}`)
   } else if (unread.length) {
     skipped = 'a confirmed question was not read'
     log('Apply skipped: a confirmed question was not read')
-  } else if (after && dry) {
+  } else if (dry) {
     skipped = 'no Confirm comment confirms any question'
     log('Apply skipped: no Confirm comment')
   } else if (toClassify.length) {
     apply.ran = true
-    const classifyKey = key({ questions: toClassify, dry })
-    const cls = reuse('classify', classifyKey) || await run(classifyPrompt(date, issue, toClassify, dry, classifyKey), { label: 'classify', phase: 'Apply', schema: CLASSIFY })
+    // The key keeps the shape it had when a dry classification shared the phase file (#1082 Q14), so a
+    // classification an earlier pass wrote is still found by its inputs.
+    const classifyKey = key({ questions: toClassify, dry: false })
+    const cls = reuse('classify', classifyKey) || await run(classifyPrompt(date, issue, toClassify, classifyKey), { label: 'classify', phase: 'Apply', schema: CLASSIFY })
     // A classifier that returned nothing is named, never read as one that classified nothing
     // (CODING_STANDARDS.md -> "A check fails closed"; #277), and no question is applied.
     if (!cls) { refusals.push(`the Classify agent returned nothing: ${toClassify.map((q) => 'Q' + q.q).join(', ')} ${toClassify.length === 1 ? 'was' : 'were'} not classified, so none is applied`); skipped = 'the Classify agent returned nothing' }
@@ -2182,54 +2307,38 @@ const applyAnswers = async ({ date, issue, gate, refusals, reuse, after = false 
       t.questions.push({ ...q, kind: c.kind, summary: c.summary })
       byQ.set(q.q, { kind: c.kind, issue: q.issue, rewrite: t.rewrite, unit: '', result: null })
     }
-    if (dry) {
-      for (const t of byTicket) {
-        for (const q of t.questions) if (q.kind !== 'no-repo-change') apply.wouldDo.push(`Q${q.q} (#${t.issue}): ${q.kind}: ${q.summary}`)
-        for (const f of t.followUps) apply.wouldDo.push(`Q${f.q} (#${t.issue}): file the follow-up "${f.title}"`)
-        if (t.rewrite) apply.wouldDo.push(`#${t.issue}: rewrite its body, the changed paragraphs posted as a diff in a dated comment`)
-      }
-    } else {
-      const units = unitsFor(byTicket)
-      const runUnit = async (u) => {
-        if (after) {
-          const k = key({ unit: u, date, issue, after: true })
-          return run(applyPrompt(date, issue, u, k, true), { label: `apply:${u.kind}:${u.key}`, phase: 'Apply', schema: APPLIED_AFTER })
-        }
-        const k = key({ unit: u, date, issue })
-        return reuse(`apply/${u.key}`, k, (r) => !r.refused && !r.unreachable) || await run(applyPrompt(date, issue, u, k), { label: `apply:${u.kind}:${u.key}`, phase: 'Apply', schema: APPLIED })
-      }
-      // Chained appliers, those that commit or write a ticket body another may write, run one at a
-      // time; tracker-only appliers run beside them, bounded by the slots (#78 -> "Apply"; #320).
-      const runChain = async () => {
-        const out = []
-        for (const u of units.chain) out.push(await runUnit(u))
-        return out
-      }
-      const got = await parallel([runChain, ...units.tracker.map((u) => () => runUnit(u))])
-      const all = [...units.chain, ...units.tracker]
-      const results = [...(got[0] || units.chain.map(() => null)), ...got.slice(1)]
-      all.forEach((u, i) => { for (const t of u.tickets) for (const q of t.questions) if (byQ.has(q.q)) Object.assign(byQ.get(q.q), { unit: u.key, result: results[i] || null }) })
-      // The body each follow-up was filed with, by title, so the hand-over reads a ticket filed this
-      // morning by the same parser as one the follow-ups reader lists (#481).
-      const bodies = new Map(all.flatMap((u) => u.followUps).map((f) => [f.title, f.body]))
-      for (const r of results.filter(Boolean)) {
-        for (const c of r.commits) apply.done.push(`commit ${c.sha} on ${P.morningBranch}: ${c.subject} (${c.questions.map((q) => 'Q' + q).join(', ')})`)
-        for (const i of r.issues) apply.done.push(`filed #${i.number} ${i.title} (${i.questions.map((q) => 'Q' + q).join(', ')}): ${i.url}`)
-        for (const i of r.issues) apply.filed.push({ number: i.number, title: i.title, url: i.url, body: bodies.get(i.title) || '' })
-        for (const c of r.candidates) apply.done.push(`ADR candidate (${c.questions.map((q) => 'Q' + q).join(', ')}): ${c.url}`)
-        for (const w of r.rewrites) apply.done.push(`rewrote #${w.issue}; the diff is at ${w.comment}`)
-        for (const e of r.edits) apply.done.push(`edited #${e.issue}: removed ${e.removed.length} box(es); the diff is at ${e.comment} (${e.questions.map((q) => 'Q' + q).join(', ')})`)
-        for (const e of r.edges) apply.done.push(`blocked #${e.issue} by ${e.blockedBy.map((n) => '#' + n).join(', ')} (${e.questions.map((q) => 'Q' + q).join(', ')})`)
-        for (const s of r.skipped) apply.done.push(`skipped Q${s.q}: ${s.why}`)
-        if (r.refused) refusals.push(`applier ${r.unit} refused: ${r.refused}`)
-        if (r.unreachable) refusals.push(`applier ${r.unit}: GitHub could not be reached; relaunch to finish it`)
-        if (r.commits.length) { apply.morning.commits += r.commits.length; apply.morning.pushed = r.pushed.ok; apply.morning.reason = r.pushed.reason }
-      }
-      // An applier that returned nothing is named in the after pass, whose settled rule reads it.
-      if (after) all.forEach((u, i) => { if (!results[i]) refusals.push(`applier ${u.key} returned nothing; relaunch the after pass to finish it`) })
-      // An answer needing nothing is named with its reason, never dropped from the hand-over (#320).
-      for (const t of byTicket) for (const q of t.questions) if (q.kind === 'no-repo-change') apply.done.push(`skipped Q${q.q} (#${t.issue}): needs nothing: ${q.summary}`)
+    const units = unitsFor(byTicket)
+    const runUnit = (u) => {
+      const k = key({ unit: u, date, issue, after: true })
+      return run(applyPrompt(date, issue, u, k), { label: `apply:${u.kind}:${u.key}`, phase: 'Apply', schema: APPLIED_AFTER })
     }
+    // Chained appliers, those that commit or write a ticket body another may write, run one at a
+    // time; tracker-only appliers run beside them, bounded by the slots (#78 -> "Apply"; #320).
+    const runChain = async () => {
+      const out = []
+      for (const u of units.chain) out.push(await runUnit(u))
+      return out
+    }
+    const got = await parallel([runChain, ...units.tracker.map((u) => () => runUnit(u))])
+    const all = [...units.chain, ...units.tracker]
+    const results = [...(got[0] || units.chain.map(() => null)), ...got.slice(1)]
+    all.forEach((u, i) => { for (const t of u.tickets) for (const q of t.questions) if (byQ.has(q.q)) Object.assign(byQ.get(q.q), { unit: u.key, result: results[i] || null }) })
+    for (const r of results.filter(Boolean)) {
+      for (const c of r.commits) apply.done.push(`commit ${c.sha} on ${P.morningBranch}: ${c.subject} (${c.questions.map((q) => 'Q' + q).join(', ')})`)
+      for (const i of r.issues) apply.done.push(`filed #${i.number} ${i.title} (${i.questions.map((q) => 'Q' + q).join(', ')}): ${i.url}`)
+      for (const c of r.candidates) apply.done.push(`ADR candidate (${c.questions.map((q) => 'Q' + q).join(', ')}): ${c.url}`)
+      for (const w of r.rewrites) apply.done.push(`rewrote #${w.issue}; the diff is at ${w.comment}`)
+      for (const e of r.edits) apply.done.push(`edited #${e.issue}: removed ${e.removed.length} box(es); the diff is at ${e.comment} (${e.questions.map((q) => 'Q' + q).join(', ')})`)
+      for (const e of r.edges) apply.done.push(`blocked #${e.issue} by ${e.blockedBy.map((n) => '#' + n).join(', ')} (${e.questions.map((q) => 'Q' + q).join(', ')})`)
+      for (const s of r.skipped) apply.done.push(`skipped Q${s.q}: ${s.why}`)
+      if (r.refused) refusals.push(`applier ${r.unit} refused: ${r.refused}`)
+      if (r.unreachable) refusals.push(`applier ${r.unit}: GitHub could not be reached; relaunch to finish it`)
+      if (r.commits.length) { apply.morning.commits += r.commits.length; apply.morning.pushed = r.pushed.ok; apply.morning.reason = r.pushed.reason }
+    }
+    // An applier that returned nothing is named, since the settled rule reads it.
+    all.forEach((u, i) => { if (!results[i]) refusals.push(`applier ${u.key} returned nothing; relaunch the after pass to finish it`) })
+    // An answer needing nothing is named with its reason, never dropped from the After comment (#320).
+    for (const t of byTicket) for (const q of t.questions) if (q.kind === 'no-repo-change') apply.done.push(`skipped Q${q.q} (#${t.issue}): needs nothing: ${q.summary}`)
   }
   return { apply, unread, byQ, refusedQs, skipped, index }
 }
@@ -2305,7 +2414,7 @@ if (AFTER) {
   // Apply, as the morning pass runs it, over every confirmed question (Q22, Q24).
   phase('Apply')
   const { reuse, reused } = reuser(a.phaseFiles)
-  const ap = await applyAnswers({ date: look.date, issue: look.issue, gate: evidence ? 'the landed head\'s review record or CI does not clear it (see Refusals)' : '', refusals, reuse, after: true })
+  const ap = await applyAnswers({ date: look.date, issue: look.issue, gate: evidence ? 'the landed head\'s review record or CI does not clear it (see Refusals)' : '', refusals, reuse })
   const { settled, unsettled } = settleOf(look.date, ap)
   // Then the hand-over and the close (Q25 to Q27).
   phase('Hand-over')
@@ -2335,7 +2444,119 @@ if (AFTER) {
   }
 }
 
+// ---------------------------------------------------------------- run: the follow-ups pass (#1082)
+// The Follow-ups phase as it ran in the morning before #1082, with the same window, checkpoint, batches
+// and filer, then the follow-ups comment. Its first agent is the lookup and the window reader (Q9): a
+// date with no Overnight issue is refused there, and no other agent runs.
+if (FOLLOWUPS_PASS) {
+  phase('Follow-ups')
+  const wr = await run(windowPrompt(), { label: 'followups-window', phase: 'Follow-ups', schema: WINDOW_READ })
+  const look = judgeLookup(wr && wr.listing, false, true)
+  if (look.refused) return { mode: 'followups', halted: look.refused, agents: agentsRun }
+  const DATE = look.date
+  const ISSUE = look.issue
+  const P = paths(DATE)
+  const refusals = []
+  log(`follow-ups ${DATE} (#${ISSUE}): run log ${P.mdir}`)
+  const followUps = { filed: [], already: [], fixed: [], refused: [], forHuman: [] }
+  // The window first (#514): the discovery start, then the checkpoint. A window reader that failed leaves
+  // no checkpoint, so the read backfills: more read, nothing missed, and the checkpoint is kept.
+  const win = judgeWindow(wr)
+  const unprocessed = [...win.unread]
+  let windowCounts = null
+  const fr = await run(followupsPrompt(DATE, win.since), { label: 'followups', phase: 'Follow-ups', schema: FOLLOWUPS })
+  // The open Apply tickets (#481): a reader that failed leaves them unread, which the comment says, never
+  // "none" (CODING_STANDARDS.md -> "A check fails closed"). This pass files no Apply ticket (Q15).
+  const applyTickets = {
+    unread: !fr ? 'the follow-ups agent returned nothing' : fr.error ? `the follow-ups agent could not read them: ${fr.error}` : '',
+    open: openApplyTickets(fr && !fr.error ? fr.applyTickets : [], []),
+  }
+  const named = (fs) => fs.map((f) => `#${f.pr} ${JSON.stringify(f.title)}`).join(', ')
+  if (!fr) {
+    refusals.push('the follow-ups agent returned nothing: no review record\'s follow-ups were read, so none was filed')
+    unprocessed.push('the follow-ups reader returned nothing')
+  } else if (fr.error) {
+    refusals.push(`the follow-ups agent could not read the pull requests: ${fr.error}; none was filed`)
+    unprocessed.push(`the follow-ups reader: ${fr.error}`)
+  } else {
+    const found = judgeDiscovery(fr, win.since)
+    windowCounts = found.counts
+    unprocessed.push(...found.unread)
+    const batches = recordBatches(found.fetch)
+    const got = await parallel(batches.map((b, k) => () => run(recordsPrompt(DATE, k + 1, b.items), { label: `followups-batch:${k + 1}`, phase: 'Follow-ups', schema: RECORDS_READ })))
+    const records = judgeRecords(batches, got)
+    unprocessed.push(...records.unread)
+    const { toFile, already } = followUpsToFile({ prs: records.prs, filed: records.filed, ownership: fr.ownership }, P.mdir)
+    followUps.already.push(...already)
+    // No rules, no owner: a follow-up is filed only with the owner its place derives (#479), so an
+    // OWNERSHIP.md the reader could not return, or one with no block, files none (CODING_STANDARDS.md
+    // -> "A check fails closed"), as .github/path-ownership.py refuses one.
+    if (toFile.length && !ownershipRules(fr.ownership).length) {
+      refusals.push(`the follow-ups agent returned no OWNERSHIP.md block, so no follow-up's owner could be derived and none was filed: ${named(toFile)}; relaunch to file them`)
+      unprocessed.push(`not filed, with no OWNERSHIP.md block to derive an owner from: ${named(toFile)}`)
+    } else if (toFile.length) {
+      const fd = await run(fileFollowUpsPrompt(DATE, toFile), { label: 'followups-file', phase: 'Follow-ups', schema: FILED })
+      if (!fd) {
+        refusals.push(`the follow-ups filer returned nothing: ${named(toFile)} may be unfiled; relaunch to file them`)
+        unprocessed.push(`the follow-ups filer returned nothing: ${named(toFile)} may be unfiled`)
+      } else {
+        followUps.filed.push(...fd.filed)
+        followUps.already.push(...fd.skipped)
+        // Already fixed by the pull request's description or an origin's later Answer (#1111): filed by
+        // nobody, and accounted for, so it neither reads as lost nor holds the checkpoint.
+        followUps.fixed.push(...fd.fixed)
+        followUps.refused.push(...fd.refused)
+        // Filed ready-for-human, each with why (#479): the comment lists them under a heading of their
+        // own, and the return keeps the why the ticket's body carries.
+        for (const f of fd.filed) {
+          const sent = toFile.find((t) => t.pr === f.pr && sameFinding(t.title, f.title))
+          if (sent && sent.label === 'ready-for-human') followUps.forHuman.push({ ...f, why: sent.why })
+        }
+        // A body tools/ticket_shape.py failed was filed by nobody (#479): named, so it is fixed and filed by hand.
+        for (const r of fd.refused) refusals.push(`the follow-up #${r.pr} ${JSON.stringify(r.title)} failed tools/ticket_shape.py and was not filed: ${r.why}`)
+        // A follow-up the filer accounts for in no list is named, never read as filed: the comment
+        // would otherwise say "none" over a finding nobody filed (CODING_STANDARDS.md -> "A check fails closed").
+        const told = [...fd.filed, ...fd.skipped, ...fd.fixed, ...fd.refused]
+        const lost = toFile.filter((f) => !told.some((t) => t && t.pr === f.pr && sameFinding(t.title, f.title)))
+        if (lost.length && !fd.unreachable && !fd.reason) refusals.push(`the follow-ups filer returned ${named(lost)} neither filed nor skipped; relaunch to file them`)
+        if (fd.unreachable || fd.reason) refusals.push(`the follow-ups filer stopped: ${fd.reason || 'GitHub could not be reached'}; relaunch to file the rest`)
+        // Filed, found already filed or found already fixed (#1111), or the checkpoint stays (Q12): a
+        // refused or unaccounted row is none of these.
+        if (fd.refused.length) unprocessed.push(`not filed, tools/ticket_shape.py failed them: ${named(fd.refused)}`)
+        if (lost.length) unprocessed.push(`not filed${fd.unreachable || fd.reason ? ` (the filer stopped: ${fd.reason || 'GitHub could not be reached'})` : ', the filer accounted for none of them'}: ${named(lost)}`)
+      }
+    }
+  }
+  // The coverage boundary (Q9, Q12 of #599): advanced to the discovery start only when nothing above went
+  // unread or unprocessed; otherwise kept, so the next pass reads the same span again.
+  const complete = unprocessed.length === 0 && !!win.startedAt
+  followUps.window = { since: win.since, source: win.source, startedAt: win.startedAt, complete, advanced: complete, boundary: complete ? win.startedAt : win.since, counts: windowCounts, unprocessed }
+  followUps.window.line = windowLineOf(followUps.window)
+  if (!complete) refusals.push(`the follow-ups coverage is incomplete, so the checkpoint stays at ${win.since || 'none'} and the next follow-ups pass reads the span again; the Follow-ups window line names what was not read or not processed`)
+  // The follow-ups comment, by #969's rule with Q10's clock mask: the issue's comments indexed, and the
+  // night's earlier follow-ups comments read, before the text is written, so a read that failed is named in it.
+  const HEADING_FU = `## Follow-ups ${DATE}`
+  const ix = await readIndex(ISSUE, 'Follow-ups', 'so the night\'s earlier follow-ups comments were not found and this one was posted whole')
+  if (ix.refusal) refusals.push(ix.refusal)
+  const prior = ix.refusal ? { earlier: null, failed: '', note: '' } : await readHandovers(ISSUE, ix.index, HEADING_FU, refusals, 'Follow-ups')
+  const text = followupsText({ date: DATE, issue: ISSUE, refusals, followUps, applyTickets })
+  log(text)
+  const decided = followupsPost(text, prior.earlier, complete)
+  const note = decided.note || prior.note || (prior.failed ? 'the earlier follow-ups comment was not read, so this one was posted whole' : '')
+  if (note) log(`follow-ups comment: ${note}`)
+  const posted = decided.mode === 'identical' ? null : await run(followupsPostPrompt(DATE, ISSUE, decided.body), { label: 'followups-post', phase: 'Follow-ups', schema: HANDED })
+  if (decided.mode !== 'identical' && !posted) refusals.push('the follow-ups comment\'s poster returned nothing: the comment may not be posted; relaunch the follow-ups pass')
+  if (posted && posted.reason) refusals.push(`the follow-ups comment was not posted: ${posted.reason}`)
+  return {
+    mode: 'followups', date: DATE, issue: ISSUE, runLog: P.mdir, refusals, followUps, applyTickets,
+    comment: { url: decided.mode === 'identical' ? decided.url : posted ? posted.url : '', posted: !!(posted && posted.posted), mode: decided.mode, extends: decided.extends, posts: decided.body, note, text },
+    agents: agentsRun,
+  }
+}
+
 // ---------------------------------------------------------------- run: the morning
+// Replay, Verify and the hand-over (#1082 Q4 to Q6): no Apply and no Follow-ups phase, also when Verify
+// finds the landing already merged; the hand-over names the passes that do them.
 phase('Replay')
 const rep = await run(replayPrompt(), { label: 'replay', phase: 'Replay', schema: REPLAY })
 if (rep) for (const f of ['pending', 'renamed', 'reason']) rep[f] = blankField(rep[f])
@@ -2349,10 +2570,8 @@ const DATE = look.date
 const ISSUE = look.issue
 const P = paths(DATE)
 const SUBJECT = subjectFor(DATE)
-// done (reuse's third argument): whether a phase file's result is a finished phase. An applier GitHub
-// could not reach, or one that refused, is not, so a relaunch dispatches it again rather than
-// replaying the stop.
-const { reuse, reused } = reuser(rep.phaseFiles)
+// The phase files the morning reads back: Verify's, by its inputs (#1082 Q14: no applier's).
+const { reused } = reuser(rep.phaseFiles)
 const refusals = []
 // A stop is a failed line, or a pending file left unrenamed (#895), so the refusal keys on those
 // (replayStop), never on reason alone (#319): on 2026-10-22 a reason of "" with stoppedAt 0 was
@@ -2366,7 +2585,7 @@ phase('Verify')
 const verifyKey = key({ date: DATE, issue: ISSUE, repo: REPO, wt: WTROOT })
 const v = await run(verifyPrompt(DATE, ISSUE, verifyKey), { label: 'verify', phase: 'Verify', schema: VERIFY })
 const verdict = judgeVerify(v, SUBJECT, ISSUE, P.intBranch)
-// A merge is not a refusal (#661 Q27): only the reason Apply did not run over it is.
+// A merge is not a refusal (#661 Q27): only the reason the after pass's Apply would not run over it is.
 if (verdict.merged) { if (verdict.evidence) refusals.push(verdict.evidence) } else if (!verdict.ok) refusals.push(verdict.stop)
 // The description of a pull request an earlier morning opened, refreshed to this head (#300). Read
 // whatever the record says: on 2026-10-22 it was the stale description a review held on.
@@ -2388,92 +2607,12 @@ if (v && v.outcome === 'ok' && v.prReused && !v.prBody) {
   }
 }
 
-phase('Apply')
-// A merged pull request's answers are applied through the after pass's path (#661 Q22): its appliers
-// fetch origin/main fresh, verify each effect before they skip it and reuse no applier's phase file,
-// behind the merged head's record and CI (judgeEvidence).
-const { apply, skipped: applySkipped, index: commentsIndex } = await applyAnswers({
-  date: DATE, issue: ISSUE, refusals, reuse, after: !!verdict.merged,
-  gate: verdict.merged ? (verdict.evidence ? 'the merged head\'s review record or CI does not clear it (see Refusals)' : '') : verdict.ok ? '' : 'Verify did not clear the head',
-})
-
-phase('Follow-ups')
-// Read whatever Verify said: a review's carried finding is filed whether or not tonight's head clears.
-const followUps = { filed: [], already: [], refused: [], forHuman: [] }
-// The window first (#514): the discovery start, then the checkpoint. A window reader that failed leaves
-// no checkpoint, so the read backfills: more read, nothing missed, and the checkpoint is kept.
-const win = judgeWindow(await run(windowPrompt(DATE), { label: 'followups-window', phase: 'Follow-ups', schema: WINDOW_READ }))
-const unprocessed = [...win.unread]
-let windowCounts = null
-const fr = await run(followupsPrompt(DATE, win.since), { label: 'followups', phase: 'Follow-ups', schema: FOLLOWUPS })
-// The open Apply tickets (#481), read whatever Verify or Apply did: a reader that failed leaves the
-// earlier nights' unread, which the hand-over says, never "none" (CODING_STANDARDS.md -> "A check fails closed").
-const applyTickets = {
-  unread: !fr ? 'the follow-ups agent returned nothing' : fr.error ? `the follow-ups agent could not read them: ${fr.error}` : '',
-  open: openApplyTickets(fr && !fr.error ? fr.applyTickets : [], apply.filed),
-}
-const named = (fs) => fs.map((f) => `#${f.pr} ${JSON.stringify(f.title)}`).join(', ')
-if (!fr) {
-  refusals.push('the follow-ups agent returned nothing: no review record\'s follow-ups were read, so none was filed')
-  unprocessed.push('the follow-ups reader returned nothing')
-} else if (fr.error) {
-  refusals.push(`the follow-ups agent could not read the pull requests: ${fr.error}; none was filed`)
-  unprocessed.push(`the follow-ups reader: ${fr.error}`)
-} else {
-  const found = judgeDiscovery(fr, win.since)
-  windowCounts = found.counts
-  unprocessed.push(...found.unread)
-  const batches = recordBatches(found.fetch)
-  const got = await parallel(batches.map((b, k) => () => run(recordsPrompt(DATE, k + 1, b.items), { label: `followups-batch:${k + 1}`, phase: 'Follow-ups', schema: RECORDS_READ })))
-  const records = judgeRecords(batches, got)
-  unprocessed.push(...records.unread)
-  const { toFile, already } = followUpsToFile({ prs: records.prs, filed: records.filed, ownership: fr.ownership }, P.mdir)
-  followUps.already.push(...already)
-  // No rules, no owner: a follow-up is filed only with the owner its place derives (#479), so an
-  // OWNERSHIP.md the reader could not return, or one with no block, files none (CODING_STANDARDS.md
-  // -> "A check fails closed"), as .github/path-ownership.py refuses one.
-  if (toFile.length && !ownershipRules(fr.ownership).length) {
-    refusals.push(`the follow-ups agent returned no OWNERSHIP.md block, so no follow-up's owner could be derived and none was filed: ${named(toFile)}; relaunch to file them`)
-    unprocessed.push(`not filed, with no OWNERSHIP.md block to derive an owner from: ${named(toFile)}`)
-  } else if (toFile.length) {
-    const fd = await run(fileFollowUpsPrompt(DATE, toFile), { label: 'followups-file', phase: 'Follow-ups', schema: FILED })
-    if (!fd) {
-      refusals.push(`the follow-ups filer returned nothing: ${named(toFile)} may be unfiled; relaunch to file them`)
-      unprocessed.push(`the follow-ups filer returned nothing: ${named(toFile)} may be unfiled`)
-    } else {
-      followUps.filed.push(...fd.filed)
-      followUps.already.push(...fd.skipped)
-      followUps.refused.push(...fd.refused)
-      // Filed ready-for-human, each with why (#479): the hand-over lists them under a heading of their
-      // own, and the return keeps the why the ticket's body carries.
-      for (const f of fd.filed) {
-        const sent = toFile.find((t) => t.pr === f.pr && sameFinding(t.title, f.title))
-        if (sent && sent.label === 'ready-for-human') followUps.forHuman.push({ ...f, why: sent.why })
-      }
-      // A body tools/ticket_shape.py failed was filed by nobody (#479): named, so it is fixed and filed by hand.
-      for (const r of fd.refused) refusals.push(`the follow-up #${r.pr} ${JSON.stringify(r.title)} failed tools/ticket_shape.py and was not filed: ${r.why}`)
-      // A follow-up the filer accounts for in no list is named, never read as filed: the hand-over
-      // would otherwise say "none" over a finding nobody filed (CODING_STANDARDS.md -> "A check fails closed").
-      const told = [...fd.filed, ...fd.skipped, ...fd.refused]
-      const lost = toFile.filter((f) => !told.some((t) => t && t.pr === f.pr && sameFinding(t.title, f.title)))
-      if (lost.length && !fd.unreachable && !fd.reason) refusals.push(`the follow-ups filer returned ${named(lost)} neither filed nor skipped; relaunch to file them`)
-      if (fd.unreachable || fd.reason) refusals.push(`the follow-ups filer stopped: ${fd.reason || 'GitHub could not be reached'}; relaunch to file the rest`)
-      // Filed or found already filed, or the checkpoint stays (Q12): a refused or unaccounted row is not.
-      if (fd.refused.length) unprocessed.push(`not filed, tools/ticket_shape.py failed them: ${named(fd.refused)}`)
-      if (lost.length) unprocessed.push(`not filed${fd.unreachable || fd.reason ? ` (the filer stopped: ${fd.reason || 'GitHub could not be reached'})` : ', the filer accounted for none of them'}: ${named(lost)}`)
-    }
-  }
-}
-// The coverage boundary (Q9, Q12): advanced to the discovery start only when nothing above went unread
-// or unprocessed; otherwise kept, so the next morning reads the same span again.
-const complete = unprocessed.length === 0 && !!win.startedAt
-followUps.window = { since: win.since, source: win.source, startedAt: win.startedAt, complete, advanced: complete, boundary: complete ? win.startedAt : win.since, counts: windowCounts, unprocessed }
-followUps.window.line = windowLineOf(followUps.window)
-if (!complete) refusals.push(`the follow-ups coverage is incomplete, so the checkpoint stays at ${win.since || 'none'} and the next morning reads the span again; the Follow-ups window line names what was not read or not processed`)
-
 phase('Hand-over')
-const prior = await readHandovers(ISSUE, commentsIndex, `## Morning ${DATE}`, refusals)
-const text = handoverText({ date: DATE, issue: ISSUE, verify: v, verdict, refusals, apply, skipped: applySkipped, replay: rep, followUps, refresh, applyTickets })
+// The one comments index the morning keeps (#1082 Q5), for #969's delta: the night's earlier hand-overs.
+const ix = await readIndex(ISSUE, 'Hand-over', 'so the night\'s earlier hand-overs were not found and this one was posted whole')
+if (ix.refusal) refusals.push(ix.refusal)
+const prior = ix.refusal ? { earlier: null, failed: '', note: '' } : await readHandovers(ISSUE, ix.index, `## Morning ${DATE}`, refusals)
+const text = handoverText({ date: DATE, issue: ISSUE, verify: v, verdict, refusals, replay: rep, refresh })
 log(text)
 // The first hand-over of the night is posted whole, a later one as its delta, and one identical to the
 // latest earlier hand-over not at all (#969).
@@ -2488,9 +2627,7 @@ return {
   merged: verdict.merged ? { pr: verdict.pr, url: verdict.url, head: verdict.head, commit: verdict.commit, mergedAt: verdict.mergedAt, applyCleared: !verdict.evidence } : null,
   replay: { counts: rep.counts, renamed: rep.renamed, stoppedAt: rep.stoppedAt, reason: rep.reason },
   pr: v ? v.pr : null, head: v ? v.head : '', ci: v ? v.ci : 'none', record: v ? v.record : null,
-  apply: { ran: apply.ran, dry: apply.dry, answers: apply.answers, open: apply.open, no: apply.no, wouldDo: apply.wouldDo, done: apply.done, morning: apply.morning },
   handover: { url: post.mode === 'identical' ? post.url : handed ? handed.url : '', posted: !!(handed && handed.posted), mode: post.mode, extends: post.extends, posts: post.body, note: post.note, text },
-  followUps, applyTickets,
   refresh: { state: refresh.state, named: refresh.named || '', edited: !!refresh.edited, rewrote: refresh.rewrote || [], reason: refresh.reason || '', body: refresh.body || '' },
   agents: agentsRun, reused,
 }

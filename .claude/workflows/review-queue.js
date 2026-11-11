@@ -119,11 +119,12 @@ export const meta = {
 // three records each carried three with no ticket. The verdict agent names, for every carried finding,
 // the open ticket that owns it or none, and the earliest record on the pull request that carried it;
 // the ones with none are returned as followUps and end the comment's findings as the table under
-// "## Follow-ups", which morning.js reads from the latest record of each open pull request and files
-// (#514); a row still unfiled at the merge is named by tools/land.sh (#573). Each row names, in its
-// Fails on cell, the input or state on which the finding gives the wrong result (#966); one the
-// verdict gives none for is no row but a note under its axis, and files nothing. The review still
-// writes nothing outside its log and its one comment, but for the change requests below.
+// "## Follow-ups", which morning.js's follow-ups pass reads from the latest record of each pull
+// request its window reaches, open, merged since its checkpoint or recorded since it, and files
+// (#514, #1082); a row still unfiled at the merge is named by tools/land.sh (#573). Each row names,
+// in its Fails on cell, the input or state on which the finding gives the wrong result (#966); one
+// the verdict gives none for is no row but a note under its axis, and files nothing. The review
+// still writes nothing outside its log and its one comment, but for the change requests below.
 //
 // Change requests (#434, from #411 Q5 and #421 Q12). The Spec axis reads the change-request issues
 // each cited ticket is or was blocked by, with their decision comments, as spec sources. It judges
@@ -177,7 +178,8 @@ export const meta = {
 // ticket no commit with fewer than two parents names fails the pull request at stage closes, before
 // any range or axis agent runs, with each #n named and land.sh's remedy (name it in the commit that
 // did its work; a ticket the branch only advances takes Ticket: #n in place of Closes #n), and the
-// owner/repo#n form or a GitHub issue URL (#806) fails it there too, naming the form and asking for
+// owner/repo#n form, GH-n or a GitHub issue URL (#806, #1147), or a link form in a description that
+// holds a GitHub issue URL (#1147), fails it there too, naming the form and asking for
 // Closes #n. A missing parent count counts as a merge, so the check fails closed. Nothing is
 // posted, and once the head or description is fixed the review runs again on the final head.
 // land.sh stays the gate, since a description can change after a review. The copy of land.sh's rule
@@ -318,11 +320,13 @@ const mutationTableOf = (body) => {
 const names = (cellText, test) => !!test && new RegExp(`(?<![\\w.])${test.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?!\\w)`).test(cellText)
 
 // The follow-ups table (#292): the carried findings that name no open ticket, which the comment ends
-// its findings with and the morning run files while the pull request is still open (#514); a row
-// still unfiled when tools/land.sh merges is named by its land: warning and filed by hand (#573;
-// docs/agents/review.md -> "Landing or holding"). One row per finding, its First carried by cell the
-// earliest record on the pull request that carried it, or THIS_RECORD for the record the comment
-// ends in, and its Fails on cell the input or state on which it gives the wrong result (#966).
+// its findings with and the follow-ups pass files from each pull request its window reaches, open,
+// merged since its checkpoint or recorded since it (#514, #1082); a row still unfiled when
+// tools/land.sh merges is named by its land: warning, and the next follow-ups pass files it unless
+// it is filed by hand first (#573; docs/agents/review.md -> "Landing or holding"). One row per
+// finding, its First carried by cell the earliest record on the pull request that carried it, or
+// THIS_RECORD for the record the comment ends in, and its Fails on cell the input or state on which
+// it gives the wrong result (#966).
 // morning.js reads the same table with its own copy of FOLLOW_UP_HEAD, FOLLOW_UP_HEAD_FOUR,
 // THIS_RECORD and this parser, since a workflow script imports nothing; morning_tests.mjs holds the
 // two copies equal, so a change to the table is an edit to both scripts together, and to
@@ -731,7 +735,7 @@ ${mut.rows.length ? mut.rows.map((r) => `- ${r.test} (${r.kind}): ${r.result}, $
 ${mut.holds.length ? `The rows already hold the verdict: ${mut.holds.join('; ')}. Say so in summary.` : ''}
 ${d ? deltaBrief(d) + (d.verdict === 'hold' ? ' Put each of the held record\'s findings in earlierFindings: held true when that record held on it, false when it carried it as a follow-up that did not hold; answered true when the range answers it, false when it does not; finding is the held record\'s title for it, as that record wrote it, and how states only what changed since the held record, in one sentence; never restate its finding or its evidence, which the record links. An unanswered finding the record held on holds, and so does an empty list; an unanswered follow-up does not, and goes in followUps.' : ' earlierFindings is [].') : 'earlierFindings is [].'}
 verdict is hold when a verified finding shows the change does not do what it says, or a test that proves it cannot fail: a did-not-fail row, or a stated or held mutation that did not reproduce. A could-not-run on a stated, held or nominated mutation holds too; one on a candidate nobody suspected is reported and does not. A removed row is a held break whose target the range deleted, so it holds nothing by itself, but it answers the held test only if the deletion is sound: read the commit its why names, and it answers when the removed code could never run (say why) or the same check is still enforced elsewhere (say where), each as a verified finding; otherwise, or if you cannot show either, the held test is unanswered and the verdict is hold. A caught row is a held or candidate break the project caught through other tests while the named test stayed green (#684, #689). It answers the named test only when you verify, as a verified finding, that a test it names guards the break: for a held row, the break the held record named. For a candidate, you must also verify, as a verified finding, why the named test could not go red on that break: either the break lies outside what the named test guards, or the case the break reaches skips where the review runs. Then put the named test in caughtAccepted. A candidate that guards the break and stayed green proves nothing: leave it out. A caught row of any kind on a Node companion, a row whose project is an .mjs file or whose file or test cell's leading path is one, whatever project the inventory gives it (#938), is read another way, since such a companion prints no test names, only its checks' fail() messages (#905): read the named checks' source at the head, and when every message the row went red on is one of those checks' own fail() messages, say so as a verified finding and put the named test in caughtAccepted; the check for a candidate's green named test does not apply. On a Node companion, a stated or nominated row that went red on any message of another check is not answered by it: leave it out of caughtAccepted, and the verdict is hold. A held or candidate row there keeps its catch (#684, #689): one that went red on another check's message is answered only when you verify that the check whose fail() printed it guards the break (for a held row, the break the held record named) and, for a candidate, unlike a row red only on its own checks' messages, that its named check went red on its own fail() messages as well or why it could not go red on that break; then put the named test in caughtAccepted. In every other case leave the named test out of caughtAccepted, and the named test is unanswered and the verdict is hold. Otherwise merge. outstanding lists what stays for the merge body's Outstanding: line.
-followUps: every finding this review carries rather than holds on, whatever the verdict: a finding left standing for after the merge, and each outstanding entry that is a defect still to fix. Each: axis, title (one line; when an earlier record's "## Follow-ups" table (five columns: Finding, Axis, Where, First carried by, Fails on) lists the finding, its Finding cell verbatim), where, failsOn, ticket and firstCarried. failsOn is the input or state on which the finding gives the wrong result, in one sentence (#966): what a reader would run or set up to see it go wrong. A carried finding for which you cannot name one is not a follow-up: write it in findings under the axis that found it, as a note, and leave it out of followUps; it files nothing, and the script writes any followUp with an empty failsOn as such a note. ticket is the open issue that owns the fix, as "#<n>", checked with \`cd ${REPO} && gh issue view <n> --json state,title\` (it must be OPEN and its title or body must be about this fix; an issue the finding merely mentions does not own it), or "" when there is no open ticket for it, which you search for with \`cd ${REPO} && gh issue list --state open --search "<key words> in:title,body" --json number,title\`. firstCarried is the earliest of the records on this pull request that carried the same finding, by its URL: ${(() => { const urls = recordsIn(inv).map((r) => r.url).filter(Boolean); return urls.length ? `read ${urls.join(', ')} (oldest first)` : 'there is none, so it is ""' })()}; "" when none did. The script keeps those with ticket "" as the comment's follow-ups, which the morning run files while this pull request is still open; one still unfiled when it merges is named by tools/land.sh and filed by hand (#514, #573).
+followUps: every finding this review carries rather than holds on, whatever the verdict: a finding left standing for after the merge, and each outstanding entry that is a defect still to fix. Each: axis, title (one line; when an earlier record's "## Follow-ups" table (five columns: Finding, Axis, Where, First carried by, Fails on) lists the finding, its Finding cell verbatim), where, failsOn, ticket and firstCarried. failsOn is the input or state on which the finding gives the wrong result, in one sentence (#966): what a reader would run or set up to see it go wrong. A carried finding for which you cannot name one is not a follow-up: write it in findings under the axis that found it, as a note, and leave it out of followUps; it files nothing, and the script writes any followUp with an empty failsOn as such a note. ticket is the open issue that owns the fix, as "#<n>", checked with \`cd ${REPO} && gh issue view <n> --json state,title\` (it must be OPEN and its title or body must be about this fix; an issue the finding merely mentions does not own it), or "" when there is no open ticket for it, which you search for with \`cd ${REPO} && gh issue list --state open --search "<key words> in:title,body" --json number,title\`. firstCarried is the earliest of the records on this pull request that carried the same finding, by its URL: ${(() => { const urls = recordsIn(inv).map((r) => r.url).filter(Boolean); return urls.length ? `read ${urls.join(', ')} (oldest first)` : 'there is none, so it is ""' })()}; "" when none did. The script keeps those with ticket "" as the comment's follow-ups, which the follow-ups pass files, from this pull request while it is open and on the first pass after it merges; one still unfiled when it merges is named by tools/land.sh and may be filed by hand sooner (#514, #573, #1082).
 ${heldChangeRoute(n, inv)}
 Return the result. Write no file for it: the script hands what you return to the post agent, which writes verdict.json (#1092).`
 
@@ -1077,7 +1081,7 @@ const earlierLines = (d, v) => (d && d.verdict === 'hold'
   : [])
 const followUpLines = (list) => ['## Follow-ups', '',
   ...(list.length
-    ? ['Carried findings that name no open ticket, each with the input or state it fails on; the morning run files each one while this pull request is still open (#292, #514), and `tools/land.sh` names any still unfiled when it merges, to be filed by hand (#573; `docs/agents/review.md` -> Landing or holding).', '', FOLLOW_UP_HEAD, '| --- | --- | --- | --- | --- |',
+    ? ['Carried findings that name no open ticket, each with the input or state it fails on; the follow-ups pass files each one, from this pull request while it is open and on the first pass after it merges (#292, #514, #1082), and `tools/land.sh` names any still unfiled when it merges, which may be filed by hand sooner (#573; `docs/agents/review.md` -> Landing or holding).', '', FOLLOW_UP_HEAD, '| --- | --- | --- | --- | --- |',
       ...list.map((f) => `| ${[f.title, f.axis, f.where || '-', f.firstCarried || THIS_RECORD, f.failsOn].map(cell).join(' | ')} |`)]
     : ['- None: the review carries no finding that names no open ticket.']),
   '']
@@ -1188,11 +1192,15 @@ const laterDateFindings = (inv) => {
 // letter, digit or underscore before it, then an optional colon, any whitespace, # and every digit
 // after it, anywhere in a line and as often as it occurs, each line read on its own. Whitespace is
 // POSIX's space class in the C locale, the set land.sh's [[:space:]] reads. A keyword before
-// owner/repo#n or a bare GitHub issue URL (#806) refuses the description whatever
-// else it holds, naming the form, as land.sh refuses it before it reads a commit; on the first line
-// holding one, the last on that line, which is the match land.sh's greedy prefix finds. GitHub does
-// not document closing by URL: land.sh's comment cites its two pages, says which shapes were
-// observed to close (#1053), and names the forms GitHub closed on that neither copy reads (#1147).
+// owner/repo#n, GH-n in any case (#1147) or a bare GitHub issue URL (#806) refuses the description
+// whatever else it holds, naming the form, as land.sh refuses it before it reads a commit; on the
+// first line holding one, the last on that line, which is the match land.sh's greedy prefix finds.
+// Failing those, a keyword, an optional colon and whitespace, then [ or < refuses it when the
+// description holds a GitHub issue URL on any line (#1147), naming the keyword through its bracket,
+// the last on the first line holding one; no Markdown is parsed, so a code span does not hide it.
+// GitHub does not document closing by URL, by a link or by GH-n: land.sh's comment cites its two
+// pages, says which shapes were observed to close (#1053, #1147), and names the rows of the table
+// that hold them, from "GH-n is refused, not read as #n, though a commit names #26" on.
 // Otherwise each ticket is named unless #n, or issue-n with no letter, digit or underscore before it, appears
 // with no digit after it in the message of a commit whose parent count is an integer below 2, as git
 // log --no-merges keeps; a commit with no parent count does not count, so the check fails closed.
@@ -1200,13 +1208,20 @@ const laterDateFindings = (inv) => {
 // names them.
 const CLOSING_KEYWORD = '(?<![A-Za-z0-9_])(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?):?[ \\t\\n\\v\\f\\r]*'
 const CLOSING_REFERENCE = new RegExp(CLOSING_KEYWORD + '#(\\d+)', 'gi')
-const OTHER_REPOSITORY = new RegExp(CLOSING_KEYWORD + '([^ \\t\\n\\v\\f\\r#/]+/[^ \\t\\n\\v\\f\\r#/]+#\\d+|https?://(?:www[.])?github[.]com/[^ /#\\t\\n\\v\\f\\r]+/[^ /#\\t\\n\\v\\f\\r]+/issues/\\d+)', 'gi')
+const ISSUE_URL_SOURCE = 'https?://(?:www[.])?github[.]com/[^ /#\\t\\n\\v\\f\\r]+/[^ /#\\t\\n\\v\\f\\r]+/issues/\\d+'
+const OTHER_REPOSITORY = new RegExp(CLOSING_KEYWORD + '([^ \\t\\n\\v\\f\\r#/]+/[^ \\t\\n\\v\\f\\r#/]+#\\d+|gh-\\d+|' + ISSUE_URL_SOURCE + ')', 'gi')
+// A link form's match, the lookbehind taking no characters, is the keyword through its `[` or `<`.
+const LINK_FORM = new RegExp(CLOSING_KEYWORD + '[[<]', 'gi')
+const ISSUE_URL = new RegExp(ISSUE_URL_SOURCE, 'i')
 const closingReferences = (inv) => {
-  const lines = String(inv.description || '').split('\n')
+  const description = String(inv.description || '')
+  const lines = description.split('\n')
   for (const line of lines) {
     const forms = [...line.matchAll(OTHER_REPOSITORY)]
-    if (forms.length) return { otherRepository: forms[forms.length - 1][1], unnamed: [] }
+    if (forms.length) return { otherRepository: forms[forms.length - 1][1], link: '', unnamed: [] }
   }
+  const links = lines.map((line) => [...line.matchAll(LINK_FORM)]).find((forms) => forms.length)
+  if (links && ISSUE_URL.test(description)) return { otherRepository: '', link: links[links.length - 1][0], unnamed: [] }
   const tickets = lines.flatMap((line) => [...line.matchAll(CLOSING_REFERENCE)].map((m) => m[1]))
   const messages = (inv.commitMessages || [])
     .filter((c) => c && Number.isInteger(c.parents) && c.parents < 2 && typeof c.message === 'string')
@@ -1215,7 +1230,7 @@ const closingReferences = (inv) => {
     const named = new RegExp('(?:#' + n + '|(?<![A-Za-z0-9_])issue-' + n + ')(?!\\d)')
     return !messages.some((msg) => named.test(msg))
   })
-  return { otherRepository: '', unnamed }
+  return { otherRepository: '', link: '', unnamed }
 }
 
 // ---------------------------------------------------------------- a rebuilt head
@@ -1316,10 +1331,14 @@ const reviewOne = async (n, res, at) => {
   }
 
   // A closing reference land.sh would refuse stops the pull request before any other agent runs (#688).
-  const { otherRepository, unnamed } = closingReferences(inv)
+  const { otherRepository, link, unnamed } = closingReferences(inv)
   if (otherRepository) {
-    log(`#${n}: the description closes ${otherRepository}, the owner/repo#n form or a GitHub issue URL; stopped before the review`)
-    return failed(res, `closes: the description closes ${otherRepository}, the owner/repo#n form or a GitHub issue URL, which tools/land.sh cannot read against the commits and refuses. Write Closes #n for a ticket of this repository; a ticket of another repository is not closed from here`)
+    log(`#${n}: the description closes ${otherRepository}, the owner/repo#n form, the GH-n form or a GitHub issue URL; stopped before the review`)
+    return failed(res, `closes: the description closes ${otherRepository}, the owner/repo#n form, the GH-n form or a GitHub issue URL, which tools/land.sh cannot read against the commits and refuses. Write Closes #n for a ticket of this repository; a ticket of another repository is not closed from here`)
+  }
+  if (link) {
+    log(`#${n}: the description closes through a link, ${link}, beside a GitHub issue URL; stopped before the review`)
+    return failed(res, `closes: the description closes through a link, ${link}, beside a GitHub issue URL, which tools/land.sh cannot read against the commits and refuses. Write Closes #n for a ticket of this repository; a ticket of another repository is not closed from here`)
   }
   if (unnamed.length) {
     const list = unnamed.map((t) => '#' + t).join(', ')
