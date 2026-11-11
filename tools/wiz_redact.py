@@ -12,9 +12,9 @@ tools/wiz_redact_tests.py holds each rule to a case. It applies ten rules, in th
    --keep-last-four it becomes `<account-9012>`, for a ticket whose grill asks for the last four
    digits, as #125 does. Without the option no twelve-digit number survives on its own; a run of
    twelve digits inside a longer hexadecimal word, one whose letters and digits are all 0-9 and
-   a-f (either case), is part of a hash, a `sha256:` image digest or a file's SHA-256, and is kept,
-   so a post carries the hash whole (#1004). A run beside any other word (`web123456789012`) is
-   still an account.
+   a-f (either case), is part of a hash, a `sha256:` image digest or a file's SHA-256, or of an ECS
+   task id, and is kept, so a post carries the hash or the id whole (#1004, #1065). A run beside
+   any other word (`web123456789012`) is still an account.
 2. An ARN, `arn:aws:<service>:<region>:<account>:<resource>`, becomes its resource field, the part
    after the account: `arn:aws:iam::<account>:role/x` becomes `role/x`.
 3. The value after `code=`, `state=`, `client_id=`, `client_secret=`, `code_verifier=`,
@@ -89,8 +89,9 @@ P04_CASE = re.compile(
 
 # The plain form goes wherever no digit touches it, a hyphen included, because a CDK bootstrap
 # bucket (cdk-hnb659fds-assets-123456789012-us-east-1) carries the account between hyphens; account()
-# keeps a run whose whole word is a longer hexadecimal one, a hash (#1004). Only the console's dashed
-# form needs the hyphen guard, so 1234-5678-9012-3456 is not read as an account.
+# keeps a run whose whole word is a longer hexadecimal one, a hash or an ECS task id (#1004, #1065).
+# Only the console's dashed form needs the hyphen guard, so 1234-5678-9012-3456 is not read as an
+# account.
 ACCOUNT = re.compile(r"(?<!\d)(\d{12})(?!\d)|(?<![\d-])(\d{4}-\d{4}-\d{4})(?![\d-])")
 WORD_CHARACTER = re.compile(r"[0-9A-Za-z]")
 HEXADECIMAL_WORD = re.compile(r"[0-9A-Fa-f]{13,}")
