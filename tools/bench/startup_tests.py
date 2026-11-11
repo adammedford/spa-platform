@@ -9,7 +9,9 @@ medians, maxima and gaps, the verdict mode's rules and command line (ADR-0033, w
 proved by the benchmark's verdict and the verdict's logic here), and the gateway's environment, read
 from the contract's example rather than from a copy. One class reads the two Dockerfiles the
 benchmark builds, and holds the floor's image chain to the gateway's (#910); the line below names
-them for tools/check.sh, so a change to either runs this companion.
+them for tools/check.sh, so a change to either runs this companion. The discovery stand-in's TLS
+listener is tried against a certificate the host's `openssl` issues (LibreSSL on macOS, OpenSSL on
+CI's runner), so this companion needs that command, and fails without it rather than skipping.
 
 Checkout inputs: src/Gateway/Dockerfile tools/bench/floor/Dockerfile
 
@@ -205,7 +207,8 @@ class GatewayEnvironment(unittest.TestCase):
     def setUp(self):
         self.example = json.loads((ROOT / "contracts" / "platform-config.example.json").read_text())
         self.env = startup.gateway_environment(self.example, endpoint="http://10.90.0.10:5000",
-                                               discovery="http://127.0.0.1:9000")
+                                               discovery=startup.DISCOVERY_AUTHORITY,
+                                               trust_file="/bench-trust/ca.pem")
 
     def test_sections_flatten_the_way_ecs_tf_names_them(self):
         self.assertEqual(".spa-poc.test:8443", self.env["Policy__AllowedHostSuffixes__0"])
@@ -215,7 +218,26 @@ class GatewayEnvironment(unittest.TestCase):
         self.assertEqual(self.example["Registry"]["Bucket"], self.env["Registry__Bucket"])
 
     def test_every_issuer_discovers_from_the_loopback_stand_in(self):
-        self.assertEqual("http://127.0.0.1:9000", self.env["Issuers__cognito-poc__Authority"])
+        self.assertEqual("https://127.0.0.1:9000", self.env["Issuers__cognito-poc__Authority"])
+
+    def test_every_issuer_value_the_bench_sets_is_one_the_config_schema_admits(self):
+        # #1112: the schema's https patterns refuse a plain-http authority once the gateway validates
+        # its configuration at start-up (#544), and the benchmark would then measure a gateway that
+        # never starts. The patterns are read from the contract, not copied.
+        schema = json.loads((ROOT / "contracts" / "platform-config.schema.json").read_text())
+        issuer = schema["properties"]["Issuers"]["additionalProperties"]["properties"]
+        checked = 0
+        for name in self.example["Issuers"]:
+            for field in ("Authority", "BrowserOrigin"):
+                value = self.env[f"Issuers__{name}__{field}"]
+                self.assertRegex(value, issuer[field]["pattern"], f"Issuers:{name}:{field}")
+                checked += 1
+        self.assertGreater(checked, 0)
+
+    def test_the_gateway_trusts_the_stand_ins_authority_and_nothing_else_changes_its_trust(self):
+        # The stand-in's certificate is issued per run by a CA of the run's own; .NET on Linux reads
+        # its root store from SSL_CERT_FILE, so that file is the one trust the bench adds.
+        self.assertEqual("/bench-trust/ca.pem", self.env["SSL_CERT_FILE"])
 
     def test_the_sdk_chain_resolves_from_the_environment_alone(self):
         # docs/research/local-aws-stand-in.md section 1: the endpoint, AWS_REGION (the .NET chain reads
@@ -224,6 +246,83 @@ class GatewayEnvironment(unittest.TestCase):
         self.assertEqual("us-east-1", self.env["AWS_REGION"])
         self.assertIn("AWS_ACCESS_KEY_ID", self.env)
         self.assertIn("AWS_SECRET_ACCESS_KEY", self.env)
+
+
+class DiscoveryStandIn(unittest.TestCase):
+    """The provider's stand-in: its document, and its TLS listener, against a certificate the host's
+    openssl issues for this test (the benchmark's own comes from the `trust` subcommand, in the moto
+    image, which is proved by a run)."""
+
+    def test_every_endpoint_the_document_names_is_under_the_https_authority(self):
+        documents = startup.discovery_documents("https://127.0.0.1:9000")
+        document = documents["/.well-known/openid-configuration"]
+        self.assertEqual("https://127.0.0.1:9000", document["issuer"])
+        endpoints = {key: value for key, value in document.items() if key.endswith(("_endpoint", "_uri"))}
+        self.assertEqual({"authorization_endpoint", "token_endpoint", "jwks_uri", "end_session_endpoint"}, set(endpoints))
+        for key, value in endpoints.items():
+            self.assertTrue(value.startswith("https://127.0.0.1:9000/"), f"{key}: {value}")
+        self.assertIn("/jwks", documents)
+
+    def test_the_stand_in_answers_over_tls_to_a_client_that_trusts_the_runs_ca(self):
+        import ssl
+        import subprocess
+        import tempfile
+        import urllib.request
+
+        with tempfile.TemporaryDirectory() as directory:
+            folder = pathlib.Path(directory)
+            (folder / "leaf.cnf").write_text(
+                "[req]\ndistinguished_name=dn\nprompt=no\n[dn]\nCN=127.0.0.1\n"
+                "[ext]\nsubjectAltName=IP:127.0.0.1\nbasicConstraints=CA:TRUE\nextendedKeyUsage=serverAuth\n")
+            subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
+                            "-keyout", str(folder / "leaf.key"), "-out", str(folder / "leaf.pem"),
+                            "-config", str(folder / "leaf.cnf"), "-extensions", "ext"],
+                           check=True, capture_output=True)
+            served = []
+            server = startup.discovery_server("https://127.0.0.1:9000", 0, folder / "leaf.pem", folder / "leaf.key",
+                                              on_request=served.append)
+            port = server.server_address[1]
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                trusting = ssl.create_default_context(cafile=str(folder / "leaf.pem"))
+                url = f"https://127.0.0.1:{port}/.well-known/openid-configuration"
+                with urllib.request.urlopen(url, context=trusting, timeout=5) as response:
+                    self.assertEqual("https://127.0.0.1:9000", json.loads(response.read())["issuer"])
+                # A client that does not trust the run's certificate is refused: the listener is TLS,
+                # not plain HTTP on the https port.
+                with self.assertRaises(Exception) as refused:
+                    urllib.request.urlopen(url, context=ssl.create_default_context(), timeout=5)
+                self.assertIn("CERTIFICATE_VERIFY_FAILED", str(refused.exception))
+                # Only the request that completed a handshake is served, and so only it is announced.
+                self.assertEqual([startup.DISCOVERY_SERVED], served)
+            finally:
+                server.shutdown()
+                server.server_close()
+
+
+class DiscoveryRead(unittest.TestCase):
+    """Since #908 a fetch is answered 401 whether or not the provider's document could be read
+    (src/Platform.Identity/ProviderDiscovery.cs), so a gateway that cannot reach or trust the stand-in
+    still stops the app-host clock, on its failure path. ADR-0033 times the 401 the handler writes
+    after reading discovery, so a gateway start whose 401 came without that read is refused."""
+
+    def gateway(self, app_host_at=5):
+        return {"app_host": {"at_ns": app_host_at, "after_ns": 1, "attempts": 2, "status": 401}}
+
+    def test_a_401_after_the_stand_in_served_discovery_is_the_clock(self):
+        startup.check_discovery_read("gateway", self.gateway(), "ready\n" + startup.DISCOVERY_SERVED + "\n")
+
+    def test_a_401_without_a_discovery_read_is_refused(self):
+        with self.assertRaises(RuntimeError) as refused:
+            startup.check_discovery_read("gateway", self.gateway(), "ready\n")
+        self.assertIn("discovery", str(refused.exception))
+
+    def test_an_unreached_app_host_clock_is_left_to_the_verdict(self):
+        startup.check_discovery_read("gateway", self.gateway(app_host_at=None), "ready\n")
+
+    def test_the_floor_reads_no_discovery(self):
+        startup.check_discovery_read("floor", {"healthz": {"at_ns": 5}}, "ready\n")
 
 
 # A Dockerfile's FROM: optional flags such as --platform, the image, and an optional stage name.
