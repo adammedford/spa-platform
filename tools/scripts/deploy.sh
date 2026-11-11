@@ -27,12 +27,26 @@
 #      fetches only that digest, and keeps #288's guard for a FROM line that names a tag alone: such
 #      a build resolves the tag afresh rather than build on an older cached image, which could ship
 #      a .NET runtime that predates the security fixes the tag's current image carries (#273).
+#      Each build attests, so that every image the cell runs carries a record of what it contains and
+#      how it was built, kept in ECR beside it (#779, answer 3,
+#      https://github.com/adammedford/spa-platform/issues/779#issuecomment-6767167834). --sbom=true
+#      attaches BuildKit's SBOM attestation, an SPDX document of the image's packages
+#      (https://docs.docker.com/build/metadata/attestations/sbom/). --provenance=mode=max attaches
+#      its SLSA provenance attestation in the fuller of its two modes, which the vendor recommends
+#      and which adds the Dockerfile and the build arguments' values, of which this script passes
+#      none (https://docs.docker.com/build/metadata/attestations/slsa-provenance/). With either, the
+#      run's tag names an image index holding the linux/arm64 image and an attestation manifest for
+#      it (https://docs.docker.com/build/metadata/attestations/attestation-storage/), so the digest
+#      ECR gives for the tag is the index's. Nothing signs a digest: #779's answer 4 defers signing
+#      until a verifier other than the signer exists.
 #   3. It plans and applies infra/envs/poc/platform with both images by digest and the health
 #      check on /readyz, and records them in images.auto.tfvars there, so every later apply of the
 #      root passes the same digests back and never moves the image.
 #   4. It writes infra/envs/poc/outputs.json from the three roots' outputs.
 #   5. It waits for the service to be stable, then asserts the primary deployment completed on the
-#      applied task definition, every running task's gateway container has the pushed digest, each
+#      applied task definition, every running task's gateway container runs the image pushed (the
+#      index's digest, or the index's linux/arm64 image's: which of them ECS reports is what #788
+#      observes on a cell, and the attestation manifest's is never taken), each
 #      running task's own target is healthy on /readyz, every other target is healthy or draining,
 #      and the outputs document names the applied gateway. It tolerates draining because a stable
 #      service still lists the previous task's target as draining for the target group's
@@ -55,7 +69,9 @@
 # sourced, after `terraform init -backend-config=backend.hcl` in each root. It needs the AWS CLI,
 # Terraform, python3, Docker with buildx (decision D-2 in docs/dependencies.md), the .NET SDK for
 # spactl, or SPACTL naming a spactl to run instead (cell-common.sh), and the Session Manager plugin
-# for the wait's tunnel unless --url is given.
+# for the wait's tunnel unless --url is given. Docker's own builder, the docker driver, builds the
+# attestations of step 2 only with the containerd image store on, and fails the build without it:
+# the classic store holds no image index (https://docs.docker.com/build/metadata/attestations/).
 #
 # It redacts two kinds of value, and Docker's and Terraform's output pass through the filter that
 # does it (cell-common.sh's redact_stream):
@@ -181,9 +197,9 @@ aws --region "$REGION" ecr get-login-password 2> "$ERR" |
 build_and_push() {
   local dockerfile="$1" repository="$2" name="${2#*/}"
   note "building ${dockerfile} for linux/arm64 as $(redact "${repository}:${TAG}")" >&2
-  # ARM64, the task's platform (ecs.tf's runtime_platform). No provenance or SBOM attestation: with
-  # either, buildx pushes an image index whose digest is not the platform manifest's, and the digest
-  # pushed is the one asserted against the running task below.
+  # ARM64, the task's platform (ecs.tf's runtime_platform), with the SBOM and provenance
+  # attestations (step 2 of the header, #779). The digest ECR names for the tag is the image index's,
+  # and that is the one applied; step 5 reads the index back to know its linux/arm64 image.
   # https://docs.docker.com/build/metadata/attestations/#creating-attestations
   docker_build "$dockerfile" "${repository}:${TAG}" >&2 ||
     fail "building ${dockerfile} failed."
@@ -201,7 +217,7 @@ build_and_push() {
 # Docker's own output, through the redaction: it names the repository, which carries the account.
 docker_build() {
   local status=0
-  docker buildx build --pull --platform linux/arm64 --provenance=false --sbom=false \
+  docker buildx build --pull --platform linux/arm64 --sbom=true --provenance=mode=max \
     --file "${REPO_ROOT}/$1" --tag "$2" --push "$REPO_ROOT" 2>&1 | redact_stream || status=$?
   return "$status"
 }

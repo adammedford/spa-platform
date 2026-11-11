@@ -23,6 +23,11 @@ one file back.
         The number of apps in a registry document.
     cell_documents.py revision <registry.json>
         A registry document's revision, the number /readyz reports once it is live.
+    cell_documents.py digests <manifest> <digest> <os/architecture>
+        The digests a running container of the image <digest> can report, one a line, from the
+        manifest ECR's BatchGetImage answered for it: <digest> alone for an image manifest, and for an
+        image index <digest> and then the one image in it for <os/architecture>, an attestation
+        manifest never among them (#783).
     cell_documents.py release <directory>
         A release name for a fixture directory, derived from its content.
     cell_documents.py requests
@@ -270,6 +275,46 @@ def revision(path: str) -> int:
     return 0
 
 
+# --- digests --------------------------------------------------------------------------------------
+
+# The two forms of each kind, OCI's and Docker's: an index lists images, an image manifest is one.
+# https://github.com/opencontainers/image-spec/blob/main/image-index.md
+INDEX_TYPES = ("application/vnd.oci.image.index.v1+json", "application/vnd.docker.distribution.manifest.list.v2+json")
+IMAGE_TYPES = ("application/vnd.oci.image.manifest.v1+json", "application/vnd.docker.distribution.manifest.v2+json")
+# buildx lists an attestation manifest in the index it pushes under the platform unknown/unknown,
+# so a platform's image is told from it by its platform alone:
+# https://docs.docker.com/build/metadata/attestations/attestation-storage/
+
+
+def digests(path: str, digest: str, platform: str) -> int:
+    """BatchGetImage answers a digest it does not hold under failures, so the query's text is None."""
+    text = pathlib.Path(path).read_text().strip()
+    if text in ("", "None"):
+        raise Refused("the registry holds no manifest for the image")
+    try:
+        manifest = json.loads(text)
+    except ValueError:
+        raise Refused("the image's manifest is not JSON")
+    kind = manifest.get("mediaType") if isinstance(manifest, dict) else None
+    if kind in IMAGE_TYPES:
+        print(digest)
+        return 0
+    if kind not in INDEX_TYPES or not isinstance(manifest.get("manifests"), list):
+        raise Refused("the image's manifest is neither an image manifest nor an image index")
+    wanted_os, _, wanted_architecture = platform.partition("/")
+    images = [entry.get("digest") for entry in manifest["manifests"]
+              if isinstance(entry, dict)
+              and (entry.get("platform") or {}).get("os") == wanted_os
+              and (entry.get("platform") or {}).get("architecture") == wanted_architecture]
+    if len(images) != 1:
+        raise Refused(f"the image index holds {len(images) or 'no'} {platform} image{'' if len(images) == 1 else 's'}")
+    if not isinstance(images[0], str) or not images[0].startswith("sha256:"):
+        raise Refused(f"the image index names its {platform} image by no digest")
+    print(digest)
+    print(images[0])
+    return 0
+
+
 # --- release ---------------------------------------------------------------------------------------
 
 def release(directory: str) -> int:
@@ -338,7 +383,7 @@ def requests() -> int:
     return 0
 
 
-COMMANDS = {"outputs": (outputs, 5), "field": (field, 3), "clients": (clients, 2), "config": (config, 2), "apps": (apps, 1), "revision": (revision, 1), "release": (release, 1), "requests": (requests, 0)}
+COMMANDS = {"outputs": (outputs, 5), "field": (field, 3), "clients": (clients, 2), "config": (config, 2), "apps": (apps, 1), "revision": (revision, 1), "digests": (digests, 3), "release": (release, 1), "requests": (requests, 0)}
 
 
 def main(argv: list[str]) -> int:
