@@ -509,6 +509,21 @@ try {
     // The open reviews are the range's merges (docs/agents/landing-work.md -> "Gates"), so a direct
     // commit on trunk, such as a generated roadmap refresh, is not read as a merge with no review.
     if (!commands(ready.prompt('scope')).some((c) => /\blog --first-parent --merges\b.*<previousTag>\.\.<base>/.test(c))) fail('the Scope prompt does not list the merges since the previous tag with --first-parent --merges')
+    // A row's merges are every merge naming it, not the first-parent line alone: a row landed through
+    // an overnight run has its "Merge task <id>" under the trunk's "Land the overnight run" merge (#1143).
+    const step2 = (ready.prompt('audit-1').match(/^2\. Per row:[^\n]*/m) || [''])[0]
+    const listing = commands(step2).filter((c) => /\blog\b.*--format=%H%x09%s/.test(c))
+    if (!listing.length || !listing.every((c) => /\blog --merges\b/.test(c)) || listing.some((c) => /--first-parent/.test(c))) fail(`the Row-audit prompt's step 2 does not read the row's merges with --merges and without --first-parent: ${JSON.stringify(listing)}`)
+    // With --merges the walk reaches the merges made on a task branch, which brought main or another
+    // branch into it; their subjects name the task, but none is the row's merge (#1143).
+    if (!/A merge into the task's own branch, whose subject is "Merge <from> into task\/<branch>", is not the row's merge: leave it out\./.test(step2)) fail(`the Row-audit prompt's step 2 does not leave out a merge into the task's own branch: ${step2}`)
+    // A landed row whose audit read no merge naming it is not done: nothing was read, so no
+    // Outstanding line and no ownership check held it (#1143).
+    {
+      const none = await execute(newRepo(), { gate: 'G3' }, { baseResolved: OTHER, ...base, audit: { '4.2': [] } })
+      if (none.result.verdict !== 'tag withheld' || !none.result.reasons.includes('row 4.2 is not done')) fail(`a landed row whose audit read no merge: verdict ${none.result.verdict}, reasons ${JSON.stringify(none.result.reasons)}`)
+      if (!none.result.report.text.includes('the audit read no merge naming it')) fail('a landed row whose audit read no merge: the report does not say the audit read no merge naming it')
+    }
     // The report's closing section claims no clean checkout the Report agent did not find.
     const dirty = await execute(newRepo(), { gate: 'G3' }, { gates: { G3: READY }, reportCheckout: { trackedChanged: ['README.md'], newUntracked: [] } })
     const closing = section(dirty.result.report.text, 'What this run did not do') || ''
