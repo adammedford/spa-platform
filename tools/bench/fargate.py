@@ -83,7 +83,9 @@ Set-Cookie holds the correlation cookie. The clock is that log line's duration_m
      after a bounded wait, the probe never reaching the new task, another stop, a malformed task
      id, deployment id, control-plane instant or 302 duration, or any other failure once restart
      1's update-service was sent, a failure of that call itself included, since the service may
-     have changed; the files hold the restarts so far, marked incomplete with the reason
+     have changed; the files hold the restarts so far, marked incomplete with the reason. A report
+     file that cannot be written also ends here, or in the run's own 3 or 4, saying so on stderr
+     with only the error's type, and the files may then be missing
 
 **Secrecy** (Q7, amended by #976's confirmed answers). The .txt, .json, stdout and stderr use the
 same field-aware publication policy. Arbitrary text has recognized ARNs and ECR repository URIs
@@ -99,6 +101,9 @@ measurement evidence refuses the run before its first restart or makes it incomp
 malformed optional diagnostic values are omitted with a fixed marker. Redaction operates on
 structured values before rendering or serialization, and detects literal digit sequences rather
 than separated, spelled-out or encoded numbers.
+
+A usage error is argparse's own: it is printed on stderr before this policy runs, and it can quote
+the operator's argv, which is the operator's own input and nothing this script read (#1182's review).
 """
 
 from __future__ import annotations
@@ -118,7 +123,7 @@ import statistics
 import subprocess
 import sys
 import time
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Union
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 OUTPUTS_FILE = ROOT / "infra" / "envs" / "poc" / "outputs.json"
@@ -163,9 +168,10 @@ class AwsError(Exception):
 # --- secrecy ---------------------------------------------------------------------------------------
 
 # The division the Secrecy paragraph states (#976 Q219-Q226). redact() is for arbitrary text; it never
-# looks at what a token resembles. Everything written goes through publish_document(), by field path,
-# or for a line of stdout or stderr through compose(), before it is rendered, so no pass over the
-# rendered text exists to undo a kept identifier or corrupt a number.
+# looks at what a token resembles. The files are published by publish_document(), by field path,
+# before they are rendered. say() and err() pass each stdout and stderr message through
+# publish_text(), and a line carrying an identifier is built by compose(), whose Published result
+# that pass keeps. No pass over the rendered text exists to undo a kept identifier or corrupt a number.
 
 MALFORMED = "<malformed>"     # the fixed marker: a rejected value is never echoed (#976 contract 5)
 
@@ -185,6 +191,9 @@ DEPLOYMENT_ID = re.compile(r"ecs-svc/[0-9]{19}")
 CALLER_ACCOUNT = re.compile(r"[0-9]{12}")
 
 LATEST_EPOCH_S = 253402300799     # 9999-12-31T23:59:59Z, the last instant the ISO form can name
+# A stopwatch reading below 10^11 ms, about 3.2 years, has at most eleven digits before its point, so
+# no twelve-digit id read from a log can pass as one (#976 contract 3; the #976 status note).
+DURATION_BOUND_MS = 10 ** 11
 
 
 class Published(str):
@@ -237,9 +246,10 @@ def valid_status(value):
 
 
 def valid_duration(value):
-    """A stopwatch reading, so never negative, unlike the differences of clocks ms() derives. The
-    upper bound is a thousand years in ms: float() below it cannot overflow."""
-    return value if is_measurement(value) and 0 <= value <= LATEST_EPOCH_S * 1000 else MALFORMED
+    """A stopwatch reading, so never negative, unlike the differences of clocks ms() derives, and
+    below DURATION_BOUND_MS: a request the gateway timed is no longer than that, and a value at or
+    above it is a log value that only looks like a measurement (#976 contract 3)."""
+    return value if is_measurement(value) and 0 <= value < DURATION_BOUND_MS else MALFORMED
 
 
 def valid_event_ms(value):
@@ -1002,7 +1012,7 @@ def _listening(port: int) -> bool:
         return False
 
 
-def probe(port: int, host: str, server_name: str, ca: str, timeout_s: float = 10.0) -> Optional[int]:
+def probe(port: int, host: str, server_name: str, ca: str, timeout_s: float = 10.0) -> Union[int, str, None]:
     """A cookieless navigation to the app's host through the forward: Host and SNI the app's, TLS
     verified against the cell's authority. Only the status line is read; the headers, which carry
     the challenge's state and its cookies, and the body are never read (Q7)."""
@@ -1276,7 +1286,14 @@ def main(argv: List[str]) -> int:
         ending, reason, code = "incomplete", f"an unexpected {type(error).__name__}", EXIT_INCOMPLETE
     finally:
         bench.close_forward()
-    write(options, bench.facts, bench.restarts, ending, reason, bench.account)
+    try:
+        write(options, bench.facts, bench.restarts, ending, reason, bench.account)
+    except OSError as error:
+        # Endings: 4, or the run's own 3 or 4. The path is the operator's, but only the type is kept.
+        err(f"the report files could not be written ({type(error).__name__}).")
+        if code != EXIT_CLEAN:
+            err(compose("{ending}: {reason}", ending=ending, reason=reason))
+        return code if code != EXIT_CLEAN else EXIT_INCOMPLETE
     if code != EXIT_CLEAN:
         err(compose("{ending}: {reason}", ending=ending, reason=reason))
     bench.say(f"wrote {options.txt} and {options.json}")

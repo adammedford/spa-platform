@@ -4,8 +4,9 @@ tools/bench/.
 
 The run itself needs the applied cell and about half an hour, and is #178's. What runs here is everything the
 script decides without AWS: the order of its calls, which task it measures, which hop it takes,
-which clocks it reads and how it labels them, when it stops and what it writes, and that nothing it
-writes holds a secret.
+which clocks it reads and how it labels them, when it stops and what it writes, and that what it
+writes keeps to the Secrecy paragraph: no secret that comes in as text or an unvalidated field shows,
+and only the four designated identifiers and validated measurements keep their digits.
 
 **The real script, a constructed environment.** Each case copies fargate.py into a repository tree
 of its own, with infra/envs/poc/outputs.json in contracts/infra-outputs.schema.json's shape, and runs
@@ -35,7 +36,9 @@ group, the stop reason's target group) and in the gateway image's repository URI
 `state` and a cookie; the session the CLI hands session-manager-plugin for an exec or a port
 forward carries a session token; another account's id, against letters, in hex-like free text and
 inside longer digit runs, is in the stop reason and the log's listening line (#976). No output may
-hold any of them, nor the repository URI with its account label redacted, nor "arn:aws". Absence
+hold any of them as text, nor the repository URI with its account label redacted, nor "arn:aws".
+The one exception is Q223's: a validated measurement keeps its digits, so the caller's number can sit
+inside one, which TheSecrecyMatrix proves while checking that no string holds it. Absence
 alone proves nothing of a canary that never came in, so TheSecrecyMatrix asserts where each one's
 placeholder lands, and names each source and outcome no path connects.
 
@@ -859,10 +862,12 @@ class TheValidators(unittest.TestCase):
         for bad in (99, 600, 200.0, True, "200", None, int(FOREIGN)):
             with self.subTest(status=bad):
                 self.assertEqual(fargate.MALFORMED, line(status=bad)["status"])
-        for good in (0, 1.5, 640):
+        for good in (0, 1.5, 640, 10 ** 11 - 1):
             self.assertEqual(good, line(duration_ms=good)["duration_ms"])
-        for bad in (-1, "1.5", True, None, float("inf"), float("nan"), 10 ** 400):
-            with self.subTest(duration_ms=repr(bad)[:20]):
+        for label, bad in (("-1", -1), ("'1.5'", "1.5"), ("True", True), ("None", None), ("inf", float("inf")),
+                           ("nan", float("nan")), ("10**400", 10 ** 400), ("10**11", 10 ** 11),
+                           ("10**11 as a float", 1e11), ("a twelve-digit number", int(FOREIGN))):
+            with self.subTest(duration_ms=label):
                 self.assertEqual(fargate.MALFORMED, line(duration_ms=bad)["duration_ms"])
         self.assertEqual(fargate.MALFORMED, line(route={"x": FOREIGN})["route"])
         self.assertNotIn("status", line())
@@ -923,6 +928,8 @@ class TheSecrecyMatrix(CaseBase):
     #   any free text, breach's stderr: its reason is built from the task id, the code and placement,
     #     so test_breach pins that line whole.
     #   stderr, clean: a clean run says nothing on it, pinned empty by test_clean.
+    #   a log line, the .txt: report() renders no msg or route, so a log canary's only sink is the
+    #     .json.
 
     @classmethod
     def setUpClass(cls):
@@ -1071,39 +1078,43 @@ class TheSecrecyMatrix(CaseBase):
 
 
 class TheMalformedValues(CaseBase):
-    """A malformed value supplied, against one legitimately absent (#976 contract 5). Every rejected
-    value below holds BADVALUE and the foreign canary, so an echo of it turns these red."""
+    """A malformed value supplied, against one legitimately absent (#976 contract 5). Each test hands
+    assertNoEcho the values it rejected, which it looks for whole in every output, so an echo of any
+    of them turns its case red. BAD holds BADVALUE and the foreign canary, and every case also checks
+    that BADVALUE shows nowhere."""
 
     BAD = f"BADVALUE{FOREIGN}"
 
-    def assertNoEcho(self, run):
+    def assertNoEcho(self, run, *rejected):
         self.assertNoSecrets(run)
         for name, text in (("txt", run.txt), ("json", run.json_path.read_text() if run.json_path.exists() else None),
                            ("stderr", run.stderr), ("stdout", run.stdout)):
-            self.assertNotIn("BADVALUE", text or "", f"the rejected value reached the {name}")
+            # assertFalse, not assertNotIn, so that a failure names the output and never prints the value.
+            for value in ("BADVALUE", *(str(value) for value in rejected if value is not None)):
+                self.assertFalse(value in (text or ""), f"a rejected value reached the {name}")
 
-    def assertRefused(self, run, says):
+    def assertRefused(self, run, says, *rejected):
         self.assertEqual(2, run.code, run.stderr)
         self.assertIsNone(run.txt)
         self.assertIsNone(run.json)
         self.assertEqual([], run.aws("ecs", "update-service"))
         self.assertIn(says, run.stderr)
-        self.assertNoEcho(run)
+        self.assertNoEcho(run, *rejected)
 
     def test_a_malformed_image_digest_is_refused_before_restart_1(self):
         for digest in (f"sha256:{self.BAD}", "sha256:" + "A" * 64, "sha256:" + "a" * 63):
             with self.subTest(digest):
                 image = f"{ACCOUNT}.dkr.ecr.{REGION}.amazonaws.com/spa-poc/gateway@{digest}"
-                self.assertRefused(run_case(world(td_image=image), outputs={"gatewayImage": image}), "not pinned by digest")
+                self.assertRefused(run_case(world(td_image=image), outputs={"gatewayImage": image}), "not pinned by digest", digest)
 
     def test_a_malformed_caller_account_is_refused_before_restart_1(self):
         for answer in (self.BAD, "12345678901", None, 111122223333):
             with self.subTest(repr(answer)):
-                self.assertRefused(run_case(world(account_answer=answer)), "no well-formed account id")
+                self.assertRefused(run_case(world(account_answer=answer)), "no well-formed account id", answer)
 
     def test_a_malformed_task_id_on_the_hop_of_restart_1_is_refused(self):
         run = run_case(world(arn_ids={"1": self.BAD}))
-        self.assertRefused(run, "holds no well-formed task id")
+        self.assertRefused(run, "holds no well-formed task id", self.BAD)
 
     def test_a_malformed_task_id_on_the_new_task_is_incomplete(self):
         run = run_case(world(arn_ids={"100": self.BAD}))
@@ -1112,7 +1123,7 @@ class TheMalformedValues(CaseBase):
         self.assertEqual(1, len(run.aws("ecs", "update-service")))
         self.assertIn("holds no well-formed task id", run.json["reason"])
         self.assertNotIn("task_id", run.json["restarts"][0])
-        self.assertNoEcho(run)
+        self.assertNoEcho(run, self.BAD)
 
     def test_a_malformed_deployment_id_is_incomplete_since_update_service_was_sent(self):
         for deployment in (self.BAD, "ecs-svc/123", "ecs-svc/" + "1" * 20):
@@ -1122,26 +1133,30 @@ class TheMalformedValues(CaseBase):
                 self.assertEqual(1, len(run.aws("ecs", "update-service")))
                 self.assertEqual("update-service named a malformed PRIMARY deployment id on restart 1.", run.json["reason"])
                 self.assertNotIn("deployment", run.json["restarts"][0])
-                self.assertNoEcho(run)
+                self.assertNoEcho(run, deployment)
 
     def test_a_malformed_required_instant_is_incomplete(self):
         run = run_case(world([plan(created_at=self.BAD)]))
         self.assertEqual(4, run.code, run.stderr)
         self.assertEqual("an unexpected ValueError", run.json["reason"])
-        self.assertNoEcho(run)
+        self.assertNoEcho(run, self.BAD)
 
     def test_a_malformed_302_duration_is_incomplete_where_an_absent_one_is_not(self):
         def world_with(fields):
             log = plan()["log"] + [["raw", {"msg": "Request", "route": "asset", "status": 302, **fields}, 30000]]
             return world([plan(log=log), plan(stable=False)])
 
-        run = run_case(world_with({"duration_ms": self.BAD}))
-        self.assertEqual(4, run.code, run.stderr)
-        self.assertEqual(1, len(run.aws("ecs", "update-service")))
-        self.assertEqual(f"restart 1: task {task_id(100)}'s 302 line holds a malformed duration_ms.", run.json["reason"])
-        self.assertEqual(fargate.MALFORMED, run.json["restarts"][0]["marks"]["redirect"]["duration_ms"])
-        self.assertFalse(run.json["restarts"][0]["complete"])
-        self.assertNoEcho(run)
+        # A string, and a number no request takes: a twelve-digit id in a numeric field is no
+        # measurement for being a number (#976 contract 3, valid_duration's bound).
+        for label, bad in (("a string", self.BAD), ("a twelve-digit number", int(FOREIGN))):
+            with self.subTest(label):
+                run = run_case(world_with({"duration_ms": bad}))
+                self.assertEqual(4, run.code, run.stderr)
+                self.assertEqual(1, len(run.aws("ecs", "update-service")))
+                self.assertEqual(f"restart 1: task {task_id(100)}'s 302 line holds a malformed duration_ms.", run.json["reason"])
+                self.assertEqual(fargate.MALFORMED, run.json["restarts"][0]["marks"]["redirect"]["duration_ms"])
+                self.assertFalse(run.json["restarts"][0]["complete"])
+                self.assertNoEcho(run, bad)
         # The same line with none: the benchmark's existing absence, a row with no value.
         absent = run_case(world_with({}))
         self.assertEqual(2, len(absent.aws("ecs", "update-service")))
@@ -1175,29 +1190,44 @@ class TheMalformedValues(CaseBase):
         self.assertTrue(any(line["ts"] == marker for line in first["lines"]))
         # The calculations stand on the valid lines alone.
         self.assertRegex(run.txt, r"first passing check \(log\)\s+3000\s+3000\n")
-        self.assertNoEcho(run)
+        self.assertNoEcho(run, self.BAD)
 
     def test_a_stopped_reason_that_is_no_string_is_the_marker(self):
         run = run_case(world([plan(stop_at_sample=1)], stopped_reason={"x": self.BAD}))
         self.assertEqual(4, run.code, run.stderr)
         self.assertEqual(fargate.MALFORMED, run.json["restarts"][0]["stop"]["reason"])
-        self.assertNoEcho(run)
+        self.assertNoEcho(run, self.BAD)
 
     def test_a_stop_code_that_is_a_number_gains_nothing_by_it(self):
         run = run_case(world([plan(stop_at_sample=1, stop=[int(FOREIGN), "exited"])]))
         self.assertEqual(4, run.code, run.stderr)
         self.assertEqual(fargate.MALFORMED, run.json["restarts"][0]["stop"]["code"])
         self.assertIn(f"stopped ({fargate.MALFORMED}), not for health.", run.stderr)
-        self.assertNoEcho(run)
+        self.assertNoEcho(run, int(FOREIGN))
 
     def test_legitimate_absence_stays_absent(self):
-        # git's own failure is the commit's fallback, not a malformed value; an absent StartedAt path
-        # still falls back with its reason (TheZero); an absent CloudWatch timestamp stays null.
+        # git's own failure is the commit's fallback, not a malformed value. The other legitimate
+        # absences are asserted where they live: the StartedAt fallback in TheZero, a null CloudWatch
+        # timestamp in TheValidators.
         run = run_case(world([plan(stable=False)]))
         self.assertEqual("unknown", run.json["facts"]["commit"])
         self.assertIn("commit unknown,", run.txt)
         self.assertEqual(4, run.code, run.stderr)
         self.assertNoEcho(run)
+
+
+class TheUnwritableReport(CaseBase):
+    def test_a_report_path_that_cannot_be_written_ends_on_a_fixed_line_with_no_traceback(self):
+        # write() raises before either file exists: the .txt's directory is missing. The path holds
+        # the foreign canary, so a traceback quoting it would also fail assertNoSecrets.
+        run = run_case(world([plan(stable=False)]), txt_name=f"missing{FOREIGN}/out.txt")
+        self.assertEqual(4, run.code, run.stderr)
+        self.assertIsNone(run.json)
+        self.assertFalse("Traceback" in run.stderr, "a traceback reached stderr")
+        self.assertIn("fargate: the report files could not be written (FileNotFoundError).\n", run.stderr)
+        self.assertIn("fargate: incomplete: ", run.stderr)
+        self.assertNotIn("wrote ", run.stdout)
+        self.assertNoSecrets(run)
 
 
 class TheProse(unittest.TestCase):
