@@ -44,7 +44,7 @@ RUN chmod -R a+rX,go-w /app
 # package manager, and a non-root user by default; -extra for its ICU and tzdata, since the mock API
 # does not set InvariantGlobalization either
 # (https://learn.microsoft.com/en-us/dotnet/core/docker/container-images#scenario-based-images).
-FROM mcr.microsoft.com/dotnet/aspnet:10.0-noble-chiseled-extra@sha256:9b755ea799ae649141a073e30d8b62d8095a5465af2b7694d17866e8c05131d8 AS final
+FROM mcr.microsoft.com/dotnet/aspnet:10.0-noble-chiseled-extra@sha256:cae5b962bfb786606def03d250c6a645cc98839095c89e806e4bd8978a68115b AS final
 WORKDIR /app
 
 # Off, as in the gateway's image: the runtime's debugger, profiler and EventPipe diagnostics, and

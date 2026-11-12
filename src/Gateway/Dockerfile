@@ -65,7 +65,7 @@ RUN chmod -R a+rX,go-w /app
 # (https://learn.microsoft.com/en-us/dotnet/core/docker/container-images#scenario-based-images).
 # Pinned by digest for the reason above the build stage's FROM. tools/image-check.sh fails an image
 # that has /bin/sh.
-FROM mcr.microsoft.com/dotnet/aspnet:10.0-noble-chiseled-extra@sha256:9b755ea799ae649141a073e30d8b62d8095a5465af2b7694d17866e8c05131d8 AS final
+FROM mcr.microsoft.com/dotnet/aspnet:10.0-noble-chiseled-extra@sha256:cae5b962bfb786606def03d250c6a645cc98839095c89e806e4bd8978a68115b AS final
 WORKDIR /app
 
 # Off: the runtime's debugger, profiler and EventPipe diagnostics, and with them the diagnostic port

@@ -29,7 +29,7 @@ RUN dotnet publish tools/bench/floor/Bench.Floor.csproj -a "$TARGETARCH" --no-re
 # The gateway's permission step, for the same reason: the final stage runs as $APP_UID (#204).
 RUN chmod -R a+rX,go-w /app
 
-FROM mcr.microsoft.com/dotnet/aspnet:10.0-noble-chiseled-extra@sha256:9b755ea799ae649141a073e30d8b62d8095a5465af2b7694d17866e8c05131d8 AS final
+FROM mcr.microsoft.com/dotnet/aspnet:10.0-noble-chiseled-extra@sha256:cae5b962bfb786606def03d250c6a645cc98839095c89e806e4bd8978a68115b AS final
 WORKDIR /app
 
 # The gateway's diagnostics switch: with it off the runtime opens no diagnostic port at start, so
