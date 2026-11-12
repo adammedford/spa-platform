@@ -88,7 +88,7 @@ Each is read with `dotnet --list-runtimes`, the image's from inside it:
 
 | Where | Read on 22 October 2026 | Command |
 | --- | --- | --- |
-| The gateway image | `Microsoft.NETCore.App` and `Microsoft.AspNetCore.App` 10.0.14, read on 3 November 2026 (#781); the final stage's `mcr.microsoft.com/dotnet/aspnet:10.0-noble-chiseled-extra` is pinned to manifest list `sha256:9b755ea799ae649141a073e30d8b62d8095a5465af2b7694d17866e8c05131d8` | `docker build -f src/Gateway/Dockerfile -t gateway . && docker run --rm --entrypoint dotnet gateway --list-runtimes`. `tools/image-check.sh` prints the same reading of the image it builds |
+| The gateway image | `Microsoft.NETCore.App` and `Microsoft.AspNetCore.App` 10.0.15, read on 11 November 2026 (#1176), clearing CVE-2026-114146, CVE-2026-114147 and CVE-2026-114149 in 10.0.14; the final stage's `mcr.microsoft.com/dotnet/aspnet:10.0-noble-chiseled-extra` is pinned to manifest list `sha256:cae5b962bfb786606def03d250c6a645cc98839095c89e806e4bd8978a68115b`, the tag's digest that day by `docker buildx imagetools inspect` | `docker build -f src/Gateway/Dockerfile -t gateway . && docker run --rm --entrypoint dotnet gateway --list-runtimes`. `tools/image-check.sh` prints the same reading of the image it builds |
 | CI's build job | SDK 10.0.402, runtime 10.0.13, as `actions/setup-dotnet` installs them from `global.json`; this reading is from setup-dotnet's install log (run 39713194106 on main), since the step that reads it lands with #273 | `dotnet --version && dotnet --list-runtimes`, the step after `setup-dotnet` in `.github/workflows/ci.yml` |
 | This workstation | SDK 10.0.401, runtime 10.0.12 | `dotnet --version && dotnet --list-runtimes` |
 
