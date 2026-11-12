@@ -53,7 +53,13 @@ TOKEN_CANARY = "TOKENCANARY13579bdf"
 # The repository canary is the URI without its account label, so it fails on its own once the
 # account has been redacted out of a URI that was not.
 REPOSITORY_TAIL = IMAGE.split("@")[0].split(".", 1)[1]
-SECRETS = (ACCOUNT, STATE_CANARY, COOKIE_CANARY, TOKEN_CANARY, REPOSITORY_TAIL, "arn:aws")
+# Another account's id (#976). The doubles plant it against letters, inside hex-like free text and
+# inside longer digit runs, wherever free text enters the script, so every case asserting no secret
+# has it on its way in: FOREIGN_FORMS is what the stop reason and the log's listening line carry.
+FOREIGN = "999988887777"
+FOREIGN_FORMS = (f"account{FOREIGN} x{FOREIGN}y a{FOREIGN} {('ab' + FOREIGN).ljust(32, 'c')} "
+                 f"{('ab' + FOREIGN).ljust(40, 'c')} {('ab' + FOREIGN).ljust(64, 'c')} 1{FOREIGN} {FOREIGN}{FOREIGN}")
+SECRETS = (ACCOUNT, FOREIGN, STATE_CANARY, COOKIE_CANARY, TOKEN_CANARY, REPOSITORY_TAIL, "arn:aws")
 APP_HOST = "app1.spa-poc.test:8443"
 BASE_S = 1792557666           # 2026-10-21T04:41:06Z, startup_tests.py's worked instant
 
@@ -83,15 +89,18 @@ def plan(**changes) -> dict:
         "health": [None, ["initial", "Elb.RegistrationInProgress"], ["initial", "Elb.InitialHealthChecking"],
                    ["healthy", None]],
         "stop_at_sample": None,                  # a stop for health after this many samples
-        "stop": ["ServiceSchedulerInitiated", f"Task failed ELB health checks in (target-group {TG_ARN})"],
+        "stop": ["ServiceSchedulerInitiated", f"Task failed ELB health checks in (target-group {TG_ARN}) {FOREIGN_FORMS}"],
         "probe_lands": ["new"],                  # each probe in turn, the last repeated
         "stable": True,
         "exec": "ok",
         "pull_started": 5000, "pull_stopped": 20000, "container_started": 21500, "started": 22000,
-        "log": [["Now listening on: http://[::]:8080", 900], ["Registry revision 42 (\"etag\") is live with 1 app(s).", 1500],
+        "log": [[f"Now listening on: http://[::]:8080 {FOREIGN_FORMS}", 900], ["Registry revision 42 (\"etag\") is live with 1 app(s).", 1500],
                 ["health", 503, 2000], ["health", 200, 3000], ["health", 200, 3100]],
         "redirect_ms": 640.5,
         "bad_created_at": False,                 # the new task's createdAt is no instant the script reads
+        "created_at": None,                      # the new task's createdAt as given, in place of the worked one
+        "deployment_id": None,                   # update-service's PRIMARY id, in place of the worked one
+        "probe_status_line": "HTTP/1.1 302 Found",
     }
     entry.update(changes)
     return entry
@@ -119,6 +128,13 @@ def world(plans=None, **changes) -> dict:
         "list_tasks_fail_at_poll": None,         # this list-tasks call (1-based) fails ThrottlingException
         "list_tasks_garbage_at_poll": None,      # this list-tasks call (1-based) exits 0 with no JSON
         "update_service_fail_at": None,          # this restart's (1-based) update-service fails ThrottlingException
+        "error_code": "ThrottlingException",     # the code those two failures name
+        "exec_error_code": "TargetNotConnectedException",
+        "account_answer": ACCOUNT,               # get-caller-identity's Account
+        "platform_version": "1.4.0",
+        "stopped_reason": None,                  # a stop's stoppedReason as given, in place of the plan's
+        "health_reason": None,                   # every target-health Reason as given, in place of the plan's
+        "arn_ids": {},                           # task n -> the id its ARN carries, in place of its own
     }
     document.update(changes)
     return document
@@ -165,7 +181,9 @@ def options_of(argv):
 
 
 def created_ns(task: dict) -> int:
-    return (BASE_S + task["n"] * 1000) * 1_000_000_000
+    # Modulo, so a case can give a task a number whose hex holds the account (#976) and its clocks
+    # stay in the worked range.
+    return (BASE_S + (task["n"] % 100_000) * 1000) * 1_000_000_000
 
 
 def task_json(document: dict, task: dict) -> dict:
@@ -173,7 +191,7 @@ def task_json(document: dict, task: dict) -> dict:
     entry = document["plans"][task["plan"]] if task.get("plan") is not None else plan()
     out = {
         "taskArn": task_arn(task["n"]), "lastStatus": task["last"], "desiredStatus": task["desired"],
-        "startedBy": task["startedBy"], "platformVersion": "1.4.0",
+        "startedBy": task["startedBy"], "platformVersion": document["platform_version"],
         "taskDefinitionArn": TD_ARN,
         "createdAt": iso(base),
         "pullStartedAt": iso(base + entry["pull_started"] * 1_000_000),
@@ -190,6 +208,12 @@ def task_json(document: dict, task: dict) -> dict:
     }
     if task.get("stop"):
         out["stopCode"], out["stoppedReason"] = task["stop"]
+        if document["stopped_reason"] is not None:
+            out["stoppedReason"] = document["stopped_reason"]
+    if str(task["n"]) in document["arn_ids"]:
+        out["taskArn"] = f"arn:aws:ecs:{REGION}:{ACCOUNT}:task/{CLUSTER}/{document['arn_ids'][str(task['n'])]}"
+    if task.get("plan") is not None and entry["created_at"] is not None and not task.get("decoy"):
+        out["createdAt"] = entry["created_at"]
     if task.get("plan") is not None and entry["bad_created_at"] and not task.get("decoy"):
         out["createdAt"] = "not an instant"
     return out
@@ -204,7 +228,10 @@ def log_events(case: pathlib.Path, document: dict, task: dict) -> list:
     zero = created_ns(task) + entry["container_started"] * 1_000_000
     lines = []
     for item in entry["log"]:
-        if item[0] == "health":
+        if item[0] == "raw":
+            # A line as given (#976): a "ts" it names stands, and "_event_timestamp" is CloudWatch's.
+            lines.append((dict(item[1]), item[2]))
+        elif item[0] == "health":
             lines.append(({"ts": None, "level": "info", "msg": "Request", "route": "health", "status": item[1],
                            "duration_ms": 1.2}, item[2]))
         else:
@@ -218,8 +245,10 @@ def log_events(case: pathlib.Path, document: dict, task: dict) -> list:
     events = []
     for line, at in sorted(lines, key=lambda pair: pair[1]):
         stamp = zero + at * 1_000_000
-        line["ts"] = iso(stamp, 7)
-        events.append({"timestamp": stamp // 1_000_000 + 200, "message": json.dumps(line), "ingestionTime": stamp // 1_000_000 + 900})
+        if line.get("ts") is None:
+            line["ts"] = iso(stamp, 7)
+        timestamp = line.pop("_event_timestamp", stamp // 1_000_000 + 200)
+        events.append({"timestamp": timestamp, "message": json.dumps(line), "ingestionTime": stamp // 1_000_000 + 900})
     return events
 
 
@@ -242,7 +271,7 @@ def answer_aws(case: pathlib.Path, argv: list) -> int:
         if not document["credentials"]:
             sys.stderr.write("\nUnable to locate credentials. You can configure credentials by running \"aws configure\".\n")
             return 253
-        out = {"UserId": "AROAEXAMPLE:operator", "Account": ACCOUNT, "Arn": f"arn:aws:sts::{ACCOUNT}:assumed-role/operator/x"}
+        out = {"UserId": "AROAEXAMPLE:operator", "Account": document["account_answer"], "Arn": f"arn:aws:sts::{ACCOUNT}:assumed-role/operator/x"}
     elif shape == "ecs describe-services" and options.get("cluster") == CLUSTER and options.get("services") == [SERVICE] \
             and document["service_gone_after"] is not None and document["restart"] >= document["service_gone_after"]:
         out = {"services": [], "failures": [{"arn": f"arn:aws:ecs:{REGION}:{ACCOUNT}:service/{CLUSTER}/{SERVICE}", "reason": "MISSING"}]}
@@ -280,7 +309,7 @@ def answer_aws(case: pathlib.Path, argv: list) -> int:
         document["list_polls"] += 1
         if document["list_tasks_fail_at_poll"] == document["list_polls"]:
             save(case, document)
-            return fail("ThrottlingException")
+            return fail(document["error_code"])
         if document["list_tasks_garbage_at_poll"] == document["list_polls"]:
             save(case, document)
             sys.stdout.write("<html>not json</html>")
@@ -310,11 +339,11 @@ def answer_aws(case: pathlib.Path, argv: list) -> int:
             raise Unexpected("a restart the world has no plan for")
         if document["update_service_fail_at"] == document["restart"] + 1:
             save(case, document)
-            return fail("ThrottlingException")
+            return fail(document["error_code"])
         index = document["restart"]
         entry = document["plans"][index]
         document["restart"] += 1
-        deployment = f"ecs-svc/{2000000000000000000 + index}"
+        deployment = entry["deployment_id"] or f"ecs-svc/{2000000000000000000 + index}"
         n = document["next_task"]
         document["next_task"] += 2
         document["tasks"][str(n)] = {"n": n, "startedBy": deployment, "desired": "RUNNING", "last": "PROVISIONING",
@@ -343,7 +372,7 @@ def answer_aws(case: pathlib.Path, argv: list) -> int:
             if sample is not None:
                 state = {"State": sample[0]}
                 if sample[1]:
-                    state["Reason"] = sample[1]
+                    state["Reason"] = sample[1] if document["health_reason"] is None else document["health_reason"]
                     state["Description"] = f"Target registration is in progress for {TG_ARN}"
                 descriptions.append({"Target": {"Id": ip_of(new["n"]), "Port": 8080}, "TargetHealth": state})
         save(case, document)
@@ -365,7 +394,7 @@ def answer_aws(case: pathlib.Path, argv: list) -> int:
             raise Unexpected("an exec on a task that is not the service's running one")
         kind = document["plans"][task["plan"]]["exec"]
         if kind == "no-session":
-            return fail("TargetNotConnectedException")
+            return fail(document["exec_error_code"])
         session = {"sessionId": "ecs-execute-command-0abc", "streamUrl": "wss://example", "tokenValue": TOKEN_CANARY}
         os.execvp("session-manager-plugin", ["session-manager-plugin", json.dumps(session), REGION, "StartSession", "",
                                              json.dumps({"kind": "exec", "task": task["n"]}), "https://ecs"])
@@ -391,10 +420,14 @@ def answer_plugin(case: pathlib.Path, argv: list) -> int:
         entry = document["plans"][task["plan"]]
         zero = created_ns(task) + entry["container_started"] * 1_000_000
         sys.stdout.write("\r\nStarting session with SessionId: ecs-execute-command-0abc\r\n")
-        if entry["exec"] == "ok":
+        if entry["exec"] in ("ok", "bad-drift"):
             container = {"DockerId": "x", "Name": GATEWAY, "StartedAt": iso(zero, 9, "Z")}
-            whole = {"Cluster": f"arn:aws:ecs:{REGION}:{ACCOUNT}:cluster/{CLUSTER}", "ClockDrift": {
-                "ClockErrorBound": 0.4, "ReferenceTimestamp": iso(zero, 9, "Z"), "ClockSynchronizationStatus": "SYNCHRONIZED"}}
+            drift = {"ClockErrorBound": 0.4, "ReferenceTimestamp": iso(zero, 9, "Z"), "ClockSynchronizationStatus": "SYNCHRONIZED"}
+            if entry["exec"] == "bad-drift":
+                # Each value malformed for its field, and an account's digits in each (#976).
+                drift = {"ClockErrorBound": f"BADVALUE{FOREIGN}", "ReferenceTimestamp": f"BADVALUE{FOREIGN}",
+                         "ClockSynchronizationStatus": {"nested": f"BADVALUE{FOREIGN}"}}
+            whole = {"Cluster": f"arn:aws:ecs:{REGION}:{ACCOUNT}:cluster/{CLUSTER}", "ClockDrift": drift}
             for name, body in (("CONTAINER", container), ("TASK", whole)):
                 sys.stdout.write(f"SPA-BENCH-BEGIN-{name}\r\nHTTP/1.0 200 OK\r\nContent-Type: application/json\r\n\r\n"
                                  f"{json.dumps(body)}\r\nSPA-BENCH-END-{name}\r\n")
@@ -444,7 +477,8 @@ def serve_forward(case: pathlib.Path, request: dict) -> int:
                 with open(probes, "a") as out:
                     out.write(json.dumps({"request": head[0], "headers": headers, "hop": hop, "restart": document["restart"],
                                           "task": int(document["new"]) if where == "new" else int(document["current"])}) + "\n")
-                tls.sendall((f"HTTP/1.1 302 Found\r\nLocation: https://idp.example/authorize?client_id=x&state={STATE_CANARY}\r\n"
+                status_line = document["plans"][document["restart"] - 1]["probe_status_line"]
+                tls.sendall((f"{status_line}\r\nLocation: https://idp.example/authorize?client_id=x&state={STATE_CANARY}\r\n"
                              f"Set-Cookie: .AspNetCore.Correlation.{STATE_CANARY}={COOKIE_CANARY}; path=/; secure; httponly\r\n"
                              "Content-Length: 0\r\n\r\n").encode())
         except (OSError, ssl.SSLError):

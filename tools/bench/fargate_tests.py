@@ -4,8 +4,9 @@ tools/bench/.
 
 The run itself needs the applied cell and about half an hour, and is #178's. What runs here is everything the
 script decides without AWS: the order of its calls, which task it measures, which hop it takes,
-which clocks it reads and how it labels them, when it stops and what it writes, and that nothing it
-writes holds a secret.
+which clocks it reads and how it labels them, when it stops and what it writes, and that what it
+writes keeps to the Secrecy paragraph: no secret that comes in as text or an unvalidated field shows,
+and only the four designated identifiers and validated measurements keep their digits.
 
 **The real script, a constructed environment.** Each case copies fargate.py into a repository tree
 of its own, with infra/envs/poc/outputs.json in contracts/infra-outputs.schema.json's shape, and runs
@@ -33,8 +34,13 @@ the locals in infra/modules/cell/ecs.tf.
 **Canaries.** The account id is in every ARN the doubles hand out (task, task definition, target
 group, the stop reason's target group) and in the gateway image's repository URI; the 302 carries a
 `state` and a cookie; the session the CLI hands session-manager-plugin for an exec or a port
-forward carries a session token. No output may hold any of them, nor the repository URI with its
-account label redacted, nor "arn:aws".
+forward carries a session token; another account's id, against letters, in hex-like free text and
+inside longer digit runs, is in the stop reason and the log's listening line (#976). No output may
+hold any of them as text, nor the repository URI with its account label redacted, nor "arn:aws".
+The one exception is Q223's: a validated measurement keeps its digits, so the caller's number can sit
+inside one, which TheSecrecyMatrix proves while checking that no string holds it. Absence
+alone proves nothing of a canary that never came in, so TheSecrecyMatrix asserts where each one's
+placeholder lands, and names each source and outcome no path connects.
 
 Run: python3 -I tools/bench/fargate_tests.py
 """
@@ -78,6 +84,7 @@ spec.loader.exec_module(doubles)
 ACCOUNT, REGION, CLUSTER, SERVICE, GATEWAY = doubles.ACCOUNT, doubles.REGION, doubles.CLUSTER, doubles.SERVICE, doubles.GATEWAY
 LOG_GROUP, DIGEST, IMAGE, TG_ARN, ALB = doubles.LOG_GROUP, doubles.DIGEST, doubles.IMAGE, doubles.TG_ARN, doubles.ALB
 SECRETS, APP_HOST, REPOSITORY_TAIL = doubles.SECRETS, doubles.APP_HOST, doubles.REPOSITORY_TAIL
+FOREIGN, FOREIGN_FORMS = doubles.FOREIGN, doubles.FOREIGN_FORMS
 plan, world, task_id, save = doubles.plan, doubles.world, doubles.task_id, doubles.save
 
 
@@ -130,7 +137,7 @@ class Run:
         self.code = done.returncode
         self.stdout = done.stdout
         self.stderr = done.stderr
-        self.txt_path = case / "out.txt"
+        self.txt_path = next(iter(sorted(case.glob("*.txt"))), case / "out.txt")
         self.json_path = case / "out.json"
         self.txt = self.txt_path.read_text() if self.txt_path.exists() else None
         self.json = json.loads(self.json_path.read_text()) if self.json_path.exists() else None
@@ -147,7 +154,8 @@ class Run:
         return [" ".join(word for word in call["argv"][2:4]) for call in self.calls if call["tool"] == "aws"]
 
 
-def run_case(document: dict, outputs: dict = None, region: str = REGION, extra=(), env_changes=None, ca: str = "ca.pem") -> Run:
+def run_case(document: dict, outputs: dict = None, region: str = REGION, extra=(), env_changes=None, ca: str = "ca.pem",
+             git_stdout: str = None, txt_name: str = "out.txt") -> Run:
     case = pathlib.Path(tempfile.mkdtemp(prefix="fargate-case-"))
     repo = case / "repo"
     (repo / "tools" / "bench").mkdir(parents=True)
@@ -171,7 +179,11 @@ def run_case(document: dict, outputs: dict = None, region: str = REGION, extra=(
         wrapper.write_text(f"#!/bin/sh\nexec '{sys.executable}' -I '{DOUBLES}' {name} '{case}' \"$@\"\n")
         wrapper.chmod(0o755)
     git = shutil.which("git")
-    if git:
+    if git_stdout is not None:
+        # What `git rev-parse HEAD` prints here is the case's, so a commit can hold what a case needs.
+        (bin_dir / "git").write_text(f"#!/bin/sh\nprintf '%s\\n' '{git_stdout}'\n")
+        (bin_dir / "git").chmod(0o755)
+    elif git:
         (bin_dir / "git").symlink_to(git)
     (case / "home").mkdir()
     save(case, document)
@@ -179,7 +191,7 @@ def run_case(document: dict, outputs: dict = None, region: str = REGION, extra=(
     if region is None:
         env.pop("AWS_REGION")
     env.update(env_changes or {})
-    argv = [sys.executable, "-I", str(repo / "tools" / "bench" / "fargate.py"), "--txt", str(case / "out.txt"),
+    argv = [sys.executable, "-I", str(repo / "tools" / "bench" / "fargate.py"), "--txt", str(case / txt_name),
             "--json", str(case / "out.json"), "--ca", str(case / ca), "--local-port", str(free_port()),
             "--poll-seconds", "0", "--probe-interval", "0", "--task-timeout", "20", "--health-timeout", "20",
             "--log-timeout", "1", "--probe-attempts", "5", "--forward-timeout", "20", *extra]
@@ -664,41 +676,568 @@ class Arithmetic(unittest.TestCase):
         self.assertEqual(1792557666_349093400, fargate.time_ns("2026-10-21T04:41:06.3490934+00:00"))
         self.assertEqual(1792557666_000000000, fargate.time_ns("2026-10-21T06:41:06+02:00"))
 
-    def test_redact_removes_arns_and_account_ids(self):
-        text = fargate.redact(f"failed in (target-group {TG_ARN}) for {ACCOUNT}", ACCOUNT)
-        self.assertNotIn(ACCOUNT, text)
-        self.assertNotIn("arn:aws", text)
-        # A deployment id's nineteen digits are not an account id.
-        self.assertEqual("ecs-svc/2000000000000000001", fargate.redact("ecs-svc/2000000000000000001"))
 
-    def test_redact_masks_any_twelve_digit_run_without_the_known_account(self):
-        # The fallback: with no account known (main()'s first err() calls) or another account's id
-        # in the text, every twelve-digit run standing alone still becomes <account id>. One that
-        # touches a letter or a digit is kept (test_redact_keeps_a_twelve_digit_run_inside_a_hex_id).
-        other = "999988887777"
-        for account in (None, ACCOUNT):
-            with self.subTest(account=account):
-                text = fargate.redact(f"role in {other}, trusted by {other}.", account)
-                self.assertEqual("role in <account id>, trusted by <account id>.", text)
-        self.assertEqual("ecs-svc/2000000000000000001 <account id>",
-                         fargate.redact(f"ecs-svc/2000000000000000001 {other}"))
+ACCOUNT_IN_A_NUMBER_NS = 1111222233330000000     # 2005-03-19T08:50:33.33Z: its digits hold ACCOUNT
+ACCOUNT_IN_A_NUMBER_MS = 1111222233330
 
-    def test_redact_keeps_a_twelve_digit_run_inside_a_hex_id(self):
-        # A sha256 digest (and a task id) can hold twelve digits in a row; that is no account id.
-        digest = "sha256:" + "f" + "123456789012" + "e" * 51
-        other = "999988887777"
-        for account in (None, ACCOUNT):
-            with self.subTest(account=account):
-                self.assertEqual(f"image @{digest} in task 9ab123456789012cd",
-                                 fargate.redact(f"image @{digest} in task 9ab123456789012cd", account))
-                self.assertEqual(f"@{digest} in <account id>", fargate.redact(f"@{digest} in {other}", account))
 
-    def test_redact_replaces_a_repository_uri_and_keeps_the_digest(self):
-        for account in (None, ACCOUNT):
-            with self.subTest(account=account):
-                text = fargate.redact(f"image {IMAGE} pulled", account)
-                self.assertEqual(f"image <repository>@{DIGEST} pulled", text)
-                self.assertNotIn(REPOSITORY_TAIL, text)
+def strings_in(value):
+    """Every string a parsed document holds, keys included; the numbers are left out on purpose."""
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            yield key
+            yield from strings_in(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from strings_in(item)
+
+
+class TheTextRule(unittest.TestCase):
+    """redact(): what happens to arbitrary text (Secrecy paragraph, #976 contract 4)."""
+
+    def test_every_run_of_twelve_or_more_digits_goes_whole_whatever_touches_it(self):
+        worked = {
+            f"in {FOREIGN}.": "in <account id>.",
+            f"account{FOREIGN}": "account<account id>",
+            f"x{FOREIGN}y": "x<account id>y",
+            f"1{FOREIGN}": "<account id>",
+            f"{FOREIGN}{FOREIGN}": "<account id>",
+            f"{ACCOUNT}4444": "<account id>",
+            "ecs-svc/2000000000000000001": "ecs-svc/<account id>",
+        }
+        for text, expected in worked.items():
+            with self.subTest(text):
+                self.assertEqual(expected, fargate.redact(text))
+
+    def test_an_identifier_shape_earns_arbitrary_text_nothing(self):
+        for length in (32, 40, 64):
+            with self.subTest(length):
+                token = ("ab" + FOREIGN).ljust(length, "c")
+                self.assertEqual(len(token), length)
+                self.assertEqual("ab<account id>" + "c" * (length - 14), fargate.redact(token))
+        self.assertEqual("sha256:<account id>" + "c" * 52, fargate.redact(f"sha256:{FOREIGN}" + "c" * 52))
+
+    def test_it_promises_literal_ascii_runs_of_twelve_and_nothing_more(self):
+        for kept in ("12345678901", "1234-5678-9012", "١" * 12):
+            with self.subTest(kept):
+                self.assertEqual(kept, fargate.redact(kept))
+
+    def test_a_repository_uri_and_an_arn_are_recognized_first(self):
+        # Were the digits replaced first, the URI would no longer be recognized and its path would stay.
+        self.assertEqual(f"image <repository>@{DIGEST} pulled", fargate.redact(f"image {IMAGE} pulled"))
+        self.assertEqual(f"x<repository>@{DIGEST}", fargate.redact(f"x{IMAGE}"))
+        self.assertEqual("in (target-group <arn>) for <account id>", fargate.redact(f"in (target-group {TG_ARN}) for {ACCOUNT}"))
+
+    def test_redacting_serialized_numbers_would_corrupt_them(self):
+        # The regression behind "before rendering or serialization": the broad pass this script used
+        # to run over its json.dumps makes a number a bare word and the document no JSON at all.
+        serialized = json.dumps({"event_timestamp_ms": ACCOUNT_IN_A_NUMBER_MS})
+        self.assertEqual(ACCOUNT_IN_A_NUMBER_MS, json.loads(serialized)["event_timestamp_ms"])
+        with self.assertRaises(ValueError):
+            json.loads(fargate.redact(serialized))
+
+
+class ThePublication(unittest.TestCase):
+    """publish_document(): the field paths, without a run. The real paths are in TheSecrecyMatrix."""
+
+    COMMIT = ("ab" + FOREIGN).ljust(40, "c")
+    TASK = ("ab" + FOREIGN).ljust(32, "c")
+    PICTURE = "sha256:" + ("ab" + FOREIGN).ljust(64, "c")
+    DEPLOYMENT = "ecs-svc/1999988887777000000"
+
+    def published(self, account=ACCOUNT):
+        return fargate.publish_document({
+            "facts": {"commit": self.COMMIT, "image_digest": self.PICTURE, "task_definition": f"{self.TASK}:7",
+                      "platform_version": self.COMMIT},
+            "reason": f"task {self.TASK}", "ending": "incomplete",
+            "restarts": [{"index": 1, "task_id": self.TASK, "hop_task": self.TASK, "deployment": self.DEPLOYMENT,
+                          "task_arn": TG_ARN, "created_ns": ACCOUNT_IN_A_NUMBER_NS,
+                          "stop": {"code": self.DEPLOYMENT, "reason": self.TASK},
+                          "samples": [{"at_ns": ACCOUNT_IN_A_NUMBER_NS, "state": self.TASK, "reason": self.DEPLOYMENT}],
+                          "lines": [{"ts": "2026-10-21T04:41:06.3490934+00:00", "ts_ns": ACCOUNT_IN_A_NUMBER_NS,
+                                     "route": self.TASK, "status": 200, "msg": self.COMMIT,
+                                     "duration_ms": 1.5, "event_timestamp_ms": ACCOUNT_IN_A_NUMBER_MS}]}],
+        }, account)
+
+    def test_the_same_string_stays_whole_in_its_designated_field_only(self):
+        document = self.published()
+        restart = document["restarts"][0]
+        self.assertEqual(self.COMMIT, document["facts"]["commit"])
+        self.assertEqual(self.PICTURE, document["facts"]["image_digest"])
+        self.assertEqual(self.TASK, restart["task_id"])
+        self.assertEqual(self.TASK, restart["hop_task"])
+        self.assertEqual(self.DEPLOYMENT, restart["deployment"])
+        masked_task = "ab<account id>" + "c" * 18
+        masked_commit = "ab<account id>" + "c" * 26
+        self.assertEqual(f"{masked_task}:7", document["facts"]["task_definition"])
+        self.assertEqual(masked_commit, document["facts"]["platform_version"])
+        self.assertEqual(f"task {masked_task}", document["reason"])
+        self.assertEqual("ecs-svc/<account id>", restart["stop"]["code"])
+        self.assertEqual(masked_task, restart["stop"]["reason"])
+        self.assertEqual(masked_task, restart["samples"][0]["state"])
+        self.assertEqual("ecs-svc/<account id>", restart["samples"][0]["reason"])
+        self.assertEqual(masked_task, restart["lines"][0]["route"])
+        self.assertEqual(masked_commit, restart["lines"][0]["msg"])
+
+    def test_a_designated_field_still_refuses_what_does_not_fit_its_grammar(self):
+        document = fargate.publish_document({"facts": {"commit": self.TASK, "image_digest": "sha256:" + "A" * 64},
+                                             "restarts": [{"task_id": self.COMMIT, "deployment": "ecs-svc/" + FOREIGN}]}, ACCOUNT)
+        self.assertEqual(fargate.MALFORMED, document["facts"]["commit"])
+        self.assertEqual(fargate.MALFORMED, document["facts"]["image_digest"])
+        self.assertEqual(fargate.MALFORMED, document["restarts"][0]["task_id"])
+        self.assertEqual(fargate.MALFORMED, document["restarts"][0]["deployment"])
+
+    def test_the_known_account_is_masked_inside_an_identifier_after_it_validates(self):
+        task = ("ab" + ACCOUNT).ljust(32, "c")
+        document = fargate.publish_document({"restarts": [{"task_id": task}]}, ACCOUNT)
+        self.assertEqual("ab<account id>" + "c" * 18, document["restarts"][0]["task_id"])
+
+    def test_a_validated_measurement_stays_a_number_holding_the_callers_digits(self):
+        document = self.published()
+        restart = document["restarts"][0]
+        self.assertEqual(ACCOUNT_IN_A_NUMBER_NS, restart["created_ns"])
+        self.assertEqual(ACCOUNT_IN_A_NUMBER_NS, restart["samples"][0]["at_ns"])
+        self.assertEqual(ACCOUNT_IN_A_NUMBER_NS, restart["lines"][0]["ts_ns"])
+        self.assertEqual(ACCOUNT_IN_A_NUMBER_MS, restart["lines"][0]["event_timestamp_ms"])
+        self.assertEqual(-1500.5, fargate.publish_document({"restarts": [{"created_ns": -1500.5}]}, ACCOUNT)["restarts"][0]["created_ns"])
+
+    def test_a_value_a_measurement_field_cannot_hold_is_the_marker(self):
+        for bad in (f"{FOREIGN}", True, float("nan"), float("inf"), [FOREIGN], {"n": FOREIGN}):
+            with self.subTest(repr(bad)):
+                document = fargate.publish_document({"restarts": [{"created_ns": bad}]}, ACCOUNT)
+                self.assertEqual(fargate.MALFORMED, document["restarts"][0]["created_ns"])
+
+    def test_a_field_this_policy_does_not_list_is_text_whatever_it_holds_or_is_called(self):
+        document = fargate.publish_document({"restarts": [{
+            "status": int(FOREIGN), "duration_ms": f"{FOREIGN}", "someday": {"task_id": FOREIGN, "n": int(FOREIGN)}}],
+            "elsewhere": int(FOREIGN)}, ACCOUNT)
+        restart = document["restarts"][0]
+        self.assertEqual("<account id>", restart["status"])
+        self.assertEqual("<account id>", restart["duration_ms"])
+        self.assertEqual('{"task_id": "<account id>", "n": <account id>}', restart["someday"])
+        self.assertEqual("<account id>", document["elsewhere"])
+
+    def test_a_text_field_holding_an_object_is_the_marker(self):
+        document = fargate.publish_document({"restarts": [{"stop": {"reason": {"x": FOREIGN}}}]}, ACCOUNT)
+        self.assertEqual(fargate.MALFORMED, document["restarts"][0]["stop"]["reason"])
+
+    def test_the_task_arn_stays_for_the_aws_calls_and_is_published_as_a_placeholder(self):
+        record = {"task_arn": TG_ARN, "task_id": self.TASK}
+        document = fargate.publish_document({"restarts": [record]}, ACCOUNT)
+        self.assertEqual("<arn>", document["restarts"][0]["task_arn"])
+        self.assertEqual(TG_ARN, record["task_arn"])
+
+    def test_a_message_keeps_a_published_identifier_and_redacts_the_rest(self):
+        task = fargate.publish_identifier(self.TASK, fargate.TASK_ID, ACCOUNT)
+        line = fargate.compose("task {task} on {host} after {n}", task=task, host=f"h{FOREIGN}", n=3)
+        self.assertEqual(f"task {self.TASK} on h<account id> after 3", line)
+        self.assertEqual(line, fargate.publish_text(line))
+        # Lost by an f-string, the type goes and the text is arbitrary again: it fails safe.
+        self.assertEqual(f"task {'ab<account id>' + 'c' * 18}", fargate.publish_text(f"task {self.TASK}"))
+
+
+class TheValidators(unittest.TestCase):
+    def test_an_instant_is_one_of_the_read_forms_and_nothing_else(self):
+        for bad in (True, None, [], "not an instant", "2026-10-21T04:41:06Z\n", " 2026-10-21T04:41:06Z",
+                    "2026-13-21T04:41:06Z", "2026-02-30T04:41:06Z", "2026-10-21T24:41:06Z", "2026-10-21T04:60:06Z",
+                    "2026-10-21T04:41:61Z", "2026-10-21T04:41:06+24:00", "٢026-10-21T04:41:06Z",
+                    float("nan"), float("inf"), 10 ** 400, -(10 ** 12)):
+            with self.subTest(repr(bad)[:40]):
+                with self.assertRaises(ValueError):
+                    fargate.time_ns(bad)
+        # A number stays the CLI's other timestamp format (the worked instant's seconds).
+        self.assertEqual(1792557666_000000000, fargate.time_ns(1792557666))
+        self.assertEqual(1792557666_500000000, fargate.time_ns(1792557666.5))
+
+    def test_a_log_line_keeps_only_values_valid_for_their_field(self):
+        ts = "2026-10-21T04:41:06.3490934+00:00"
+
+        def line(**fields):
+            return fargate.read_lines([{"timestamp": 1, "message": json.dumps({"ts": ts, **fields})}])[0]
+
+        for good in (100, 200, 302, 599):
+            self.assertEqual(good, line(status=good)["status"])
+        for bad in (99, 600, 200.0, True, "200", None, int(FOREIGN)):
+            with self.subTest(status=bad):
+                self.assertEqual(fargate.MALFORMED, line(status=bad)["status"])
+        for good in (0, 1.5, 640, 10 ** 11 - 1):
+            self.assertEqual(good, line(duration_ms=good)["duration_ms"])
+        for label, bad in (("-1", -1), ("'1.5'", "1.5"), ("True", True), ("None", None), ("inf", float("inf")),
+                           ("nan", float("nan")), ("10**400", 10 ** 400), ("10**11", 10 ** 11),
+                           ("10**11 as a float", 1e11), ("a twelve-digit number", int(FOREIGN))):
+            with self.subTest(duration_ms=label):
+                self.assertEqual(fargate.MALFORMED, line(duration_ms=bad)["duration_ms"])
+        self.assertEqual(fargate.MALFORMED, line(route={"x": FOREIGN})["route"])
+        self.assertNotIn("status", line())
+        self.assertNotIn("duration_ms", line())
+
+    def test_a_malformed_status_never_reads_as_the_passing_check_or_the_302(self):
+        ts = "2026-10-21T04:41:06.3490934+00:00"
+        marks = fargate.log_marks(fargate.read_lines([
+            {"message": json.dumps({"ts": ts, "route": "health", "status": 200.0})},
+            {"message": json.dumps({"ts": ts, "route": "asset", "status": 302.0})}]))
+        self.assertIsNone(marks["first_passing_check"])
+        self.assertIsNone(marks["redirect"])
+
+    def test_a_log_ts_is_a_string_a_malformed_one_marks_its_line_and_a_line_with_none_is_skipped(self):
+        lines = fargate.read_lines([
+            {"timestamp": 7, "message": json.dumps({"ts": f"BADVALUE{FOREIGN}", "route": "health", "status": 200, "msg": "m"})},
+            {"timestamp": "BADVALUE", "message": json.dumps({"ts": 1792557666, "route": "health", "status": 200})},
+            {"message": "not json"}, {"message": json.dumps(["a list"])}, {"message": json.dumps({"no": "ts"})}])
+        self.assertEqual([{"ts": fargate.MALFORMED, "event_timestamp_ms": 7},
+                          {"ts": fargate.MALFORMED, "event_timestamp_ms": fargate.MALFORMED}], lines)
+        # Neither counts as a health line nor a mark.
+        marks = fargate.log_marks(lines)
+        self.assertEqual(0, marks["health_lines"])
+        self.assertIsNone(marks["first_passing_check"])
+
+    def test_an_event_timestamp_is_a_whole_ms_instant(self):
+        ts = "2026-10-21T04:41:06.3490934+00:00"
+
+        def stamp(value):
+            return fargate.read_lines([{"timestamp": value, "message": json.dumps({"ts": ts})}])[0]["event_timestamp_ms"]
+
+        self.assertEqual(ACCOUNT_IN_A_NUMBER_MS, stamp(ACCOUNT_IN_A_NUMBER_MS))
+        self.assertIsNone(fargate.read_lines([{"message": json.dumps({"ts": ts})}])[0]["event_timestamp_ms"])
+        for bad in (1.5, -1, True, "1", 10 ** 20):
+            with self.subTest(repr(bad)):
+                self.assertEqual(fargate.MALFORMED, stamp(bad))
+
+    def test_a_task_id_is_the_arns_last_segment_in_its_grammar(self):
+        good = "0" * 31 + "a"
+        self.assertEqual(good, fargate.task_id_of(f"arn:aws:ecs:{REGION}:{ACCOUNT}:task/c/{good}"))
+        for bad in (f"arn:aws:ecs:{REGION}:{ACCOUNT}:task/c/{good.upper()}", f"arn:aws:ecs:{REGION}:{ACCOUNT}:task/c/{good}0", None, 7):
+            with self.subTest(repr(bad)):
+                self.assertIsNone(fargate.task_id_of(bad))
+
+
+class TheSecrecyMatrix(CaseBase):
+    """Real input-to-output paths, source by outcome and by sink. Each entry asserts the placeholder
+    where its canary lands, not only the canary's absence. An entry `unreachable` is a pair no code
+    path connects, named with the reason rather than counted as coverage."""
+
+    # The combinations no path connects:
+    #   stoppedReason, clean or refusal: a stop ends the run as breach or incomplete, and a refusal
+    #     is before any new task exists.
+    #   stoppedReason or a log line, stderr or stdout: the breach reason carries the stop's code and
+    #     placement, and the file holds the rest.
+    #   a log line, refusal: nothing is read from a stream before restart 1 and nothing is written.
+    #   the --txt path, refusal: the "wrote" line follows the files, which a refusal does not write.
+    #   any free text, breach's stderr: its reason is built from the task id, the code and placement,
+    #     so test_breach pins that line whole.
+    #   stderr, clean: a clean run says nothing on it, pinned empty by test_clean.
+    #   a log line, the .txt: report() renders no msg or route, so a log canary's only sink is the
+    #     .json.
+
+    @classmethod
+    def setUpClass(cls):
+        cls.path_name = f"report{FOREIGN}.txt"
+        plans = [plan(exec="no-session") for _ in range(10)]
+        cls.clean = run_case(world(plans, platform_version=f"LATEST-{FOREIGN}", exec_error_code=f"Target{FOREIGN}Exception"),
+                             txt_name=cls.path_name)
+
+    def test_clean(self):
+        run = self.clean
+        self.assertEqual(0, run.code, run.stderr)
+        self.assertNoSecrets(run)
+        self.assertEqual("", run.stderr)
+        # .txt: the platform version and the exec's error code are free text.
+        self.assertEqual("LATEST-<account id>", run.json["facts"]["platform_version"])
+        self.assertIn("platform version LATEST-<account id>", run.txt)
+        self.assertIn("no session: execute-command failed (Target<account id>Exception)", run.txt)
+        self.assertEqual("no session: execute-command failed (Target<account id>Exception)", run.json["restarts"][0]["zero"]["fallback"])
+        # .json: the log's listening line, in every form.
+        listening = run.json["restarts"][0]["marks"]["listening"]["msg"]
+        self.assertIn("account<account id> x<account id>y a<account id> ", listening)
+        self.assertIn("ab<account id>" + "c" * 18, listening)
+        self.assertIn("ab<account id>" + "c" * 50, listening)
+        self.assertTrue(listening.endswith(" <account id> <account id>"), listening)
+        # stdout: the --txt path is the operator's text.
+        self.assertIn("wrote ", run.stdout)
+        self.assertIn("report<account id>.txt", run.stdout)
+        # Identifiers, in each sink that carries them: their zeros are a twelve-digit run and more.
+        first = task_id(100)
+        self.assertIn("000000000000", first)
+        self.assertIn(f"#1 task {first} complete", run.txt)
+        self.assertEqual(first, run.json["restarts"][0]["task_id"])
+        self.assertIn(f"restart 2/10: deployment ecs-svc/2000000000000000001, hop through task {first}", run.stdout)
+        self.assertEqual("ecs-svc/2000000000000000000", run.json["restarts"][0]["deployment"])
+        self.assertEqual(task_id(1), run.json["restarts"][0]["hop_task"])
+
+    def test_the_commit_keeps_a_long_digit_run_where_arbitrary_text_would_lose_it(self):
+        # Digits of its own: the designated source keeps its run, so a canary in SECRETS cannot stand in it.
+        commit = ("ab" + "123456789012345").ljust(40, "c")
+        run = run_case(world([plan(stable=False)]), git_stdout=commit)
+        self.assertEqual(4, run.code, run.stderr)
+        self.assertEqual(commit, run.json["facts"]["commit"])
+        self.assertIn(f"commit {commit},", run.txt)
+
+    def test_breach(self):
+        plans = [plan(), plan(health=[None, ["initial", f"Elb.{FOREIGN}"], ["initial", "Elb.InitialHealthChecking"],
+                                      ["unhealthy", "Target.ResponseCodeMismatch"]],
+                              stop_at_sample=4)] + [plan() for _ in range(8)]
+        run = run_case(world(plans), txt_name=self.path_name)
+        self.assertEqual(3, run.code, run.stderr)
+        self.assertNoSecrets(run)
+        row = run.json["restarts"][1]
+        self.assertIn("(target-group <arn>) account<account id> x<account id>y", row["stop"]["reason"])
+        self.assertIn("ab<account id>" + "c" * 26, row["stop"]["reason"])
+        self.assertIn("stopped ServiceSchedulerInitiated: Task failed ELB health checks in (target-group <arn>) account<account id>", run.txt)
+        self.assertIn("account<account id>", row["marks"]["listening"]["msg"])
+        self.assertEqual("Elb.<account id>", row["samples"][1]["reason"])
+        # The reason the task's id stays whole in, on stderr and in both files.
+        self.assertRegex(run.stderr, rf"^fargate: breach: the scheduler stopped task {task_id(102)} for failing the load balancer's "
+                                     r"health checks \(ServiceSchedulerInitiated\), seen at T0 \+ -?\d+\.\.-?\d+ s, before the T0 \+ 60 s hard bound\n$")
+        self.assertIn(f"ending: BREACH on restart 2: the scheduler stopped task {task_id(102)} ", run.txt)
+        self.assertIn(f"stopped task {task_id(102)} ", run.json["reason"])
+        self.assertIn("report<account id>.txt", run.stdout)
+
+    def test_incomplete_a_stop_not_for_health_carries_its_code_and_reason(self):
+        plans = [plan(stop_at_sample=1, stop=[f"Code{FOREIGN}", f"Essential container of task {task_id(100)} exited {FOREIGN_FORMS}"])]
+        run = run_case(world(plans), txt_name=self.path_name)
+        self.assertEqual(4, run.code, run.stderr)
+        self.assertNoSecrets(run)
+        self.assertEqual(f"restart 1: task {task_id(100)} stopped (Code<account id>), not for health.", run.json["reason"])
+        self.assertIn(f"fargate: incomplete: restart 1: task {task_id(100)} stopped (Code<account id>), not for health.\n", run.stderr)
+        self.assertIn(f"INCOMPLETE after 0 complete restart(s): restart 1: task {task_id(100)} stopped (Code<account id>)", run.txt)
+        # The task's own id, as arbitrary text in the reason and whole in its designated field.
+        self.assertEqual(task_id(100), run.json["restarts"][0]["task_id"])
+        self.assertIn("Essential container of task <account id> exited account<account id> x<account id>y", run.json["restarts"][0]["stop"]["reason"])
+        self.assertIn("Essential container of task <account id> exited account<account id> x<account id>y", run.txt)
+        self.assertIn("report<account id>.txt", run.stdout)
+
+    def test_incomplete_an_aws_error_code_is_text(self):
+        run = run_case(world([plan()], update_service_fail_at=1, error_code=f"Thing{FOREIGN}Exception"))
+        self.assertEqual(4, run.code, run.stderr)
+        self.assertNoSecrets(run)
+        self.assertEqual("an AWS call failed (Thing<account id>Exception)", run.json["reason"])
+        self.assertIn("fargate: incomplete: an AWS call failed (Thing<account id>Exception)\n", run.stderr)
+        self.assertIn("INCOMPLETE after 0 complete restart(s): an AWS call failed (Thing<account id>Exception)", run.txt)
+
+    def test_refusal_says_the_code_as_text_and_writes_no_report(self):
+        run = run_case(world(list_tasks_fail_at_poll=2, error_code=f"Thing{FOREIGN}Exception"))
+        self.assertEqual(2, run.code, run.stderr)
+        self.assertIsNone(run.txt)
+        self.assertIsNone(run.json)
+        self.assertEqual([], list(run.case.glob("out.*")))
+        self.assertNoSecrets(run)
+        self.assertEqual("fargate: an AWS call failed before restart 1 (Thing<account id>Exception).\n", run.stderr)
+        # stdout before the first update-service is the one fixed line of expected length.
+        self.assertTrue(run.stdout.startswith("fargate: ten restarts, about half an hour"), run.stdout)
+        self.assertEqual(1, len(run.stdout.splitlines()))
+
+    def test_incidental_digits_a_measurement_keeps_and_a_string_never_shows(self):
+        # Contract 3's exception, on the real path: a createdAt and a log event's timestamp whose
+        # digits hold the caller's number, and calculations from them unchanged.
+        created = doubles.iso(ACCOUNT_IN_A_NUMBER_NS)
+        log = [["Now listening on: http://[::]:8080", 900], ["Registry revision 42 (\"etag\") is live with 1 app(s).", 1500],
+               ["health", 200, 3000],
+               ["raw", {"msg": "Request", "route": "health", "status": 200, "duration_ms": 1.2,
+                        "_event_timestamp": ACCOUNT_IN_A_NUMBER_MS}, 3100]]
+        finished = run_case(world([plan(created_at=created, log=log), plan(stable=False)]))
+        self.assertEqual(4, finished.code, finished.stderr)
+        first = finished.json["restarts"][0]
+        self.assertEqual(ACCOUNT_IN_A_NUMBER_NS, first["created_ns"])
+        stamps = [line["event_timestamp_ms"] for line in first["lines"]]
+        self.assertIn(ACCOUNT_IN_A_NUMBER_MS, stamps)
+        self.assertIs(type(stamps[-1]), int)
+        for text in strings_in(finished.json):
+            self.assertNotIn(ACCOUNT, text)
+        self.assertIn(ACCOUNT, finished.json_path.read_text(), "the number's digits are the exception this case proves")
+        # startedAt, BASE_S + 100 000 s + 22 s, less the createdAt above: a value a pass over the
+        # rendered report would mask, and the calculation the valid input always gave.
+        self.assertRegex(finished.txt, r"#1 task \w+ complete: pull-and-place 681435454670 ")
+        # The others are as the worked world gives them.
+        self.assertRegex(finished.txt, r"listening \(log\)\s+900\s+900\n")
+
+    def test_a_known_account_inside_identifiers_is_masked_and_the_aws_calls_keep_the_real_one(self):
+        number = int(ACCOUNT, 16)
+        collided = f"{number:032x}"
+        self.assertIn(ACCOUNT, collided)
+        digest = "sha256:" + ACCOUNT + "a" * 52
+        image = f"{ACCOUNT}.dkr.ecr.{REGION}.amazonaws.com/spa-poc/gateway@{digest}"
+        document = world([plan(stable=False, deployment_id=f"ecs-svc/{ACCOUNT}0000000", decoy=False)],
+                         td_image=image, next_task=number)
+        document["tasks"]["1"]["digest"] = digest
+        run = run_case(document, outputs={"gatewayImage": image}, git_stdout=(ACCOUNT + "a" * 28))
+        self.assertEqual(4, run.code, run.stderr)
+        self.assertNoUnexpectedCalls(run)
+        self.assertNoSecrets(run)
+        self.assertEqual("<account id>" + "a" * 28, run.json["facts"]["commit"])
+        self.assertEqual("sha256:<account id>" + "a" * 52, run.json["facts"]["image_digest"])
+        restart = run.json["restarts"][0]
+        self.assertEqual("ecs-svc/<account id>0000000", restart["deployment"])
+        self.assertEqual("0" * 20 + "<account id>", restart["task_id"])
+        self.assertIn("deployment ecs-svc/<account id>0000000,", run.stdout)
+        self.assertIn(f"#1 task {'0' * 20}<account id> ", run.txt)
+        # The stream the script read is the task's real one: a masked id would name no stream.
+        streams = {argv[argv.index("--log-stream-name") + 1] for argv in run.aws("logs", "get-log-events")}
+        self.assertEqual({f"{GATEWAY}/{GATEWAY}/{collided}"}, streams)
+
+
+class TheMalformedValues(CaseBase):
+    """A malformed value supplied, against one legitimately absent (#976 contract 5). Each test hands
+    assertNoEcho the values it rejected, which it looks for whole in every output, so an echo of any
+    of them turns its case red. BAD holds BADVALUE and the foreign canary, and every case also checks
+    that BADVALUE shows nowhere."""
+
+    BAD = f"BADVALUE{FOREIGN}"
+
+    def assertNoEcho(self, run, *rejected):
+        self.assertNoSecrets(run)
+        for name, text in (("txt", run.txt), ("json", run.json_path.read_text() if run.json_path.exists() else None),
+                           ("stderr", run.stderr), ("stdout", run.stdout)):
+            # assertFalse, not assertNotIn, so that a failure names the output and never prints the value.
+            for value in ("BADVALUE", *(str(value) for value in rejected if value is not None)):
+                self.assertFalse(value in (text or ""), f"a rejected value reached the {name}")
+
+    def assertRefused(self, run, says, *rejected):
+        self.assertEqual(2, run.code, run.stderr)
+        self.assertIsNone(run.txt)
+        self.assertIsNone(run.json)
+        self.assertEqual([], run.aws("ecs", "update-service"))
+        self.assertIn(says, run.stderr)
+        self.assertNoEcho(run, *rejected)
+
+    def test_a_malformed_image_digest_is_refused_before_restart_1(self):
+        for digest in (f"sha256:{self.BAD}", "sha256:" + "A" * 64, "sha256:" + "a" * 63):
+            with self.subTest(digest):
+                image = f"{ACCOUNT}.dkr.ecr.{REGION}.amazonaws.com/spa-poc/gateway@{digest}"
+                self.assertRefused(run_case(world(td_image=image), outputs={"gatewayImage": image}), "not pinned by digest", digest)
+
+    def test_a_malformed_caller_account_is_refused_before_restart_1(self):
+        for answer in (self.BAD, "12345678901", None, 111122223333):
+            with self.subTest(repr(answer)):
+                self.assertRefused(run_case(world(account_answer=answer)), "no well-formed account id", answer)
+
+    def test_a_malformed_task_id_on_the_hop_of_restart_1_is_refused(self):
+        run = run_case(world(arn_ids={"1": self.BAD}))
+        self.assertRefused(run, "holds no well-formed task id", self.BAD)
+
+    def test_a_malformed_task_id_on_the_new_task_is_incomplete(self):
+        run = run_case(world(arn_ids={"100": self.BAD}))
+        self.assertEqual(4, run.code, run.stderr)
+        self.assertEqual("incomplete", run.json["ending"])
+        self.assertEqual(1, len(run.aws("ecs", "update-service")))
+        self.assertIn("holds no well-formed task id", run.json["reason"])
+        self.assertNotIn("task_id", run.json["restarts"][0])
+        self.assertNoEcho(run, self.BAD)
+
+    def test_a_malformed_deployment_id_is_incomplete_since_update_service_was_sent(self):
+        for deployment in (self.BAD, "ecs-svc/123", "ecs-svc/" + "1" * 20):
+            with self.subTest(deployment):
+                run = run_case(world([plan(deployment_id=deployment)]))
+                self.assertEqual(4, run.code, run.stderr)
+                self.assertEqual(1, len(run.aws("ecs", "update-service")))
+                self.assertEqual("update-service named a malformed PRIMARY deployment id on restart 1.", run.json["reason"])
+                self.assertNotIn("deployment", run.json["restarts"][0])
+                self.assertNoEcho(run, deployment)
+
+    def test_a_malformed_required_instant_is_incomplete(self):
+        run = run_case(world([plan(created_at=self.BAD)]))
+        self.assertEqual(4, run.code, run.stderr)
+        self.assertEqual("an unexpected ValueError", run.json["reason"])
+        self.assertNoEcho(run, self.BAD)
+
+    def test_a_malformed_302_duration_is_incomplete_where_an_absent_one_is_not(self):
+        def world_with(fields):
+            log = plan()["log"] + [["raw", {"msg": "Request", "route": "asset", "status": 302, **fields}, 30000]]
+            return world([plan(log=log), plan(stable=False)])
+
+        # A string, and a number no request takes: a twelve-digit id in a numeric field is no
+        # measurement for being a number (#976 contract 3, valid_duration's bound).
+        for label, bad in (("a string", self.BAD), ("a twelve-digit number", int(FOREIGN))):
+            with self.subTest(label):
+                run = run_case(world_with({"duration_ms": bad}))
+                self.assertEqual(4, run.code, run.stderr)
+                self.assertEqual(1, len(run.aws("ecs", "update-service")))
+                self.assertEqual(f"restart 1: task {task_id(100)}'s 302 line holds a malformed duration_ms.", run.json["reason"])
+                self.assertEqual(fargate.MALFORMED, run.json["restarts"][0]["marks"]["redirect"]["duration_ms"])
+                self.assertFalse(run.json["restarts"][0]["complete"])
+                self.assertNoEcho(run, bad)
+        # The same line with none: the benchmark's existing absence, a row with no value.
+        absent = run_case(world_with({}))
+        self.assertEqual(2, len(absent.aws("ecs", "update-service")))
+        self.assertTrue(absent.json["restarts"][0]["complete"])
+        self.assertNotIn("duration_ms", absent.json["restarts"][0]["marks"]["redirect"])
+        self.assertRegex(absent.txt, r"#1 task \w+ complete: .*, 302 - ms at")
+
+    def test_malformed_optional_diagnostics_are_the_marker_and_the_run_is_valid(self):
+        log = plan()["log"] + [
+            ["raw", {"msg": "Request", "route": {"x": self.BAD}, "status": self.BAD, "duration_ms": self.BAD,
+                     "_event_timestamp": self.BAD}, 3200],
+            ["raw", {"ts": self.BAD, "msg": "Request", "route": "health", "status": 200}, 3300]]
+        plans = [plan(log=log, exec="bad-drift", probe_status_line=f"HTTP/1.1 {FOREIGN} Found"),
+                 plan(stable=False, probe_status_line="HTTP/1.1 BADVALUE Found")]
+        run = run_case(world(plans, health_reason=[self.BAD]), git_stdout=self.BAD)
+        self.assertEqual(4, run.code, run.stderr)
+        self.assertEqual(2, len(run.aws("ecs", "update-service")))
+        first = run.json["restarts"][0]
+        self.assertTrue(first["complete"])
+        marker = fargate.MALFORMED
+        self.assertEqual(marker, run.json["facts"]["commit"])
+        self.assertIn(f"commit {marker},", run.txt)
+        self.assertEqual({"ClockErrorBound": marker, "ReferenceTimestamp": marker, "ClockSynchronizationStatus": marker},
+                         first["zero"]["clock_drift"])
+        self.assertIn(f"ClockDrift bound {marker} ms, {marker}", run.txt)
+        self.assertEqual(marker, first["probes"][0]["status"])
+        self.assertEqual(marker, run.json["restarts"][1]["probes"][0]["status"])
+        self.assertEqual(marker, first["samples"][1]["reason"])
+        odd = next(line for line in first["lines"] if line.get("route") == marker)
+        self.assertEqual((marker, marker, marker), (odd["status"], odd["duration_ms"], odd["event_timestamp_ms"]))
+        self.assertTrue(any(line["ts"] == marker for line in first["lines"]))
+        # The calculations stand on the valid lines alone.
+        self.assertRegex(run.txt, r"first passing check \(log\)\s+3000\s+3000\n")
+        self.assertNoEcho(run, self.BAD)
+
+    def test_a_stopped_reason_that_is_no_string_is_the_marker(self):
+        run = run_case(world([plan(stop_at_sample=1)], stopped_reason={"x": self.BAD}))
+        self.assertEqual(4, run.code, run.stderr)
+        self.assertEqual(fargate.MALFORMED, run.json["restarts"][0]["stop"]["reason"])
+        self.assertNoEcho(run, self.BAD)
+
+    def test_a_stop_code_that_is_a_number_gains_nothing_by_it(self):
+        run = run_case(world([plan(stop_at_sample=1, stop=[int(FOREIGN), "exited"])]))
+        self.assertEqual(4, run.code, run.stderr)
+        self.assertEqual(fargate.MALFORMED, run.json["restarts"][0]["stop"]["code"])
+        self.assertIn(f"stopped ({fargate.MALFORMED}), not for health.", run.stderr)
+        self.assertNoEcho(run, int(FOREIGN))
+
+    def test_legitimate_absence_stays_absent(self):
+        # git's own failure is the commit's fallback, not a malformed value. The other legitimate
+        # absences are asserted where they live: the StartedAt fallback in TheZero, a null CloudWatch
+        # timestamp in TheValidators.
+        run = run_case(world([plan(stable=False)]))
+        self.assertEqual("unknown", run.json["facts"]["commit"])
+        self.assertIn("commit unknown,", run.txt)
+        self.assertEqual(4, run.code, run.stderr)
+        self.assertNoEcho(run)
+
+
+class TheUnwritableReport(CaseBase):
+    def test_a_report_path_that_cannot_be_written_ends_on_a_fixed_line_with_no_traceback(self):
+        # write() raises before either file exists: the .txt's directory is missing. The path holds
+        # the foreign canary, so a traceback quoting it would also fail assertNoSecrets.
+        run = run_case(world([plan(stable=False)]), txt_name=f"missing{FOREIGN}/out.txt")
+        self.assertEqual(4, run.code, run.stderr)
+        self.assertIsNone(run.json)
+        self.assertFalse("Traceback" in run.stderr, "a traceback reached stderr")
+        self.assertIn("fargate: the report files could not be written (FileNotFoundError).\n", run.stderr)
+        self.assertIn("fargate: incomplete: ", run.stderr)
+        self.assertNotIn("wrote ", run.stdout)
+        self.assertNoSecrets(run)
+
+
+class TheProse(unittest.TestCase):
+    def test_the_docstrings_state_the_division_and_drop_the_old_claims(self):
+        module = " ".join(fargate.__doc__.split())
+        self.assertIn("**Secrecy** (Q7, amended by #976's confirmed answers).", module)
+        self.assertIn("An identifier-shaped token in arbitrary text is not an exception.", module)
+        for doc in (module, " ".join(fargate.redact.__doc__.split())):
+            for old in ("One exception", "Nothing this script reads", "tunnel.sh's session filter", "every line written passed through"):
+                self.assertNotIn(old, doc)
 
 
 class TheDoubles(unittest.TestCase):
