@@ -6,6 +6,8 @@
   decision 4's list loses a change request's status line, and a change request, once decided, is
   committed as an integrator ticket on its decision comment; a change request may be filed from a
   pre-accepted answer, as it asks and decides nothing; the other decisions are unchanged.
+  **Amended 2026-11-13 by [ADR-0037](0037-foreground-confirm-posting.md):** decision 2
+  defines when a foreground session may post the human's confirmation.
 - **Date:** 2026-10-17
 - **Deciders:** integrator
 - **Plan ref:** No decision row. The grill of #78 (the morning workflow spec), questions Q1, Q2, Q7

@@ -351,9 +351,11 @@ head after `--pr`, is refused with both forms named.
 
 ## Drafting a Confirm comment
 
-A `Confirm` comment on an `Overnight <date>` issue is Adam's act, and no agent session posts one
-(`docs/agents/tracker-policy.md`). A session that drafts one for him writes the draft to a file and
-runs the morning's own parser over it and the issue's comments before handing it over:
+A `Confirm` comment on an `Overnight <date>` issue is Adam's act. No scripted session posts one,
+and a foreground session posts one only on Adam's words given in that session
+(`docs/agents/tracker-policy.md`, ADR-0037). A session that drafts one for him writes the draft
+to a file and runs the morning's own parser over it and the issue's comments before handing it over
+or posting it, and posts it only when the check exits 0 or Adam accepts what it reports:
 
 ```bash
 gh issue view <n> --json comments > .scratch/overnight/log/confirm-<date>-comments.json
