@@ -73,7 +73,8 @@ ADR-0020 records the decision and its reasons. What it adds to `docs/agents/issu
   the ticket's work may rest on and cite by URL, and it authorises no steering change the ticket's
   acceptance criteria do not ask for, which stays a change request (ADR-0032 decision 3). A
   question a grill numbered is answered by his `Confirm` on the run's `Overnight <date>` issue,
-  which no session writes. Every session posts as `@adammedford`, so this is a convention the
+  which a session posts only as the `Confirm` rule under "A body is rewritten only to carry
+  confirmed decisions" allows. Every session posts as `@adammedford`, so this is a convention the
   shared account cannot enforce: the prompts and the reviewer guard it, as they guard the `Confirm`
   rule. #435's Rows-prefix decision of 2026-10-29 is the precedent, posted under the Deciding rule
   before this one was written.
@@ -84,8 +85,10 @@ ADR-0020 records the decision and its reasons. What it adds to `docs/agents/issu
   question number applied and posts the changed paragraphs as a diff in a comment headed with the
   date; the previous body verbatim is the issue's edit history, which GitHub keeps for every edit.
   Whoever rewrites ticks or unticks an acceptance box only for work done or undone. The overnight
-  grill comments; it never rewrites. A `Confirm` comment is the human's act: no agent session
-  writes one.
+  grill comments; it never rewrites. A `Confirm` comment is the human's act: no scripted session
+  writes one, and a foreground session posts one only on Adam's words given in that session, after
+  the check in `docs/agents/landing-work.md` → "Drafting a Confirm comment", its last line "Posted
+  from a foreground session on Adam's words in it." (ADR-0037).
 - **Current claims are the issue's fields; everything written is dated.** What an issue claims now
   is its state, labels, assignee, sub-issue and blocked-by relationships, corrected in place, and
   its body under the rule above; "Lifecycle: not labels" below says
@@ -203,8 +206,8 @@ A scripted session never posts a comment whose first line begins `Decision:`. It
 A foreground session may post a decision comment only on Adam's words given in that session, under
 "A decision Adam gives in a session" (above): its first line is the `Decision:` form, not that
 rule's heading, and its last line is that rule's. Every session posts as `@adammedford`, so this is
-a convention the shared account cannot enforce, as the rule that no agent session writes a
-`Confirm` is (above): the prompts and the reviewer guard it.
+a convention the shared account cannot enforce, as the `Confirm` rule is (above): the prompts
+and the reviewer guard it.
 
 A `Confirm` on the Overnight issue never authorises a change request's edit; only the request's
 decision comment does. `.github/steering.py` reads only a cited comment's author, so it cannot tell
