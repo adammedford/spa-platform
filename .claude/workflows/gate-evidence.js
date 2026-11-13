@@ -151,6 +151,7 @@ const SCOPE = S({
   idTables: { type: 'array', items: S({ document: str, lines: strs }) },
   gateRegister: S({ exists: bool, lines: strs }),
   rowStates: { type: 'object' },
+  ticketStates: { type: 'object' },
   changeRequests: { type: 'array', items: S({ number: int, title: str, state: str, labels: strs, rowsLine: str, blocking: { type: 'array', items: S({ number: int, state: str }) } }) },
   changeRequestsRead: S({ ok: bool, why: str }),
   openIssues: { type: 'array', items: S({ number: int, title: str, rows: strs, label: str, assignee: str }) },
@@ -424,9 +425,13 @@ const registerOfLines = (reg) => {
   return { gates, problems }
 }
 // What would run a deployed clause, by the gate (Q10 of #364): an export gate's deployed runs are
-// Phase 1's rows; G6's are #348's sitting, whose rows run through #358's deployed class. A register
-// gate with no entry here names none, rather than pointing at Phase 1's runs.
-const WOULD_RUN = { G6: "#348's sitting, which runs each deployed row through #358's deployed class" }
+// Phase 1's rows; G6's are #348's sitting, whose rows run through #358's deployed class, and G9's are
+// #1011's, whose rows run through #1005's. A register gate with no entry here names none, rather than
+// pointing at Phase 1's runs.
+const WOULD_RUN = {
+  G6: "#348's sitting, which runs each deployed row through #358's deployed class",
+  G9: "#1011's sitting, which runs each deployed row through #1005's deployed class",
+}
 const PHASE_1_RUNS = 'the deployed gate runs of row 6.9 over the tunnel of row 1.6b with the deploy scripts of row 1.7'
 const wouldRunOf = (gate, fromRegister) => (!fromRegister ? PHASE_1_RUNS : WOULD_RUN[gate] || `nothing is named for ${gate}'s deployed clauses yet, so say so`)
 
@@ -519,7 +524,7 @@ const idVerdict = (tier, tests) => {
 // each one raw and the code decides, so the companion can hold it (Q1). A request is counted only
 // when its state is OPEN and its labels include change-request, which repeats the listing's own
 // filter so that a closed or unlabelled one served anyway holds nothing. A row waits on a request
-// in two ways: (a) the request's **Rows:** line names the row, parsed to exact row ids, no range
+// in three ways: (a) the request's **Rows:** line names the row, parsed to exact row ids, no range
 // expanded, split on commas, whitespace and the word "and", a token that is no plan row
 // withholding the tag (Q4). A served rowsLine that is not empty and does not begin **Rows:**
 // names no row and withholds the tag, quoting the line: the prompt asks only for a line that
@@ -527,7 +532,9 @@ const idVerdict = (tier, tests) => {
 // comment, 6509327875; CODING_STANDARDS.md, "A check fails closed"); (b) the request blocks an OPEN issue whose
 // title names the row as a whole token (Q3): bodies name neighbouring rows, so a body mention keeps
 // only the "open issue #n carries it" annotation. A title's tokens split on everything but letters,
-// digits, "." and "-", so P2-1 never matches P2-10 and 1.6 never matches 1.6a.
+// digits, "." and "-", so P2-1 never matches P2-10 and 1.6 never matches 1.6a; (c) the request
+// blocks the OPEN issue N that a stage row written issue-N names (#1057), whether or not openIssues
+// serves it.
 const REQUEST_LABEL = 'change-request'
 const ROWS_LINE = /^\*\*Rows:\*\*/
 const rowTokens = (text) => text.split(/[^A-Za-z0-9.\-]+/).filter(Boolean)
@@ -547,7 +554,10 @@ const requestsOf = (crs, openIssues, rowIds) => {
     const { rows, unknown, stray } = rowsLineOf(c, rowIds)
     const waits = rows.map((row) => ({ row, via: `its Rows line names ${row}` }))
     for (const b of c.blocking || []) {
-      if (b.state !== 'OPEN' || !titled.has(b.number)) continue
+      if (b.state !== 'OPEN') continue
+      const own = `issue-${b.number}`
+      if (rowIds.has(own)) waits.push({ row: own, via: `it blocks ${'#' + b.number}, the ticket this row names` })
+      if (!titled.has(b.number)) continue
       for (const row of titled.get(b.number)) if (rowIds.has(row)) waits.push({ row, via: `it blocks ${'#' + b.number}, whose title names ${row}` })
     }
     return { number: c.number, title: c.title, waits, unknown, stray }
@@ -560,6 +570,7 @@ const rowDone = (row, state, audit, waits, idState) => {
   const why = []
   if (state !== 'landed') why.push(state === 'part-landed' ? 'part-landed: no merge names it as landed' : `not landed (${state || 'unknown'})`)
   if (audit) {
+    if (!audit.merges.length) why.push('the audit read no merge naming it')
     const out = audit.merges.flatMap((m) => m.outstanding)
     if (out.length) why.push(`outstanding: ${out.join('; ')}`)
     for (const m of audit.merges) if (m.ownership !== 'pass') why.push(`the ownership check ${m.ownership === 'fail' ? 'fails' : 'could not run'} on ${m.sha.slice(0, 7)}${m.ownershipDetail ? `: ${m.ownershipDetail}` : ''}`)
@@ -636,8 +647,8 @@ DATE ARGUMENT: ${JSON.stringify(A.date || '')}
 1. \`git -C ${REPO} fetch origin --tags\`. If it fails, stop: fetched false, reason its error, every other field empty. originMain is \`git -C ${REPO} ls-remote origin refs/heads/main\`, its sha. base is the BASE ARGUMENT resolved with \`git -C ${REPO} rev-parse --verify <it>^{commit}\`, or originMain when it is "". date is the DATE ARGUMENT, or \`date +%F\` when it is "". Record the checkout as it is now, \`mkdir -p ${LOG}/<date>-<base's first 12>\` and \`git -C ${REPO} status --porcelain --untracked-files=all > ${LOG}/<date>-<base's first 12>/checkout-at-start.txt\`.
 2. tagsReachable: \`git -C ${REPO} for-each-ref --merged <base> --format=%(refname:short) refs/tags\`. tagsAll: \`git -C ${REPO} for-each-ref --format=%(refname:short) refs/tags\` together with the names \`git -C ${REPO} ls-remote --tags origin\` prints.
 3. ladder: docs/roadmap.md at base, its ladder table, one {stage, gate, tag} per row in order, tag without backticks ("—" where it has none).
-4. gate: the GATE, or, when it is "first untagged", the first ladder row whose tag is not in tagsReachable. From docs/plan/01-plan.md at base, the gates table's row for it: defined true, and exitTest, the exit test cell verbatim; when that table has no row for it, defined false, exitTest "", ids [] and criteria [], since the script reads a gate defined after the export from gateRegister below and never from your reading. phase is a label only, 1 for a gate of that table and 2 for G6 to G8, which Phase 2 adds; it admits or refuses nothing. ids: the exit test split into test ids, each with the tiers the cell itself requires of it ("H" hermetic, "L" local, "D" deployed; "in both tiers" is H and D; a range "X to Y" names every id between; "the deployed subset" is every N- id whose row in docs/plan/04-tests.md or contracts/test-ids.md has a Tier cell that includes D, plus any it adds), and tiers [] for an id the cell gives no tier: never tier one yourself, since the script tiers it from idTables. idTables: two entries, one per document that lists test ids, each {document, lines}: document "docs/plan/04-tests.md" (the export) with lines every line \`git -C ${REPO} show <base>:docs/plan/04-tests.md | grep -E '^[|]'\` prints, and document "contracts/test-ids.md" (the test id register) with lines every line \`git -C ${REPO} show <base>:contracts/test-ids.md | grep -E '^[|]'\` prints, each in the order printed, verbatim. Copy the lines as printed and never drop, add, reorder or edit one: the script reads the tables, the ranges and the tiers from them. gateRegister: the gate register, ${GATES_DOC}, which defines the gates added after the export: exists, whether \`git -C ${REPO} cat-file -e <base>:${GATES_DOC}\` succeeds; lines, when it does, every line \`git -C ${REPO} show <base>:${GATES_DOC} | grep -E '^[|]'\` prints, in the order printed, verbatim, under the same rule as idTables, else []. The script reads each gate's row, its ids and tiers and its criteria from those lines, so copy them whatever gate you were asked for. criteria: for a gate whose exit test names the acceptance criteria, each criterion of docs/plan/01-plan.md's acceptance table with its proving ids, else []. previousTag: the tag of the nearest earlier ladder row that is in tagsReachable. rows: the ladder stage's **Plan rows.** in docs/roadmap.md, each with its owner and Done-when clause from docs/plan/03-workstreams-and-tasks.md and the test ids that clause names.
-5. rowStates: in a throwaway worktree at base, \`git -C ${REPO} worktree add --detach ${WT}/scope-<base's first 12> <base>\`, run \`python3 -I tools/roadmap.py --json\` there and return its "rows" object as it prints it; then remove the worktree. The roadmap script is the derivation: never derive a row's state yourself.
+4. gate: the GATE, or, when it is "first untagged", the first ladder row whose tag is not in tagsReachable. From docs/plan/01-plan.md at base, the gates table's row for it: defined true, and exitTest, the exit test cell verbatim; when that table has no row for it, defined false, exitTest "", ids [] and criteria [], since the script reads a gate defined after the export from gateRegister below and never from your reading. phase is a label only, 1 for a gate of that table and 2 for G6 to G8, which Phase 2 adds; it admits or refuses nothing. ids: the exit test split into test ids, each with the tiers the cell itself requires of it ("H" hermetic, "L" local, "D" deployed; "in both tiers" is H and D; a range "X to Y" names every id between; "the deployed subset" is every N- id whose row in docs/plan/04-tests.md or contracts/test-ids.md has a Tier cell that includes D, plus any it adds), and tiers [] for an id the cell gives no tier: never tier one yourself, since the script tiers it from idTables. idTables: two entries, one per document that lists test ids, each {document, lines}: document "docs/plan/04-tests.md" (the export) with lines every line \`git -C ${REPO} show <base>:docs/plan/04-tests.md | grep -E '^[|]'\` prints, and document "contracts/test-ids.md" (the test id register) with lines every line \`git -C ${REPO} show <base>:contracts/test-ids.md | grep -E '^[|]'\` prints, each in the order printed, verbatim. Copy the lines as printed and never drop, add, reorder or edit one: the script reads the tables, the ranges and the tiers from them. gateRegister: the gate register, ${GATES_DOC}, which defines the gates added after the export: exists, whether \`git -C ${REPO} cat-file -e <base>:${GATES_DOC}\` succeeds; lines, when it does, every line \`git -C ${REPO} show <base>:${GATES_DOC} | grep -E '^[|]'\` prints, in the order printed, verbatim, under the same rule as idTables, else []. The script reads each gate's row, its ids and tiers and its criteria from those lines, so copy them whatever gate you were asked for. criteria: for a gate whose exit test names the acceptance criteria, each criterion of docs/plan/01-plan.md's acceptance table with its proving ids, else []. previousTag: the tag of the nearest earlier ladder row that is in tagsReachable. rows: the ladder stage's **Plan rows.** in docs/roadmap.md, each with its owner and Done-when clause from docs/plan/03-workstreams-and-tasks.md and the test ids that clause names. A row written issue-N is a ticket, named by a stage cut after the export (#990): its owner is the **Owner:** line of \`cd ${REPO} && gh issue view N --json body\`, its doneWhen that body's "## Acceptance criteria" section verbatim, and its ids the ids of this step's ids list that section names, since a section can name an id of another gate (N-16) or a name that is no test id (F-T1).
+5. rowStates: in a throwaway worktree at base, \`git -C ${REPO} worktree add --detach ${WT}/scope-<base's first 12> <base>\`, run \`python3 -I tools/roadmap.py --json\` there and return its "rows" object as it prints it as rowStates, and its "tickets" object as it prints it as ticketStates; then remove the worktree. The roadmap script is the derivation: never derive a row's state yourself.
 6. changeRequests: the open change requests, which are the issues labelled change-request (docs/agents/tracker-policy.md -> "Change requests"; #435), read in full or reported unread, never derived: the script decides which rows wait on which request. Three reads: \`cd ${REPO} && gh label list --search change-request --json name\`; \`cd ${REPO} && gh issue list --state open --label change-request --limit 500 --json number,title,state,labels,body,blocking\`; and \`cd ${REPO} && gh api graphql -F owner='{owner}' -F name='{repo}' -f query='query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { requests: issues(states: OPEN, labels: ["change-request"]) { totalCount } open: issues(states: OPEN) { totalCount } } }'\`. changeRequests is one entry per issue of that listing, raw: number, title, state (as gh prints it, OPEN or CLOSED), labels (the label names), rowsLine (the body's first line that begins **Rows:**, verbatim, or "" when it has none), and blocking (each node of its blocking list as {number, state}, closed ones included). changeRequestsRead is {ok, why}: ok is true only when the label listing includes the exact name change-request, both gh listings and the graphql query succeeded, the change-request listing's length equals requests.totalCount, and the open-issue listing of the next sentence, before you filter it, has a length equal to open.totalCount; otherwise ok is false and why names the check that failed and what it read (a missing label, a failed command with its error, or the two counts). A listing that is short or empty with exit 0 is the case this check exists for: it must read as unread, never as "no request is open". openIssues: \`cd ${REPO} && gh issue list --state open --limit 500 --json number,title,body,labels,assignees\`, each issue whose title or body names a row of rows or ends " evidence, <date>", with the rows it names, its first label and its first assignee ("" for none).
 7. ci: the GitHub Actions run of base, \`cd ${REPO} && gh run list --commit <base> --json url,headSha,databaseId\` and \`cd ${REPO} && gh run view <id> --json jobs\`, with each job's name and conclusion. lastFull: walking \`git -C ${REPO} log --first-parent --format=%H <base>\`, the most recent commit whose run's Build and test and Terraform jobs both ran and succeeded: {sha, url}.
 8. merges: every merge on \`git -C ${REPO} log --first-parent --merges --format=%H%x09%s <previousTag>..<base>\` (docs/agents/landing-work.md -> "Gates"; a direct commit, such as a generated roadmap refresh, is not one) with its subject, the pull request it merged (0 when none), and head, the merged head: the merge's second parent, \`git -C ${REPO} rev-parse <merge>^2\`. For each with a pull request: \`cd ${REPO} && gh api --paginate --slurp repos/{owner}/{repo}/issues/<pr>/comments > ${LOG}/<date>-<base's first 12>/pr-<pr>-comments.json\` and the same of \`repos/{owner}/{repo}/pulls/<pr>/reviews\`, then pipe \`{"comments": <comments>, "reviews": <reviews>}\` to \`python3 -I tools/review_record.py <head>\`, run from a throwaway worktree at base: cleared is true when it exits 0, and record is the URL it prints, or its refusal line when it does not.
@@ -686,7 +697,7 @@ WORKTREE: ${wt}
 ROWS: ${JSON.stringify(rows)}
 
 1. Record \`git -C ${REPO} status --porcelain --untracked-files=no\`.
-2. Per row: its merges, each commit of \`git -C ${REPO} log --first-parent --format=%H%x09%s ${ctx.base}\` whose subject names the row's task; form, landed for "Merge task <id>" or GitHub's subject naming the task branch, part for "Merge part of task <id>", other for anything else; outstanding, every line of \`git -C ${REPO} log -1 --format=%B <merge>\` that begins "Outstanding:" or "Outstanding test ids:", verbatim.
+2. Per row: its merges, each commit of \`git -C ${REPO} log --merges --format=%H%x09%s ${ctx.base}\` whose subject names the row's task; form, landed for "Merge task <id>" or GitHub's subject naming the task branch, part for "Merge part of task <id>", other for anything else; outstanding, every line of \`git -C ${REPO} log -1 --format=%B <merge>\` that begins "Outstanding:" or "Outstanding test ids:", verbatim. A merge into the task's own branch, whose subject is "Merge <from> into task/<branch>", is not the row's merge: leave it out.
 3. Per merge, the ownership check between its first parent and it, read-only, in a throwaway worktree: \`git -C ${REPO} worktree add --detach ${wt} <merge>\`, then in ${wt} \`python3 -I .github/path-ownership.py <merge>^1 <merge>\`. ownership is pass when it exits 0, fail otherwise, could-not-run when it cannot be run, with ownershipDetail its last line. Remove the worktree after each merge: \`git -C ${REPO} worktree remove --force ${wt}\` and \`git -C ${REPO} worktree prune\`.
 4. why: one sentence on anything you could not read.
 5. cleanup: worktreeRemoved, and checkoutChanged, each tracked path whose status line differs from step 1.
@@ -859,7 +870,8 @@ const counts = {
 const noProof = table.filter((r) => r.per.some((p) => p.tier === 'H' && p.verdict !== 'proved')).map((r) => `${r.id}: ${r.testsList.filter((t) => t.tier === 'H').map((t) => `${t.test} ${TEST_VERDICT[t.status]}`).join('; ') || 'no hermetic test cites it'}`)
 
 phase('Row audit')
-const states = scope.rowStates || {}
+const ticketRow = /^issue-\d+$/
+const states = { ...(scope.rowStates || {}), ...Object.fromEntries(g.rows.filter((r) => ticketRow.test(r.row)).map((r) => [r.row, (scope.ticketStates || {})[r.row] || 'open'])) }
 const auditable = g.rows.filter((r) => ['landed', 'part-landed'].includes(states[r.row]))
 const auditBatches = AUDIT_ROWS ? chunks(auditable, Math.ceil(auditable.length / ROWS_PER_AUDIT)) : []
 const audited = auditBatches.length && auditable.length

@@ -8,6 +8,9 @@
      amendment.
   3. Changing the 2× multiplier is a rule change, so it takes a new ADR that supersedes this one's
      rule section.
+  Status-line pointer, 2026-11-13 (#1145): what a request gets when the discovery document
+  cannot be read, given as a 500 under Decision -> "The method" and Alternatives rejected, has been
+  held by `src/Platform.Identity/ProviderDiscovery.cs` since #908 (`3c8b6ac`).
 - **Date:** 2026-10-29
 - **Deciders:** integrator, on Adam's answers to #175, #176, #246 and #177 (wayfinder map #169)
 - **Plan ref:** No decision row. Map #169 and its tickets #170 to #178; `docs/plan/04-tests.md`

@@ -11,9 +11,10 @@ namespace Platform.Proxy;
 /// <c>upstream_timeout</c> when it exceeded the entry's timeout.
 ///
 /// YARP sets the status and leaves the body empty, so this fills the body in. Nothing has been sent
-/// when the failure happened before the upstream's first body byte; once the response has started,
-/// the status is already on the wire and there is nothing to say (finding T-C18: headers followed by
-/// silence give 502, and that one has started).
+/// when the failure happened before the upstream's first body byte, and that includes an upstream
+/// that sent its headers and then stayed silent (finding T-C18: headers followed by silence give
+/// 502, and that one gets the body). Once a body byte has been forwarded the response has started,
+/// the status is already on the wire and there is nothing to say.
 ///
 /// Only those two statuses get a body. YARP answers some failures with a status of its own, 400 when
 /// the client gave up mid-body among them, and the browser contract gives 400 a different code

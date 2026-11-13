@@ -7,7 +7,7 @@
 // stubbed where the script reaches them: through its agents, each of which the stub plays from a
 // served fixture as its prompt asks. The Scope agent serves the ladder, the tag listings, origin's
 // main, the gate's row of the gates table, the table lines of the export, the test id register and
-// the gate register (#328, #403), the roadmap script's row states, the change requests,
+// the gate register (#328, #403), the roadmap script's row and ticket states, the change requests,
 // the open issues, CI, the merges since the previous tag with their review records, and the durable
 // results it reads from disk under the run's log for the base it resolved; the Locate agents serve
 // the tests citing the ids their prompt names; the Prove agents play each item their prompt lists
@@ -149,7 +149,7 @@ const testsFor = (served, id) => {
   return out
 }
 
-// served: { ladder, tagsReachable, tagsAll, originMain, baseResolved, gates, rowStates, changeRequests,
+// served: { ladder, tagsReachable, tagsAll, originMain, baseResolved, gates, rowStates, ticketStates, changeRequests,
 //           openIssues, ci, merges, tests: {id: [test]}, outcome: {test: 'proved'|'did-not-fail'|
 //           'other-failed'|'red'|'one-mutation'}, audit: {row: [merge]}, deployedIds,
 //           nothingFrom: [label], the agents that return nothing, as a failed agent does }
@@ -195,6 +195,7 @@ function stub(env, scriptArgs, served) {
             ? { gate: gname, phase: 1, defined: true, exitTest: gd.exitTest, previousTag: prev ? prev.tag : '', ids: gd.ids, criteria: gd.criteria || [], rows: gd.rows }
             : { gate: gname, phase: 2, defined: false, exitTest: '', previousTag: prev ? prev.tag : '', ids: [], criteria: [], rows: [] },
           rowStates: served.rowStates || { '1.5': 'part-landed', '1.7': 'open', '6.9': 'open', '6.3': 'part-landed', '6.7': 'open', '4.1': 'landed', '4.2': 'landed' },
+          ticketStates: served.ticketStates || {},
           idTables: served.idTables || ID_TABLES,
           gateRegister: served.gateRegister || GATE_REGISTER,
           changeRequests: served.changeRequests || [], changeRequestsRead: served.changeRequestsRead || { ok: true, why: '' }, openIssues: served.openIssues || [],
@@ -508,6 +509,21 @@ try {
     // The open reviews are the range's merges (docs/agents/landing-work.md -> "Gates"), so a direct
     // commit on trunk, such as a generated roadmap refresh, is not read as a merge with no review.
     if (!commands(ready.prompt('scope')).some((c) => /\blog --first-parent --merges\b.*<previousTag>\.\.<base>/.test(c))) fail('the Scope prompt does not list the merges since the previous tag with --first-parent --merges')
+    // A row's merges are every merge naming it, not the first-parent line alone: a row landed through
+    // an overnight run has its "Merge task <id>" under the trunk's "Land the overnight run" merge (#1143).
+    const step2 = (ready.prompt('audit-1').match(/^2\. Per row:[^\n]*/m) || [''])[0]
+    const listing = commands(step2).filter((c) => /\blog\b.*--format=%H%x09%s/.test(c))
+    if (!listing.length || !listing.every((c) => /\blog --merges\b/.test(c)) || listing.some((c) => /--first-parent/.test(c))) fail(`the Row-audit prompt's step 2 does not read the row's merges with --merges and without --first-parent: ${JSON.stringify(listing)}`)
+    // With --merges the walk reaches the merges made on a task branch, which brought main or another
+    // branch into it; their subjects name the task, but none is the row's merge (#1143).
+    if (!/A merge into the task's own branch, whose subject is "Merge <from> into task\/<branch>", is not the row's merge: leave it out\./.test(step2)) fail(`the Row-audit prompt's step 2 does not leave out a merge into the task's own branch: ${step2}`)
+    // A landed row whose audit read no merge naming it is not done: nothing was read, so no
+    // Outstanding line and no ownership check held it (#1143).
+    {
+      const none = await execute(newRepo(), { gate: 'G3' }, { baseResolved: OTHER, ...base, audit: { '4.2': [] } })
+      if (none.result.verdict !== 'tag withheld' || !none.result.reasons.includes('row 4.2 is not done')) fail(`a landed row whose audit read no merge: verdict ${none.result.verdict}, reasons ${JSON.stringify(none.result.reasons)}`)
+      if (!none.result.report.text.includes('the audit read no merge naming it')) fail('a landed row whose audit read no merge: the report does not say the audit read no merge naming it')
+    }
     // The report's closing section claims no clean checkout the Report agent did not find.
     const dirty = await execute(newRepo(), { gate: 'G3' }, { gates: { G3: READY }, reportCheckout: { trackedChanged: ['README.md'], newUntracked: [] } })
     const closing = section(dirty.result.report.text, 'What this run did not do') || ''
@@ -1061,6 +1077,63 @@ try {
     if (!/Its wouldRun is `tools\/bench\/startup\.py --verdict` with the `--budget` flags/.test(locate)) fail('the Locate prompt does not say what would run a B- id on tier L, with the budgets its verdict mode refuses to run without')
 
     if (driftAll.length > driftBefore) fail(`schema drift or thrown thunks in the B- runs:\n  ${driftAll.slice(driftBefore).join('\n  ')}`)
+  }
+  // The ticket rows (#1057): a stage cut after the export names GitHub tickets as issue-N on its
+  // **Plan rows.** line (#990). A ticket row takes its state from the roadmap script's "tickets"
+  // object, served as ticketStates, and reads open when that object does not list it; a plan row's
+  // state still comes from rowStates alone. An open request blocking the ticket a row names holds
+  // that row, whatever openIssues serves. The Scope prompt bounds a ticket's ids by step 4's ids
+  // list, and a G9 run's Locate prompt names #1011's sitting for a deployed clause.
+  checks++
+  {
+    const driftBefore = driftAll.length
+    const TICKET = 'issue-5'
+    const stage = { gates: { G3: { ...READY, rows: [row('4.1', 'ws4-api', ['N-01']), row(TICKET, 'integrator')] } } }
+    const run = (served) => execute(newRepo(), { gate: 'G3' }, { ...stage, ...served })
+    const whyOf = (r, rw = TICKET) => (r.result.rowsNotDone.find((x) => x.row === rw) || { why: [] }).why
+    const auditedRows = (env) => (env.auditRows || []).flat().map((x) => x.row)
+    // A landed ticket is audited like a landed plan row: dealt to a Row-audit agent, and done.
+    const landedEnv = newRepo()
+    const landed = await execute(landedEnv, { gate: 'G3' }, { ...stage, ticketStates: { [TICKET]: 'landed' } })
+    if (!auditedRows(landedEnv).includes(TICKET)) fail(`a landed ticket row was not audited: the audit agents were dealt ${JSON.stringify(auditedRows(landedEnv))}`)
+    if (landed.result.verdict !== 'tag ready' || whyOf(landed).length) fail(`a landed ticket row: verdict ${landed.result.verdict}, ${TICKET} reads ${JSON.stringify(whyOf(landed))}`)
+    // The same row with an empty ticketStates reads open, and is not audited; a rowStates entry for
+    // it does not stand in for the tickets object.
+    for (const [label, served] of [['an empty ticketStates', { ticketStates: {} }], ['rowStates naming the ticket', { ticketStates: {}, rowStates: { '4.1': 'landed', [TICKET]: 'landed' } }]]) {
+      const env = newRepo()
+      const r = await execute(env, { gate: 'G3' }, { ...stage, ...served })
+      if (!whyOf(r).includes('not landed (open)') || !r.result.reasons.includes(`row ${TICKET} is not done`)) fail(`${label}: ${TICKET} reads ${JSON.stringify(whyOf(r))}, reasons ${JSON.stringify(r.result.reasons)}`)
+      if (auditedRows(env).includes(TICKET)) fail(`${label}: an open ticket row was audited`)
+    }
+    // A plan row's state still comes from rowStates alone: a ticketStates entry naming it changes nothing.
+    const plan = await run({ ticketStates: { [TICKET]: 'landed', '4.1': 'open' } })
+    if (whyOf(plan, '4.1').length || plan.result.verdict !== 'tag ready') fail(`a ticketStates entry for plan row 4.1 changed it: 4.1 reads ${JSON.stringify(whyOf(plan, '4.1'))}, verdict ${plan.result.verdict}`)
+    const planOpen = await run({ ticketStates: { [TICKET]: 'landed', '4.1': 'landed' }, rowStates: { '4.1': 'open' } })
+    if (!whyOf(planOpen, '4.1').includes('not landed (open)')) fail(`plan row 4.1 open in rowStates read ${JSON.stringify(whyOf(planOpen, '4.1'))} with ticketStates calling it landed`)
+    // An open request blocking open issue 5 holds issue-5 though openIssues serves no entry for it,
+    // and the row's why names the edge; blocking it CLOSED, or blocking another open issue, holds nothing.
+    const CR = (blocking) => ({ number: 900, title: 'Number the rows', state: 'OPEN', labels: ['change-request', 'ready-for-human'], rowsLine: '', blocking })
+    const edgeWhy = `change request ${cite(900)} is open (Number the rows): it blocks ${cite(5)}, the ticket this row names`
+    const held = await run({ ticketStates: { [TICKET]: 'landed' }, changeRequests: [CR([{ number: 5, state: 'OPEN' }])] })
+    if (held.result.verdict !== 'tag withheld' || !whyOf(held).includes(edgeWhy)) fail(`a request blocking open issue 5: verdict ${held.result.verdict}, ${TICKET} reads ${JSON.stringify(whyOf(held))}`)
+    if (held.result.reasons.some((x) => /which is no plan row/.test(x))) fail(`a request blocking a ticket row was read as naming no plan row: ${JSON.stringify(held.result.reasons)}`)
+    for (const [label, blocking] of [['blocking issue 5 CLOSED', [{ number: 5, state: 'CLOSED' }]], ['blocking another open issue', [{ number: 6, state: 'OPEN' }]]]) {
+      const r = await run({ ticketStates: { [TICKET]: 'landed' }, changeRequests: [CR(blocking)] })
+      if (r.result.verdict !== 'tag ready' || whyOf(r).length) fail(`a request ${label}: verdict ${r.result.verdict}, ${TICKET} reads ${JSON.stringify(whyOf(r))}`)
+    }
+    // The Scope prompt asks for the tickets object, and bounds a ticket's ids by step 4's ids list.
+    const scope = landed.prompt('scope')
+    const step4 = (scope.match(/^4\. gate:[^\n]*/m) || [''])[0]
+    if (!/A row written issue-N is a ticket[^\n]*its ids the ids of this step's ids list that section names/.test(step4)) fail('the Scope prompt\'s step 4 does not bound a ticket row\'s ids by its ids list')
+    const step5 = (scope.match(/^5\. rowStates:[^\n]*/m) || [''])[0]
+    if (!/its "tickets" object as it prints it as ticketStates/.test(step5)) fail('the Scope prompt\'s step 5 does not ask for the tickets object as ticketStates')
+    if (!('ticketStates' in ((landed.calls.find((c) => c.label === 'scope').schema || {}).properties || {}))) fail('the Scope schema has no ticketStates')
+    // A G9 run's Locate prompt names #1011's sitting and #1005's deployed class for a deployed clause.
+    const g9 = await execute(newRepo(), { gate: 'G9' }, { ladder: [...LADDER.slice(0, -1), { stage: 'S8a', gate: 'G9', tag: 'g9-fragments' }, LADDER[LADDER.length - 1]], gateRegister: { exists: true, lines: registerOf('G9', [['N-01', 'H'], ['F-07', 'D']]) } })
+    const g9would = g9.calls.filter((c) => c.label.startsWith('locate')).map((c) => (c.prompt.match(/wouldRun:[^\n]*/) || [''])[0])
+    if (g9.result.refused || !g9would.length) fail(`G9 with a register row was not located: ${g9.labels.join(', ')}; ${JSON.stringify(g9.result.reasons)}`)
+    for (const w of g9would) if (!/#1011's sitting/.test(w) || !/#1005's deployed class/.test(w)) fail(`G9's wouldRun does not name #1011's sitting and #1005's deployed class: ${w}`)
+    if (driftAll.length > driftBefore) fail(`schema drift or thrown thunks in the ticket-row runs:\n  ${driftAll.slice(driftBefore).join('\n  ')}`)
   }
 } catch (e) {
   console.error(`gate-evidence_tests: the script could not run: ${e && e.stack ? e.stack : e}`)

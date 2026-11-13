@@ -45,11 +45,11 @@
 # which is cut off here; #966), and a merge body with no line
 # beginning `Outstanding:` is then refused before the merge, naming the rows (#521). A record with
 # no such row is not checked, and nor is an --unreviewed landing, which reads no record.
-# Each such row also names, before the merge, whether an issue has filed it (#573): the morning
-# files a record's rows from open pull requests only (#514), so once this merges nobody files a row
-# still open. A row no issue answers (one titled with the finding, with a `**Raised by:** #<pr>`
-# line, as .claude/workflows/morning.js's filedAs reads one) is printed as a `land:` warning that
-# says so; nothing is refused for it.
+# Each such row also names, before the merge, whether an issue has filed it (#573): the follow-ups
+# pass files a record's rows from the merged pull requests its window reaches too (#514, #1082), but
+# only when it is next launched. A row no issue answers (one titled with the finding, with a
+# `**Raised by:** #<pr>` line, as .claude/workflows/morning.js's filedAs reads one) is printed as a
+# `land:` warning that says so; nothing is refused for it.
 #
 # It merges only a description whose every closing reference, `Closes #n` or any other keyword
 # GitHub documents (#578), names a ticket some non-merge commit between the base and that head
@@ -57,7 +57,8 @@
 # names each #n no commit names, and --unreviewed does not lift it. A keyword before `owner/repo#n`,
 # GitHub's form for another repository's ticket, or before a bare GitHub issue URL (#806), is refused
 # outright, because the check cannot tell whether it names a ticket here; the remedy is `Closes #n`.
-# GitHub also closes on forms this does not read, which the rule's comment below names (#1147).
+# So is a keyword before `GH-n`, and one before a `[` or `<` in a description that holds a GitHub
+# issue URL, the link forms GitHub was seen to close on, which the rule's comment below names (#1147).
 #
 # It merges only a body that cites each decision it owes (#530). A closing reference that names a
 # change request decided `ADR: no` closes a request whose why lives nowhere but the merge body, so
@@ -79,7 +80,9 @@
 # issues titled `Overnight <date>` for `## Questions:` comments naming this pull request's number
 # or a number its description closes, and this script prints each such question as one `land:`
 # line: the Overnight issue, the Q number, whether a Confirm comment on that issue covers it, and
-# its first line. It only reports: nothing it finds stops the merge, and when the reader fails one
+# its first line. It reads only the questions comments the human's account wrote (#1078): one
+# another account wrote that names such a number is one `land:` line with its login and URL and
+# none of its text. It only reports: nothing it finds stops the merge, and when the reader fails one
 # line says so and the merge proceeds, with the reader's own words above it.
 #
 # --unreviewed "<reason>" is the one escape: for a red main that cannot wait, or no session free to
@@ -269,9 +272,20 @@ full_sha='^[0123456789abcdef]{40}$'
 # `https://github.com/owner/repo/issues/n` closed its ticket, as it did with a trailing `/` or a
 # `#fragment`, which the pattern reads because it does not anchor the URL's end. `http://`, `www.`
 # and no scheme closed nothing; the pattern still refuses the first two, because a needless refusal
-# costs a rewrite and a missed form merges a ticket no commit names. What GitHub closed on and this
-# does not read is the URL of a Markdown link, `[text](url)` or `[text][ref]`, the URL inside
-# `<url>` or `<a href>`, and `GH-n` (#1147).
+# costs a rewrite and a missed form merges a ticket no commit names. GitHub also closed on the URL
+# of a Markdown link, `[text](url)` or `[text][ref]`, on the URL inside `<url>` or `<a href>`, and
+# on `GH-n` (#1147), and each is refused before a commit is read. `GH-n` in any case is refused as
+# `owner/repo#n` is, and not read as `#n`. A keyword, an optional colon and whitespace, then `[` or
+# `<` refuses the description when it holds a GitHub issue URL on any line, since a reference-style
+# link's target and a link broken over two lines put the URL on another line; the check parses no
+# Markdown, so `Fixes <thing>` beside an unrelated issue URL is refused too, and so is a link inside
+# a code span, which GitHub did not close on: the remedy is to reword it. The link form is looked
+# for once the whole description is read for the forms above, so either of those wins over it, and
+# on the first line holding one the last on that line is named. The rows of
+# .claude/workflows/fixtures/closing-references.json that hold these, from "GH-n is refused, not
+# read as #n, though a commit names #26" on, name each form refused and four that merge: a
+# relative link, the keyword alone on its line and a bold link, none of which closed on GitHub,
+# and a link beside a pull request's URL, which is no issue URL.
 # bash's =~ finds one match, so a line is read from its right end, each match's prefix
 # becoming the next line to read, and the numbers are put back in the line's order. `#n` and
 # `issue-n` are matched in a message only where no digit follows, so #35 is not found inside #352
@@ -291,14 +305,21 @@ caller_lc_all="${LC_ALL-}"
 LC_ALL=C
 keyword='([Cc][Ll][Oo][Ss][Ee]([Ss]|[Dd])?|[Ff][Ii][Xx]([Ee][Ss]|[Ee][Dd])?|[Rr][Ee][Ss][Oo][Ll][Vv][Ee]([Ss]|[Dd])?)'
 # In each match, group 1 is what comes before the keyword, groups 2 to 5 the keyword and its
-# endings, and group 6 the ticket: `n` of `#n`, the whole `owner/repo#n`, or a GitHub issue URL.
+# endings, and group 6 the ticket: `n` of `#n`, the whole `owner/repo#n`, `GH-n` or a GitHub issue
+# URL.
 closing="^(.*[^[:alnum:]_])?${keyword}:?[[:space:]]*#([0-9]+)([^0-9].*)?\$"
 issue_url='[Hh][Tt][Tt][Pp][Ss]?://([Ww][Ww][Ww][.])?[Gg][Ii][Tt][Hh][Uu][Bb][.][Cc][Oo][Mm]/[^[:space:]/#]+/[^[:space:]/#]+/[Ii][Ss][Ss][Uu][Ee][Ss]/[0-9]+'
-other_repository="^(.*[^[:alnum:]_])?${keyword}:?[[:space:]]*([^[:space:]#/]+/[^[:space:]#/]+#[0-9]+|${issue_url})"
+other_repository="^(.*[^[:alnum:]_])?${keyword}:?[[:space:]]*([^[:space:]#/]+/[^[:space:]#/]+#[0-9]+|[Gg][Hh]-[0-9]+|${issue_url})"
+# Group 2 of a link form is the keyword through the `[` or `<` that opens the link.
+link_form="^(.*[^[:alnum:]_])?(${keyword}:?[[:space:]]*[[<])"
 closes=""
+link=""
 while IFS= read -r line; do
   if [[ $line =~ $other_repository ]]; then
-    die "the description of #$pr closes ${BASH_REMATCH[6]}, the owner/repo#n form or a GitHub issue URL, which this check cannot read against the commits here, so it does not merge. Write Closes #n for a ticket of this repository (docs/agents/landing-work.md -> Land it); a ticket of another repository is not closed from here."
+    die "the description of #$pr closes ${BASH_REMATCH[6]}, the owner/repo#n form, the GH-n form or a GitHub issue URL, which this check cannot read against the commits here, so it does not merge. Write Closes #n for a ticket of this repository (docs/agents/landing-work.md -> Land it); a ticket of another repository is not closed from here."
+  fi
+  if [ -z "$link" ] && [[ $line =~ $link_form ]]; then
+    link="${BASH_REMATCH[2]}"
   fi
   in_line=""
   while [[ $line =~ $closing ]]; do
@@ -307,6 +328,9 @@ while IFS= read -r line; do
   done
   closes="$closes$in_line"
 done <<< "$description"
+if [ -n "$link" ] && [[ $description =~ $issue_url ]]; then
+  die "the description of #$pr closes through a link, $link, beside a GitHub issue URL, which this check cannot read against the commits here, so it does not merge. Write Closes #n for a ticket of this repository (docs/agents/landing-work.md -> Land it); a ticket of another repository is not closed from here."
+fi
 if [ -n "$closes" ]; then
   { git cat-file -e "$head^{commit}" 2>/dev/null || git fetch -q origin "$head"; } \
     && messages="$(git log --no-merges --format=%B "origin/$base..$head")" \
@@ -414,18 +438,22 @@ if [ -n "${follow_ups:-}" ]; then
     die "the review record that clears #$pr carries follow-ups (${rows#; }) and the merge body has no Outstanding: line, so it does not merge. Add one saying what the merge carries, and pass the body with --body-file; docs/agents/review.md -> Landing or holding."
   fi
 
-  # A carried row also owes an issue, and the morning files a record's rows from open pull requests
-  # only (#514), so a row still unfiled when this merges is nobody's to file unless somebody is
-  # told (#573): on 2026-10-29 #568's two rows reached #569 and #570 only because the session read
-  # the record before it merged. So each row no issue answers is named here, and the merge goes on;
-  # this warns and refuses nothing. A row is answered as .claude/workflows/morning.js's filedAs
-  # answers it: an issue whose title is the finding, the two compared lowercased with each run of
-  # whitespace one space and none at the ends, and whose body has a `**Raised by:**` line naming
-  # #<pr> with no digit after it. The issues are the listing the morning takes, every state, and
-  # the --jq keeps the ones whose Raised-by line names this pull request and prints their titles;
-  # the match on the title is made here, with awk's tolower and its field splitting, which
-  # collapses blanks and trims them. A listing gh cannot make is said, and the rows are not
-  # checked: a warning that cannot be computed is not a reason to hold a merge a record clears.
+  # A carried row also owes an issue, and the follow-ups pass files it only when it is next launched
+  # (#514, #1082), so somebody is told (#573): on 2026-10-29 #568's two rows reached #569 and #570
+  # only because the session read the record before it merged. So each row no issue answers is named
+  # here, and the merge goes on; this warns and refuses nothing. A row is answered as
+  # .claude/workflows/morning.js's filedAs answers it: an issue whose title is the finding, the two
+  # compared lowercased with each run of whitespace one space and none at the ends, and whose body
+  # has a `**Raised by:**` line naming #<pr> with no digit after it. The issues are the listing the
+  # follow-ups pass takes, every state, and the --jq keeps the ones whose Raised-by line names this
+  # pull request and prints their titles; the match on the title is made here, with awk's tolower
+  # and its field splitting, which collapses blanks and trims them. A listing gh cannot make is
+  # said, and the rows are not checked: a warning that cannot be computed is not a reason to hold a
+  # merge a record clears.
+  # A row is often fixed after the record that carried it, and filed fixed (#1111: #816, #823, #977,
+  # #842 to #846, #931), so the warning tells the filer to re-read #<pr>'s description and the latest
+  # ## Answer on each issue it closes first and file nothing for a row they already fix; whether one
+  # does is the filer's judgement, so the match below is unchanged.
   filed_jq='.[] | select(any(.body | split("\n")[]; startswith("**Raised by:**") and test("#'"$pr"'([^0-9]|$)"))) | .title'
   if filed="$(gh issue list --state all --limit 500 --search "Raised by #$pr in:body" --json number,title,body --jq "$filed_jq")"; then
     filed_titles="$(printf '%s\n' "$filed" | awk '{ $0 = tolower($0); $1 = $1; print }')"
@@ -437,7 +465,7 @@ if [ -n "${follow_ups:-}" ]; then
         if [ "$title" = "$wanted" ]; then answered=1; break; fi
       done <<< "$filed_titles"
       [ -n "$answered" ] \
-        || printf 'land: the review record that clears #%s carries a follow-up no issue has filed: %s. Once #%s merges, no morning run files it, because the morning reads the records of open pull requests only (#514); file it by hand, with that finding as the title and a **Raised by:** #%s line (docs/agents/review.md -> Landing or holding).\n' "$pr" "$finding" "$pr" "$pr" >&2
+        || printf 'land: the review record that clears #%s carries a follow-up no issue has filed: %s. The next follow-ups pass files it from #%s'"'"'s record (#514, #1082); to file it sooner, re-read #%s'"'"'s description as it reads now and the latest ## Answer comment on each issue it closes, and file nothing if either already fixes it (#1111); otherwise file it by hand, with that finding as the title and a **Raised by:** #%s line (docs/agents/review.md -> Landing or holding).\n' "$pr" "$finding" "$pr" "$pr" "$pr" >&2
     done <<< "$follow_ups"
   else
     printf 'land: could not list the issues raised by #%s, so whether each carried follow-up has been filed is not checked; gh says why above. The merge goes on; read the record'"'"'s Follow-ups table yourself.\n' "$pr" >&2

@@ -10,7 +10,7 @@ working directory. Both start by moving to that repository's top level, so the c
 reach from there -- .github/touches.sh, tools/smoke.sh, tools/image-check.sh, the Python checks --
 are the case's. The case links .github/touches.sh and tools/check.sh to the real ones, so the halves
 are decided by the real classifier and the hook reaches the real script; it puts doubles at
-tools/smoke.sh and tools/image-check.sh.
+tools/smoke.sh, tools/image-check.sh and tools/dockerfile-lint.sh.
 
 **The interpreter is named**, as in land_tests.py: /bin/bash, so a Mac with Homebrew's bash first
 on PATH still tests the 3.2 macOS ships, and SCRIPT_TESTS_REQUIRE_BASH (CI's macOS job sets it to
@@ -146,9 +146,10 @@ TEST_DIRS = ["infra/modules/m", "infra/roots/b"]
 # The hook's lines, as the hook before #68 printed them. #69 changed one on purpose: the Terraform
 # half now names the version it ran, in a line of its own and in the last line. #205 added a check,
 # the file modes, and so a name to the list of what ran; #291 added the part-row merges, and #296
-# the full-landing merges; #606 added the analysis guard.
+# the full-landing merges; #606 added the analysis guard, and #760 the endpoint paths.
 HOOK_RAN = ("A-05, the steering documents, every ticket citation, the ticket numbers, the part-row merges, "
-            "the full-landing merges, the roadmap, the analysis guard, the artifacts, the file modes")
+            "the full-landing merges, the roadmap, the analysis guard, the endpoint paths, the artifacts, "
+            "the file modes")
 HOOK_BUILD_SKIPPED = "pre-push: build skipped: no .NET source changed."
 HOOK_TERRAFORM_SKIPPED = "pre-push: Terraform skipped: nothing under infra/ or the floor changed."
 HOOK_FIX = "pre-push: fix it, or push with --no-verify if you mean it."
@@ -166,6 +167,8 @@ PYTHON_CHECKS = [
     ["python3", "-I", "tools/roadmap.py", "--check"],
     # The analysis guard (#606) reads the tree, not the diff, so it runs with or without a base.
     ["python3", "-I", "tools/analysis_guard.py"],
+    # The endpoint paths (#760) read the tree too, after the analysis guard.
+    ["python3", "-I", "tools/endpoint_paths.py"],
 ]
 # The full check fails a full-landing merge whose ticket it could not read, where the hook passes it
 # (#894), so it alone passes the flag.
@@ -175,6 +178,8 @@ BUILD = [["dotnet", "build", "--nologo", "--verbosity", "quiet"]]
 TESTS = [["dotnet", "test", "--solution", "SpaPlatform.slnx", "--no-build", "--ignore-exit-code", "8"]]
 SMOKE = [["smoke", "Debug", PORT]]
 IMAGE = [["image"]]
+# hadolint over every Dockerfile (#785), after Terraform and before the companions, under --full only.
+LINT = [["lint"]]
 
 
 def terraform_checks() -> list[list[str]]:
@@ -315,8 +320,8 @@ class Case:
         self.git("checkout", "-q", "-b", "task", cwd=self.work)
 
         # The check files the script reaches from the top level: the real classifier and the real
-        # script, linked, and doubles for the smoke test and the image check. Left untracked, so no
-        # diff includes them.
+        # script, linked, and doubles for the smoke test, the image check and the Dockerfiles' lint.
+        # Left untracked, so no diff includes them.
         (self.work / ".github").mkdir(exist_ok=True)
         (self.work / ".github" / "touches.sh").symlink_to(TOUCHES)
         (self.work / "tools").mkdir(exist_ok=True)
@@ -326,12 +331,17 @@ class Case:
                               self.double("smoke", fails_on.get("smoke", ""), "yes"))
         self.write_executable(self.work / "tools" / "image-check.sh",
                               self.double("image", fails_on.get("image", ""), "yes"))
+        self.write_executable(self.work / "tools" / "dockerfile-lint.sh",
+                              self.double("lint", fails_on.get("lint", ""), "yes"))
 
         for name in (change,) if isinstance(change, str) else change or ():
             path = self.work / name
             path.parent.mkdir(parents=True, exist_ok=True)
+            # A double the check runs, changed by the case, stays a program it can run: the case
+            # touching tools/dockerfile-lint.sh is what earns the lint (#785).
+            executable = path.exists() and os.access(path, os.X_OK)
             path.write_text(path.read_text() + "changed\n" if path.exists() else "new\n")
-            path.chmod(0o644)
+            path.chmod(0o755 if executable else 0o644)
             self.git("add", name, cwd=self.work)
             self.git("commit", "-q", "-m", f"Change {name}", cwd=self.work)
 
@@ -443,6 +453,18 @@ class HookTests(CheckTestCase):
         self.assertLines(["python3 double failed: -I tools/analysis_guard.py",
                           "pre-push: the analyzer configs or a suppression break ADR-0035's rules, or were not judged.",
                           HOOK_FIX], result.stderr)
+        self.assertEqual(PYTHON_CHECKS[:-1], case.calls())
+
+    def test_an_endpoint_paths_check_that_fails(self):
+        # #760: the endpoint paths run after the analysis guard and before the artifacts, and their
+        # failure stops the hook.
+        case = Case(self, change="docs/notes.md", fails_on={"python3": "tools/endpoint_paths.py"})
+        result = case.run(hook=True)
+        self.assertEqual(1, result.status)
+        self.assertLines(["python3 double failed: -I tools/endpoint_paths.py",
+                          "pre-push: a skill, a runbook or the test catalogue names a path contracts/http-contract.md "
+                          "does not make known, or none was judged.",
+                          HOOK_FIX], result.stderr)
         self.assertEqual(PYTHON_CHECKS, case.calls())
 
     def test_an_email_that_is_not_the_noreply_address(self):
@@ -464,6 +486,7 @@ class HookTests(CheckTestCase):
             "pre-push: the full-landing merges not checked: python3 is not on PATH.",
             "pre-push: the roadmap not checked: python3 is not on PATH.",
             "pre-push: the analysis guard not checked: python3 is not on PATH.",
+            "pre-push: the endpoint paths not checked: python3 is not on PATH.",
             "pre-push: Terraform not checked: terraform is not on PATH.",
         ], result.stderr)
         self.assertLines([HOOK_BUILD_SKIPPED, f"pre-push: {HOOK_RAN} pass."], result.stdout)
@@ -820,10 +843,10 @@ class BothHalvesTests(CheckTestCase):
         self.assertEqual(0, result.status, result.stderr)
         self.assertEqual(
             f"check: pass: {FULL_RAN}, the build, the tests, the smoke test, the gateway image, Terraform {FLOOR}, "
-            "the Terraform tests.",
+            "the Terraform tests, the Dockerfiles' lint.",
             result.last_line(result.stdout))
-        self.assertEqual(FULL_PYTHON_CHECKS + BUILD + TESTS + SMOKE + IMAGE + terraform_checks() + TERRAFORM_TESTS,
-                         case.calls())
+        self.assertEqual(FULL_PYTHON_CHECKS + BUILD + TESTS + SMOKE + IMAGE + terraform_checks() + TERRAFORM_TESTS
+                         + LINT, case.calls())
         self.assertNotIn("skipped", result.stdout)
 
     def test_the_hooks_checks_run_both_halves_on_a_docs_only_change(self):
@@ -833,6 +856,79 @@ class BothHalvesTests(CheckTestCase):
         self.assertLines([at_the_floor("pre-push", case.bin / "terraform"),
                           f"pre-push: {HOOK_RAN}, the build, Terraform {FLOOR} pass."], result.stdout)
         self.assertEqual(PYTHON_CHECKS + BUILD + terraform_checks(), case.calls())
+
+
+LINT_SKIPPED = "check: the Dockerfiles' lint skipped: no Dockerfile, .hadolint.yaml or tools/dockerfile-lint.sh changed."
+
+
+class DockerfileLintTests(CheckTestCase):
+    """#785's fourth box: under --full, a change to a Dockerfile, at the top level or at any depth,
+    to .hadolint.yaml or to tools/dockerfile-lint.sh runs the script, after Terraform and before the
+    companions, and the verdict names it; its failure fails the verdict; any other change skips it and
+    says so; and the hook never runs it."""
+
+    def full(self, case: Case, *extra: str) -> Result:
+        return case.run("--full", "--port", PORT, *extra)
+
+    def test_a_dockerfile_or_its_lints_inputs_run_it(self):
+        for change, before in (("Dockerfile", []),
+                               ("tools/bench/floor/Dockerfile", []),
+                               (".hadolint.yaml", []),
+                               ("tools/dockerfile-lint.sh", []),
+                               ("src/App/Dockerfile", BUILD + TESTS + SMOKE + IMAGE)):
+            with self.subTest(change=change):
+                case = Case(self, change=change)
+                result = self.full(case)
+                self.assertEqual(0, result.status, result.stdout + result.stderr)
+                self.assertEqual(FULL_PYTHON_CHECKS + before + LINT, case.calls())
+                self.assertTrue(result.last_line(result.stdout).endswith(", the Dockerfiles' lint."),
+                                result.last_line(result.stdout))
+                # Shown, not hidden: hadolint's findings are the log a lane reads.
+                self.assertIn("lint double ran: ", result.stdout)
+                self.assertNotIn(LINT_SKIPPED, result.stdout.splitlines())
+
+    def test_it_runs_after_terraform_and_before_the_companions(self):
+        case = Case(self, extra=SCRIPTS, change=("tools/bench/floor/Dockerfile", "infra/roots/a/main.tf",
+                                                 "tools/thing.sh"))
+        result = self.full(case)
+        self.assertEqual(0, result.status, result.stdout + result.stderr)
+        self.assertEqual(FULL_PYTHON_CHECKS + terraform_checks() + TERRAFORM_TESTS + LINT
+                         + [companion("tools/thing_tests.py")], case.calls())
+        self.assertEqual(f"check: pass: {FULL_RAN}, Terraform {FLOOR}, the Terraform tests, the Dockerfiles' lint, "
+                         "the test companion tools/thing_tests.py.", result.last_line(result.stdout))
+
+    def test_any_other_change_skips_it_and_says_so(self):
+        for change in ("docs/notes.md", "src/App/App.cs", "docs/Dockerfile.md", "src/App/Dockerfile.dev",
+                       "infra/roots/a/main.tf"):
+            with self.subTest(change=change):
+                case = Case(self, change=change)
+                result = self.full(case)
+                self.assertEqual(0, result.status, result.stdout + result.stderr)
+                self.assertNotIn(LINT[0], case.calls())
+                self.assertIn(LINT_SKIPPED, result.stdout.splitlines())
+                self.assertNotIn("lint", result.last_line(result.stdout))
+
+    def test_a_failing_lint_fails_the_verdict_and_stops_there(self):
+        case = Case(self, extra=SCRIPTS, change=("tools/bench/floor/Dockerfile", "tools/thing.sh"),
+                    fails_on={"lint": "*"})
+        result = self.full(case)
+        self.assertEqual(1, result.status, result.stdout)
+        self.assertEqual("check: fail: hadolint failed a Dockerfile, or did not run.", result.last_line(result.stderr))
+        self.assertEqual(FULL_PYTHON_CHECKS + LINT, case.calls())
+
+    def test_it_is_timed_as_a_step_of_its_own(self):
+        case = Case(self, change="tools/bench/floor/Dockerfile")
+        result = self.full(case)
+        self.assertEqual(0, result.status, result.stderr)
+        self.assertEqual(ELAPSED_STEPS + ["the Dockerfiles' lint", REACH, "total"],
+                         [step for _, step, _ in result.elapsed()])
+
+    def test_the_hook_never_runs_it(self):
+        case = Case(self, change="tools/bench/floor/Dockerfile")
+        result = case.run(hook=True)
+        self.assertEqual(0, result.status, result.stderr)
+        self.assertEqual(PYTHON_CHECKS, case.calls())
+        self.assertLines([HOOK_BUILD_SKIPPED, HOOK_TERRAFORM_SKIPPED, f"pre-push: {HOOK_RAN} pass."], result.stdout)
 
 
 OUTSTANDING = "Outstanding: box 2 waits on a change request."
@@ -1880,7 +1976,7 @@ class CiWorkflowCompanionTests(CheckTestCase):
 
 # The steps that every run with a base executes, in order, as the elapsed lines name them (#629).
 ELAPSED_STEPS = ["A-05", "the steering check", "the part-row merges", "the full-landing merges", "the roadmap",
-                 "the analysis guard", "the artifacts", "the file modes"]
+                 "the analysis guard", "the endpoint paths", "the artifacts", "the file modes"]
 # Under --full, finding which test companions the change earns is a step of its own: on 2026-10-29
 # the companions were where the integrate step's span went (#629).
 REACH = "the test companions' reach"

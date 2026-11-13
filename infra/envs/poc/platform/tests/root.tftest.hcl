@@ -820,6 +820,7 @@ run "the_platform_plan_holds_exactly_the_allowlisted_types_and_counts" {
         "aws_subnet.public"                   = aws_subnet.public
         "aws_route_table_association.public"  = aws_route_table_association.public
         "aws_ecr_repository.repository"       = aws_ecr_repository.repository
+        "aws_ecr_lifecycle_policy.repository" = aws_ecr_lifecycle_policy.repository
         "aws_dynamodb_table.sessions"         = try(aws_dynamodb_table.sessions[0].name, null)
         "aws_subnet.private"                  = aws_subnet.private
         "aws_eip.nat"                         = aws_eip.nat
@@ -829,7 +830,7 @@ run "the_platform_plan_holds_exactly_the_allowlisted_types_and_counts" {
         "aws_route_table_association.private" = aws_route_table_association.private
         "aws_vpc_endpoint.gateway"            = aws_vpc_endpoint.gateway
     }))
-    error_message = "Only the subnets, their route table associations, the image repositories, the session table and the two-task cell's gated egress (#347) may carry count or for_each: every other declaration is one instance, and that is how the next assertion counts it. A new count or for_each needs its instances counted there."
+    error_message = "Only the subnets, their route table associations, the image repositories and their lifecycle policies, the session table and the two-task cell's gated egress (#347) may carry count or for_each: every other declaration is one instance, and that is how the next assertion counts it. A new count or for_each needs its instances counted there."
   }
 
   # The session table is counted at its planned instances, which on these inputs, Phase 1's, is none
@@ -844,6 +845,7 @@ run "the_platform_plan_holds_exactly_the_allowlisted_types_and_counts" {
           "aws_subnet.public"                   = length(aws_subnet.public)
           "aws_route_table_association.public"  = length(aws_route_table_association.public)
           "aws_ecr_repository.repository"       = length(aws_ecr_repository.repository)
+          "aws_ecr_lifecycle_policy.repository" = length(aws_ecr_lifecycle_policy.repository)
           "aws_dynamodb_table.sessions"         = can(aws_dynamodb_table.sessions[0].name) ? 1 : 0
           "aws_subnet.private"                  = length(aws_subnet.private)
           "aws_eip.nat"                         = length(aws_eip.nat)
@@ -879,6 +881,7 @@ run "the_platform_plan_holds_exactly_the_allowlisted_types_and_counts" {
       aws_s3_bucket_server_side_encryption_configuration = 1
       aws_s3_bucket_policy                               = 1
       aws_ecr_repository                                 = 2
+      aws_ecr_lifecycle_policy                           = 2
       aws_ecs_cluster                                    = 1
       aws_ecs_task_definition                            = 1
       aws_ecs_service                                    = 1
@@ -1003,6 +1006,7 @@ run "under_dynamodb_the_platform_plan_holds_one_session_table_and_every_other_co
           "aws_subnet.public"                   = length(aws_subnet.public)
           "aws_route_table_association.public"  = length(aws_route_table_association.public)
           "aws_ecr_repository.repository"       = length(aws_ecr_repository.repository)
+          "aws_ecr_lifecycle_policy.repository" = length(aws_ecr_lifecycle_policy.repository)
           "aws_dynamodb_table.sessions"         = can(aws_dynamodb_table.sessions[0].name) ? 1 : 0
           "aws_subnet.private"                  = length(aws_subnet.private)
           "aws_eip.nat"                         = length(aws_eip.nat)
@@ -1038,6 +1042,7 @@ run "under_dynamodb_the_platform_plan_holds_one_session_table_and_every_other_co
       aws_s3_bucket_server_side_encryption_configuration = 1
       aws_s3_bucket_policy                               = 1
       aws_ecr_repository                                 = 2
+      aws_ecr_lifecycle_policy                           = 2
       aws_ecs_cluster                                    = 1
       aws_ecs_task_definition                            = 1
       aws_ecs_service                                    = 1
@@ -1081,6 +1086,7 @@ run "under_multi_task_the_platform_plan_holds_d6_s_egress_and_every_other_count_
           "aws_subnet.public"                   = length(aws_subnet.public)
           "aws_route_table_association.public"  = length(aws_route_table_association.public)
           "aws_ecr_repository.repository"       = length(aws_ecr_repository.repository)
+          "aws_ecr_lifecycle_policy.repository" = length(aws_ecr_lifecycle_policy.repository)
           "aws_dynamodb_table.sessions"         = can(aws_dynamodb_table.sessions[0].name) ? 1 : 0
           "aws_subnet.private"                  = length(aws_subnet.private)
           "aws_eip.nat"                         = length(aws_eip.nat)
@@ -1116,6 +1122,7 @@ run "under_multi_task_the_platform_plan_holds_d6_s_egress_and_every_other_count_
       aws_s3_bucket_server_side_encryption_configuration = 1
       aws_s3_bucket_policy                               = 1
       aws_ecr_repository                                 = 2
+      aws_ecr_lifecycle_policy                           = 2
       aws_ecs_cluster                                    = 1
       aws_ecs_task_definition                            = 1
       aws_ecs_service                                    = 1

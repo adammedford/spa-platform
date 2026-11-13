@@ -278,6 +278,8 @@ run "the_module_declares_only_the_cell_s_intended_resource_types" {
       "aws_s3_bucket_server_side_encryption_configuration",
       "aws_s3_bucket_policy",
       "aws_ecr_repository",
+      # #784, storage.tf: each repository's lifecycle policy, which keeps rollback.sh's digests
+      "aws_ecr_lifecycle_policy",
       # Task 1.4a, ecs.tf and iam.tf
       "aws_ecs_cluster",
       "aws_ecs_task_definition",
@@ -544,6 +546,92 @@ run "a_bucket_name_override_with_another_account_s_suffix_is_refused_at_plan" {
   }
 
   expect_failures = [aws_s3_bucket.platform]
+}
+
+# --- The image repositories' scan and lifecycle (#784) ------------------------------------------
+#
+# #779's answer 1 (https://github.com/adammedford/spa-platform/issues/779#issuecomment-6767167834):
+# both repositories scan on push at the basic level. The lifecycle policy keeps what rollback.sh
+# may apply and expires the rest; storage.tf's comment above it gives the reasons. The expected
+# rules are written out here, not read from the module, so a changed rule fails until this file
+# says what the new one is for.
+
+run "both_repositories_scan_every_pushed_image" {
+  command = plan
+
+  assert {
+    condition = alltrue([
+      for key in ["gateway", "mock-api"] :
+      try(one(aws_ecr_repository.repository[key].image_scanning_configuration).scan_on_push, false) == true
+    ])
+    error_message = "Both repositories scan an image when it is pushed (#779, answer 1). With scan_on_push off, an image is scanned only when someone starts a scan by hand, and nothing in deploy.sh does."
+  }
+}
+
+run "the_lifecycle_policy_keeps_the_rollback_digest_and_expires_the_rest" {
+  command = plan
+
+  assert {
+    condition     = toset(keys(aws_ecr_lifecycle_policy.repository)) == toset(["gateway", "mock-api"])
+    error_message = "Each of the two repositories has its own lifecycle policy: rollback.sh applies the previous gateway image and the mock API image deployed with it."
+  }
+
+  assert {
+    condition = alltrue([
+      for key in ["gateway", "mock-api"] :
+      aws_ecr_lifecycle_policy.repository[key].repository == aws_ecr_repository.repository[key].name
+    ])
+    error_message = "Each lifecycle policy is attached to its own repository."
+  }
+
+  # The tagged rule counts and never ages: an age rule would expire the running image of a cell that
+  # has not been deployed for that long. Five, not two, so that pushes whose apply failed or whose
+  # deployment the circuit breaker rolled back cannot push the previous task definition's image out.
+  assert {
+    condition = alltrue([
+      for key in ["gateway", "mock-api"] :
+      jsondecode(aws_ecr_lifecycle_policy.repository[key].policy).rules == [
+        {
+          rulePriority = 1
+          description  = "Expire an untagged image a day after its push, once no kept image index references it"
+          selection = {
+            tagStatus   = "untagged"
+            countType   = "sinceImagePushed"
+            countUnit   = "days"
+            countNumber = 1
+          }
+          action = { type = "expire" }
+        },
+        {
+          rulePriority = 2
+          description  = "Keep the five most recently pushed tagged images: rollback.sh applies the previous task definition's"
+          selection = {
+            tagStatus      = "tagged"
+            tagPatternList = ["*"]
+            countType      = "imageCountMoreThan"
+            countNumber    = 5
+          }
+          action = { type = "expire" }
+        },
+      ]
+    ])
+    error_message = "The lifecycle policy expires an untagged image a day after its push and keeps the five most recent tagged images (#784). A tagged rule by age would expire a quiet cell's running image, and a count of two loses the previous task definition's image after one failed deploy."
+  }
+
+  # The ticket's floor, held apart from the literal above: whatever the count becomes, it keeps the
+  # running task definition's image and the previous one's. No rule selects tagStatus any, which would
+  # count an index's untagged children, its platform image and its attestation manifest, among the
+  # images kept.
+  assert {
+    condition = alltrue(flatten([
+      for key in ["gateway", "mock-api"] : [
+        for rule in jsondecode(aws_ecr_lifecycle_policy.repository[key].policy).rules :
+        rule.selection.tagStatus != "any"
+        && (rule.selection.tagStatus != "tagged" || (rule.selection.countType == "imageCountMoreThan" && rule.selection.countNumber >= 2))
+      ]
+    ]))
+    error_message = "Every rule keeps at least the two most recent tagged images, rollback.sh's running and previous digests, and none selects tagStatus any."
+  }
 }
 
 # --- The task's shape ------------------------------------------------------------------------

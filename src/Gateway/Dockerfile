@@ -24,8 +24,9 @@ WORKDIR /src
 
 # The build files first, so a source change does not re-resolve every package. The two analyzer
 # configs come with them, so the image publishes under the analysis every other build runs
-# (ADR-0035); Directory.Build.props switches analysis on only where .globalconfig is (#606), and
-# attaches the banned-symbol lists there too, so they come along (#608).
+# (ADR-0035); Directory.Build.props runs that analysis wherever it is read, so a build without them
+# fails (#673), and attaches the banned-symbol lists beside them, so they come along too (#608).
+# Every other Dockerfile copies this line as it stands, which tools/image_build_tests.py holds.
 COPY global.json nuget.config Directory.Build.props Directory.Packages.props .editorconfig .globalconfig BannedSymbols.*.txt ./
 COPY src/Gateway/Gateway.csproj src/Gateway/
 COPY src/Platform.Abstractions/Platform.Abstractions.csproj src/Platform.Abstractions/

@@ -17,9 +17,9 @@ that string.
 
 | Tag | Value | Applied to |
 | --- | --- | --- |
-| `Platform` | `spa-platform` | Every resource in `infra/envs/poc/{idp,apps,platform}`, and the wildcard certificate `tools/scripts/certs.sh` imports to ACM |
+| `Platform` | `spa-platform` | Every resource in `infra/envs/poc/{idp,apps,platform}`, the wildcard certificate `tools/scripts/certs.sh` imports to ACM, and the data-protection key ring parameters the gateway writes |
 | `Cell` | the cell name, e.g. `poc` | The same resources |
-| `ManagedBy` | `terraform`, or `certs.sh` for the certificate | The same resources |
+| `ManagedBy` | `terraform`; `certs.sh` for the certificate; `gateway` for the key ring parameters under `/spa-platform/<cell>/data-protection/` (#274) | The same resources |
 
 `Platform = spa-platform` is **the platform tag**: the one every reader of
 `tools/scripts/verify-teardown.sh` matches exactly, and P-05 asserts that no reader finds. `Cell` is the same value as `Platform:Cell` in platform configuration and as `cell`
@@ -29,6 +29,12 @@ Each root sets all three through the provider's `default_tags`, so a resource ad
 without the author remembering to. `certs.sh` tags in the same API call that imports the
 certificate: an untagged certificate is invisible to both the script's own lookup and teardown's
 query, and a retry would import a second copy.
+
+The gateway writes the data-protection key ring parameters (ADR-0025) at run time under
+`/spa-platform/<cell>/data-protection/`. No Terraform state holds them. The gateway applies all
+three tags when it creates a parameter, with `ManagedBy = gateway` as #274 decided.
+`infra/modules/cell` grants the gateway task role `ssm:AddTagsToResource` on the key ring parameters
+with exactly those three tag keys and their required values.
 
 ## The query is an exact value match
 

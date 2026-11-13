@@ -88,6 +88,24 @@ class RollbackAppliesThePreviousTaskDefinitionsImages(cell.CompanionTestCase):
         self.assertEqual([], [c for c in case.calls("terraform") if c.get("command") == "output" and "-raw" in c["argv"]])
         self.assertEqual(A, json.loads((case.repo / "infra/envs/poc/outputs.json").read_text())["gatewayImage"])
 
+    def test_a_previous_build_pushed_as_an_image_index_is_asserted_by_its_arm64_image(self):
+        # #783: a build deploy.sh attested is an image index, and rollback.sh shares deploy.sh's
+        # wait_and_assert, which takes the index's linux/arm64 image as the running digest too, and
+        # its attestation manifest never.
+        for fault, passes in (("running_platform", True), ("running_attestation", False)):
+            with self.subTest(fault=fault):
+                world = deployed_twice()
+                world["manifests"] = {A.split("@")[1]: cell.attested_index(world, "gateway-a")}
+                world["faults"][fault] = True
+                case = cell.Case(self, outputs=True, world=world)
+                result = case.run(SCRIPT)
+                self.assertNoUnexpectedCall(case)
+                self.assertEqual(0 if passes else 1, result.status, result.output)
+                running = case.load()["tasks"][0]["gatewayDigest"]
+                self.assertNotEqual(A.split("@")[1], running)
+                if not passes:
+                    self.assertIn("is not the applied gateway", result.stderr)
+
     def test_the_plan_prints_no_client_id_from_the_outputs_document(self):
         # #251, as deploy_tests.py's case of the same name: the plan shows the mock API's
         # environment, which carries both apps' client ids.

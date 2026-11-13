@@ -2076,9 +2076,10 @@ try {
   // landing. fixtures/closing-references.json is the table both answer: tools/land_tests.py runs
   // land.sh against every row, and this runs the script end to end on every row, one pull request
   // each with its commits as one-parent commits. A row naming tickets stops its pull request at stage
-  // closes naming exactly those, in order, with no other agent run; a row of the owner/repo#n form
-  // or a GitHub issue URL (#806) stops it naming that form and asking for Closes #n; a row naming
-  // none is reviewed to its verdict.
+  // closes naming exactly those, in order, with no other agent run; a row of the owner/repo#n form,
+  // GH-n or a GitHub issue URL (#806, #1147) stops it naming that form and asking for Closes #n, and
+  // a row of a link form beside a GitHub issue URL (#1147) stops it naming the keyword and its
+  // bracket and asking the same; a row naming none is reviewed to its verdict.
   checks++
   {
     const table = path.join(here, 'fixtures', 'closing-references.json')
@@ -2097,10 +2098,11 @@ try {
       const n = numbers[i]
       const r = resultOf(n, result)
       const what = `row ${i} (${row.why}) as PR ${n}`
-      const stops = row.otherRepository ? `closes: the description closes ${row.otherRepository}, the owner/repo#n form` : row.unnamed.length ? `closes: the description closes ${row.unnamed.map((t) => '#' + t).join(', ')}, which` : ''
+      const refused = row.otherRepository || row.link
+      const stops = row.otherRepository ? `closes: the description closes ${row.otherRepository}, the owner/repo#n form` : row.link ? `closes: the description closes through a link, ${row.link}, beside a GitHub issue URL` : row.unnamed.length ? `closes: the description closes ${row.unnamed.map((t) => '#' + t).join(', ')}, which` : ''
       if (stops) {
         if (r.outcome !== 'failed' || !String(r.stage).startsWith(stops)) fail(`${what}: outcome ${r.outcome} at ${JSON.stringify(r.stage)}, expected a stop beginning ${JSON.stringify(stops)}`)
-        if (row.otherRepository && !/Write Closes #n/.test(String(r.stage))) fail(`${what}: the stage ${JSON.stringify(r.stage)} does not ask for Closes #n`)
+        if (refused && !/Write Closes #n/.test(String(r.stage))) fail(`${what}: the stage ${JSON.stringify(r.stage)} does not ask for Closes #n`)
         const ran = env.calls.filter((c) => c.split(':')[1] === String(n) && !c.startsWith('inventory:'))
         if (ran.length) fail(`${what}: stopped at closes, but ${ran.join(', ')} ran`)
         if (env.posted.some((p) => p.n === n)) fail(`${what}: stopped at closes, but a comment was posted`)

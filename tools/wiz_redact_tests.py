@@ -364,6 +364,14 @@ class RuleOneLeavesHashesWhole(InBothModes):
         text = "123456789012fe9e8d7c6b5a4f3e2d1c0b9e8d7c6b5a4f3e2d1c0b9e8d7c6b5a  TestResults/junit.xml\n"
         self.assertRedactsInBothModes(text, text)
 
+    def test_an_ecs_task_id_holding_a_twelve_digit_run_is_kept(self) -> None:
+        # A sitting browser's observation line names the task that answered (#1033, #1065). A task
+        # id is 32 hexadecimal digits, shorter than a SHA-256, and an account beside it still goes.
+        self.assertRedactsInBothModes(
+            "instance=4f1c123456789012a9d8e4abcdefabcd x 123456789012 y\n",
+            "instance=4f1c123456789012a9d8e4abcdefabcd x <account> y\n",
+        )
+
     def test_a_bare_twelve_digit_account_id_is_still_masked(self) -> None:
         self.assertRedactsInBothModes(
             "account 123456789012, 210987654321.dkr.ecr.us-east-2.amazonaws.com, -123456789012-\n",

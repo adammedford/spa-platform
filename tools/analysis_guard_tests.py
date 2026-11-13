@@ -90,8 +90,8 @@ class Guard(unittest.TestCase):
         self.assertFails(self.run_guard(cwd=self.repo / "src"), "src/App/GlobalSuppressions.cs")
 
     def test_no_root_globalconfig_fails(self) -> None:
-        # Directory.Build.props switches analysis on only where .globalconfig is, so a tree without it
-        # would build green with no analysis at all.
+        # Directory.Build.props runs the analysis wherever it is read, so a tree without the file
+        # builds every rule at error with none of the exceptions; the guard names the cause (#673).
         del self.files[".globalconfig"]
         self.assertFails(self.run_guard(), "no root .globalconfig")
 
