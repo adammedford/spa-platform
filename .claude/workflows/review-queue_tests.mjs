@@ -145,6 +145,16 @@ function run(scriptArgs, served, behave = {}) {
     if (!m) throw new Error(`the inventory prompt's ${list} --jq has no sub(...; "") to count a body's length by`)
     return new RegExp(m[1])
   }
+  // What the inventory prompt asks of the commit messages: the class its jq strips before it counts
+  // one, read from the prompt as jqTrim reads a list's, and the sum of lengths past which the
+  // inventory returns no message.
+  const messageRule = (prompt) => {
+    const trim = /--format=%B "\$s" \| jq -Rs 'sub\("([^"]+)"; ""\) \| length'/.exec(prompt)
+    const most = /when the lengths sum to at most (\d+),/.exec(prompt)
+    if (!trim || !most) throw new Error('the inventory prompt has no jq count of a commit message, or no sum past which it returns none')
+    return { trim: new RegExp(trim[1]), most: Number(most[1]) }
+  }
+  const batches = []   // {n, label, asked: [{sha, length}]}, every message agent's batch, as its prompt lists it
   globalThis.agent = async (prompt, opts) => {
     flight.now++
     flight.max = Math.max(flight.max, flight.now)
@@ -201,6 +211,26 @@ function run(scriptArgs, served, behave = {}) {
       if (b && b.error) return { body: b.whole ? e.body : '', error: b.error }
       return { body: typeof b === 'function' ? b(e.body) : e.body, error: '' }
     }
+    if (kind === 'inventory' && opts.label.split(':')[2] === 'messages') {
+      // A message agent: the commits its prompt lists, each with its message as the pull request
+      // holds it, or what behave.messages says of a sha: 'null' for an agent that dies returning
+      // nothing, { throws } for one that dies throwing that value, { error } for a commit it cannot
+      // read, 'missing' for an entry it leaves out, or a function of the message for what it returns
+      // instead.
+      const asked = [...prompt.matchAll(/^COMMIT: ([0-9a-f]{40}) (\d+)$/gm)].map((m) => ({ sha: m[1], length: Number(m[2]) }))
+      batches.push({ n: Number(n), label: opts.label, asked })
+      const says = asked.map((c) => (behave.messages || {})[c.sha])
+      for (const b of says) {
+        if (b && b.throws !== undefined) throw b.throws
+        if (b === 'null') return null
+      }
+      const held = (s) => (served[n].commitMessages.find((c) => c.sha === s) || {}).message
+      const messages = asked.filter((c, i) => says[i] !== 'missing').map((c) => {
+        const b = (behave.messages || {})[c.sha]
+        return { sha: c.sha, message: typeof b === 'function' ? b(held(c.sha)) : held(c.sha) }
+      })
+      return { messages, error: (says.find((b) => b && b.error) || { error: '' }).error }
+    }
     if (kind === 'inventory') {
       const inv = served[n]
       const gh = behave.gh
@@ -210,7 +240,14 @@ function run(scriptArgs, served, behave = {}) {
       // Each entry as the inventory's jq projection prints it (#1018): no body, its length in code
       // points, as jq's length counts a string, once what that list's --jq strips is removed (#1030,
       // #1072), and whether the record's text is anywhere in it.
-      return { ...inv, comments: comments.map(projected(jqTrim(prompt, 'comments'), 'issues/comments')), reviews: (inv.reviews || []).map(projected(jqTrim(prompt, 'reviews'), `pulls/${n}/reviews`)) }
+      // Each commit message as the prompt's loop prints it, its length counted once what the jq
+      // strips is removed, and its text only when the lengths sum to no more than the prompt allows.
+      // behave.inventoryMessages: a function of those entries, for an inventory that returns others.
+      const rule = messageRule(prompt)
+      const counted = (inv.commitMessages || []).map((c) => ({ ...c, length: Array.from((c.message || '').replace(rule.trim, '')).length }))
+      const over = counted.reduce((sum, c) => sum + c.length, 0) > rule.most
+      const commitMessages = over ? counted.map((c) => ({ ...c, message: '' })) : counted
+      return { ...inv, commitMessages: behave.inventoryMessages ? behave.inventoryMessages(commitMessages) : commitMessages, comments: comments.map(projected(jqTrim(prompt, 'comments'), 'issues/comments')), reviews: (inv.reviews || []).map(projected(jqTrim(prompt, 'reviews'), `pulls/${n}/reviews`)) }
     }
     if (kind === 'range') {
       const r = (behave.range || {})[n]
@@ -252,7 +289,7 @@ function run(scriptArgs, served, behave = {}) {
     }
     throw new Error(`unexpected agent label ${opts.label}`)
   }
-  return { repo, wt: args.wt, calls, posted, mutations, prompts, git, flight, events }
+  return { repo, wt: args.wt, calls, posted, mutations, prompts, git, flight, events, batches }
 }
 
 // A stubbed gh shared across runs. failPost: GitHub cannot be reached at posting time. headNow: the
@@ -2504,6 +2541,154 @@ try {
     const inventory = (meta && meta.phases.find((ph) => ph.title === 'Inventory')) || {}
     for (const w of ['COMMENTED review', 'repository account', 'flags']) if (!String(inventory.detail).includes(w)) fail(`meta's Inventory detail does not name ${JSON.stringify(w)} of what costs a body agent`)
     if (String(inventory.detail).includes('carries a record line')) fail('meta\'s Inventory detail says a body agent runs per record line; it runs per flagged body')
+  }
+
+  // Commit messages past one return. On 2026-11-12 the review of #1175, 79 commits whose messages
+  // run 95,615 characters, failed at the inventory, whose agent could not return them beside the
+  // rest. The fixture has that shape: 79 commits, every other one a merge, about 96 KB of messages.
+  // The inventory returns each message's length and no text, and message agents return the texts in
+  // batches that keep the commits' order and hold no more than the prompt's sum each. What only the
+  // messages hold is then read: the ticket the description closes, named by one non-merge commit, and
+  // a date later than the run's in the last commit's message.
+  const M1175 = 16000
+  const C1175 = Array.from({ length: 79 }, (_, i) => (i + 1).toString(16).padStart(40, 'a'))
+  const LATE1175 = 'Verified green on 2026-10-22 by the check.'
+  const T1175 = '#' + 77   // the ticket the description closes, spelled as the closes check's h() spells one
+  const message1175 = (i) => [
+    i % 2 ? `Merge task issue-${2000 + i} into the run branch` : `Task issue-${2000 + i}: what commit ${i} lands`, '',
+    ...Array.from({ length: 10 }, (_, k) => `Paragraph ${k} of commit ${i}: what it changed, why it changed it, and how that was checked, as its author left it.`),
+    ...(i === 70 ? ['', `Ticket: ${T1175}`] : []), ...(i === 78 ? ['', LATE1175] : []), '', 'Co-Authored-By: t', '',
+  ].join('\n')
+  const MESSAGES1175 = C1175.map((s, i) => ({ sha: s, message: message1175(i), parents: i % 2 ? 2 : 1 }))
+  const served1175 = (commitMessages = MESSAGES1175, extra = {}) => ({ 1175: pr(1175, ['docs/z.md'], { head: C1175[0], commits: C1175, description: `Lands the night.\n\nCloses ${T1175}\n`, commitMessages, ...extra }) })
+  const lengthOf = (c) => Array.from(c.message.replace(/[ \t\r\n]+$/, '')).length
+  // What every run's batches must be: the commits asked for, in order and once each, no batch over
+  // the sum unless it holds one commit, and no two neighbours that would have fitted in one.
+  const batchFaults = (env, wanted) => {
+    const faults = []
+    const asked = env.batches.flatMap((b) => b.asked.map((c) => c.sha))
+    if (JSON.stringify(asked) !== JSON.stringify(wanted.map((c) => c.sha))) faults.push(`the batches ask for ${asked.length} commit(s), expected the ${wanted.length} wanted, in the commits' order and once each`)
+    const sizes = env.batches.map((b) => b.asked.reduce((sum, c) => sum + c.length, 0))
+    for (const [i, b] of env.batches.entries()) {
+      if (sizes[i] > M1175 && b.asked.length > 1) faults.push(`batch ${i + 1} holds ${b.asked.length} messages of ${sizes[i]} characters, over ${M1175}`)
+      if (i && sizes[i - 1] + b.asked[0].length <= M1175) faults.push(`batch ${i + 1} opens with a message that fitted in batch ${i}`)
+      if (b.label !== `inventory:1175:messages:${i + 1}`) faults.push(`batch ${i + 1} ran as ${b.label}`)
+    }
+    return faults
+  }
+  checks++
+  {
+    const total = MESSAGES1175.reduce((sum, c) => sum + lengthOf(c), 0)
+    if (total < 90000 || total > 100000) fail(`#1175's shape: the messages run ${total} characters, expected about 96,000`)
+    env = run({ prs: [1175] }, served1175())
+    result = await execute(env)
+    const r = resultOf(1175, result)
+    if (r.outcome !== 'recorded' || r.verdict !== 'merge') fail(`#1175's shape: outcome ${r.outcome} ${r.verdict} at ${JSON.stringify(r.stage)}, expected a recorded merge`)
+    if (env.batches.length < Math.ceil(total / M1175)) fail(`#1175's shape: ${env.batches.length} message agent(s) ran for ${total} characters, fewer than ${M1175} a batch allows`)
+    for (const f of batchFaults(env, MESSAGES1175)) fail(`#1175's shape: ${f}`)
+    for (const b of env.batches) for (const c of b.asked) if (c.length !== lengthOf(MESSAGES1175[C1175.indexOf(c.sha)])) fail(`#1175's shape: ${b.label} is given ${c.length} characters for ${c.sha}, not the length the inventory counted`)
+    const late = ((r.findings || {}).verified || []).filter((f) => String(f.title).includes('2026-10-22'))
+    if (late.length !== 1 || !String(late[0].where).includes(C1175[78]) || !String(late[0].checked).endsWith(JSON.stringify(LATE1175))) fail(`#1175's shape: the later date in the last commit's message gave ${JSON.stringify(late)}, expected one finding naming ${C1175[78]} and quoting its sentence`)
+    if (result.agents !== env.calls.length) fail(`#1175's shape: the return reports ${result.agents} agents, ${env.calls.length} ran`)
+    for (const [i, b] of env.batches.entries()) {
+      const p = env.prompts[b.label] || ''
+      for (const w of [`git -C ${env.repo} log -1 --format=%B`, `OUTPUT FILE: ${env.repo}/.scratch/review-queue/log/2026-10-21/pr-1175/messages-${i + 1}.json`]) if (!p.includes(w)) fail(`#1175's shape: the message prompt ${b.label} lacks ${JSON.stringify(w)}`)
+    }
+    const inv = env.prompts['inventory:1175'] || ''
+    if (!inv.includes('jq -Rs \'sub("[ \\t\\r\\n]+$"; "") | length\'') || !inv.includes(`at most ${M1175},`)) fail('#1175\'s shape: the inventory prompt does not count each message through jq, or does not name the sum past which it returns none')
+    if (env.flight.max > 3) fail(`#1175's shape: ${env.flight.max} agents ran at once, over the default maxParallel of 3`)
+    const meta = loadMeta()
+    const inventory = (meta && meta.phases.find((ph) => ph.title === 'Inventory')) || {}
+    if (!String(inventory.detail).includes('commit messages')) fail('meta\'s Inventory detail does not name the commit messages a message agent returns')
+
+    // The ticket is named by a message only: with that line gone the review stops at closes, so the
+    // run above read commit 70's message from its batch.
+    env = run({ prs: [1175] }, served1175(MESSAGES1175.map((c, i) => (i === 70 ? { ...c, message: c.message.replace(`Ticket: ${T1175}`, 'Ticket: none') } : c))))
+    const stopped = resultOf(1175, await execute(env))
+    if (stopped.outcome !== 'failed' || !String(stopped.stage).startsWith('closes: ') || !String(stopped.stage).includes(T1175)) fail(`#1175's shape, no commit naming the ticket: outcome ${stopped.outcome} at ${JSON.stringify(stopped.stage)}, expected failed at closes naming ${T1175}`)
+
+    // A message longer than a batch is read alone, and its neighbours in batches of their own.
+    const LONG = MESSAGES1175.map((c, i) => (i === 40 ? { ...c, message: `Task x: a long one\n\n${'It says a great deal. '.repeat(900)}\n` } : c))
+    env = run({ prs: [1175] }, served1175(LONG))
+    const long = resultOf(1175, await execute(env))
+    if (long.outcome !== 'recorded') fail(`a message over a batch: outcome ${long.outcome} at ${JSON.stringify(long.stage)}, expected recorded`)
+    for (const f of batchFaults(env, LONG)) fail(`a message over a batch: ${f}`)
+    const alone = env.batches.find((b) => b.asked.some((c) => c.sha === C1175[40])) || { asked: [] }
+    if (lengthOf(LONG[40]) <= M1175 || alone.asked.length !== 1) fail(`a message over a batch: the ${lengthOf(LONG[40])}-character message shares its batch with ${alone.asked.length - 1} other(s), expected none`)
+
+    // A head that already carries a record is skipped before any message is read.
+    const RECORDED = { author_association: 'OWNER', created_at: '2026-10-20T09:00:00Z', html_url: 'https://github.com/o/r/pull/1175#issuecomment-5', body: `## Review\n\nReviewed ${C1175[0]} against ${FORK}: merge` }
+    env = run({ prs: [1175] }, served1175(MESSAGES1175, { comments: [RECORDED] }))
+    const skipped = resultOf(1175, await execute(env))
+    if (skipped.outcome !== 'skipped' || env.batches.length) fail(`#1175's shape, its head recorded: outcome ${skipped.outcome} with ${env.batches.length} message agent(s), expected skipped with none`)
+  }
+
+  // Messages the inventory can return in one piece cost no agent, and one it returns other than
+  // whole is read again by a message agent rather than searched as it stands: a small pull request
+  // whose inventory returns no text, and one whose last message came back a character short. An
+  // entry with no length cannot be checked, so it fails the review at the inventory with no message
+  // agent run.
+  checks++
+  {
+    const SMALL = MESSAGES1175.slice(76)
+    const servedSmall = () => served1175(SMALL, { commits: C1175.slice(76), description: '' })
+    const lateIn = (r) => ((r.findings || {}).verified || []).filter((f) => String(f.title).includes('2026-10-22')).length
+    env = run({ prs: [1175] }, servedSmall())
+    let r = resultOf(1175, await execute(env))
+    if (r.outcome !== 'recorded' || env.batches.length || lateIn(r) !== 1) fail(`three short messages: outcome ${r.outcome} at ${JSON.stringify(r.stage)}, ${env.batches.length} message agent(s), ${lateIn(r)} later-date finding(s); expected recorded, none and one`)
+    const cases = {
+      'no text returned': (list) => list.map((c) => ({ ...c, message: '' })),
+      'the last a character short': (list) => list.map((c, i) => (i === 2 ? { ...c, message: c.message.replace(LATE1175, LATE1175.slice(0, -1)) } : c)),
+    }
+    for (const [what, inventoryMessages] of Object.entries(cases)) {
+      env = run({ prs: [1175] }, servedSmall(), { inventoryMessages })
+      r = resultOf(1175, await execute(env))
+      const asked = env.batches.flatMap((b) => b.asked.map((c) => c.sha))
+      if (r.outcome !== 'recorded' || env.batches.length !== 1 || !asked.includes(C1175[78]) || lateIn(r) !== 1) fail(`a small inventory with ${what}: outcome ${r.outcome} at ${JSON.stringify(r.stage)}, ${env.batches.length} message agent(s) asked for ${JSON.stringify(asked)}, ${lateIn(r)} later-date finding(s); expected recorded, one agent reading ${C1175[78]}, and the date found`)
+    }
+    for (const [what, drop] of Object.entries({ 'no length': (c) => { const { length, ...rest } = c; return rest }, 'a negative length': (c) => ({ ...c, length: -1 }) })) {
+      env = run({ prs: [1175] }, servedSmall(), { inventoryMessages: (list) => list.map((c, i) => (i === 1 ? drop(c) : c)) })
+      r = resultOf(1175, await execute(env))
+      if (r.outcome !== 'failed' || !String(r.stage).startsWith('inventory: ') || !String(r.stage).includes(C1175[77]) || env.batches.length || env.posted.length) fail(`a commit message with ${what}: outcome ${r.outcome} at ${JSON.stringify(r.stage)} with ${env.batches.length} message agent(s), expected failed at the inventory naming ${C1175[77]} with none`)
+    }
+  }
+
+  // A message that comes back other than whole fails the review at the inventory, naming its commit,
+  // and nothing is searched in it: a stand-in, a message one character short or long, an entry left
+  // out, and, naming the batch by its first commit, an agent that returns nothing, one that cannot
+  // read a commit, and one that throws, whose first line alone is carried. Nothing runs after the
+  // inventory, so no record is posted.
+  checks++
+  {
+    const target = C1175[78]
+    env = run({ prs: [1175] }, served1175())
+    await execute(env)
+    const first = (env.batches.find((b) => b.asked.some((c) => c.sha === target)) || { asked: [{}] }).asked[0].sha
+    const cases = {
+      'a stand-in': { b: () => `[Stand-in: the message of ${target} is in messages.json]`, names: target },
+      'one character short': { b: (m) => m.replace(/[^ \t\r\n]([ \t\r\n]*)$/, '$1'), names: target },
+      'one character long': { b: (m) => m.replace(/[ \t\r\n]*$/, (w) => 'x' + w), names: target },
+      'left out': { b: 'missing', names: target },
+      'nothing returned': { b: 'null', names: first },
+      'a commit unread': { b: { error: `git could not read ${target}` }, names: first },
+      'an agent throwing': { b: { throws: new Error('the agent was killed\n    at agent (harness.js:1:1)') }, names: first, says: 'the agent was killed', hides: 'harness.js' },
+    }
+    for (const [what, { b, names, says, hides }] of Object.entries(cases)) {
+      env = run({ prs: [1175] }, served1175(), { messages: { [target]: b } })
+      result = await execute(env)
+      const r = resultOf(1175, result)
+      const stage = String(r.stage)
+      if (r.outcome !== 'failed' || !stage.startsWith('inventory: ') || !stage.includes(names)) fail(`a message with ${what}: outcome ${r.outcome} at ${JSON.stringify(r.stage)}, expected failed at the inventory naming ${names}`)
+      if (says && !stage.includes(says)) fail(`a message with ${what}: stage ${JSON.stringify(r.stage)}, expected it to carry ${JSON.stringify(says)}`)
+      if (hides && stage.includes(hides)) fail(`a message with ${what}: stage ${JSON.stringify(r.stage)} carries more than the first line`)
+      const after = env.calls.filter((c) => !c.startsWith('inventory:') && c !== 'launch')
+      if (after.length || env.posted.length) fail(`a message with ${what}: ${after.join(', ') || 'nothing'} ran after the inventory and ${env.posted.length} comment(s) were posted, expected none`)
+      if (r.recordUrl || r.verdict) fail(`a message with ${what}: verdict ${JSON.stringify(r.verdict)} with record ${JSON.stringify(r.recordUrl)}, expected none`)
+    }
+    // A message whose return differs only in the whitespace at its end is whole, as a body's is (#1030).
+    env = run({ prs: [1175] }, served1175(), { messages: { [target]: (m) => m.replace(/[ \t\r\n]+$/, '') } })
+    const r = resultOf(1175, await execute(env))
+    if (r.outcome !== 'recorded') fail(`a message returned without its final newline: outcome ${r.outcome} at ${JSON.stringify(r.stage)}, expected recorded`)
   }
 
   // The record's compact shape (#967). The verdict prompt asks for the Spec table of three columns,

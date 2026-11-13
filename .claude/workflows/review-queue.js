@@ -3,7 +3,7 @@ export const meta = {
   description: 'Review every open pull request into main, or a named list, on the Standards and Spec axes, and post one comment per pull request ending in its review record',
   whenToUse: 'An integrator session, in the foreground, wants the open pull requests into main, or the ones it names, to carry a review record before tools/land.sh merges them; launched by scriptPath .claude/workflows/review-queue.js with args { repo, date, wt } and an optional prs list (the header comment has the full launch)',
   phases: [
-    { title: 'Inventory', detail: 'with no list, one queue agent lists the open pull requests into main; then one agent per pull request reads head, fork point, files, owner set, CI, citations and the comments and reviews already posted, and one agent per comment or COMMENTED review from a repository account whose body the inventory flags as holding the text of a record, a record line or a sentence quoting one, returns its body; they judge nothing. When the latest record names another head, one range agent says whether it is an ancestor and what the commits since it touch, or, for a rebuilt head, which new commits have the tree of an old one' },
+    { title: 'Inventory', detail: 'with no list, one queue agent lists the open pull requests into main; then one agent per pull request reads head, fork point, files, owner set, CI, citations and the comments and reviews already posted, and one agent per comment or COMMENTED review from a repository account whose body the inventory flags as holding the text of a record, a record line or a sentence quoting one, returns its body, and, when the commit messages are more than the inventory returns in one piece, one agent per batch of them returns those messages; they judge nothing. When the latest record names another head, one range agent says whether it is an ancestor and what the commits since it touch, or, for a rebuilt head, which new commits have the tree of an old one' },
     { title: 'Review', detail: 'two fresh agents per pull request, Standards and Spec, read the branch through origin and rebuild nothing' },
     { title: 'Mutate', detail: 'one agent per mutation, up to the cap, breaks what a test guards in a throwaway worktree, runs that test\'s project, and removes the worktree' },
     { title: 'Verdict', detail: 'one agent per pull request re-takes the severity of every finding the axes report and says merge or hold, held to the mutation rows; one comment is posted, its last line the record' },
@@ -55,7 +55,9 @@ export const meta = {
 // RECORD_TEST flags (#1018, #1073), one range agent when an earlier head carries a record, two axes,
 // up to maxMutationsPerPr mutations, one verdict and one post: 6 + the cap + the flagged bodies each,
 // 9 + the flagged bodies with the defaults, beside the run's launch and queue agents. RECORD_TEST
-// also flags a sentence quoting a record, so the flagged bodies can outnumber the records. The
+// also flags a sentence quoting a record, so the flagged bodies can outnumber the records. A pull
+// request whose commit messages run past MESSAGES_AT_ONCE characters adds one message agent per
+// batch of that size ("Commit messages past one return" below); most add none. The
 // return's agents is the count that ran, beside the date, the base tip the run saw and the log
 // directory. A wide queue is kept under a session's guideline by naming pull requests or lowering the
 // cap.
@@ -184,6 +186,20 @@ export const meta = {
 // is held to it by a shared table of rows both test companions run (#745), described where the rule
 // is written below.
 //
+// Commit messages past one return. Both searches above read every commit message whole, and the
+// inventory was their one carrier. On 2026-11-12 the review of #1175, an overnight landing of 79
+// commits whose messages run 95,615 characters, failed at the inventory: its agent could not fit them
+// in one return beside the rest, two attempts were cut off, and it returned none with an error. That
+// is #1018's failure again, a text too long for the agent asked to copy it, and it takes #1018's
+// answer. The inventory returns each commit's sha, parent count and its message's length in code
+// points, counted by jq and not by the agent, and the message itself only when the lengths sum to
+// MESSAGES_AT_ONCE or less. The script then has every message that did not come back whole, by
+// that length, read by message agents, in the commits' order and in batches of at most
+// MESSAGES_AT_ONCE characters, a longer message alone in its batch. A message is taken only whole: a
+// batch whose agent dies or errors, or a message short, long or missing, fails the review at the
+// inventory naming the commit, so no date or ticket is searched for in a text that is not all there.
+// They are read after the skip of a recorded head, which reads none of them.
+//
 // Posting (#85). The post agent re-reads the head first; a head that moved is still posted, because
 // the record names the head the inventory read, and the return flags it (per pull request and in
 // the run-level headMoved list) so the operator runs again. GitHub unreachable at posting time is
@@ -219,6 +235,10 @@ const NAMED = A.prs === undefined ? null : [...new Set(A.prs)]
 const MAX_PAR = A.maxParallel || 3
 const MUTATION_CAP = A.maxMutationsPerPr || 3
 const SKIP_RECORDED = A.skipRecorded !== false
+// The characters of commit messages one agent is asked to copy into one return: the inventory when
+// every message fits, otherwise a message agent per batch. #796's body agents each returned a body
+// of 11 to 21 KB whole (#1018), and the inventory carries the rest of its return beside them.
+const MESSAGES_AT_ONCE = 16000
 // The run's directory under the git-ignored scratch log (.gitignore: .scratch/*/log/). It is the only
 // place the run writes in the main checkout, apart from git's own bookkeeping for fetches and worktrees.
 const LOG = `${REPO}/.scratch/review-queue/log/${DATE}`
@@ -418,6 +438,15 @@ const BODY = {
   properties: { body: { type: 'string' }, error: { type: 'string' } },
   required: ['body', 'error'],
 }
+// What a message agent returns: each commit message of its batch, whole (MESSAGES_AT_ONCE above).
+const MESSAGES = {
+  type: 'object',
+  properties: {
+    messages: { type: 'array', items: { type: 'object', properties: { sha: { type: 'string' }, message: { type: 'string' } }, required: ['sha', 'message'] } },
+    error: { type: 'string' },
+  },
+  required: ['messages', 'error'],
+}
 // A candidate invariant test: an xUnit fact or theory, a Terraform test file or a Python test
 // companion the diff adds or changes. project is what runs it alone: the .NET test project, the
 // Terraform test directory, or the companion's path. file is the file the test is written in, and
@@ -480,9 +509,11 @@ const INVENTORY = {
     statedHeads: { type: 'array', items: { type: 'object', properties: { sha: { type: 'string' }, quote: { type: 'string' } }, required: ['sha', 'quote'] } },
     // The description and every commit message since the fork point, as written, for the script's
     // search for a date later than the run's (#525), and each commit's parent count, for its check of
-    // the Closes lines (#688).
+    // the Closes lines (#688). length is the message's code points once its trailing whitespace is
+    // removed, as jq counts them, and message is "" when the messages together are more than the
+    // inventory returns: readMessages has each one that is not whole read by a message agent.
     description: { type: 'string' },
-    commitMessages: { type: 'array', items: { type: 'object', properties: { sha: { type: 'string' }, message: { type: 'string' }, parents: { type: 'integer' } }, required: ['sha', 'message', 'parents'] } },
+    commitMessages: { type: 'array', items: { type: 'object', properties: { sha: { type: 'string' }, message: { type: 'string' }, parents: { type: 'integer' }, length: { type: 'integer' } }, required: ['sha', 'message', 'parents', 'length'] } },
     statedMutations: { type: 'array', items: STATED },
     candidates: { type: 'array', items: CANDIDATE },
     comments: { type: 'array', items: ENTRY },
@@ -629,7 +660,7 @@ OUTPUT FILE: ${DIR(n)}/inventory.json
 5. ci: one row per check of statusCheckRollup, state one of success, failure, pending, skipped.
 6. cites: the plan row id, the issue numbers and the merge subject the body proposes (empty when absent). bodyClaims: every claim the body makes about what it did or proved, quoted, mutation statements with their counts included. statedMutations: one entry per mutation the body states: the test it names, the project that runs it, the mutation as stated, failed and total as the body gives them (-1 for a count it does not give), and the sentence quoted.
 6a. statedHeads: one entry per sha the body gives as this pull request's head, the head it says it describes ("head \`76704c5\`"): sha exactly as written, full or abbreviated, and quote, the sentence that gives it. Leave out the fork point, the base, a listed commit, and a sha the body names as an earlier head or as history ("the earlier head \`ed8d063\`"). [] when the body gives none. Do not compare it with the head: the script does.
-6c. description: the body exactly as gh serves it, byte for byte ("" when it is empty). commitMessages: one entry per commit of commits, in that order: sha, and message = \`git -C ${REPO} log -1 --format=%B <sha>\`, copied byte for byte, and parents = the number of shas \`git -C ${REPO} log -1 --format=%P <sha>\` prints (2 or more for a merge). Do not look for dates or Closes lines in them: the script does.
+6c. description: the body exactly as gh serves it, byte for byte ("" when it is empty). commitMessages: one entry per line \`git -C ${REPO} log --format=%H <forkPoint>..<head> | while read -r s; do echo "$s $(git -C ${REPO} log -1 --format=%P "$s" | wc -w | tr -d ' ') $(git -C ${REPO} log -1 --format=%B "$s" | jq -Rs 'sub("[ \\t\\r\\n]+$"; "") | length')"; done\` prints, in that order, its three fields exactly as printed: sha, parents (the commit's parent shas counted, 2 or more for a merge) and length (the characters its message runs before any whitespace at its end). message: when the lengths sum to at most ${MESSAGES_AT_ONCE}, \`git -C ${REPO} log -1 --format=%B <sha>\` copied byte for byte, every character and never a summary, an elision or a stand-in, since the script counts them against length; when they sum to more, "" for every commit, and the script has them read by agents of their own. Do not look for dates or Closes lines in them: the script does.
 6b. candidates: every candidate invariant test the diff adds or changes: each xUnit fact or theory (test = its class and method name, project = its test project's directory), each Terraform test file (project = its directory), each Python test companion (test and project = its path, and nothing added to the test). file: the repository path of the file the test is written in. guards: one sentence on what it guards. breaks: the source file it would take to break that, never the test itself.
 7. comments: one entry per line \`cd ${REPO} && gh api --paginate repos/{owner}/{repo}/issues/${n}/comments --jq '.[] | {id, author_association, html_url, created_at, length: (.body // "" | sub("[ \\t\\r\\n]+$"; "") | length), record: ((.body // "") | test("${RECORD_TEST}"))}'\` prints, its fields exactly as printed. reviews: the same for \`cd ${REPO} && gh api --paginate repos/{owner}/{repo}/pulls/${n}/reviews --jq '.[] | {id, state, author_association, html_url, submitted_at, length: (.body // "" | sub("[ \\t\\r\\n]+$"; "") | length), record: ((.body // "") | test("${RECORD_TEST}"))}'\`. Return no body: the script has each one it needs read by an agent of its own.
 8. Write the whole result as JSON to the OUTPUT FILE, then return it. error is "" when nothing stopped you.`
@@ -643,6 +674,18 @@ OUTPUT FILE: ${DIR(n)}/body-${e.id}.json
 
 1. \`cd ${REPO} && gh api ${review ? `repos/{owner}/{repo}/pulls/${n}/reviews/${e.id}` : `repos/{owner}/{repo}/issues/comments/${e.id}`}\`, the ${review ? 'review' : 'comment'} at ${e.html_url}.
 2. body: the JSON's body field, its decoded value byte for byte, not --jq's printed form, which adds a newline. It runs ${e.length} characters before any whitespace at its end; copy every one, and never a summary, an elision or a stand-in: the script counts them and fails the review on a body that is short or long. If gh cannot be reached, body is "" and error says why.
+3. Write the whole result as JSON to the OUTPUT FILE, then return it. error is "" when nothing stopped you.`
+
+// One batch of commit messages, read whole by an agent of its own (MESSAGES_AT_ONCE above).
+const messagesPrompt = (n, batch, i) => `Read ${batch.length} commit message(s) of pull request #${n} and return each whole. Read and report; judge nothing.
+
+${HOUSE}
+
+OUTPUT FILE: ${DIR(n)}/messages-${i}.json
+
+1. \`git -C ${REPO} fetch origin --tags\`. The commits, each with the characters its message runs before any whitespace at its end:
+${batch.map((c) => `COMMIT: ${c.sha} ${c.length}`).join('\n')}
+2. messages: one entry per commit above, in that order: sha, and message = \`git -C ${REPO} log -1 --format=%B <sha>\`, copied byte for byte. Copy every character, and never a summary, an elision or a stand-in: the script counts them and fails the review on a message that is short or long. If a commit cannot be read, error says which and why.
 3. Write the whole result as JSON to the OUTPUT FILE, then return it. error is "" when nothing stopped you.`
 
 const rangePrompt = (n, inv, from, oldFork, sinceHeads = []) => `Read the range for a delta review of pull request #${n}: the commits since ${from}, the head its latest review record names. Read and report; judge nothing.
@@ -1294,6 +1337,50 @@ const readBodies = async (n, inv) => {
   for (const [i, { e }] of wanted.entries()) e.body = got[i].body
   return null
 }
+// The commit messages laterDateFindings and closingReferences read ("Commit messages past one
+// return" in the header): each one the inventory did not return whole, by the length it counted, is
+// read by a message agent and written into its entry. The batches keep the commits' order and hold at
+// most MESSAGES_AT_ONCE characters each, a longer message alone. As with a body, a message is taken
+// only whole, a throw is caught per agent, and the reason returned names the commit, so the review
+// fails at the inventory. null when every message is whole, which costs no agent when the inventory
+// returned them all.
+const messageBatches = (wanted) => {
+  const batches = []
+  let size = 0
+  for (const c of wanted) {
+    if (!batches.length || size + c.length > MESSAGES_AT_ONCE) { batches.push([]); size = 0 }
+    batches[batches.length - 1].push(c)
+    size += c.length
+  }
+  return batches
+}
+const readMessages = async (n, inv) => {
+  const all = inv.commitMessages || []
+  for (const c of all) {
+    if (!c || !SHA.test(c.sha || '')) return 'a commit message came back with no sha to read it by'
+    if (!Number.isInteger(c.length) || c.length < 0) return `the commit message of ${c.sha} has no length to read it by`
+  }
+  const batches = messageBatches(all.filter((c) => typeof c.message !== 'string' || codePoints(c.message) !== c.length))
+  const got = await parallel(batches.map((batch, i) => async () => {
+    try { return await run(messagesPrompt(n, batch, i + 1), { label: `inventory:${n}:messages:${i + 1}`, phase: 'Inventory', schema: MESSAGES }) } catch (err) { return { messages: [], error: `its agent threw: ${thrownReason(err)}` } }
+  }))
+  const read = []
+  for (const [i, batch] of batches.entries()) {
+    const b = got[i]
+    const named = batch.length > 1 ? `the commit messages of ${batch[0].sha} and the ${batch.length - 1} after it` : `the commit message of ${batch[0].sha}`
+    if (!b || !Array.isArray(b.messages)) return `the message agent for ${named} returned nothing`
+    if (b.error) return `${named} could not be read: ${b.error}`
+    for (const c of batch) {
+      const m = b.messages.find((x) => x && x.sha === c.sha)
+      if (!m || typeof m.message !== 'string') return `the commit message of ${c.sha} did not come back from its message agent`
+      const length = codePoints(m.message)
+      if (length !== c.length) return `the commit message of ${c.sha} came back ${length < c.length ? 'abridged' : 'altered'}: ${length} of the ${c.length} characters the inventory counted, so no date or ticket is read from it`
+      read.push([c, m.message])
+    }
+  }
+  for (const [c, message] of read) c.message = message
+  return null
+}
 const reviewOne = async (n, res, at) => {
   const inv = await run(inventoryPrompt(n), { label: `inventory:${n}`, phase: 'Inventory', schema: INVENTORY })
   if (!inv || inv.error) return failed(res, 'inventory' + (inv ? ': ' + inv.error : ': the inventory agent returned nothing'))
@@ -1314,6 +1401,9 @@ const reviewOne = async (n, res, at) => {
     log(`#${n}: ${inv.head} already carries a record (${latest.verdict}): ${latest.url}; skipped`)
     return { ...res, outcome: 'skipped', stage: '', verdict: latest.verdict, recordUrl: latest.url, skippedBecauseRecorded: true }
   }
+
+  const unreadMessages = await readMessages(n, inv)
+  if (unreadMessages) return failed(res, `inventory: ${unreadMessages}`)
 
   // A closing reference land.sh would refuse stops the pull request before any other agent runs (#688).
   const { otherRepository, unnamed } = closingReferences(inv)
