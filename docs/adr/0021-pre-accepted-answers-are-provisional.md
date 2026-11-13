@@ -6,7 +6,7 @@
   decision 4's list loses a change request's status line, and a change request, once decided, is
   committed as an integrator ticket on its decision comment; a change request may be filed from a
   pre-accepted answer, as it asks and decides nothing; the other decisions are unchanged.
-  Status-line pointer, 2026-11-11 (#1146): Since #1082 the "dry Apply" in Consequences is gone:
+  Status-line pointer, 2026-11-13 (#1146): Since #1082 the "dry Apply" in Consequences is gone:
   the morning pass runs no Apply, and #1082 holds the current fact.
 - **Date:** 2026-10-17
 - **Deciders:** integrator
