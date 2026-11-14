@@ -8,6 +8,8 @@
   pre-accepted answer, as it asks and decides nothing; the other decisions are unchanged.
   Status-line pointer, 2026-11-13 (#1146): Since #1082 the "dry Apply" in Consequences is gone:
   the morning pass runs no Apply, and #1082 holds the current fact.
+  **Amended 2026-11-13 by [ADR-0037](0037-foreground-confirm-posting.md):** decision 2
+  defines when a foreground session may post the human's confirmation.
 - **Date:** 2026-10-17
 - **Deciders:** integrator
 - **Plan ref:** No decision row. The grill of #78 (the morning workflow spec), questions Q1, Q2, Q7
