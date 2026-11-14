@@ -90,7 +90,10 @@ PRELUDE = ROOT / "tools" / "wiz_prelude.sh"
 # that keeps the pin, the record and the bundle out of git: .scratch/sitting/ is tracked, its log/
 # is not (CODING_STANDARDS.md, "A guard reads the thing it guards").
 COPIED = (".gitignore", "tools/wiz_prelude.sh", "tools/aws-project.env", "tools/wiz_redact.py")
-SKILL_FILES = (ROOT / ".claude" / "skills" / "wiz" / "SKILL.md", ROOT / ".claude" / "skills" / "wiz" / "a-and-b.md")
+SKILL = ROOT / ".claude" / "skills" / "wiz"
+SKILL_FILES = (SKILL / "SKILL.md", SKILL / "c.md", SKILL / "d.md", SKILL / "a-and-b.md")
+# The skill a sitting runs by: the main file, then sittings C and D, which #1198 moved beside it.
+SKILL_TEXT = "".join(path.read_text() for path in SKILL_FILES[:3])
 PIN = ".scratch/sitting/log/date"
 SOURCE = ". tools/wiz_prelude.sh"
 SITTING_BROWSER = ROOT / "tests" / "e2e" / "SittingBrowser"
@@ -284,7 +287,7 @@ class SkillCountsTheWatchsLines(Sitting):
         self.navigation = [self.tokens[name.strip()] for name in listed.group(1).split(",")]
         browser = (SITTING_BROWSER / "SittingBrowser.cs").read_text()
         self.watch_log = re.search(r'WatchLog = "([^"]+)"', browser).group(1)
-        self.skill = SKILL_FILES[0].read_text().splitlines()
+        self.skill = SKILL_TEXT.splitlines()
 
     def skill_line(self, start: str, end: str = "") -> str:
         found = [line for line in self.skill if line.startswith(start) and line.endswith(end)]
@@ -332,7 +335,7 @@ class SkillCountsTheWatchsLines(Sitting):
 
     def confirm_block(self) -> str:
         """The fenced block the confirm runs before the watch, as the skill holds it."""
-        blocks = [block for block in re.findall(r"^```bash\n(.*?)^```$", SKILL_FILES[0].read_text(), re.M | re.S)
+        blocks = [block for block in re.findall(r"^```bash\n(.*?)^```$", SKILL_TEXT, re.M | re.S)
                   if f'mv "$E/{self.watch_log}"' in block]
         self.assertEqual(len(blocks), 1, f"SKILL.md should hold one block setting the log aside: {blocks}")
         return blocks[0]
@@ -380,7 +383,7 @@ class SkillCountsTheWatchsLines(Sitting):
         # A log that exists already must not refuse the watch: WritePrivateAsync's other mode is CreateNew.
         self.assertIn('Path.Combine(bundle, WatchLog), line + "\\n", append: true', browser)
         self.assertIn("Mode = append ? FileMode.Append : FileMode.CreateNew", browser)
-        text = SKILL_FILES[0].read_text()
+        text = SKILL_TEXT
         self.assertLess(text.index(self.confirm_block()), text.index("shown sitting_browser watch main "))
 
     def test_a_line_starts_with_its_token_then_a_space_as_both_read_it(self) -> None:
@@ -409,7 +412,7 @@ class SkillSavesThePlansItsConfirmsRead(Sitting):
 
     def setUp(self) -> None:
         super().setUp()
-        self.text = SKILL_FILES[0].read_text()
+        self.text = SKILL_TEXT
         self.n_section = self.between("**N, from nothing", "**C4, the gate tags.**")
 
     def between(self, start: str, end: str) -> str:
@@ -582,7 +585,7 @@ class SkillRecordsStage0sLines(Sitting):
 
     def setUp(self) -> None:
         super().setUp()
-        self.skill = SKILL_FILES[0].read_text().splitlines()
+        self.skill = SKILL_TEXT.splitlines()
         self.pin(utc_day(-1) + "\n")
 
     def run_line(self, marker: str, double: str = "") -> tuple[subprocess.CompletedProcess, list[str]]:
@@ -697,7 +700,7 @@ class SkillMatchesTheAuthorityByFingerprint(Sitting):
 }}"""
 
     def run_line(self, double: str) -> tuple[subprocess.CompletedProcess, list[str]]:
-        found = [line for line in SKILL_FILES[0].read_text().splitlines() if "openssl x509 -in" in line]
+        found = [line for line in SKILL_TEXT.splitlines() if "openssl x509 -in" in line]
         self.assertEqual(len(found), 1, f"SKILL.md should hold one CA line: {found}")
         done = self.bash(f"{SOURCE}\n{double}\n{found[0]}\n")
         return done, (self.repo / PIN).with_name(f"{utc_day(-1)}.log").read_text().splitlines()
@@ -759,7 +762,7 @@ class SkillGivesEachSittingItsOwnWayOutOfALostClaude(unittest.TestCase):
     """D10 restores D2's copy and posts on #348, so sitting C has its own way out (#1138)."""
 
     def setUp(self) -> None:
-        text = SKILL_FILES[0].read_text()
+        text = SKILL_TEXT
         found = re.search(r"- \*\*A lost `claude`.*?(?=- \*\*AWS Settings)", text, re.S)
         self.assertIsNotNone(found, "SKILL.md's route has no lost-claude item")
         self.item = " ".join(found.group(0).split())
@@ -971,7 +974,7 @@ class GuardedInit(Sitting):
         self.assertNotIn("terraform ", done.stdout)
 
     def test_ns_step_2_names_the_guard_and_no_init_of_its_own(self) -> None:
-        n_section = re.search(r"\*\*N, from nothing.*?(?=\*\*C4, the gate tags\.\*\*)", SKILL_FILES[0].read_text(), re.S)
+        n_section = re.search(r"\*\*N, from nothing.*?(?=\*\*C4, the gate tags\.\*\*)", SKILL_TEXT, re.S)
         self.assertIsNotNone(n_section)
         step = re.search(r"^2\. (.*?)(?=^3\. )", n_section.group(0), re.M | re.S)
         self.assertIsNotNone(step)

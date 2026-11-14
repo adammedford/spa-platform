@@ -4,7 +4,7 @@ Moved out of `SKILL.md` by #468: sitting A ran on 2026-10-19 and sitting B on 20
 (H3) and #71 (H4) are closed. Kept as the record of how they ran, for a cell rebuilt from nothing
 that needs the read pass again. The rules, the prelude's `shown`, the post mode and Stage 0 are in
 `SKILL.md`, and every read below runs through `shown`; where a stage below says "A-alt", read
-`SKILL.md` → N, the platform root on the sample image.
+`c.md` → N, the platform root on the sample image.
 
 ## Sitting A: the read pass
 
