@@ -45,9 +45,17 @@ public static class Observations
     public static string Timeout(DateTimeOffset at, string profile, string app) =>
         ObservationLine.Format(TimeoutToken, at, profile, [("app", app)]);
 
-    /// <summary><c>host=</c> is the app's id, <c>provider</c> or <c>elsewhere</c>, never a hostname; <c>shell=</c>, on an app host only, is the free text.</summary>
-    public static string Other(DateTimeOffset at, string profile, string app, string host, string path, Readiness ready, string? shell) =>
-        ObservationLine.Format(OtherToken, at, profile, [("app", app), ("host", host), ("path", path), .. ready.Fields], shell is null ? null : ("shell", shell));
+    /// <summary>
+    /// <c>host=</c> is the app's id, <c>provider</c> or <c>elsewhere</c>, never a hostname; <c>shell=</c>,
+    /// on an app host only, is the free text. At the app's callback path the line also says what the
+    /// callback was answered with (<paramref name="answered"/>, #1195): <c>http=</c>, <c>problem=</c>,
+    /// and a problem document's <c>title=</c> as the free text in <c>shell=</c>'s place, since a problem
+    /// document is no shell.
+    /// </summary>
+    public static string Other(DateTimeOffset at, string profile, string app, string host, string path, Readiness ready, string? shell, Answered? answered = null) =>
+        ObservationLine.Format(OtherToken, at, profile,
+            [("app", app), ("host", host), ("path", path), .. answered is { } answer ? answer.Fields : [], .. ready.Fields],
+            answered?.Title is { } title ? ("title", title) : shell is null ? null : ("shell", shell));
 
     public static string Marker(DateTimeOffset at, string profile, string app, string text) =>
         ObservationLine.Format("marker", at, profile, [("app", app)], ("text", text));
@@ -117,4 +125,21 @@ public readonly record struct Readiness(string Revision, string Instance)
     public static readonly Readiness Unknown = new(ObservationLine.Dash, ObservationLine.Dash);
 
     public IEnumerable<(string Key, string Value)> Fields => [("revision", Revision), ("instance", Instance)];
+}
+
+/// <summary>
+/// What a login callback's document was answered with (#1195): the response's status, and of a
+/// problem document its <c>code</c> and its <c>title</c>, the title through the page text's scrub;
+/// dashes for a document that could not be read, and for a body that is no problem document, as the
+/// gateway's failure page for a refused callback is not (contracts/http-contract.md -> Errors).
+/// </summary>
+public readonly record struct Answered(int? Status, string? Problem, string? Title)
+{
+    public static readonly Answered Unknown = new(null, null, null);
+
+    public IEnumerable<(string Key, string Value)> Fields =>
+    [
+        ("http", Status is { } status ? status.ToString(System.Globalization.CultureInfo.InvariantCulture) : ObservationLine.Dash),
+        ("problem", Problem ?? ObservationLine.Dash),
+    ];
 }
