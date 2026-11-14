@@ -72,7 +72,7 @@ public sealed record Step(string Name, string TraceId, DateTimeOffset At, int? S
 
     /// <summary>
     /// The request line's <c>route</c>, for a browser step whose trace id rides on every request of a
-    /// navigation (Q137: the context's extra HTTP headers): a callback's redirect to the shell carries
+    /// navigation to the app's origin (Q137, <see cref="OriginHeader"/>): a callback's redirect to the shell carries
     /// the callback's trace id too, and only the <c>callback</c> line is the callback's.
     /// </summary>
     public string? Route { get; init; }

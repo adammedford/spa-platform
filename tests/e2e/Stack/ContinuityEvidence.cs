@@ -8,7 +8,8 @@ namespace Gateway.E2ETests.Stack;
 /// id, a time, a status and an exception's type; an observation holds task ids, trace ids and
 /// <c>session_ref</c>, which contracts/telemetry.md makes safe to log. When this run stopped at a
 /// login hold that timed out, <see cref="Page"/> is what the page showed then (#1003): its URL with no
-/// query and its visible text, through <see cref="Redacted.Text"/>; a run that did not stop there writes
+/// query and its visible text, and the requests and console errors the page met during the hold (#1193),
+/// all through <see cref="Redacted.Text"/>; a run that did not stop there writes
 /// none, so a rerun's file never carries an earlier run's page beside its own verdict. No field can hold
 /// a cookie, a token, a session key or a ticket.
 /// </summary>

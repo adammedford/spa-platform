@@ -107,7 +107,9 @@ internal static partial class Redacted
         Exception scrubbed = failed switch
         {
             // A timed-out hold keeps its kind and what the page showed, the evidence a continuity row writes (#1003).
-            HoldTimeoutException held => new HoldTimeoutException(message, new PageShown(Url(held.Page.Url), Text(held.Page.Text, []))),
+            HoldTimeoutException held => new HoldTimeoutException(message, new PageShown(Url(held.Page.Url), Text(held.Page.Text, []),
+                held.Page.Requests is { } requests ? [.. requests.Select(line => Text(line, []))] : null,
+                held.Page.Errors is { } errors ? [.. errors.Select(line => Text(line, []))] : null)),
             System.TimeoutException => new System.TimeoutException(message),
             _ => new PlaywrightException(message),
         };
