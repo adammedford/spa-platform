@@ -9,8 +9,8 @@ namespace Gateway.E2ETests.Stack;
 /// <summary>
 /// The driver of the deployed continuity rows (#358 Q136): it sends the requests and pulls the levers,
 /// on the two-task cell and nowhere else. Every request carries a fresh sampled <c>traceparent</c>
-/// (Q137): the raw client's per request (<see cref="TracedClient"/>), Chromium's per step through the
-/// context's extra HTTP headers. The raw client's requests carry the fetch metadata a same-origin
+/// (Q137): the raw client's per request (<see cref="TracedClient"/>), Chromium's per step, on its
+/// requests to the app's origin (<see cref="OriginHeader"/>, #1193). The raw client's requests carry the fetch metadata a same-origin
 /// <c>fetch</c> from the app's page sends (<see cref="TracedClient.FetchMetadata"/>), so they pass the
 /// request gate (#1001). What it records is <see cref="Step"/>s, which the observer
 /// (<see cref="ContinuityObserver"/>) places and judges; it holds the session's cookies only in
@@ -90,10 +90,11 @@ public sealed class ContinuityDriver : IAsyncDisposable
         new(string.Join("; ", (await profile.CookiesOfAsync(app)).Select(cookie => $"{cookie.Name}={cookie.Value}")));
 
     /// <summary>
-    /// One browser step: the context's extra headers carry a fresh <c>traceparent</c> while
+    /// One browser step: the page's requests carry a fresh <c>traceparent</c> while
     /// <paramref name="action"/> runs, and the step's status is the first response the page received
-    /// for <paramref name="path"/> on the app's host. The headers go to every request of the step, so
-    /// <paramref name="route"/> names the request line that is the step's own.
+    /// for <paramref name="path"/> on the app's host. The header goes to every request of the step to
+    /// the app's origin and to no other (<see cref="OriginHeader"/>), so <paramref name="route"/> names
+    /// the request line that is the step's own.
     /// </summary>
     public static async Task<Step> BrowserStepAsync(Profile profile, HarnessApp app, string name, string path, string route, int? expect, Func<Task> action)
     {
@@ -109,16 +110,16 @@ public sealed class ContinuityDriver : IAsyncDisposable
             }
         }
 
-        await profile.Context.SetExtraHTTPHeadersAsync([new(ClientTrace.Header, trace.Traceparent)]);
+        await using OriginHeader header = await OriginHeader.SendAsync(profile.Page, app.Origin, ClientTrace.Header, trace.Traceparent);
         profile.Page.Response += Seen;
         try
         {
             await action();
+            header.ThrowIfFailed();
         }
         finally
         {
             profile.Page.Response -= Seen;
-            await profile.Context.SetExtraHTTPHeadersAsync([]);
         }
 
         return new Step(name, trace.TraceId, at, status.Task.IsCompleted ? status.Task.Result : null) { Expect = expect, Route = route };
@@ -131,15 +132,25 @@ public sealed class ContinuityDriver : IAsyncDisposable
     public async Task<(Profile Profile, Step Start, Step Callback)> LoginAsync(HarnessApp app)
     {
         Profile profile = await stack.OpenAsync();
+        (Step start, Step finish) = await LoginAsync(profile, app, () => profile.StopAtCallbackAsync(app));
+        return (profile, start, finish);
+    }
+
+    /// <summary>
+    /// The same two steps in a given profile, with the stop at the callback given: the local proof that
+    /// the step and the hold work together when the provider's page sends its own requests (#1193).
+    /// </summary>
+    public static async Task<(Step Start, Step Callback)> LoginAsync(Profile profile, HarnessApp app, Func<Task<Uri>> stopAtCallback)
+    {
         Uri? callback = null;
         Step start = await BrowserStepAsync(profile, app, "login-start", "/bff/login", "bff", 302,
-            async () => callback = await profile.StopAtCallbackAsync(app));
+            async () => callback = await stopAtCallback());
         Step finish = await BrowserStepAsync(profile, app, "callback", "/signin-oidc", "callback", 302, async () =>
         {
             await profile.GotoAsync(callback!.ToString());
             await profile.WaitSignedInAsync(app);
         });
-        return (profile, start, finish);
+        return (start, finish);
     }
 
     /// <summary>Row 5's antiforgery pair: <c>GET /bff/session</c> for the token, then a POST to the orders API carrying it.</summary>

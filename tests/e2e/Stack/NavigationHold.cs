@@ -66,6 +66,7 @@ public static class NavigationHold
             }
         };
 
+        using HoldRecord seen = HoldRecord.Of(page);
         Task acting = Task.CompletedTask;
         try
         {
@@ -92,7 +93,7 @@ public static class NavigationHold
             {
                 // Faulted by the handler, whatever its failure's kind: a TimeoutException it met is not the wait's.
                 Exception failure = held.Task.Exception!.InnerException!;
-                PageShown shown = await ShownAsync(page);
+                PageShown shown = await ShownAsync(page, seen);
                 throw new HoldFailedException(
                     $"the hold on {Redacted.Url(prefix)} ended when its handler met {failure.GetType().Name}: {Redacted.Text(failure.Message, [])}; the page is at {shown.Url}.",
                     failure.GetType().Name,
@@ -100,7 +101,7 @@ public static class NavigationHold
             }
             catch (TimeoutException)
             {
-                PageShown shown = await ShownAsync(page);
+                PageShown shown = await ShownAsync(page, seen);
                 throw new HoldTimeoutException($"no request to {prefix} came within {wait ?? DefaultWait}; the page is at {shown.Url}.", shown);
             }
         }
@@ -133,11 +134,13 @@ public static class NavigationHold
     /// both through <see cref="Redacted"/>, with the values of the page's own query and fragment and of
     /// the context's cookies taken out of the text as well. A page mid-navigation, or one with no body,
     /// may not give its text within <see cref="TextWait"/>; the record then says so, and the hold still
-    /// fails with its own timeout.
+    /// fails with its own timeout. With it go what the page's requests and console met during the hold
+    /// (<see cref="HoldRecord"/>, #1193), each line through <see cref="Redacted.Text"/> with the same values.
     /// </summary>
-    internal static async Task<PageShown> ShownAsync(IPage page)
+    internal static async Task<PageShown> ShownAsync(IPage page, HoldRecord? seen = null)
     {
         string url = page.Url;
+        (string[] requests, string[] errors) = seen?.Lines() ?? ([], []);
         try
         {
             // innerText is the rendered text, so a script's source and a hidden element are not in it
@@ -146,21 +149,105 @@ public static class NavigationHold
             // still takes out what the page renders.
             string text = await page.Locator("body").InnerTextAsync(new() { Timeout = (float)TextWait.TotalMilliseconds });
             IReadOnlyList<BrowserContextCookiesResult> cookies = await page.Context.CookiesAsync();
-            return new PageShown(Redacted.Url(url), Redacted.Text(text, [.. Redacted.ParameterValues(url), .. cookies.Select(cookie => cookie.Value)]));
+            string[] values = [.. Redacted.ParameterValues(url), .. cookies.Select(cookie => cookie.Value)];
+            return new PageShown(Redacted.Url(url), Redacted.Text(text, values), [.. requests.Select(line => Redacted.Text(line, values))], [.. errors.Select(line => Redacted.Text(line, values))]);
         }
         catch (Exception unread) when (unread is PlaywrightException or TimeoutException)
         {
-            return new PageShown(Redacted.Url(url), $"(the page's text could not be read within {TextWait}: {unread.GetType().Name})");
+            string[] values = [.. Redacted.ParameterValues(url)];
+            return new PageShown(Redacted.Url(url), $"(the page's text could not be read within {TextWait}: {unread.GetType().Name})",
+                [.. requests.Select(line => Redacted.Text(line, values))], [.. errors.Select(line => Redacted.Text(line, values))]);
         }
     }
 
     /// <summary>The protocol's pattern treats <c>*</c> and <c>?</c> as wildcards and <c>\</c> as their escape.</summary>
-    private static string Escape(string literal) =>
+    internal static string Escape(string literal) =>
         literal.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("*", "\\*", StringComparison.Ordinal).Replace("?", "\\?", StringComparison.Ordinal);
 }
 
-/// <summary>What a page showed, as an evidence file may hold it: <see cref="NavigationHold.ShownAsync"/> builds one.</summary>
-public sealed record PageShown(string Url, string Text);
+/// <summary>
+/// What a page showed, as an evidence file may hold it: <see cref="NavigationHold.ShownAsync"/> builds
+/// one. <see cref="Requests"/> and <see cref="Errors"/> are what the page met during a hold
+/// (<see cref="HoldRecord"/>); a file written before #1193 has neither.
+/// </summary>
+public sealed record PageShown(string Url, string Text, IReadOnlyList<string>? Requests = null, IReadOnlyList<string>? Errors = null);
+
+/// <summary>
+/// What a page's requests and console met while a hold waited (#1193): each request that failed or was
+/// answered 400 or above, as its method, its URL with no query and its status or failure text, and each
+/// console error and uncaught exception. On the cell a login that stayed at the provider's form showed
+/// no error on the page (#348), and what the form's script met was in neither the page's URL nor its
+/// text. Only <see cref="NavigationHold.ShownAsync"/> reads it, through <see cref="Redacted.Text"/>.
+/// </summary>
+internal sealed class HoldRecord : IDisposable
+{
+    /// <summary>How many lines of each kind are kept: the first ones, where a failed login's cause is.</summary>
+    public const int MaxLines = 20;
+
+    private readonly IPage page;
+    private readonly List<string> requests = [];
+    private readonly List<string> errors = [];
+
+    private HoldRecord(IPage page) => this.page = page;
+
+    public static HoldRecord Of(IPage page)
+    {
+        HoldRecord record = new(page);
+        page.Response += record.Answered;
+        page.RequestFailed += record.Failed;
+        page.Console += record.Logged;
+        page.PageError += record.Thrown;
+        return record;
+    }
+
+    /// <summary>The lines so far, oldest first, unredacted: for <see cref="NavigationHold.ShownAsync"/> alone.</summary>
+    public (string[] Requests, string[] Errors) Lines()
+    {
+        lock (requests)
+        {
+            return ([.. requests], [.. errors]);
+        }
+    }
+
+    private void Answered(object? sender, IResponse response)
+    {
+        if (response.Status >= 400)
+        {
+            Keep(requests, $"{response.Request.Method} {Redacted.Url(response.Url)} {response.Status}");
+        }
+    }
+
+    private void Failed(object? sender, IRequest request) => Keep(requests, $"{request.Method} {Redacted.Url(request.Url)} failed: {request.Failure}");
+
+    private void Logged(object? sender, IConsoleMessage message)
+    {
+        if (message.Type == "error")
+        {
+            Keep(errors, message.Text);
+        }
+    }
+
+    private void Thrown(object? sender, string error) => Keep(errors, error);
+
+    private void Keep(List<string> lines, string line)
+    {
+        lock (requests)
+        {
+            if (lines.Count < MaxLines)
+            {
+                lines.Add(line);
+            }
+        }
+    }
+
+    public void Dispose()
+    {
+        page.Response -= Answered;
+        page.RequestFailed -= Failed;
+        page.Console -= Logged;
+        page.PageError -= Thrown;
+    }
+}
 
 /// <summary>
 /// A hold whose request never came (<see cref="NavigationHold.HoldAsync"/>), carrying what the page

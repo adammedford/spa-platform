@@ -42,7 +42,9 @@ public sealed class TlsLoadBalancer : IAsyncDisposable
     private readonly List<Uri> held = [];
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> foreign = new(StringComparer.OrdinalIgnoreCase);
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, Uri> formAnswers = new(StringComparer.OrdinalIgnoreCase);
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, Uri> scriptAnswers = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<Uri> submitted = [];
+    private readonly List<Exchange> foreignRequests = [];
 
     private TlsLoadBalancer(WebApplication app, HttpMessageInvoker transport)
     {
@@ -99,6 +101,34 @@ public sealed class TlsLoadBalancer : IAsyncDisposable
         Uri url = new($"https://{request.Host}{target}");
         using HttpRequestMessage message = new(new HttpMethod(request.Method), url);
 
+        if (scriptAnswers.TryGetValue(url.Authority, out Uri? next))
+        {
+            // Another origin's answer to a page's script: its preflight names no header the script may
+            // add, so a request carrying one the browser does not safelist never leaves the browser (#1193).
+            context.Response.Headers.AccessControlAllowOrigin = request.Headers.Origin.ToString();
+            if (HttpMethods.IsOptions(request.Method))
+            {
+                context.Response.Headers.AccessControlAllowMethods = HttpMethods.Post;
+                context.Response.StatusCode = StatusCodes.Status204NoContent;
+                return;
+            }
+
+            if (!HttpMethods.IsPost(request.Method))
+            {
+                context.Response.StatusCode = StatusCodes.Status405MethodNotAllowed; // Not an Errors row: a foreign endpoint's own answer.
+                return;
+            }
+
+            lock (submitted)
+            {
+                submitted.Add(url);
+            }
+
+            context.Response.ContentType = "text/plain";
+            await context.Response.WriteAsync(next.ToString(), context.RequestAborted);
+            return;
+        }
+
         if (HttpMethods.IsPost(request.Method) && formAnswers.TryGetValue(url.Authority, out Uri? after))
         {
             lock (submitted)
@@ -115,6 +145,11 @@ public sealed class TlsLoadBalancer : IAsyncDisposable
 
         if (foreign.TryGetValue(url.Authority, out string? page))
         {
+            lock (foreignRequests)
+            {
+                foreignRequests.Add(new Exchange(request.Method, url, request.Headers.ToDictionary(header => header.Key, header => header.Value.ToString(), StringComparer.OrdinalIgnoreCase), StatusCodes.Status200OK, [], []));
+            }
+
             context.Response.ContentType = "text/html";
             await context.Response.WriteAsync(page, context.RequestAborted);
             return;
@@ -214,7 +249,28 @@ public sealed class TlsLoadBalancer : IAsyncDisposable
         ServeForeign(origin, html);
     }
 
-    /// <summary>The URLs a form was posted to on a <see cref="ServeForeignForm"/> origin, oldest first.</summary>
+    /// <summary>
+    /// Answers a script's POST to <paramref name="origin"/> with the URL <paramref name="next"/> as its
+    /// body, as an endpoint a provider's login page calls from its script and then follows (#1193). It
+    /// allows the caller's origin and names no request header, so the browser sends the POST only when it
+    /// carries none beyond those CORS safelists (https://fetch.spec.whatwg.org/#cors-safelisted-request-header).
+    /// Any other method it answers 405.
+    /// </summary>
+    public void AnswerForeignScript(Uri origin, Uri next) => scriptAnswers[origin.Authority] = next;
+
+    /// <summary>Every request a <see cref="ServeForeign"/> page was served for, oldest first, with the headers the browser sent.</summary>
+    public IReadOnlyList<Exchange> ForeignRequests
+    {
+        get
+        {
+            lock (foreignRequests)
+            {
+                return [.. foreignRequests];
+            }
+        }
+    }
+
+    /// <summary>The URLs a form was posted to on a <see cref="ServeForeignForm"/> origin or a script on an <see cref="AnswerForeignScript"/> one, oldest first.</summary>
     public IReadOnlyList<Uri> Submitted
     {
         get

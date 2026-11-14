@@ -113,6 +113,66 @@ public sealed class NavigationHoldTests
         await profile.WaitSignedInAsync(app);
     }
 
+    // ---- a login through the driver's step, whose provider's page submits by script (#1193) ----
+
+    /// <summary>
+    /// A provider's login form whose submit is its script's: a POST from the page to another origin, and
+    /// then a navigation to the URL that answers it.
+    /// </summary>
+    private static string ScriptedLoginForm(Uri endpoint) => $$"""
+        <!doctype html><title>Signin</title>
+        <form>
+          <input name="username"><input name="password" type="password"><button type="submit">Sign in</button>
+        </form>
+        <script>
+          document.querySelector("form").addEventListener("submit", async submitted => {
+            submitted.preventDefault();
+            const answer = await fetch("{{endpoint}}", { method: "POST", body: new URLSearchParams(new FormData(submitted.target)) });
+            location.assign(await answer.text());
+          });
+        </script>
+        """;
+
+    [Fact]
+    public async Task A_login_through_the_drivers_steps_is_held_within_the_wait_when_the_providers_script_submits_the_form_to_another_origin()
+    {
+        await using LocalStack stack = await LocalStack.StartAsync();
+        await using Profile profile = await stack.OpenAsync();
+        HarnessApp app = stack.App("app1");
+        string callback = app.Url("/signin-oidc").ToString();
+
+        // A real callback, as in the case above, which the provider's endpoint names once the script has
+        // posted the form to it. The page is on one foreign origin and the endpoint on another, and the
+        // endpoint's preflight allows no header of the test's.
+        Uri issued = await profile.StopAtCallbackAsync(app);
+        Uri login = new(ForeignSites.Elsewhere, "/login");
+        Uri endpoint = new(((IBrowserStack)stack).Sibling, "/submit");
+        stack.LoadBalancer.ServeForeign(login, ScriptedLoginForm(endpoint));
+        stack.LoadBalancer.AnswerForeignScript(endpoint, issued);
+
+        // Rows 5 and 7: the driver's two steps, with the hold the cell's stack stops the first one at.
+        Stopwatch watch = Stopwatch.StartNew();
+        Uri? held = null;
+        (Step start, Step finish) = await ContinuityDriver.LoginAsync(profile, app, async () => held = await Redacted.PlaywrightAsync(() =>
+            NavigationHold.HoldAsync(profile.Page, callback, async () =>
+            {
+                await profile.GotoAsync(login.ToString());
+                await profile.Page.Locator("input[name='username']").FillAsync("alice");
+                await profile.Page.Locator("input[name='password']").FillAsync("not-a-password");
+                await profile.Page.Locator("button[type='submit']").ClickAsync();
+            }, HeldWait)));
+        watch.Stop();
+
+        Assert.True(held!.AbsoluteUri == issued.AbsoluteUri, $"the hold reported {Redacted.Url(held)}, not the callback the provider's endpoint named");
+        Assert.True(watch.Elapsed < HeldWait, $"the login took {watch.Elapsed}");
+        Assert.Equal([endpoint.AbsolutePath], stack.LoadBalancer.Submitted.Select(url => url.AbsolutePath));
+
+        // The callback step is the login's: the gateway answered it, on a request carrying the step's trace.
+        Assert.Equal(302, finish.Status);
+        Assert.Contains(stack.LoadBalancer.Exchanges, exchange => exchange.Url.AbsolutePath == "/signin-oidc" && exchange.Sent(ClientTrace.Header)?.Contains(finish.TraceId, StringComparison.Ordinal) == true);
+        Assert.NotEqual(start.TraceId, finish.TraceId);
+    }
+
     /// <summary>
     /// What the handler met is the hold's failure, whatever its kind: a <see cref="TimeoutException"/>
     /// it met is not the hold's wait running out.
@@ -276,6 +336,65 @@ public sealed class NavigationHoldTests
             Assert.Contains($"Continue at {callback}{Environment.NewLine}", page.Text + Environment.NewLine, StringComparison.Ordinal);
             Assert.Contains("An error was encountered with the requested page: state", page.Text, StringComparison.Ordinal);
             foreach ((string name, string value) in new[] { ("code", Code), ("state", State), ("token", Token), ("ID token", IdToken), ("cookie", CookieValue) })
+            {
+                // Says which, never prints the file: the file is what must hold none of them.
+                Assert.False(file.Contains(value, StringComparison.Ordinal), $"the evidence file holds the {name} canary");
+            }
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task A_timed_out_hold_writes_the_requests_that_failed_and_the_console_errors_to_the_evidence_file_and_no_token_code_or_state()
+    {
+        await using LocalStack stack = await LocalStack.StartAsync();
+        await using Profile profile = await stack.OpenAsync();
+        HarnessApp app = stack.App("app1");
+        Uri callback = app.Url("/signin-oidc");
+
+        // A provider's page that shows no error and whose script meets three: an endpoint on another
+        // origin that refuses its preflight, the same endpoint's 405, and an error it logs. Each carries
+        // a code, a state or a token, in a query or in the text.
+        Uri shown = new(ForeignSites.Elsewhere, $"/login?code={Code}&state={State}");
+        Uri endpoint = new(((IBrowserStack)stack).Sibling, "/submit");
+        stack.LoadBalancer.AnswerForeignScript(endpoint, callback);
+        string html = $$"""
+            <!doctype html><title>Signin</title>
+            <form><p>Sign in</p></form>
+            <script>
+              console.error("the session {{CookieValue}} met state {{State}} with {{Token}} at {{callback}}?code={{Code}}");
+              fetch("{{endpoint}}?state={{State}}", { method: "POST", headers: { "x-provider": "1" } }).catch(() => {});
+              fetch("{{endpoint}}?code={{Code}}").catch(() => {});
+            </script>
+            """;
+        await profile.Context.AddCookiesAsync([new Cookie { Name = "provider-session", Value = CookieValue, Url = shown.GetLeftPart(UriPartial.Authority) }]);
+
+        string directory = Directory.CreateTempSubdirectory("spa-e2e-hold-").FullName;
+        try
+        {
+            ContinuityRun run = await RunInAsync(directory);
+            await Assert.ThrowsAsync<HoldTimeoutException>(() => run.TwoTaskRowAsync("row5", new Step("control", ClientTrace.Fresh().TraceId, DateTimeOffset.UtcNow, 200), null,
+                async (n, _) =>
+                {
+                    await Redacted.PlaywrightAsync(() => NavigationHold.HoldAsync(profile.Page, callback.ToString(),
+                        () => profile.OpenForeignPageAsync(shown, html), TimeSpan.FromSeconds(3)));
+                    return new Attempt(n, []);
+                },
+                (_, _) => RowResult.Passed("never judged", []),
+                Ct));
+
+            string file = await File.ReadAllTextAsync(Path.Combine(directory, "row5.json"), Ct);
+            PageShown page = JsonSerializer.Deserialize<RowEvidence>(file)!.Page!;
+            Assert.Contains($"POST {endpoint} failed: net::ERR_FAILED", page.Requests!);
+            Assert.Contains($"GET {endpoint} 405", page.Requests!);
+            Assert.Contains(page.Errors!, line => line.StartsWith("the session ", StringComparison.Ordinal) && line.Contains($" at {callback}", StringComparison.Ordinal));
+
+            // The browser's own report of the refused preflight, which names the header it refused.
+            Assert.Contains(page.Errors!, line => line.Contains("x-provider", StringComparison.Ordinal) && line.Contains(endpoint.ToString(), StringComparison.Ordinal));
+            foreach ((string name, string value) in new[] { ("code", Code), ("state", State), ("token", Token), ("cookie", CookieValue) })
             {
                 // Says which, never prints the file: the file is what must hold none of them.
                 Assert.False(file.Contains(value, StringComparison.Ordinal), $"the evidence file holds the {name} canary");
