@@ -37,6 +37,7 @@ public sealed class TlsLoadBalancer : IAsyncDisposable
     private readonly WebApplication app;
     private readonly HttpMessageInvoker transport;
     private readonly List<Exchange> exchanges = [];
+    private volatile Func<Uri, Uri?>? detour;
     private HttpClient? raw;
     private volatile Func<Uri, bool>? hold;
     private readonly List<Uri> held = [];
@@ -129,6 +130,15 @@ public sealed class TlsLoadBalancer : IAsyncDisposable
 
             context.Response.ContentType = "text/html";
             await context.Response.WriteAsync($"<!doctype html><title>{HeldTitle}</title>", context.RequestAborted);
+            return;
+        }
+
+        if (detour?.Invoke(url) is { } elsewhere)
+        {
+            // Sent on before the gateway sees it, as a provider that shows a page of its own between the
+            // authorization and the callback does (#1195).
+            context.Response.StatusCode = StatusCodes.Status302Found;
+            context.Response.Headers.Location = elsewhere.ToString();
             return;
         }
 
@@ -240,6 +250,15 @@ public sealed class TlsLoadBalancer : IAsyncDisposable
             }
         }
     }
+
+    /// <summary>
+    /// Answers each request <paramref name="to"/> gives a URL for with a redirect there, instead of
+    /// passing it to the gateway; a request it gives null for goes on as before. This is how a test
+    /// puts a provider's login form in a login's way (#1195): the test provider approves every
+    /// authorization at once and shows no form of its own (fixtures/TestIdp), so the callback it
+    /// redirects to is sent to a form first, whose answer names the same callback again. Null ends it.
+    /// </summary>
+    public void Detour(Func<Uri, Uri?>? to) => detour = to;
 
     /// <summary>The title of the page a held request is answered with.</summary>
     public const string HeldTitle = "held by the test";

@@ -294,6 +294,141 @@ public sealed partial class SittingBrowserTests
         Assert.Equal(printed, await File.ReadAllLinesAsync(Path.Combine(sitting.Bundle.FullName, SittingBrowser.WatchLog), Ct));
     }
 
+    /// <summary>
+    /// The provider's submit is answered two seconds later, as Cognito's is some time later on the cell:
+    /// the login's observation is of the page the login ended on, not of the form it left (#1195).
+    /// </summary>
+    [Fact]
+    public async Task Login_prints_signed_in_when_the_providers_submit_answers_after_a_delay()
+    {
+        await using Fronted sitting = await Fronted.StartAsync();
+        sitting.Form.AnswersAfter = TimeSpan.FromSeconds(2);
+
+        Answer login = await sitting.SendAsync("login", "main", "--app", "app1");
+
+        login.Assert(0, Line("signed-in", "main", "app=app1 as=[a-z]+ revision=[0-9]+ instance=[A-Za-z0-9-]+"));
+        Assert.Equal(1, sitting.Form.Submitted);
+        Assert.Single(login.Lines);
+    }
+
+    [Fact]
+    public async Task Login_prints_timeout_when_the_providers_submit_never_answers()
+    {
+        await using Fronted sitting = await Fronted.StartAsync(bound: TimeSpan.FromSeconds(5));
+        sitting.Form.AnswersAfter = null;
+
+        Answer login = await sitting.SendAsync("login", "main", "--app", "app1");
+
+        login.Assert(1, Line("timeout", "main", "app=app1"));
+        Assert.Equal(1, sitting.Form.Submitted);
+        Assert.Single(login.Lines);
+    }
+
+    /// <summary>
+    /// The submit's answer takes longer than the watch's interval, as the cell's did in the sitting of
+    /// 2026-11-13 (#348's D2): a re-login read at the click is <c>login-prompt</c>, and the next tick's
+    /// reload then abandons the submit, so no tick ever reads <c>signed-in</c> (#1195).
+    /// </summary>
+    [Fact]
+    public async Task A_watch_that_signs_out_and_logs_in_again_reads_signed_in_when_the_providers_submit_answers_after_a_delay()
+    {
+        await using Fronted sitting = await Fronted.StartAsync();
+        sitting.Form.InTheWay = false;
+        (await sitting.SendAsync("open", "main", "--app", "app1")).Assert(0, Line("signed-in", "main", "app=app1 .*"));
+        sitting.Form.InTheWay = true;
+        sitting.Form.AnswersAfter = TimeSpan.FromSeconds(3);
+
+        Task<Answer> watch = sitting.SendAsync("watch", "main", "--every", "2s", "--clear-provider", "--relogin");
+        await sitting.WaitForAsync(lines => lines.Any(line => line.StartsWith("signed-in", StringComparison.Ordinal)), "a tick that reads signed-in before the sign-out");
+        int before = sitting.Lines.Count;
+
+        // Signed out of the app and of the provider at once: the browser holds nothing of either.
+        await sitting.Engine.ProfileNamed("main")!.Context.ClearCookiesAsync();
+        await sitting.WaitForAsync(
+            lines => lines.Skip(before).SkipWhile(line => !line.StartsWith("login-prompt", StringComparison.Ordinal)).Skip(2).Any(),
+            "two lines after the sign-out's login-prompt");
+        (await sitting.SendAsync("unwatch", "main")).Assert(0, Line("unwatched", "main", "app=app1 ticks=[0-9]+"));
+        Assert.Equal(0, (await watch.WaitAsync(StopBound, Ct)).Exit);
+
+        // The tick that met the form, then its re-login, then the ticks after it: signed in from there on.
+        string[] after = [.. sitting.Lines.Skip(before).SkipWhile(line => !line.StartsWith("login-prompt", StringComparison.Ordinal))
+            .TakeWhile(line => !line.StartsWith("unwatched", StringComparison.Ordinal))];
+        Assert.Matches(Line("login-prompt", "main", "app=app1 revision=- instance=-"), after[0]);
+        Assert.All(after.Skip(1), line => Assert.Matches(Line("signed-in", "main", "app=app1 revision=[0-9]+ instance=[A-Za-z0-9-]+"), line));
+        Assert.Equal(1, sitting.Form.Submitted);
+    }
+
+    /// <summary>
+    /// The gateway refuses a callback whose state it never issued with its failure page, a 400 that is no
+    /// problem body (contracts/http-contract.md -> Errors). The line says so, and neither it nor the
+    /// saved page carries the code or the state the URL does.
+    /// </summary>
+    [Fact]
+    public async Task An_other_at_the_callback_path_carries_the_refusals_status_and_no_code_or_state_value()
+    {
+        const string Code = "canary-code-1195-4f2a9c";
+        const string State = "canary-state-1195-b81d3e";
+        await using Running sitting = await Running.StartAsync();
+        (await sitting.SendAsync("open", "main", "--app", "app1")).Assert(0, Line("signed-in", "main", "app=app1 .*"));
+        Profile profile = sitting.Engine.ProfileNamed("main")!;
+        await profile.GotoAsync(sitting.Engine.Stack.App("app1").Url($"/signin-oidc?code={Code}&state={State}").ToString());
+
+        Answer reload = await sitting.SendAsync("reload", "main");
+
+        reload.Assert(0, Line("other", "main", "app=app1 host=app1 path=/signin-oidc http=400 problem=- revision=[0-9]+ instance=[A-Za-z0-9-]+"));
+        await AssertNothingHoldsAsync(sitting.Bundle.FullName, sitting.Everything, Code, State);
+    }
+
+    /// <summary>
+    /// A problem document's <c>code</c> and <c>title</c> name the refusal. The gateway's own problem
+    /// bodies carry a status and a code and no title (<c>Problems.WriteAsync</c>), so the document here is
+    /// the test's, answered in the gateway's place, with a title that repeats the URL's state and a URL
+    /// with the code in it: the worst a title could hold.
+    /// </summary>
+    [Fact]
+    public async Task An_other_at_the_callback_path_carries_a_problem_documents_code_and_title_with_no_code_or_state_value()
+    {
+        const string Code = "canary-code-1195-7d3e1b";
+        const string State = "canary-state-1195-c05a2f";
+        await using Running sitting = await Running.StartAsync();
+        (await sitting.SendAsync("open", "main", "--app", "app1")).Assert(0, Line("signed-in", "main", "app=app1 .*"));
+        Profile profile = sitting.Engine.ProfileNamed("main")!;
+        Uri callback = sitting.Engine.Stack.App("app1").Url($"/signin-oidc?code={Code}&state={State}");
+        string problem = JsonSerializer.Serialize(new Dictionary<string, object>
+        {
+            ["status"] = 403,
+            ["code"] = "origin_rejected",
+            ["title"] = $"The request gate refused\nthe callback for {State} at {callback}",
+        });
+        await profile.Context.RouteAsync("**/signin-oidc*", route => route.FulfillAsync(new() { Status = 403, ContentType = "application/problem+json", Body = problem }));
+        await profile.GotoAsync(callback.ToString());
+
+        Answer reload = await sitting.SendAsync("reload", "main");
+
+        reload.Assert(0, Line("other", "main",
+            $"app=app1 host=app1 path=/signin-oidc http=403 problem=origin_rejected revision=[0-9]+ instance=[A-Za-z0-9-]+ title=The request gate refused the callback for {Regex.Escape(Redacted.Removed)} at {Regex.Escape(Redacted.Url(callback))}"));
+        AssertGrammar(reload.Lines[^1]);
+        await AssertNothingHoldsAsync(sitting.Bundle.FullName, sitting.Everything, Code, State);
+    }
+
+    /// <summary>No line, and no page saved for an <c>other</c>, of which there is at least one, holds any of <paramref name="values"/> or a URL with a query.</summary>
+    private static async Task AssertNothingHoldsAsync(string bundle, IEnumerable<string> lines, params string[] values)
+    {
+        string[] pages = Directory.GetFiles(Path.Combine(bundle, SittingBrowser.PagesDirectory));
+        Assert.NotEmpty(pages);
+        List<string> texts = [string.Join('\n', lines)];
+        foreach (string page in pages)
+        {
+            texts.Add(await File.ReadAllTextAsync(page, Ct));
+        }
+
+        foreach (string text in texts)
+        {
+            Assert.All(values, value => Assert.DoesNotContain(value, text, StringComparison.Ordinal));
+            Assert.DoesNotMatch(UrlWithQuery(), text);
+        }
+    }
+
     [Fact]
     public async Task What_it_prints_holds_no_cookie_value_no_url_with_a_query_and_no_csrf_token()
     {
@@ -500,6 +635,9 @@ public sealed partial class SittingBrowserTests
         yield return (nameof(Observations.Other), Observations.Other(at, "main", "app1", "provider", "/oauth2/authorize", Readiness.Unknown, null));
         yield return (nameof(Observations.Other), Observations.Other(at, "main", "app1", "app1", "/", ready, "session: 500"));
         yield return (nameof(Observations.Other), Observations.Other(at, "main", "app1", "elsewhere", "/x", Readiness.Unknown, null));
+        yield return (nameof(Observations.Other), Observations.Other(at, "main", "app1", "app1", "/signin-oidc", ready, null, new Answered(400, null, null)));
+        yield return (nameof(Observations.Other), Observations.Other(at, "main", "app1", "app1", "/signin-oidc", ready, null, new Answered(403, "origin_rejected", "The request gate refused the callback")));
+        yield return (nameof(Observations.Other), Observations.Other(at, "main", "app1", "app1", "/signin-oidc", Readiness.Unknown, null, Answered.Unknown));
         yield return (nameof(Observations.Marker), Observations.Marker(at, "main", "app1", "Fixture SPA app1"));
         yield return (nameof(Observations.Session), Observations.Session(at, "main", "app1", 401, "unauthenticated"));
         yield return (nameof(Observations.Session), Observations.Session(at, "main", "app1", 401, "session_ended"));
@@ -540,7 +678,7 @@ public sealed partial class SittingBrowserTests
 
     /// <summary>
     /// The grammar of #1024 Q3: the token, the UTC time to the second, the profile, then <c>key=value</c>
-    /// fields whose keys the redactor never elides, and at most one free text, <c>text=</c> or <c>shell=</c>, last.
+    /// fields whose keys the redactor never elides, and at most one free text, <c>text=</c>, <c>shell=</c> or <c>title=</c>, last.
     /// </summary>
     private static void AssertGrammar(string line)
     {
@@ -552,7 +690,7 @@ public sealed partial class SittingBrowserTests
             Assert.True(field.Success, $"not a key=value field: {word} in {line}");
             string key = field.Groups[1].Value;
             Assert.DoesNotContain(key, ObservationLine.ElidedKeys);
-            if (key is "text" or "shell")
+            if (key is "text" or "shell" or "title")
             {
                 break;
             }
@@ -658,6 +796,138 @@ public sealed partial class SittingBrowserTests
                 ExceptionDispatchInfo.Capture(thrown.InnerException!).Throw();
                 throw;
             }
+        }
+    }
+
+    /// <summary>
+    /// The engine, handed its commands directly so a fact sets its bound, on a local stack whose logins
+    /// meet a provider's login form (<see cref="FormProvider"/>), filled as <c>DeployedStack</c> fills
+    /// Cognito's (<see cref="FormFillingStack"/>).
+    /// </summary>
+    private sealed class Fronted(TempBundle bundle) : IAsyncDisposable
+    {
+        private readonly List<string> lines = [];
+
+        public required FormProvider Form { get; init; }
+
+        public required SittingBrowser Engine { get; init; }
+
+        /// <summary>Every line every command has printed so far, in order of arrival.</summary>
+        public IReadOnlyList<string> Lines
+        {
+            get
+            {
+                lock (lines)
+                {
+                    return [.. lines];
+                }
+            }
+        }
+
+        public static async Task<Fronted> StartAsync(TimeSpan? bound = null)
+        {
+            SkipUnlessTheSwitchIsUnset();
+            FormProvider form = await FormProvider.StartAsync(Ct);
+            try
+            {
+                LocalStack stack = await LocalStack.StartCancellableAsync(null, Ct);
+                stack.LoadBalancer.Detour(form.Detour);
+                TempBundle bundle = new();
+                IBrowserStack filling = FormFillingStack.Over(stack);
+                SittingBrowser engine = bound is { } given ? new(filling, bundle.Path, Ct) { Bound = given } : new(filling, bundle.Path, Ct);
+                return new Fronted(bundle) { Form = form, Engine = engine };
+            }
+            catch
+            {
+                await form.DisposeAsync();
+                throw;
+            }
+        }
+
+        public async Task<Answer> SendAsync(params string[] words)
+        {
+            (SittingCommand? command, string? usage) = SittingCommand.Parse(words);
+            Assert.True(command is not null, usage);
+            List<string> answer = [];
+            int exit = await Engine.AnswerAsync(command, line =>
+            {
+                lock (lines)
+                {
+                    lines.Add(line);
+                    answer.Add(line);
+                }
+
+                return Task.CompletedTask;
+            });
+            lock (lines)
+            {
+                return new Answer(exit, [.. answer]);
+            }
+        }
+
+        /// <summary>Waits, for no longer than a watch may take to get there, until the lines so far are <paramref name="reached"/>.</summary>
+        public async Task WaitForAsync(Func<IReadOnlyList<string>, bool> reached, string what)
+        {
+            Stopwatch waited = Stopwatch.StartNew();
+            while (!reached(Lines))
+            {
+                Assert.True(waited.Elapsed < TimeSpan.FromSeconds(40), $"the lines never held {what}: {string.Join(" | ", Lines)}");
+                await Task.Delay(100, Ct);
+            }
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            await Engine.DisposeAsync();
+            await Form.DisposeAsync();
+            bundle.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// A stack that is another stack, but for the login it completes: at the provider's form it fills
+    /// the fields, clicks the submit and returns, as <c>DeployedStack</c>'s form filler does on the cell,
+    /// where the local stack has nothing to do.
+    /// </summary>
+    public class FormFillingStack : DispatchProxy
+    {
+        private IBrowserStack inner = null!;
+
+        public static IBrowserStack Over(IBrowserStack inner)
+        {
+            IBrowserStack proxy = Create<IBrowserStack, FormFillingStack>();
+            ((FormFillingStack)(object)proxy).inner = inner;
+            return proxy;
+        }
+
+        protected override object? Invoke(MethodInfo? targetMethod, object?[]? args)
+        {
+            if (targetMethod!.Name == nameof(IBrowserStack.CompleteLoginCancellableAsync))
+            {
+                return FillAsync(((Profile)args![0]!).Page);
+            }
+
+            try
+            {
+                return targetMethod.Invoke(inner, args);
+            }
+            catch (TargetInvocationException thrown)
+            {
+                ExceptionDispatchInfo.Capture(thrown.InnerException!).Throw();
+                throw;
+            }
+        }
+
+        private async Task FillAsync(IPage page)
+        {
+            if (new Uri(page.Url).Host != inner.ProviderHost)
+            {
+                return;
+            }
+
+            await page.Locator("input[name='username']:visible").First.FillAsync("alice");
+            await page.Locator("input[name='password']:visible").First.FillAsync("not-a-password");
+            await page.Locator("button[type='submit']:visible").First.ClickAsync();
         }
     }
 

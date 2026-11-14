@@ -21,7 +21,9 @@ namespace Gateway.E2ETests.SittingBrowser;
 /// password, a <c>/bff/session</c> or <c>/api</c> body, or the provider's page text (#1024 Q5). A page
 /// that ends as <c>other</c> has its query-less URL and visible text written to
 /// <c>browser-pages/&lt;UTC time&gt;.txt</c> in the bundle directory, through
-/// <see cref="NavigationHold.ShownAsync"/>'s scrub, as #1003 does for a timed-out hold.</para>
+/// <see cref="NavigationHold.ShownAsync"/>'s scrub, as #1003 does for a timed-out hold. The one piece
+/// of a body a line carries is a problem document's title at the callback path, through the same
+/// scrub (#1195).</para>
 ///
 /// <para>It owns the stack it is given and disposes it. It does not stop the Playwright driver, which
 /// is the whole process's: the entry point does that when the process ends.</para>
@@ -33,6 +35,12 @@ public sealed partial class SittingBrowser(IBrowserStack stack, string bundle, C
 
     /// <summary>The directory in the bundle directory an <c>other</c> page's text goes to.</summary>
     public const string PagesDirectory = "browser-pages";
+
+    /// <summary>The path a login's callback arrives at (contracts/http-contract.md), on every app's host.</summary>
+    public const string CallbackPath = "/signin-oidc";
+
+    /// <summary>How much of a problem document's title an <c>other</c> line carries.</summary>
+    public const int MaxTitle = 200;
 
     private readonly Lock gate = new();
     private readonly Dictionary<string, OpenProfile> profiles = new(StringComparer.Ordinal);
@@ -389,7 +397,8 @@ public sealed partial class SittingBrowser(IBrowserStack stack, string bundle, C
     /// failed before a response is <c>tunnel-down</c>, a 404 is <c>not-found</c>; otherwise the page is
     /// watched until it is signed in, at the provider's login, or settled on anything else
     /// (<c>other</c>), and <see cref="Bound"/> passing first is <c>timeout</c>. With
-    /// <paramref name="login"/> the stack completes the provider's part first, as the login's user.
+    /// <paramref name="login"/> the stack completes the provider's part first, as the login's user,
+    /// and the provider's form is then the page the login is leaving, not an observation (#1195).
     /// </summary>
     private async Task<int> NavigateAsync(OpenProfile open, Func<string, Task> write, Func<Task<IResponse?>> navigate, bool login)
     {
@@ -433,32 +442,58 @@ public sealed partial class SittingBrowser(IBrowserStack stack, string bundle, C
             return 0;
         }
 
-        return await SettleAsync(open, write);
+        return await SettleAsync(open, write, submitted: login);
     }
 
-    private async Task<int> SettleAsync(OpenProfile open, Func<string, Task> write)
+    /// <summary>
+    /// Watches the page until it shows an observation. After a login (<paramref name="submitted"/>) the
+    /// provider's form is none: the stack returns as soon as it has clicked the form's submit, whose
+    /// answer may be seconds away, so the form still showing is the login under way, and it is waited
+    /// out until the page has left it or <see cref="Bound"/> has passed (#1195).
+    /// </summary>
+    private async Task<int> SettleAsync(OpenProfile open, Func<string, Task> write, bool submitted)
     {
         HarnessApp app = open.App;
         IPage page = open.Profile.Page;
         Stopwatch waited = Stopwatch.StartNew();
         (Seen Seen, TimeSpan Since)? candidate = null;
-        while (waited.Elapsed < Bound)
+        while (Bound - waited.Elapsed is { Ticks: > 0 } left)
         {
             stop.ThrowIfCancellationRequested();
-            Seen seen = await LookAsync(page, app);
+
+            // The read is under the bound too. With a form's submit unanswered, a read of the page came
+            // back only when the answer did (seen on Chromium against a submit that never answers,
+            // #1195), and a read that never ends would leave the command with no observation at all.
+            Task<Seen> look = LookAsync(page, app);
+            try
+            {
+                await look.WaitAsync(left, stop);
+            }
+            catch (TimeoutException)
+            {
+                // Left to end with the page; what it meets then is observed here and dropped.
+                _ = look.ContinueWith(static ended => ended.Exception, CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted, TaskScheduler.Default);
+                break;
+            }
+
+            Seen seen = await look;
             if (seen.SignedIn)
             {
                 await EmitAsync(open, write, Observations.SignedIn(DateTimeOffset.UtcNow, open.Name, app.AppId, open.User, await ReadinessAsync(open)), Observations.SignedInToken);
                 return 0;
             }
 
-            if (seen.Prompt)
+            if (seen.Prompt && submitted)
+            {
+                candidate = null;
+            }
+            else if (seen.Prompt)
             {
                 await EmitAsync(open, write, Observations.LoginPrompt(DateTimeOffset.UtcNow, open.Name, app.AppId, Readiness.Unknown), Observations.LoginPromptToken);
                 return 0;
             }
 
-            if (!seen.Settled)
+            else if (!seen.Settled)
             {
                 candidate = null;
             }
@@ -469,9 +504,10 @@ public sealed partial class SittingBrowser(IBrowserStack stack, string bundle, C
             else if (waited.Elapsed - held.Since >= Settle)
             {
                 Readiness ready = seen.Host == app.AppId ? await ReadinessAsync(open) : Readiness.Unknown;
+                Answered? answered = seen.Host == app.AppId && seen.Path == CallbackPath ? await AnsweredAsync(open) : null;
                 DateTimeOffset at = DateTimeOffset.UtcNow;
                 await WritePageAsync(page, at);
-                await EmitAsync(open, write, Observations.Other(at, open.Name, app.AppId, seen.Host, seen.Path, ready, seen.Shell), Observations.OtherToken);
+                await EmitAsync(open, write, Observations.Other(at, open.Name, app.AppId, seen.Host, seen.Path, ready, seen.Shell, answered), Observations.OtherToken);
                 return 0;
             }
 
@@ -543,6 +579,55 @@ public sealed partial class SittingBrowser(IBrowserStack stack, string bundle, C
         {
             return Readiness.Unknown;
         }
+    }
+
+    /// <summary>
+    /// What the document the page shows was answered with, for a page at the callback path (#1195): its
+    /// status, and of a problem document the <c>code</c>, when it has the shape of one, and the
+    /// <c>title</c>, never the rest of the body. The title goes through <see cref="Redacted.Text"/> with
+    /// the values of the page's own query and of the context's cookies, as the saved page's text does,
+    /// so a title that repeats the callback's code or state does not carry it; it is cut at
+    /// <see cref="MaxTitle"/> characters. A document that is not the page's, or cannot be read, is dashes.
+    /// </summary>
+    private static async Task<Answered> AnsweredAsync(OpenProfile open)
+    {
+        IPage page = open.Profile.Page;
+        string url = page.Url;
+        if (open.Document is not { } document || Redacted.Url(document.Url) != Redacted.Url(url))
+        {
+            return Answered.Unknown;
+        }
+
+        try
+        {
+            string? type = await document.HeaderValueAsync("content-type");
+            if (type?.StartsWith("application/problem+json", StringComparison.OrdinalIgnoreCase) != true)
+            {
+                return new Answered(document.Status, null, null);
+            }
+
+            using JsonDocument body = JsonDocument.Parse(await document.TextAsync());
+            string? code = Member(body, "code");
+            string? title = Member(body, "title");
+            if (title is not null)
+            {
+                IReadOnlyList<BrowserContextCookiesResult> cookies = await page.Context.CookiesAsync();
+                title = Redacted.Text(title, [.. Redacted.ParameterValues(url), .. cookies.Select(cookie => cookie.Value)]);
+                title = title.Length <= MaxTitle ? title : string.Concat(title.AsSpan(0, MaxTitle), " (cut)");
+            }
+
+            return new Answered(document.Status, code is not null && ProblemPattern().IsMatch(code) ? code : null, string.IsNullOrWhiteSpace(title) ? null : title);
+        }
+        catch (Exception unread) when (unread is PlaywrightException or JsonException)
+        {
+            // The body went with a navigation, or is not the JSON its type says: the status is still the response's.
+            return new Answered(document.Status, null, null);
+        }
+
+        static string? Member(JsonDocument body, string name) =>
+            body.RootElement.ValueKind == JsonValueKind.Object && body.RootElement.TryGetProperty(name, out JsonElement member) && member.ValueKind == JsonValueKind.String
+                ? member.GetString()
+                : null;
     }
 
     /// <summary>The <c>code</c> of a problem body, when it has the shape of one; never the body.</summary>
@@ -618,6 +703,17 @@ public sealed partial class SittingBrowser(IBrowserStack stack, string bundle, C
     {
         Profile profile = await stack.OpenCancellableAsync(stop);
         OpenProfile open = new(name, profile) { App = app };
+
+        // The last document the page's main frame was answered with, redirects among them. A re-login has
+        // no navigation of its own whose response it could read, and Playwright reports each response
+        // as it arrives (https://playwright.dev/dotnet/docs/api/class-page#page-event-response).
+        profile.Page.Response += (_, response) =>
+        {
+            if (response.Request.IsNavigationRequest && response.Frame == profile.Page.MainFrame)
+            {
+                open.Document = response;
+            }
+        };
         lock (gate)
         {
             profiles[name] = open;
@@ -723,6 +819,9 @@ public sealed partial class SittingBrowser(IBrowserStack stack, string bundle, C
         public DateTimeOffset? LastAt { get; set; }
 
         public Watching? Watch { get; set; }
+
+        /// <summary>The last response to a navigation of the page's main frame.</summary>
+        public volatile IResponse? Document;
     }
 
     private sealed class Watching
