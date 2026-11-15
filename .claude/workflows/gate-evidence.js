@@ -97,7 +97,7 @@ const LOG = `${REPO}/.scratch/gate-evidence/log` // git-ignored (.gitignore: .sc
 const LOCATE_MAX = 3
 // One agent's reply holds REVIEWS_PER_AGENT merges at most, and the report lists each cleared merge
 // up to MERGE_LINES_MAX of them: the Scope agent once returned every merge since the previous tag,
-// and the 430 since g5-phase-1-accepted passed its output limit, as their lines would have passed an
+// and the 90 since g5-phase-1-accepted passed its output limit, as their lines would have passed an
 // issue body's (#1207).
 const REVIEWS_PER_AGENT = 30
 const MERGE_LINES_MAX = 60
@@ -674,6 +674,9 @@ DATE ARGUMENT: ${JSON.stringify(A.date || '')}
 9. durable: every JSON file in ${LOG}/results/<base>/, each parsed, \`cat ${LOG}/results/<base>/*.json\` ([] when the directory is absent). Never read another base's directory.
 Return every field; reason is "" when the fetch succeeded.`
 
+// Step 3 finds a merge's pull request by its merged head, through GitHub's "List pull requests
+// associated with a commit", which returns the merged pull request that brought the commit to the
+// default branch (https://docs.github.com/en/rest/commits/commits#list-pull-requests-associated-with-a-commit).
 const reviewsPrompt = (ctx, range, b, k, phaseFile) => {
   const wt = `${WT}/reviews-${ctx.base.slice(0, 12)}-${k}`
   return `Reviews ${k}: read the review record of each merge on lines ${b.from} to ${b.to} of the listing below (#1207; docs/agents/landing-work.md -> "Gates"). You read and report: you prove nothing and write nothing outside the run log and one throwaway worktree.
@@ -835,21 +838,22 @@ if (refusals.length) {
   const report = await writeReport({
     title, gate, tag, base, date, args: argsLine, runLog, verdict: 'tag withheld', reasons, refused: true,
     table: [], criteria: [], noProof: [], rowsNotDone: [], merges: [], previousTag: g && g.previousTag,
-    reviewProblems: [`the run was refused before Reviews, so no review of ${Number.isInteger(mergeCount) ? `the ${mergeCount}` : 'a'} merge${mergeCount === 1 ? '' : 's'} since ${since} was read`],
+    reviewProblems: [`the run was refused before Reviews, so no review of ${Number.isInteger(mergeCount) ? `the ${mergeCount} merge${mergeCount === 1 ? '' : 's'}` : 'a merge'} since ${since} was read`],
     draft: draftOf({ gate, exitTest: def.exitTest, base, ci, lastFull, table: [] }),
   })
   return { gate, tag, base, date, verdict: 'tag withheld', reasons, refused: true, counts: { proved: 0, didNotFail: 0, notRunHere: 0, notMutated: 0 }, rowsNotDone: [], report, runLog, agents: agentsRun }
 }
 
 // The merges since the previous tag, read REVIEWS_PER_AGENT to an agent (#1207). The script deals the
-// listing's lines and holds each agent to its own: a batch that comes back short, or not at all, is
-// named among the reasons and never read as merges with no open review (CODING_STANDARDS.md -> "A
-// check fails closed").
+// listing's lines and holds each agent to the number of its own: a batch that comes back short or
+// long, with a sha that is no commit id, or not at all, is named among the reasons and never read as
+// merges with no open review (CODING_STANDARDS.md -> "A check fails closed"). It compares no sha
+// with the listing, which only an agent reads. base is a commit id here: refusalsOf refuses any
+// other, and a refused run has returned above.
 phase('Reviews')
 const reviewProblems = []
 let reviewBatches = []
-if (!/^[0-9a-f]{40}$/.test(String(base))) reviewProblems.push(`the Scope agent returned base ${JSON.stringify(base)}, which is no commit id, so no review of a merge since ${since} was read`)
-else if (previousTag && !(scope.tagsReachable || []).includes(previousTag)) reviewProblems.push(`the Scope agent returned previous tag ${JSON.stringify(previousTag)}, which is no tag base reaches, so no review of a merge since it was read`)
+if (previousTag && !(scope.tagsReachable || []).includes(previousTag)) reviewProblems.push(`the Scope agent returned previous tag ${JSON.stringify(previousTag)}, which is no tag base reaches, so no review of a merge since it was read`)
 else if (!Number.isInteger(mergeCount) || mergeCount < 0) reviewProblems.push(`the Scope agent returned ${JSON.stringify(mergeCount)} as the count of merges since ${since}, so no review was read`)
 else reviewBatches = Array.from({ length: Math.ceil(mergeCount / REVIEWS_PER_AGENT) }, (_, i) => ({ from: i * REVIEWS_PER_AGENT + 1, to: Math.min(mergeCount, (i + 1) * REVIEWS_PER_AGENT) }))
 const reviewed = await parallel(reviewBatches.map((b, i) => () => run(reviewsPrompt(ctx, previousTag ? `${previousTag}..${base}` : base, b, i + 1, `${runLog}/reviews-${i + 1}.json`), { label: `reviews-${i + 1}`, phase: 'Reviews', schema: REVIEWS })))
@@ -857,8 +861,9 @@ const merges = []
 reviewBatches.forEach((b, i) => {
   const want = b.to - b.from + 1
   const got = reviewed[i] && reviewed[i].merges
-  if (Array.isArray(got) && got.length === want && got.every((m) => /^[0-9a-f]{40}$/.test(m.sha))) { merges.push(...got); return }
-  reviewProblems.push(`reviews-${i + 1} returned ${Array.isArray(got) ? `${got.length} of its ${want} merges` : 'nothing'}: the reviews of the merges on lines ${b.from} to ${b.to} of the listing since ${since} were not read`)
+  const whole = Array.isArray(got) && got.length === want
+  if (whole && got.every((m) => /^[0-9a-f]{40}$/.test(m.sha))) { merges.push(...got); return }
+  reviewProblems.push(`reviews-${i + 1} returned ${whole ? 'a merge whose sha is no commit id' : Array.isArray(got) ? `${got.length} of its ${want} merges` : 'nothing'}: the reviews of the merges on lines ${b.from} to ${b.to} of the listing since ${since} were not read`)
 })
 if (new Set(merges.map((m) => m.sha)).size !== merges.length) reviewProblems.push(`two entries the Reviews agents returned name one merge, so a merge since ${since} was not read`)
 const openReviews = merges.filter((m) => !m.cleared)
