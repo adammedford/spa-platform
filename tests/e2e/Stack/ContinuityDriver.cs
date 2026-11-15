@@ -186,7 +186,11 @@ public sealed class ContinuityDriver : IAsyncDisposable
     /// <see cref="ContinuityBounds.Row6SignInEvery"/> from the start until the interval ends, each
     /// calling the orders API once a second for <see cref="ContinuityBounds.Row6SessionCalls"/>; and a
     /// login started when ECS first lists a new task and none is RUNNING, held at the provider's form,
-    /// and submitted once every old task's desired status is STOPPED and the tunnel answers again.
+    /// and submitted once every old task has stopped and the tunnel answers again. A task ECS has
+    /// asked to stop still answers while it drains, and the tunnel still answers through a draining
+    /// hop, so a callback submitted on the desired status alone can meet an old task; and a sign-in
+    /// that fails while the tunnel does not answer is the restart's gap, tried again on the next turn,
+    /// where one that fails while it answers ends the row (#348, the sitting of 2026-11-14).
     /// </summary>
     public async Task<ContinuityObserver.RollingDeploy> RollingDeployAsync(TimeSpan bound, CancellationToken ct)
     {
@@ -203,9 +207,19 @@ public sealed class ContinuityDriver : IAsyncDisposable
         {
             if (elapsed.Elapsed >= nextSignIn)
             {
-                (_, SessionCookies cookies) = await SignInAsync(App1);
-                sessions.Add(CallEverySecondAsync(sessions.Count + 1, cookies, ct));
-                nextSignIn += ContinuityBounds.Row6SignInEvery;
+                try
+                {
+                    (_, SessionCookies cookies) = await SignInAsync(App1);
+                    sessions.Add(CallEverySecondAsync(sessions.Count + 1, cookies, ct));
+                    nextSignIn += ContinuityBounds.Row6SignInEvery;
+                }
+                catch (Exception failed) when (failed is PlaywrightException or TimeoutException)
+                {
+                    if (await TunnelAnswersAsync(ct))
+                    {
+                        throw;
+                    }
+                }
             }
 
             IReadOnlyList<EcsTaskState> listed = await Ecs.ListedAsync(ct);
@@ -217,7 +231,7 @@ public sealed class ContinuityDriver : IAsyncDisposable
             }
 
             IReadOnlyList<EcsTaskState> before = await Ecs.DescribeAsync([.. oldIds], ct);
-            if (straddling is not null && callback is null && before.All(task => task.DesiredStatus == "STOPPED") && await TunnelAnswersAsync(ct))
+            if (straddling is not null && callback is null && before.All(task => task.StoppedAt is not null) && await TunnelAnswersAsync(ct))
             {
                 Profile held = straddling;
                 callback = await BrowserStepAsync(held, App1, "callback", "/signin-oidc", "callback", 302, async () =>
