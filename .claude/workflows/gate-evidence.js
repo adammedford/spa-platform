@@ -621,7 +621,7 @@ const reportText = (s) => {
   L.push('', '## Open reviews', '', `No gate tag is cut while any review of a change it covers is open (docs/agents/landing-work.md -> "Gates"). Merges since ${s.previousTag || 'the previous gate tag'}:`, '')
   // Every merge with an open review is listed. Past MERGE_LINES_MAX the cleared ones are counted, and
   // the Reviews agents' phase files in the run log list them, so the body stays an issue's size (#1207).
-  const unread = s.reviewProblems || [] // empty-ok: a report state with no Reviews problem lists none
+  const unread = s.reviewProblems || []
   const mergeLine = (m) => `- ${m.sha.slice(0, 12)} ${m.subject}: ${m.pr ? `pull request ${'#' + m.pr}, ` : 'no pull request, '}${m.cleared ? `cleared by ${m.record}` : `open${m.record ? ` (${m.record})` : ''}`}`
   const cleared = s.merges.filter((m) => m.cleared)
   if (s.merges.length <= MERGE_LINES_MAX) s.merges.forEach((m) => L.push(mergeLine(m)))
