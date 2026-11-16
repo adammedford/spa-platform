@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Gateway.E2ETests.Stack;
 using Gateway.TestHarness;
+using Xunit.Sdk;
 
 namespace Gateway.E2ETests.Deployed;
 
@@ -231,20 +232,82 @@ public sealed class ContinuityRunTests : IDisposable
             second => Assert.Contains("not ignored by git", Assert.IsType<InvalidOperationException>(second).Message, StringComparison.Ordinal));
     }
 
+    /// <summary>
+    /// A row whose driver stops fails with the verdict line its evidence file holds (#1194): the
+    /// message starts <c>not proved:</c> (Q138), names the exception's type and carries its message,
+    /// and is <see cref="RowResult.Assert"/>'s failure, which the runner prints with no type before it. Before #1194 the row rethrew the exception, and the output read
+    /// <c>Gateway.E2ETests.Stack.HoldTimeoutException : no request to …</c> while the file read
+    /// <c>NotProved</c> (#348, D5).
+    /// </summary>
     [Fact]
-    public async Task A_stopped_driver_still_writes_its_evidence_and_throws_its_own_failure()
+    public async Task A_row_whose_driver_stops_fails_not_proved_with_the_exception_and_its_message_as_its_evidence_file_does()
     {
-        await Assert.ThrowsAsync<DriverBroke>(() => Run(Runner(true, () => [])).TwoTaskRowAsync("row3", Sent("control"), null,
-            (_, _) => throw new DriverBroke(), (_, _) => RowResult.Passed("", []), Ct));
-        await Assert.ThrowsAsync<DriverBroke>(() => Run(Runner(true, () => [])).OnceAsync<int>("row6", Sent("control"),
-            _ => throw new DriverBroke(), _ => [], (_, _) => RowResult.Passed("", []), Ct));
+        HoldTimeoutException held = new("no request to https://app1.spa-poc.test:8443/signin-oidc came within 00:01:00; the page is at the provider's /login.",
+            new PageShown("https://spa-poc.auth.us-east-1.amazoncognito.com/login", "Sign in"));
+        const string HeldReason = "the driver stopped with HoldTimeoutException: no request to https://app1.spa-poc.test:8443/signin-oidc came within 00:01:00; the page is at the provider's /login.";
+        const string BrokeReason = "the driver stopped with DriverBroke: the driver broke";
 
-        foreach (string row in new[] { "row3", "row6" })
+        (string Row, Func<Task> Stop, string Reason)[] stops =
+        [
+            ("row5", () => Run(Runner(true, () => [])).TwoTaskRowAsync("row5", Sent("control"), null, (_, _) => throw held, (_, _) => RowResult.Passed("", []), Ct), HeldReason),
+            ("row3", () => Run(Runner(true, () => [])).TwoTaskRowAsync("row3", Sent("control"), null, (_, _) => throw new DriverBroke(), (_, _) => RowResult.Passed("", []), Ct), BrokeReason),
+            ("row6", () => Run(Runner(true, () => [])).OnceAsync<int>("row6", Sent("control"), _ => throw held, _ => [], (_, _) => RowResult.Passed("", []), Ct), HeldReason),
+            ("row8", () => Run(Runner(true, () => [])).OnceAsync<int>("row8", Sent("control"), _ => throw new DriverBroke(), _ => [], (_, _) => RowResult.Passed("", []), Ct), BrokeReason),
+        ];
+
+        foreach ((string row, Func<Task> stop, string reason) in stops)
         {
+            FailException failed = await Assert.ThrowsAsync<FailException>(stop);
             RowEvidence written = JsonSerializer.Deserialize<RowEvidence>(await File.ReadAllTextAsync(Path.Combine(directory, row + ".json"), Ct))!;
+
+            Assert.Equal("not proved: " + reason, failed.Message);
             Assert.Equal(Verdict.NotProved, written.Verdict);
-            Assert.Equal("the driver stopped with DriverBroke", written.Reason);
+            Assert.Equal(reason, written.Reason);
         }
+    }
+
+    /// <summary>
+    /// The stopped row's message goes through <see cref="Redacted.Text"/> before it reaches the output or
+    /// the evidence file, which held only the exception's type before #1194, and the failure carries no
+    /// inner exception, whose message xUnit would print as it came (N-16).
+    /// </summary>
+    [Fact]
+    public async Task A_stopped_rows_message_carries_no_code_state_or_cookie_into_the_output_or_the_evidence_file()
+    {
+        HttpRequestException leaky = new($"GET https://app1.spa-poc.test:8443/signin-oidc?code={Canary}&state={Canary} failed: connection reset");
+
+        FailException failed = await Assert.ThrowsAsync<FailException>(() => Run(Runner(true, () => [])).TwoTaskRowAsync("row5", Sent("control"), null,
+            (_, _) => throw leaky, (_, _) => RowResult.Passed("", []), Ct));
+
+        string evidence = await File.ReadAllTextAsync(Path.Combine(directory, "row5.json"), Ct);
+        Assert.Equal("not proved: the driver stopped with HttpRequestException: GET https://app1.spa-poc.test:8443/signin-oidc failed: connection reset", failed.Message);
+        foreach (string printed in new[] { failed.ToString(), evidence })
+        {
+            Assert.DoesNotContain(Canary, printed, StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>
+    /// Row 4's lever refusal spends no attempt and keeps the message it had before #1194 (wiz's D4 posts
+    /// "the refusal's line from the test's output"), while its evidence file still records not proved.
+    /// </summary>
+    [Fact]
+    public async Task A_lever_refusal_that_spends_no_attempt_keeps_its_own_message_and_the_evidence_file_says_not_proved()
+    {
+        RecordedRunner ecs = Ecs((TaskA, "RUNNING"), (TaskB, "RUNNING"));
+        int made = 0;
+
+        RowRefusedException refused = await Assert.ThrowsAsync<RowRefusedException>(() => Run(Runner(true, () => [])).TwoTaskRowAsync("row4", Sent("control"),
+            ct => new ContinuityEcs(Cell, ecs).StopTheOtherAsync(null, ct),
+            (n, _) => { made++; return Task.FromResult(new Attempt(n, [])); },
+            (_, _) => RowResult.Passed("", []), Ct));
+
+        RowEvidence written = JsonSerializer.Deserialize<RowEvidence>(await File.ReadAllTextAsync(Path.Combine(directory, "row4.json"), Ct))!;
+        Assert.Equal($"row 4 stops nothing: {ContinuityEcs.TunnelTaskVariable} must name exactly one of the service's two RUNNING tasks, and it is '' with 2 running ({TaskA}, {TaskB}).", refused.Message);
+        Assert.Equal(0, made);
+        Assert.Equal(0, written.Attempts);
+        Assert.Equal(Verdict.NotProved, written.Verdict);
+        Assert.DoesNotContain(ecs.Calls, call => call.Arguments is ["ecs", "stop-task", ..]);
     }
 
     [Fact]
@@ -253,18 +316,17 @@ public sealed class ContinuityRunTests : IDisposable
         PageShown page = new("https://spa-poc.auth.us-east-1.amazoncognito.com/login", "Sign in with your username and password");
         HoldTimeoutException held = new("no request to https://app1.spa-poc.test:8443/signin-oidc came within 00:01:00", page);
 
-        await Assert.ThrowsAsync<HoldTimeoutException>(() => Run(Runner(true, () => [])).TwoTaskRowAsync("row5", Sent("control"), null,
+        await Assert.ThrowsAsync<FailException>(() => Run(Runner(true, () => [])).TwoTaskRowAsync("row5", Sent("control"), null,
             (_, _) => throw held, (_, _) => RowResult.Passed("", []), Ct));
-        await Assert.ThrowsAsync<HoldTimeoutException>(() => Run(Runner(true, () => [])).OnceAsync<int>("row6", Sent("control"),
+        await Assert.ThrowsAsync<FailException>(() => Run(Runner(true, () => [])).OnceAsync<int>("row6", Sent("control"),
             _ => throw held, _ => [], (_, _) => RowResult.Passed("", []), Ct));
-        await Assert.ThrowsAsync<DriverBroke>(() => Run(Runner(true, () => [])).TwoTaskRowAsync("row7", Sent("control"), null,
+        await Assert.ThrowsAsync<FailException>(() => Run(Runner(true, () => [])).TwoTaskRowAsync("row7", Sent("control"), null,
             (_, _) => throw new DriverBroke(), (_, _) => RowResult.Passed("", []), Ct));
 
         foreach (string row in new[] { "row5", "row6" })
         {
             RowEvidence written = JsonSerializer.Deserialize<RowEvidence>(await File.ReadAllTextAsync(Path.Combine(directory, row + ".json"), Ct))!;
             Assert.Equal(page, written.Page);
-            Assert.Equal("the driver stopped with HoldTimeoutException", written.Reason);
         }
 
         Assert.Null(JsonSerializer.Deserialize<RowEvidence>(await File.ReadAllTextAsync(Path.Combine(directory, "row7.json"), Ct))!.Page);
@@ -277,7 +339,7 @@ public sealed class ContinuityRunTests : IDisposable
             new PageShown("https://spa-poc.auth.us-east-1.amazoncognito.com/login", "Sign in"));
         await File.WriteAllTextAsync(Path.Combine(directory, "row5.json"), JsonSerializer.Serialize(earlier), Ct);
 
-        await Assert.ThrowsAsync<DriverBroke>(() => Run(Runner(true, () => [])).TwoTaskRowAsync("row5", Sent("control"), null,
+        await Assert.ThrowsAsync<FailException>(() => Run(Runner(true, () => [])).TwoTaskRowAsync("row5", Sent("control"), null,
             (_, _) => throw new DriverBroke(), (_, _) => RowResult.Passed("", []), Ct));
 
         RowEvidence written = JsonSerializer.Deserialize<RowEvidence>(await File.ReadAllTextAsync(Path.Combine(directory, "row5.json"), Ct))!;
@@ -417,7 +479,7 @@ public sealed class ContinuityRunTests : IDisposable
     {
         RecordedRunner runner = Ecs((TaskA, "RUNNING"), (TaskB, "RUNNING"));
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => new ContinuityEcs(Cell, runner).StopTheOtherAsync(tunnel, Ct));
+        await Assert.ThrowsAsync<RowRefusedException>(() => new ContinuityEcs(Cell, runner).StopTheOtherAsync(tunnel, Ct));
         Assert.DoesNotContain(runner.Calls, call => call.Arguments is ["ecs", "stop-task", ..]);
     }
 
@@ -426,7 +488,7 @@ public sealed class ContinuityRunTests : IDisposable
     {
         RecordedRunner runner = Ecs((TaskA, "RUNNING"), (TaskB, "PENDING"));
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => new ContinuityEcs(Cell, runner).StopTheOtherAsync(TaskA, Ct));
+        await Assert.ThrowsAsync<RowRefusedException>(() => new ContinuityEcs(Cell, runner).StopTheOtherAsync(TaskA, Ct));
         Assert.DoesNotContain(runner.Calls, call => call.Arguments is ["ecs", "stop-task", ..]);
     }
 

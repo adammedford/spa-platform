@@ -215,7 +215,7 @@ public sealed class NavigationHoldTests
             Stopwatch watch = Stopwatch.StartNew();
 
             // As rows 5 and 7 reach the hold, inside Redacted.PlaywrightAsync (Profile.StopAtCallbackAsync).
-            await Assert.ThrowsAsync<HoldFailedException>(() => run.TwoTaskRowAsync("row5", new Step("control", ClientTrace.Fresh().TraceId, DateTimeOffset.UtcNow, 200), null,
+            Xunit.Sdk.FailException failed = await Assert.ThrowsAsync<Xunit.Sdk.FailException>(() => run.TwoTaskRowAsync("row5", new Step("control", ClientTrace.Fresh().TraceId, DateTimeOffset.UtcNow, 200), null,
                 async (n, _) =>
                 {
                     await Redacted.PlaywrightAsync(() => NavigationHold.HoldAsync(profile.Page, callback,
@@ -230,7 +230,9 @@ public sealed class NavigationHoldTests
             RowEvidence written = JsonSerializer.Deserialize<RowEvidence>(file)!;
             Assert.True(watch.Elapsed < AtOnce, $"the row stopped after {watch.Elapsed}");
             Assert.Equal(Verdict.NotProved, written.Verdict);
-            Assert.Equal($"the driver stopped with {nameof(HoldFailedException)}: the hold's handler met {nameof(InvalidOperationException)}", written.Reason);
+            Assert.StartsWith($"the driver stopped with {nameof(HoldFailedException)}: the hold on ", written.Reason, StringComparison.Ordinal);
+            Assert.Contains($"its handler met {nameof(InvalidOperationException)}: ", written.Reason, StringComparison.Ordinal);
+            Assert.Equal("not proved: " + written.Reason, failed.Message);
             Assert.Equal(app.Url("/healthz").ToString(), written.Page?.Url);
             foreach ((string name, string value) in new[] { ("code", Code), ("state", State) })
             {
@@ -319,7 +321,7 @@ public sealed class NavigationHoldTests
 
             // Rows 5 and 7 reach the hold through Profile.StopAtCallbackAsync, which runs it inside
             // Redacted.PlaywrightAsync: so does this one.
-            await Assert.ThrowsAsync<HoldTimeoutException>(() => run.TwoTaskRowAsync("row5", new Step("control", ClientTrace.Fresh().TraceId, DateTimeOffset.UtcNow, 200), null,
+            Xunit.Sdk.FailException failed = await Assert.ThrowsAsync<Xunit.Sdk.FailException>(() => run.TwoTaskRowAsync("row5", new Step("control", ClientTrace.Fresh().TraceId, DateTimeOffset.UtcNow, 200), null,
                 async (n, _) =>
                 {
                     await Redacted.PlaywrightAsync(() => NavigationHold.HoldAsync(profile.Page, callback.ToString(),
@@ -339,6 +341,7 @@ public sealed class NavigationHoldTests
             {
                 // Says which, never prints the file: the file is what must hold none of them.
                 Assert.False(file.Contains(value, StringComparison.Ordinal), $"the evidence file holds the {name} canary");
+                Assert.False(failed.ToString().Contains(value, StringComparison.Ordinal), $"the row's failure holds the {name} canary");
             }
         }
         finally
@@ -376,7 +379,7 @@ public sealed class NavigationHoldTests
         try
         {
             ContinuityRun run = await RunInAsync(directory);
-            await Assert.ThrowsAsync<HoldTimeoutException>(() => run.TwoTaskRowAsync("row5", new Step("control", ClientTrace.Fresh().TraceId, DateTimeOffset.UtcNow, 200), null,
+            Xunit.Sdk.FailException failed = await Assert.ThrowsAsync<Xunit.Sdk.FailException>(() => run.TwoTaskRowAsync("row5", new Step("control", ClientTrace.Fresh().TraceId, DateTimeOffset.UtcNow, 200), null,
                 async (n, _) =>
                 {
                     await Redacted.PlaywrightAsync(() => NavigationHold.HoldAsync(profile.Page, callback.ToString(),
@@ -398,6 +401,7 @@ public sealed class NavigationHoldTests
             {
                 // Says which, never prints the file: the file is what must hold none of them.
                 Assert.False(file.Contains(value, StringComparison.Ordinal), $"the evidence file holds the {name} canary");
+                Assert.False(failed.ToString().Contains(value, StringComparison.Ordinal), $"the row's failure holds the {name} canary");
             }
         }
         finally
