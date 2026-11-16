@@ -109,7 +109,7 @@ with a redirect. Kestrel refuses oversized headers itself, with 431 and no body.
 | 405 | `method_not_allowed` | The path does not accept the method |
 | 500 | `shell_unavailable` | The app's release has no readable index.html |
 | 502 | `upstream_unavailable` | The upstream could not be reached |
-| 503 | `idp_unavailable` | The identity provider could not be reached to refresh the token; the session is kept |
+| 503 | `idp_unavailable` | The identity provider could not be reached to refresh the token or failed the refresh other than with `invalid_grant`, no refresh was started because the gateway is stopping, or another writer replaced the session during the refresh and left it with no access token; the session is kept |
 | 503 | `store_unavailable` | The object store could not be read to serve an asset or the shell, for a reason other than a refusal; the live snapshot is unaffected |
 | 503 | `session_store_unavailable` | A session store operation failed or ran out `StoreDeadline`, or a refresh ended at the store's bound (2 × TTL, the `continuity` spec's D2); not the session remove `POST /bff/logout` makes, which answers the usual logout (F11); no cookie is cleared and the session, if it exists, is kept |
 | 504 | `upstream_timeout` | The upstream exceeded the entry's timeout |

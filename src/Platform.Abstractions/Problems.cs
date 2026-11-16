@@ -71,7 +71,12 @@ public static class Problems
     /// <summary>502. The upstream could not be reached.</summary>
     public const string UpstreamUnavailable = "upstream_unavailable";
 
-    /// <summary>503. The identity provider could not be reached to refresh the token; the session is kept.</summary>
+    /// <summary>
+    /// 503. The identity provider could not be reached to refresh the token or failed the refresh other
+    /// than with <c>invalid_grant</c>, no refresh was started because the gateway is stopping, or another
+    /// writer replaced the session during the refresh and left it with no access token; the session is
+    /// kept.
+    /// </summary>
     public const string IdpUnavailable = "idp_unavailable";
 
     /// <summary>
