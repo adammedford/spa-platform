@@ -48,8 +48,8 @@
    condition" is "expressly forbidden"; crashing one process during exploitation is allowed.
 4. **A load test has no numeric notice threshold on the pages read.** The line between a load test
    and a simulated DDoS is purpose, not volume: a network stress test "sends a large volume of
-   legitimate or test traffic to a specific intended target application" that "is expected to be
-   able to handle this traffic"; a test that "purposefully attempt[s] to overwhelm the target" by
+   legitimate or test traffic to a specific intended target application", where "The endpoint and
+   infrastructure are expected to be able to handle this traffic"; a test that "purposefully attempt[s] to overwhelm the target" by
    flooding is a DDoS test. The only numbers: AWS "may employ traffic engineering or traffic
    shaping" where "traffic surges exceed 25Gbps or over 100Gbps", and endpoints hosted in AWS
    should be "in the local AWS Region". The project's load test, two tasks at 0.25 vCPU, is many
@@ -328,14 +328,14 @@ second per task, p99 latency, memory and the cost of reading S3. Against the pag
 Not found. The managed policies page [scp], the supported-services page [supported], the sign-up
 comparison [signup] and the spend-limit page [spend] contain no occurrence of "penetration",
 "simulated", "stress" or "load test". `docs/agents/aws-rules.md` has none either. So the general
-policies of sections 1 and 2 are the only rules read; this is "none found in the pages read", not a
-statement that AWS has none.
+policies of sections 1 and 2 are the only rules read; this means none was found in the pages read, not
+that AWS has none.
 
 What the experience does change:
 
-- **AWS Shield is not supported.** The Free Tier list's WAF entry reads "AWS WAF: AWS Shield is not
-  supported", and AWS Shield is on the "not supported for this experience" list [supported]. A DDoS
-  simulation needs a Shield Advanced subscription (section 2.2), so it would need "Activate advanced
+- **AWS Shield is not supported.** The Free Tier list's AWS WAF entry carries the note "AWS
+  Shield is not supported.", and AWS Shield is on the list headed "AWS services not supported for our
+  new AWS experience" [supported]. A DDoS simulation needs a Shield Advanced subscription (section 2.2), so it would need "Activate advanced
   AWS features" first. The map plans none.
 - **AWS Support is on the Free Tier list**, and `support:*` is in the managed policies' allowed
   actions [scp], so the route for an unlisted service ("work directly with AWS Support") is not
