@@ -26,7 +26,7 @@ public sealed class TunnelWatchTests
 
         public int Probes => probes;
 
-        public TunnelWatch Watch => new(Probe, Pause, Clock);
+        public TunnelWatch NewWatch() => new(Probe, Pause, Clock);
 
         public Task<string> Work() => work.Task;
 
@@ -58,12 +58,12 @@ public sealed class TunnelWatchTests
     public async Task A_probe_that_did_not_answer_while_the_work_ran_is_kept_though_the_ones_after_answer()
     {
         // The second of four probes, at 1 s, falls in the gap; the work ends at the third, at 2 s.
-        Scripted cell = new([true, false, true, true], (probes, _) => probes == 3);
-        TunnelWatch watch = cell.Watch;
+        Scripted scripted = new([true, false, true, true], (probes, _) => probes == 3);
+        TunnelWatch watch = scripted.NewWatch();
 
-        Assert.Equal("done", await watch.WhileAsync(cell.Work, Ct));
+        Assert.Equal("done", await watch.WhileAsync(scripted.Work, Ct));
 
-        Assert.Equal(4, cell.Probes);
+        Assert.Equal(4, scripted.Probes);
         Assert.False(watch.AnsweredSince(At(0)), "the probe at 1 s did not answer, while the work ran");
         Assert.True(watch.AnsweredSince(At(2)), "every probe from 2 s answered");
     }
@@ -72,12 +72,12 @@ public sealed class TunnelWatchTests
     public async Task The_tunnel_is_probed_once_more_after_the_work_ends()
     {
         // The work ends during the first pause; the probe after it, at 1 s, does not answer.
-        Scripted cell = new([true, false], (_, pauses) => pauses == 1);
-        TunnelWatch watch = cell.Watch;
+        Scripted scripted = new([true, false], (_, pauses) => pauses == 1);
+        TunnelWatch watch = scripted.NewWatch();
 
-        await watch.WhileAsync(cell.Work, Ct);
+        await watch.WhileAsync(scripted.Work, Ct);
 
-        Assert.Equal(2, cell.Probes);
+        Assert.Equal(2, scripted.Probes);
         Assert.False(watch.AnsweredSince(At(0)), "the probe after the work ended did not answer");
     }
 
