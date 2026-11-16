@@ -943,6 +943,77 @@ try {
     }
   }
 
+  // A stated or nominated row that names a whole companion with no same-text candidate has no file
+  // (#804): after #794 such a row, red on its own test, read as caught elsewhere and held with no
+  // acceptance route. It is its whole file when its own project is its cell and that cell is a
+  // repository path to a .py file, since such a run is that file alone; and a basename cell takes its
+  // file and project from the one whole-file candidate whose file ends in it. Red on its own test,
+  // each reproduces with no caught cell and merges. Each exclusion holds: a directory project red on
+  // a sibling file's test, a Terraform test file that is its own project, a bare basename as its own
+  // project, a basename with no whole-file candidate or with two, and a candidate with no file, which
+  // the inventory left unnamed (#805). A held row naming no candidate has no project, so it stays a
+  // caught row, held until the verdict accepts it.
+  checks++
+  {
+    const F = 'tools/overnight_answers_tests.py'
+    const B = 'overnight_answers_tests.py'
+    const F2 = 'tools/other/overnight_answers_tests.py'
+    const RED = ['test_a_confirm_from_another_account_or_not_opening_confirm_does_not_count (__main__.ConfirmTests)']
+    const SIBLING = ['test_every_collected_ticket_is_read (overnight_collect_tests.CollectTests)']
+    const TF = 'infra/modules/cell/tests/module.tftest.hcl'
+    const comp = (test, project = F, file = F) => ({ test, project, file, guards: 'every rule of the reader', breaks: 'tools/overnight_answers.py' })
+    const nom = (test, project) => ({ 214: [{ test, project, why: 'the companion may not read the author check' }] })
+    const verdictOf = async (shape, test, red, extra = {}) => {
+      env = run({ prs: [214] }, { 214: pr(214, [F, 'tools/overnight_answers.py'], shape) }, { ...extra, mutate: { [test]: { ...row('reproduced', red.length, 18), failingNames: red } } })
+      result = await execute(env)
+      const c = resultOf(214, result)
+      return { c, m: (c.mutations || []).find((x) => x.test === test && x.kind !== 'candidate') || (c.mutations || []).find((x) => x.test === test) || {} }
+    }
+    for (const [label, shape, test, extra] of [
+      ['stated by its path, its own project', { statedMutations: [stated(F, 1, -1, F)] }, F, {}],
+      ['nominated by its path, its own project', {}, F, { nominations: nom(F, F) }],
+      ['stated by its basename on project tools, one whole-file candidate', { statedMutations: [stated(B, 1, -1, 'tools')], candidates: [comp(F)] }, B, {}],
+      ['nominated by its basename on project tools, one whole-file candidate', { candidates: [comp(F)] }, B, { nominations: nom(B, 'tools') }],
+    ]) {
+      const { c, m } = await verdictOf(shape, test, RED, extra)
+      if (m.result !== 'reproduced' || (m.caughtBy || []).length || c.verdict !== 'merge') fail(`PR 214 with the ${label} ${JSON.stringify(test)}, red on its own test: row ${JSON.stringify({ result: m.result, caughtBy: m.caughtBy })}, verdict ${c.verdict}, expected reproduced with no caught cell and merge`)
+    }
+    // The borrowed row is run as the candidate's file: the mutation agent is told that project.
+    {
+      await verdictOf({ statedMutations: [stated(B, 1, -1, 'tools')], candidates: [comp(F)] }, B, RED)
+      const prompt = (env.mutations.find((x) => x.test === B) || { prompt: '' }).prompt
+      if (!prompt.includes(`The test: ${B}, run by ${F}.`)) fail(`PR 214 with the stated basename ${B} borrowing the candidate ${F}: its mutation prompt does not name ${F} as the project that runs it`)
+    }
+    for (const [label, shape, test, red, extra] of [
+      ['stated by its path on the directory project tools, red on a sibling file\'s test', { statedMutations: [stated(F, 1, -1, 'tools')] }, F, SIBLING, {}],
+      ['nominated by its path on the directory project tools, red on a sibling file\'s test', {}, F, SIBLING, { nominations: nom(F, 'tools') }],
+      ['stated Terraform test file as its own project, red on a sibling file\'s run', { statedMutations: [stated(TF, 1, -1, TF)] }, TF, ['tests/network.tftest.hcl'], {}],
+      ['stated bare basename as its own project, no candidate', { statedMutations: [stated(B, 1, -1, B)] }, B, RED, {}],
+      ['stated basename on project tools, no candidate', { statedMutations: [stated(B, 1, -1, 'tools')] }, B, RED, {}],
+      ['stated basename on project tools, two whole-file candidates', { statedMutations: [stated(B, 1, -1, 'tools')], candidates: [comp(F), comp(F2, F2, F2)] }, B, RED, {}],
+      ['candidate by its path, its own project, no file', { candidates: [comp(F, F, '')] }, F, RED, {}],
+    ]) {
+      const { c, m } = await verdictOf(shape, test, red, extra)
+      if (m.result !== 'did-not-fail' || c.verdict !== 'hold') fail(`PR 214 with the ${label} ${JSON.stringify(test)}: row ${JSON.stringify({ kind: m.kind, result: m.result })}, verdict ${c.verdict}, expected did-not-fail and hold`)
+    }
+    // A held row whose cell names no candidate: a caught row, which holds unless the verdict accepts it.
+    {
+      const H1 = sha('1'); const H2 = sha('2')
+      const BREAK = 'tools/overnight_answers.py covered_questions: dropped the author check'
+      const held = { author_association: 'OWNER', created_at: '2026-11-03T08:00:00Z', html_url: 'https://github.com/o/r/pull/214#issuecomment-1',
+        body: `## Review\n\nHead ${H1}.\n\n## Mutations\n\n| Test | What was broken | Failed of total | Result | Log file |\n| --- | --- | --- | --- | --- |\n| ${F} | ${BREAK} | 1 of 18 | did-not-fail: the project went red on another test | /log/mutation.txt |\n\n## Outstanding\n\n- Nothing.\n\nReviewed ${H1} against ${FORK}: hold` }
+      const range = { 214: { from: H1, ancestor: true, commits: [H2], merges: [], changedFiles: ['tools/overnight_answers.py'], error: '' } }
+      for (const [accept, want, verdict] of [[true, 'reproduced', 'merge'], [false, 'did-not-fail', 'hold']]) {
+        env = run({ prs: [214] }, { 214: pr(214, [F, 'tools/overnight_answers.py'], { head: H2, commits: [H2], comments: [held], candidates: [] }) },
+          { range, earlier: { 214: [{ finding: 'the companion did not fail with the author check dropped', held: true, answered: true, how: 'its own run went red' }] }, mutate: { [F]: { ...row('reproduced', 1, 18), failingNames: RED } }, caught: accept ? { 214: [F] } : {} })
+        result = await execute(env)
+        const c = resultOf(214, result)
+        const m = (c.mutations || []).find((x) => x.kind === 'held') || {}
+        if (m.test !== F || m.result !== want || c.verdict !== verdict) fail(`PR 214 with the held cell ${JSON.stringify(F)} naming no candidate, red on its own test, ${accept ? 'accepted' : 'not accepted'}: held row ${JSON.stringify({ test: m.test, result: m.result })}, verdict ${c.verdict}, expected ${want} and ${verdict}`)
+      }
+    }
+  }
+
   // A held cell in the pre-#794 spelling '<file> (companion)' is held on the whole-file candidate
   // whose path or basename is <file> (#801): on #791 the cell named no candidate's test, now the bare
   // path, so the row had no file, its red run read as caught elsewhere, and it held twice although
