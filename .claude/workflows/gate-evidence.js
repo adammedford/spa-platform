@@ -873,19 +873,18 @@ reviewBatches.forEach((b, i) => {
   reviewProblems.push(`reviews-${i + 1} returned ${whole ? 'a merge whose sha is no commit id' : Array.isArray(got) ? `${got.length} of its ${want} merges` : 'nothing'}: the reviews of the merges on lines ${b.from} to ${b.to} of the listing since ${since} were not read`)
 })
 // The listing's length each agent read, against the Scope agent's count, one reason per length read.
+// The map is keyed by the value itself, so a reply with no length is named, not thrown on.
 const lengths = new Map()
 reviewBatches.forEach((b, i) => {
   const r = reviewed[i]
   if (!r || r.listingLines === mergeCount) return
-  const k = JSON.stringify(r.listingLines)
-  lengths.set(k, [...(lengths.get(k) || []), `reviews-${i + 1}`])
+  lengths.set(r.listingLines, [...(lengths.get(r.listingLines) || []), `reviews-${i + 1}`])
 })
 const andJoin = (xs) => (xs.length > 1 ? `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}` : xs[0])
 const mergesWord = `${mergeCount} merge${mergeCount === 1 ? '' : 's'}`
-for (const [k, who] of lengths) {
-  const n = JSON.parse(k)
+for (const [n, who] of lengths) {
   reviewProblems.push(!Number.isInteger(n) || n < 0
-    ? `the Scope agent counted ${mergesWord} since ${since}, and ${andJoin(who)} returned ${k} as the listing's length, so whether the listing has ${mergeCount} is unknown`
+    ? `the Scope agent counted ${mergesWord} since ${since}, and ${andJoin(who)} returned ${n === undefined ? 'no value' : JSON.stringify(n)} as the listing's length, so whether the listing has ${mergeCount} is unknown`
     : `the Scope agent counted ${mergesWord} since ${since}, and the listing ${andJoin(who)} read has ${n}: ${n > mergeCount ? `the reviews of the merges on lines ${mergeCount + 1} to ${n} were not read` : `the batches were dealt lines ${n + 1} to ${mergeCount}, which the listing does not have`}`)
 }
 // The line after each batch, read by its agent, against the next agent's first line, and against

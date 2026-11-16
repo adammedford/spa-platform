@@ -166,7 +166,7 @@ const testsFor = (served, id) => {
 //           when it is not the listing's own (#1210); every Reviews agent reads the listing's length
 //           as the merges' own, so a served mergeCount that differs is a Scope agent's miscount,
 //           reviewsListing: {label: n}, the listing's length a Reviews agent returns when it is not
-//           the merges' own,
+//           the merges' own; a label served undefined returns a reply with no listingLines,
 //           fetchFails, the error of the Scope agent's fetch when it fails }
 function stub(env, scriptArgs, served) {
   const calls = []
@@ -227,9 +227,9 @@ function stub(env, scriptArgs, served) {
         const listing = served.merges || MERGES
         const mine = listing.slice(from - 1, to + ((served.reviewsLong || {})[label] || 0))
         const next = (served.reviewsNextSha || {})[label]
-        const length = (served.reviewsListing || {})[label]
+        const listed = Object.hasOwn(served.reviewsListing || {}, label)
         out = {
-          listingLines: length !== undefined ? length : listing.length,
+          listingLines: listed ? served.reviewsListing[label] : listing.length,
           nextSha: next !== undefined ? next : (listing[to] || { sha: '' }).sha,
           merges: mine.slice(0, mine.length - ((served.reviewsShort || {})[label] || 0)),
         }
@@ -1272,6 +1272,12 @@ try {
     if (!named(noLength, /the Scope agent counted 95 merges since g2-local-slice, and reviews-1 returned null as the listing's length, so whether the listing has 95 is unknown/)) fail(`a listing length of null: verdict ${noLength.result.verdict}, reasons ${JSON.stringify(noLength.result.reasons)}`)
     const drifted = driftAll.splice(offSchema)
     if (drifted.length !== 1 || !/^reviews-1: \$\.listingLines: /.test(drifted[0])) fail(`the run with a listing length of null drifted other than in listingLines:\n  ${drifted.join('\n  ')}`)
+    // A reply with no length at all is named the same way, not a script that stops with no verdict.
+    const offSchemaMissing = driftAll.length
+    const missing = await execute(newRepo(), { gate: 'G3' }, { ...served, merges: manyMerges(95), reviewsListing: { 'reviews-2': undefined } })
+    if (!named(missing, /the Scope agent counted 95 merges since g2-local-slice, and reviews-2 returned no value as the listing's length, so whether the listing has 95 is unknown/)) fail(`a reply with no listing length: verdict ${missing.result.verdict}, reasons ${JSON.stringify(missing.result.reasons)}`)
+    const driftedMissing = driftAll.splice(offSchemaMissing)
+    if (driftedMissing.length !== 1 || !/^reviews-2: .*listingLines/.test(driftedMissing[0])) fail(`the run with no listing length drifted other than in listingLines:\n  ${driftedMissing.join('\n  ')}`)
     if (driftAll.length > driftBefore) fail(`schema drift or thrown thunks in the #1210 runs:\n  ${driftAll.slice(driftBefore).join('\n  ')}`)
   }
 } catch (e) {
