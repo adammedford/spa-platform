@@ -115,6 +115,28 @@ public sealed partial class RollingDeployLoopTests
         Assert.Contains(cell.SignedIn, at => at >= S(120));
     }
 
+    [Theory]
+    [InlineData(65, 80)]
+    [InlineData(75, 89)]
+    public async Task A_sign_in_that_fails_after_the_tunnel_is_back_is_still_the_gap_when_the_tunnel_did_not_answer_while_it_ran(int down, int back)
+    {
+        // The sign-in due at 60 s is in flight when the tunnel's old hop stops, and its Playwright wait
+        // runs out 30 s later, at 90 s, after the tunnel has restarted: the gaps #348 records ran 8 to
+        // 16 s, and Playwright's default timeout is 30 s
+        // (https://playwright.dev/dotnet/docs/api/class-page#page-set-default-timeout). A probe taken at
+        // the failure reads the tunnel up in both cases, the second's back only a second before it.
+        ScriptedCell cell = new()
+        {
+            Tunnel = at => at < S(down) || at >= S(back),
+            SignInTakes = at => at == S(60) ? S(30) : TimeSpan.Zero,
+        };
+
+        await new RollingDeployLoop(cell, cell.Clock, TextWriter.Null).RunAsync(S(200), Ct);
+
+        Assert.Equal([S(60)], cell.SignInsFailed);
+        Assert.Contains(cell.SignedIn, at => at >= S(back));
+    }
+
     [Fact]
     public async Task A_sign_in_that_fails_while_the_tunnel_answers_ends_the_row()
     {

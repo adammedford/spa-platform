@@ -18,6 +18,13 @@ public interface IRollingDeployCell
     /// <summary>Whether <c>/healthz</c> answers 200 through the tunnel now.</summary>
     Task<bool> TunnelAnswersAsync(CancellationToken ct);
 
+    /// <summary>
+    /// Whether <c>/healthz</c> answered 200 through the tunnel at every probe taken since
+    /// <paramref name="since"/>: on the cell, those a <see cref="TunnelWatch"/> took while a sign-in ran
+    /// and the one after it ended (#1211).
+    /// </summary>
+    Task<bool> TunnelAnsweredSinceAsync(DateTimeOffset since, CancellationToken ct);
+
     /// <summary>A fresh profile signed in to app 1; a <see cref="PlaywrightException"/> or <see cref="TimeoutException"/> when it could not be.</summary>
     Task<SessionCookies> SignInAsync(CancellationToken ct);
 
@@ -65,6 +72,7 @@ public sealed class RollingDeployLoop(IRollingDeployCell cell, TimeProvider time
         {
             if (time.GetElapsedTime(started) >= nextSignIn)
             {
+                DateTimeOffset signingIn = time.GetUtcNow();
                 try
                 {
                     SessionCookies cookies = await cell.SignInAsync(ct);
@@ -74,8 +82,10 @@ public sealed class RollingDeployLoop(IRollingDeployCell cell, TimeProvider time
                 }
                 catch (Exception failed) when (failed is PlaywrightException or TimeoutException)
                 {
-                    // The tunnel's restart gap: tried again on the next turn. A failure while it answers is the row's.
-                    if (await cell.TunnelAnswersAsync(ct))
+                    // The tunnel's restart gap, when it did not answer at some moment of the sign-in, though it
+                    // answers again by the failure (#1211): tried again on the next turn. A failure while it
+                    // answered throughout is the row's.
+                    if (await cell.TunnelAnsweredSinceAsync(signingIn, ct))
                     {
                         throw;
                     }
@@ -112,4 +122,43 @@ public sealed class RollingDeployLoop(IRollingDeployCell cell, TimeProvider time
         IReadOnlyList<EcsTaskState> replacements = [.. (await cell.ListedAsync(ct)).Where(task => !oldIds.Contains(task.Id))];
         return new ContinuityObserver.RollingDeploy([.. stopped.Select(task => task.Task)], [.. replacements.Select(task => task.Task)], calls, start, callback);
     }
+}
+
+/// <summary>
+/// The tunnel probed while a piece of work runs (#1211): as it starts, every <see cref="Every"/> while
+/// it runs, and once after it ends. A sign-in in flight when the tunnel's old hop stops can fail only
+/// once its Playwright wait runs out, after the restart answers again, so a probe taken at the failure
+/// alone reads the gap as the tunnel up; the gaps #348 records ran 8 to 16 s.
+/// </summary>
+public sealed class TunnelWatch(Func<CancellationToken, Task<bool>> probe, Func<TimeSpan, CancellationToken, Task> pause, TimeProvider time)
+{
+    /// <summary>How often the tunnel is probed while the work runs.</summary>
+    public static readonly TimeSpan Every = TimeSpan.FromSeconds(1);
+
+    private readonly List<DateTimeOffset> unanswered = [];
+
+    /// <summary>Runs <paramref name="work"/> with the tunnel probed alongside, and returns or throws what it does.</summary>
+    public async Task<T> WhileAsync<T>(Func<Task<T>> work, CancellationToken ct)
+    {
+        Task<T> running = work();
+        while (true)
+        {
+            bool ended = running.IsCompleted;
+            DateTimeOffset at = time.GetUtcNow();
+            if (!await probe(ct))
+            {
+                unanswered.Add(at);
+            }
+
+            if (ended)
+            {
+                return await running;
+            }
+
+            await Task.WhenAny(running, pause(Every, ct));
+        }
+    }
+
+    /// <summary>Whether every probe taken since <paramref name="since"/> answered.</summary>
+    public bool AnsweredSince(DateTimeOffset since) => !unanswered.Exists(at => at >= since);
 }
