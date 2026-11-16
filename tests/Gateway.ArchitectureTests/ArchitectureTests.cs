@@ -64,16 +64,48 @@ public sealed class ArchitectureTests
     {
         // The rules are read from SpaPlatform.slnx, so a project missing from the solution is a
         // project no rule applies to. This is what stops A-01 to A-04 going quiet rather than red
-        // when someone adds a project and forgets the solution.
+        // when someone adds a project and forgets the solution. .scratch/ is left out of the scan,
+        // with bin/, obj/ and spikes/: overnight runs write probes under .scratch/<slug>/log/, which
+        // git ignores, and a project file there failed this in the main checkout (#1274).
         Assert.Equal(
-            Directory
-                .EnumerateFiles(RepositoryRoot, "*.csproj", SearchOption.AllDirectories)
-                .Where(path => !path.Contains("/bin/", StringComparison.Ordinal))
-                .Where(path => !path.Contains("/obj/", StringComparison.Ordinal))
-                .Where(path => !path.Contains("/spikes/", StringComparison.Ordinal))
-                .Select(Path.GetFileNameWithoutExtension)
-                .Order(StringComparer.Ordinal),
+            ProjectGraph.ProjectsATreeHolds(
+                Directory.EnumerateFiles(RepositoryRoot, "*.csproj", SearchOption.AllDirectories)),
             ProjectGraph.Solution.Projects.Select(project => project.Name).Order(StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public void A_project_file_under_scratch_is_no_project_the_solution_must_list()
+    {
+        // The filter of the assertion above, on paths this test supplies, so nothing is written
+        // into the repository's tree: the probe an overnight run left is not counted, and neither
+        // is build output or a spike.
+        Assert.Equal(
+            ["Gateway"],
+            ProjectGraph.ProjectsATreeHolds(
+            [
+                "/repo/src/Gateway/Gateway.csproj",
+                "/repo/.scratch/overnight/log/probe/probe.csproj",
+                "/repo/.scratch/overnight/log/issue-976-probe/tools/bench/floor/Bench.Floor.csproj",
+                "/repo/src/Gateway/obj/Gateway.csproj",
+                "/repo/src/Gateway/bin/Debug/Gateway.csproj",
+                "/repo/spikes/g0/cognito/Cognito.csproj",
+            ]));
+    }
+
+    [Fact]
+    public void A_project_file_anywhere_else_is_one_the_solution_must_list()
+    {
+        // What the assertion is for: a project added beside the others and left out of the solution
+        // is named, whatever directory it is in, a dot-directory that is not .scratch/ included.
+        Assert.Equal(
+            ["Forgotten", "Gateway", "Hidden", "Scratch"],
+            ProjectGraph.ProjectsATreeHolds(
+            [
+                "/repo/src/Gateway/Gateway.csproj",
+                "/repo/tools/forgotten/Forgotten.csproj",
+                "/repo/.github/hidden/Hidden.csproj",
+                "/repo/tools/scratch/Scratch.csproj",
+            ]));
     }
 
     [Fact]
