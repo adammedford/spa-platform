@@ -852,6 +852,8 @@ const sinceHeadsOf = (records, inv) => {
 // dotted name in the parenthesis after a bare method is the whole name (#695). withClass false
 // reads only the first form: in a cell someone wrote, 'Nom (Assert.Null)' has the second form's
 // shape and names no class, so there the parenthesis names the whole test only when it ends in it.
+// It reads a whole name, as a runner prints it, which never carries free text after its groups;
+// nominated() reads a cell's start and narrows the first form to three parts (#809).
 // A unittest subtest prints its message in brackets, its parameters in a parenthesis or both after
 // the class one, 'test_x (pkg.Class) [msg] (k='v')', and is read without them (#793): on #792 the
 // greedy parenthesis took both groups, the name read as the bare test_x, and a candidate Class.test_x
@@ -870,6 +872,12 @@ const dotted = (f, withClass = true) => {
 // 'test_x (pkg.Class.test_x)' is read as its whole dotted name, by dotted() as mutationRow reads a
 // failing name, so another class's test_x is not this one; 'test_x (pkg.Class)' is read as test_x,
 // since a qualifier such as '(Assert.Null)' has its shape, and keeps pkg.Class as its cls (#808).
+// In a cell the parenthesis names the whole test only in unittest's printed module.Class.method
+// shape, three or more dotted parts ending in the bare name (#809): 'Nom (Assert.Nom)', a qualifier
+// ending in the name, reads as Nom, where it read as the test Assert.Nom. The cell is read by the
+// unittest form at its start, whatever follows the closing parenthesis, so 'test_x (pkg.C.test_x)
+// red on Assert' reads as pkg.C.test_x, its trailing text kept in why by the '(nominated as <cell>)'
+// suffix; dotted() alone misses the whole cell there, and it read as the bare test_x.
 // mutationRow holds a failing name unittest printed to that class, since only a Python run prints
 // one: on #764 the bare reading took another class's red test_x for the nomination. A failing name
 // xUnit printed, 'Ns.Class.Nom', is matched by the bare name, so 'Nom (Assert.Null)' still reads
@@ -886,15 +894,17 @@ const dotted = (f, withClass = true) => {
 // unless the whole cell is itself a candidate's test. A backtick leaves every cell before any of
 // this is read, since a Broken cell cannot hold one and its row would read as none, forgetting a
 // hold on it, and '`Nom`' is the test Nom. A cell of backticks and spaces alone names no test.
+const NOMINATED_UNITTEST = /^([A-Za-z_]\w*)\s*\(([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+)\)/
 const nominated = (s, byTest, i = 0) => {
   const cell = (s.test || '').replace(/`/g, '').trim()
   if (!cell) return { ...s, test: `(nomination ${i + 1} names no test)`, why: `the Standards axis nomination names no test: ${s.why}`, kind: 'nominated', cls: '', unnamed: true }
   const bare = (/^[^\s(]*/.exec(cell) || [''])[0]
-  const whole = dotted(cell, false)
+  const lead = (NOMINATED_UNITTEST.exec(cell) || [cell])[0]
+  const whole = dotted(lead, false)
   const prose = /\s/.test(cell.split('(')[0].trim()) && (byTest.has(cell) || !byTest.has(bare))
   const test = prose ? cell
-    : whole !== bare && whole.endsWith(`.${bare}`) ? whole : bare || cell
-  const classed = dotted(cell)
+    : whole !== bare && whole.endsWith(`.${bare}`) && whole.split('.').length >= 3 ? whole : bare || cell
+  const classed = dotted(lead)
   const cls = test === bare && classed !== bare ? classed.slice(0, -bare.length - 1) : ''
   const why = test === s.test ? s.why : `${s.why} (nominated as ${s.test})`
   return { ...(byTest.get(test) || byTest.get(bare)), ...s, test, why, kind: 'nominated', cls }
