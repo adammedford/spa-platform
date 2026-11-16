@@ -2001,7 +2001,7 @@ class OvernightAnswersTests(LandTestCase):
         case = Case(self, open_issues=[overnight_issue()], issues=self.night(questions_comment(self.Q1)))
         result = case.run(PR, "--subject", self.SUBJECT, *case.with_body)
         self.assertListedBeforeTheMerge(case, result)
-        self.assertNotIn("Overnight", result.stdout.replace("overnight answers that wait", ""))
+        self.assertNotIn("Overnight", result.stdout)
 
     def test_a_failed_search_prints_one_line_and_the_merge_call_still_runs(self):
         case = Case(self, search_fails="gh: Server Error (HTTP 502)")

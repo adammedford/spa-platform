@@ -166,6 +166,30 @@ body closes its ticket at the merge, whatever the description says: 83f53f0, the
 closed #105, which #120's description named on a `Ticket: #105` line and never after a closing
 keyword, through a sentence in its body saying a later session would close it.
 
+**It lists the overnight answers that wait on the landing, and does not wait for them** (#531).
+After its refusals and before the merge call, `tools/land.sh` runs `tools/overnight_answers.py` over
+the `## Questions:` comments on the open `Overnight <date>` issues, and prints one line for each
+question that names the pull request's number or a number its description closes:
+
+```
+land: #<issue> Overnight <date> Q<n> names #<number>, a Confirm covers it: <its first line>
+land: #<issue> Overnight <date> Q<n> names #<number>, no Confirm covers it: <its first line>
+```
+
+"A Confirm covers it" says Adam has answered the question, perhaps no. "No Confirm covers it" says
+the answer is open or pre-accepted, so provisional. Neither says what the answer is: read it on the
+issue. A line is a report, neither an instruction nor an authority. Nothing listed stops the merge,
+and a reader that fails prints one line, `land: could not read the Overnight issues' questions`, and
+the merge proceeds, the departure from `CODING_STANDARDS.md` -> "A check fails closed" that #531
+decided.
+
+**Read them before writing the body.** With `--subject` given, nothing pauses between the list and
+the merge call, and the body is fixed by then. So run the reader first, from the repository:
+`python3 -I tools/overnight_answers.py --number <pr> --number <each ticket it closes> --lookup`. It
+prints the same lines without the `land: ` prefix and writes nothing. What a confirmed answer asks
+of this merge, a line in the merge body or a closing comment, the landing session does. A question
+no Confirm covers goes to Adam before the merge, who may Confirm it first or land without it.
+
 The body says what was verified and how; write it to a file and pass `--body-file <path>`, so it
 rides in the merge commit rather than staying on the pull request. A named pipe or a process
 substitution, `--body-file <(...)`, works as well; `-` does not, because the script keeps standard
