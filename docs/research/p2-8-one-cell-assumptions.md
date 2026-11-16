@@ -98,7 +98,7 @@ it does not collide.
 | State keys in the backend blocks | `poc/platform/…`, `poc/apps/…`, `poc/idp/…` | `infra/envs/poc/platform/versions.tf:25`, `apps/versions.tf:29`, `idp/versions.tf:36` | A backend block takes no variable, so the key cannot follow `var.cell` [read]. |
 | State keys in the remote-state reads | `poc/apps/terraform.tfstate`, `poc/idp/terraform.tfstate` | `infra/envs/poc/platform/main.tf:51`, `apps/main.tf:24` | With `cell = "poc2"` the read is still `poc/…`, from `spa-platform-poc2-tfstate-…` [executed]. Bootstrap's own outputs print `<cell>/…` keys (`infra/bootstrap/outputs.tf:29-31,46-48`), which the roots then do not use [read]. |
 | The root directories | `infra/envs/poc/{platform,apps,idp}` | the tree; `tools/scripts/cell-common.sh:28-30` | One directory holds one `.terraform/` backend binding, one `terraform.tfvars`, one `backend.hcl`. Two cells from one directory means re-initialising between them [read]. |
-| Bootstrap's state | local `terraform.tfstate` in `infra/bootstrap` | `infra/bootstrap/README.md:3-17` | One state file per directory. A second apply with another `cell` plans to replace the first cell's bucket and roles; `prevent_destroy` (`state.tf:14-16`) stops the bucket's half [read]. |
+| Bootstrap's state | local `terraform.tfstate` in `infra/bootstrap` | `infra/bootstrap/README.md:3-17` | One state file per directory [read]. Inferred, not run: applying it again with another `cell` would plan a replacement of the first cell's bucket and roles, since their names change, and `prevent_destroy` on the bucket (`state.tf:14-16`) would refuse that plan. Either way a second cell needs a second bootstrap state. |
 | GitHub OIDC provider | created by default | `infra/bootstrap/variables.tf:87-95`, `ci-role.tf:11-12` | One per account; a second bootstrap must set `create_github_oidc_provider = false` and pass the ARN [read; the default of one planned instance executed]. |
 | The outputs document | `infra/envs/poc/outputs.json` | `tools/scripts/cell-common.sh:35`; `.gitignore:35`; `.dockerignore:52` | One file. Readers with the path built in: `tools/spactl/Commands.cs:26`, `tests/e2e/Stack/DeployedStack.cs:149` (unless `SPA_E2E_OUTPUTS`), `tools/bench/fargate.py:134`, `tools/image_build_tests.py:102`, the runbooks (`docs/runbooks/README.md:67-68`, `rollback.md:18-19`, `end-app-sessions.md:26`, `release-rollback.md:17`, `secret-rotation.md:23-24`), and the `wiz` skill's sitting files [read]. |
 | The applied images | `infra/envs/poc/platform/images.auto.tfvars` | `tools/scripts/cell-common.sh:42` | One file, in the one platform root [read]. |
@@ -121,9 +121,9 @@ Outside that test: `infra/modules/idp-cognito/variables.tf:6` is `^[a-z][a-z0-9-
 `infra/envs/poc/apps/variables.tf:1-5` and `idp/variables.tf:1-5` have no validation. Scratch
 runs in the export: the identity root planned with `cell = "poc-"` and with `cell = "pc"`, and
 refused `0a-b` with the module's message; the apps root planned with `cell = "Not A Cell"` and
-named its parameter `/spa-platform/Not A Cell/apps/app1/client-secret`. A cell name that the
-platform root accepts and the identity module refuses (a leading digit, or 21 or 22 characters)
-fails only at the identity root's plan.
+named its parameter `/spa-platform/Not A Cell/apps/app1/client-secret`. So a name with a leading
+digit, which the platform root accepts, fails only at the identity root's plan. The same follows
+for a name of 21 or 22 characters from the expression's `{1,19}`; that case was not run.
 
 ## 2. IAM statements with resource `*` or a prefix another cell's name could match
 
@@ -165,8 +165,8 @@ teardown role has no `*`: both statements name one bucket ARN (`teardown-role.tf
 Notes on the three that matter:
 
 - **The two CI globs** are delimited by a hyphen, and `^[a-z0-9][a-z0-9-]{1,20}[a-z0-9]$` admits
-  inner hyphens. So the brief's pair `poc` and `poc2` does not collide, and `poc` with `poc-2`
-  does: cell `poc`'s CI role may read the role and policy documents of cell `poc-2`. The repository
+  inner hyphens. So `poc` and `poc2`, the pair the repository's own comments use, do not collide
+  here, and `poc` with `poc-2` does: cell `poc`'s CI role may read the role and policy documents of cell `poc-2`. The repository
   already names this hazard for the bucket and avoided it there (`ci-role.tf:189-191`,
   `infra/bootstrap/tests/root.tftest.hcl:268`), and `teardown.sh:266-267,285-287` avoids it for
   the task-definition family. The grant is read-only (`iam:Get*`, `iam:List*`). The scratch run
@@ -174,11 +174,14 @@ Notes on the three that matter:
 - **The trust condition** names this account's ECS in this Region and nothing narrower, and
   `infra/modules/cell/tests/module.tftest.hcl:1528-1560` asserts exactly that value. It bounds who
   ECS may act for, not which cluster: a principal able to pass cell B's task role to a task in
-  cell A's cluster is not stopped by the trust policy. What stops it is `iam:PassRole`, which no
-  role in the repository holds [read].
-- **`ReadState`** is exact per bucket. If two cells share one state bucket, as bootstrap's
-  `<cell>/…` keys suggest was once intended, each cell's CI role reads the other's state, and the
-  identity root's state holds the test-user passwords in clear
+  cell A's cluster is not stopped by the trust policy [read]. None of the four roles the
+  repository declares holds `iam:PassRole` [read]; whether that is the control that holds between
+  cells, and what the project's managed IAM adds, is not answered here and belongs to the
+  in-account isolation ticket.
+- **`ReadState`** is exact per bucket. Bootstrap's outputs print keys under `<cell>/…`
+  (`outputs.tf:29-31`), a layout in which cells could share a bucket. If two cells do,
+  each cell's CI role reads the other's state, and the identity root's state holds the test-user
+  passwords in clear
   (`infra/modules/idp-cognito/main.tf:95-98`) [read].
 
 Outside IAM but on the same question: the two-task cell's S3 and DynamoDB gateway endpoints carry
@@ -244,13 +247,16 @@ Three further points from reading `teardown.sh`:
 validate (`tools/check.sh:642`, `.github/workflows/ci.yml:806`) and
 `find infra -type f -name '*.tftest.hcl'` for tests (`tools/check.sh:659`, `ci.yml:824`). A
 second root directory under `infra/envs/` is formatted, validated and tested with no edit. CI
-holds no AWS credentials (ADR-0016), so nothing in CI assumes or reads a cell.
+holds no AWS credentials (ADR-0016), and no workflow assumes a role:
+`git grep -nE 'role-to-assume|configure-aws-credentials|id-token' .github` finds nothing
+[executed]. So nothing in CI assumes or reads a cell, and the CI plan role bootstrap creates per
+cell is assumed by no workflow in the repository today.
 
 **P-01, the platform plan allowlist** [read; suite executed green, 24 runs].
 `infra/envs/poc/platform/tests/root.tftest.hcl`:
 
-- `:733-740` holds the root's module calls to exactly `[["cell", "../../../modules/cell"]]`.
-- `:742-750` refuses `count` or `for_each` on the call: "either multiplies every resource in it,
+- `:731-737` holds the root's module calls to exactly `[["cell", "../../../modules/cell"]]`.
+- `:739-747` refuses `count` or `for_each` on the call: "either multiplies every resource in it,
   so one ALB becomes two."
 - `:925-946` holds one ALB, one listener, one target group, one service and one bucket, each one
   declaration with no `count` or `for_each`.
@@ -268,7 +274,7 @@ one list for the one cell (section 1.2).
 **P-03, the task role's statements** [read; executed green, 75 runs in `modules/cell`].
 `infra/modules/cell/tests/module.tftest.hcl` plans the module once with `cell = "poc"` (`:210`).
 It has one cross-cell probe: the client-secret path must not admit
-`/spa-platform/another-cell/apps/app1/client-secret` (`:1236-1245`). Runs `:2147` and `:2158`
+`/spa-platform/another-cell/apps/app1/client-secret` (`:1235-1244`). Runs `:2147` and `:2158`
 refuse another cell's ring prefix and a wider one. There is no like probe for the bucket, the
 session table, the log group or the repositories; those grants name the module's own resources'
 ARNs, so they hold by construction, and no run plans two cells and compares them. The trust
@@ -315,7 +321,8 @@ All on 2026-11-16, at `adf0273`.
 **Only read**
 
 - `infra/bootstrap/` (`main.tf`, `state.tf`, `ci-role.tf`, `teardown-role.tf`, `variables.tf`,
-  `outputs.tf`, `README.md`, `terraform.tfvars.example`, `tests/`).
+  `outputs.tf`, `README.md`, `terraform.tfvars.example` in full; `tests/` by search and the runs
+  cited).
 - `infra/envs/poc/{platform,apps,idp}` (every `.tf`, the examples, the test files' run lists and
   the P-01 runs in full).
 - `infra/modules/cell` (`iam.tf`, `storage.tf`, `sessions.tf` in full; `ecs.tf`, `alb.tf`,
@@ -323,8 +330,8 @@ All on 2026-11-16, at `adf0273`.
   `infra/modules/idp-cognito`.
 - `tools/scripts/verify-teardown.sh`, `teardown.sh` and `cell-common.sh:1-330` in full; the other
   scripts by search for the cell, the roots, the domain and the outputs path.
-- `tools/check.sh:605-676`, `.github/workflows/ci.yml:760-840`, `tools/aws-project.env`,
-  `tools/preflight.sh:200-294`.
+- `tools/aws-project.env` in full; `tools/check.sh`, `.github/workflows/ci.yml` and
+  `tools/preflight.sh` by search, at the lines cited.
 - ADR-0012, ADR-0013, ADR-0029 in full; ADR-0014, ADR-0016, ADR-0025 by their decisions;
   `GLOSSARY.md:11-14,81,83`; `contracts/resource-tags.md`.
 - The consumers of `infra/envs/poc/outputs.json`, by `git grep`.
