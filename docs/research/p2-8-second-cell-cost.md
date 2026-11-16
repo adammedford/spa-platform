@@ -38,9 +38,9 @@ gateway). The module has no other shape today.
    nothing per hour: a user pool, its clients, standard parameters and an imported certificate carry
    no standing charge.
 4. **A destroyed cell costs nothing measurable per idle month.** `verify-teardown.sh` passes only when
-   nothing carrying the platform tag remains. What survives is outside the cell: three more state
-   objects in the state bucket (bytes, at $0.023 per GB-month) and one more teardown role in
-   bootstrap (IAM carries no charge).
+   nothing carrying the platform tag remains. What could survive is outside the cell, if the second
+   cell gets its own: state objects in the state bucket (bytes, at $0.023 per GB-month) and a
+   teardown role in bootstrap (IAM carries no charge).
 5. **The load balancer and the NAT gateway bill a partial hour as a full hour.** Tasks and public
    addresses bill by the second with a one-minute minimum. So a short sitting pays whole hours for
    $0.0675 of the two-task cell's $0.096, and an apply, destroy and re-apply inside one hour may pay
@@ -56,9 +56,10 @@ gateway). The module has no other shape today.
    reached, that denies the create calls a cell's apply makes: the NAT gateway, the load balancer, the
    ECS service, the table, the user pool, the repository and a KMS key. Reaching the limit pauses the
    project and stops its resources.
-9. **Which plan the project is on is not recorded in the repository.** A grilling answer of 2026-10-24
-   speaks of "the limit set in AWS Settings > Billing", and a spend limit needs the Paid Plan, so the
-   Paid Plan is an inference, not a reading.
+9. **Which plan the project is on, and whether it has a spend limit, is recorded neither in the
+   repository nor on the tracker.** The two-task grilling's question 10 asks about "the limit set in
+   AWS Settings > Billing" and was pre-accepted under a standing answer, so nobody read a limit to
+   answer it. The P2-7 pricing research of 2026-11-16 did not read the plan either.
 10. **The module declares no KMS key, no interface endpoint and no access logs**, so three of the
     ticket's named lines cost a second cell nothing today. A customer managed key would add $1 a month,
     prorated hourly. Section 1 prices each as "if added".
@@ -132,7 +133,7 @@ Unit rates only. No volume is estimated here, because nothing in the repository 
 | Line | Unit price in `us-east-2` | Billed by |
 | --- | --- | --- |
 | Load balancer capacity units | $0.008 per LCU-hour (or partial hour) | Use |
-| NAT gateway data | $0.045 per GB processed | Use. Carries image pulls, logs, Parameter Store and the provider's OAuth endpoints; S3 and DynamoDB go by the gateway endpoints, which carry "no additional charge" |
+| NAT gateway data | $0.045 per GB processed | Use. Carries what the README lists: "Parameter Store, ECR, CloudWatch Logs, `ssmmessages` for the tunnel and the provider's OAuth endpoints"; S3 and DynamoDB go by the gateway endpoints, which carry "no additional charge" |
 | CloudWatch Logs | $0.50 per GB ingested, $0.03 per GB-month stored | Use, then storage until retention expires or the group is destroyed |
 | DynamoDB on-demand | $0.125 per million read units, $0.625 per million write units; storage free for the first 25 GB-months, then $0.25 | Use. An idle table costs nothing per hour |
 | S3 Standard | $0.023 per GB-month; $0.005 per 1,000 PUT/LIST, $0.004 per 10,000 GET | Storage and use |
@@ -142,9 +143,14 @@ Unit rates only. No volume is estimated here, because nothing in the repository 
 | ACM, imported certificate | No line in the ACM price file except private CA and OCSP | Nothing |
 | IAM roles, ECS cluster, VPC, subnets, route tables, security groups, internet gateway | No price-file line found | Nothing |
 
-- **Cognito machine-to-machine tokens** are priced at $0.00225 each with no free tier. No
-  `client_credentials` grant appears in `infra/`, `src/` or the mock API, so the line is zero today.
-  A drill that tried one cell's client secret against another's clients by that grant would meet it.
+- **Cognito machine-to-machine tokens** are priced at $0.00225 each with no free tier. The apps
+  root's clients allow the `code` flow alone (`allowed_oauth_flows = ["code"]`), and the only
+  `client_credentials` request in the tree is a fixture test against the test identity provider, so
+  the line is zero today. A drill that tried one cell's client secret against another's clients by
+  that grant should be refused by the client's flow list, and Cognito charges "per successful token
+  response", so a refused attempt should cost nothing. Neither half was run.
+- **The key ring's parameters** are written by the gateway at run time. Which tier it writes them at
+  was not found in `src/`, so "standard, no charge" is **unsourced** for them.
 - **Data transfer** out to the internet and across zones (the second zone's task to the NAT gateway)
   is **unsourced**: the rates were not looked up.
 - **Free allowances** beyond those in the table (CloudWatch's 5 GB, KMS's 20,000 requests) appear in
@@ -156,7 +162,7 @@ Unit rates only. No volume is estimated here, because nothing in the repository 
 | Addition | Price in `us-east-2` | Notes |
 | --- | --- | --- |
 | Customer managed KMS key | $1 per key per month, "prorated hourly", about $0.0014 an hour; $0.03 per 10,000 requests | Each of the first two rotations adds $1 a month. A key scheduled for deletion is not charged |
-| Interface VPC endpoint | $0.01 per endpoint-hour, $0.01 per GB | The price file does not say whether the hour is per zone. Per zone is **unsourced** |
+| Interface VPC endpoint | $0.01 per endpoint-hour in each zone, $0.01 per GB | "Billed for each hour that your VPC endpoint remains provisioned in each Availability Zone" (PrivateLink pricing page). The five services the NAT gateway carries, in two zones, would be 10 endpoint-hours, $0.10 an hour, against the NAT gateway's $0.05 |
 | NAT gateway per zone, or a regional one | $0.045 per hour each; regional: $0.045 per hour "in each availability zone" | A second zone doubles the NAT line |
 | ALB access logs | S3 storage at the rate above | Delivery charge **unsourced** |
 
@@ -175,18 +181,22 @@ Unit rates only. No volume is estimated here, because nothing in the repository 
 
 ### The idle month
 
-After `teardown.sh` for the second cell, by the script's own contract:
+After `teardown.sh` for the second cell, by the script's own contract. The first two rows hold only
+if the second cell gets its own state keys and its own teardown role, which the tickets on the
+second cell's shape and on what cells share decide:
 
 | Survivor | Where | Price |
 | --- | --- | --- |
-| Three state objects and their noncurrent versions | The state bucket, which bootstrap owns | $0.023 per GB-month on kilobytes: below a cent |
-| A second teardown role, named from the cell | `infra/bootstrap` | No charge |
+| State objects and their noncurrent versions, one per root | The state bucket, which bootstrap owns | $0.023 per GB-month on kilobytes: below a cent |
+| A teardown role, named from the cell | `infra/bootstrap` | No charge |
 | Anything of the cell | Nowhere: `verify-teardown.sh` fails if one tagged resource stands | $0 |
 
 - The user pool has `deletion_protection = "INACTIVE"`, the repositories `force_delete = true`, and
   teardown deletes the certificate, the inactive task definitions and the key ring.
-- A customer managed key, if one is added, cannot be deleted at once. It waits 7 to 30 days in
-  pending deletion, uncharged, and the tag reader would have to allow for it.
+- A customer managed key, if one is added, cannot be deleted at once. KMS requires "a waiting period
+  of 7 – 30 days", and there is "no charge for customer managed KMS keys that ... are scheduled for
+  deletion". The key still exists for that time, so a reader that lists tagged resources would have
+  to allow for it.
 - **An idle month that is not destroyed** is the 730-hour figure: $28.58 or $69.94.
 
 ## 3. Quotas and plan limits two cells meet
@@ -254,18 +264,25 @@ matters to nothing but the per-zone quota.
   - The page lists the spend-limit policies together and does not label which one each control
     applies. Pairing the create-denying policy with "stop new resource creation" is this finding's
     reading of the two pages, not a quotation.
-- **Which plan and what limit this project has: not recorded in the repository.** No file names the
-  plan. Question 10 of the two-task grilling asks whether $70.50 a month "is within the limit set in
-  AWS Settings > Billing" and is answered yes, which implies a spend limit and so the Paid Plan. The
-  limit's amount and its early controls are unread.
+- **Which plan and what limit this project has: recorded neither in the repository nor on the
+  tracker.** No file names the plan. Question 10 of the two-task grilling asks whether $70.50 a month
+  "is within the limit set in AWS Settings > Billing"; its answer is "yes, pre-accepted under the
+  standing answer granted 2026-10-24", so it records an acceptance, not a reading of a limit. The
+  P2-7 map records that "the project's plan, spend limit and advanced-features state were not read".
+  Whether a limit exists, its amount and its early controls are all unread.
+- **The create denials would meet the first cell too**: every sitting applies the platform root from
+  nothing, and that apply makes the same calls.
 
 ## 4. What this changes for the map
 
 - **The ceiling can be set from two numbers:** $0.096 an hour standing, two-task shape, and whole
   hours for the load balancer and NAT gateway. Both cells standing through a sitting is about $0.19
   an hour.
-- **The ceiling has to be read against the spend limit**, whose amount this finding could not read.
-  Two cells left running for a month are about $140 at list price.
+- **The ceiling has to be read against the spend limit, if one is set**: this finding could read
+  neither its existence nor its amount. Two cells left running for a month are about $140 at list
+  price.
+- **The P2-7 map's ceiling**, $5 added per four-hour sitting and $2 a month idle, is the borrowed
+  rule's precedent. A two-task second cell is about $0.38 per four-hour sitting and below a cent idle.
 - **Facts met on the way**, for the tickets that own them:
   - The three roots fix their state keys in `versions.tf` at `poc/platform`, `poc/apps` and `poc/idp`.
   - The teardown role is one per cell, in bootstrap.
@@ -285,7 +302,9 @@ matters to nothing but the per-zone quota.
   2026-11-16T17:10:36Z. A local Python script filtered each file by usage type. Every price in
   sections 1 and 2 comes from these files unless a page is named beside it.
 - `grep` and `sed` over the repository at `origin/main` `adf0273`.
-- `gh issue view` of the ticket, the map and the two-task grilling's question 10.
+- `gh issue view` of the ticket, the map, the P2-7 map and the two-task grilling's question 10, and a
+  search of the tracker for the plan and the spend limit.
+- `curl` of the five pricing pages and the KMS deletion page named below, searched as text.
 - Nothing else. No Terraform, no AWS CLI, no credential, no container.
 
 ### Read only (each on 2026-11-16)
@@ -309,22 +328,23 @@ Documentation pages, fetched as text and quoted from the page:
 - [CloudWatch Logs quotas](https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/cloudwatch_limits_cwl.html)
 - [Gateway endpoints](https://docs.aws.amazon.com/vpc/latest/privatelink/gateway-endpoints.html), [Pricing for NAT gateways](https://docs.aws.amazon.com/vpc/latest/userguide/nat-gateway-pricing.html) and [IP addressing for your VPCs](https://docs.aws.amazon.com/vpc/latest/userguide/vpc-ip-addressing.html)
 
-Pricing pages, read **through the fetch tool's summarising model**, which relays quotations and can
-misquote. The billing increments and the four statements below rest on them and are the least firmly
-sourced facts here:
+Pricing pages. Each was first read through the fetch tool's summarising model and then fetched again
+with `curl` and searched as plain text; the quotations in this finding are from the second read:
 
 - [Amazon VPC pricing](https://aws.amazon.com/vpc/pricing/): the NAT gateway's partial hour; the public address's one-second increment.
 - [AWS Fargate pricing](https://aws.amazon.com/fargate/pricing/): per second, one-minute minimum; 20 GB of ephemeral storage.
 - [AWS KMS pricing](https://aws.amazon.com/kms/pricing/): "prorated hourly"; no charge while scheduled for deletion; the rotation charge.
 - [Amazon Cognito pricing](https://aws.amazon.com/cognito/pricing/): the free tier "per account or per AWS organization"; machine-to-machine tokens.
+- [AWS PrivateLink pricing](https://aws.amazon.com/privatelink/pricing/): an interface endpoint's hour is per Availability Zone.
+- [Deleting AWS KMS keys](https://docs.aws.amazon.com/kms/latest/developerguide/deleting-keys.html): the waiting period.
 
 ### Unsourced, named so that nobody reads them as findings
 
-- The project's plan, its spend limit and its early controls.
+- The project's plan, whether it has a spend limit, the amount and the early controls.
 - The project's applied quotas, and whether a default VPC exists.
 - Data transfer rates, out and across zones.
 - Whether a partial hour runs from creation or by the clock.
-- Whether an interface endpoint's hour is per zone.
+- The tier of the key ring's parameters.
 - The IAM roles quota.
 - Whether the price files' free bundles apply under this experience's plans.
 - Every volume: gigabytes through the NAT gateway, log volume, image size, request counts.
