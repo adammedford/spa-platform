@@ -162,6 +162,11 @@ const testsFor = (served, id) => {
 //           reviewsShort: {label: n}, the entries a Reviews agent leaves off the end of its batch,
 //           reviewsLong: {label: n}, the entries of the next lines it adds to the end of its batch,
 //           reviewsBadSha: [label], the Reviews agents whose first entry's sha is no commit id,
+//           reviewsNextSha: {label: sha}, the sha a Reviews agent reads on the line after its last
+//           when it is not the listing's own (#1210); every Reviews agent reads the listing's length
+//           as the merges' own, so a served mergeCount that differs is a Scope agent's miscount,
+//           reviewsListing: {label: n}, the listing's length a Reviews agent returns when it is not
+//           the merges' own,
 //           fetchFails, the error of the Scope agent's fetch when it fails }
 function stub(env, scriptArgs, served) {
   const calls = []
@@ -219,8 +224,15 @@ function stub(env, scriptArgs, served) {
         const [from, to] = dataLine(prompt, 'LINES')
         env.reviewLines = env.reviewLines || []
         env.reviewLines.push([from, to])
-        const mine = (served.merges || MERGES).slice(from - 1, to + ((served.reviewsLong || {})[label] || 0))
-        out = { merges: mine.slice(0, mine.length - ((served.reviewsShort || {})[label] || 0)) }
+        const listing = served.merges || MERGES
+        const mine = listing.slice(from - 1, to + ((served.reviewsLong || {})[label] || 0))
+        const next = (served.reviewsNextSha || {})[label]
+        const length = (served.reviewsListing || {})[label]
+        out = {
+          listingLines: length !== undefined ? length : listing.length,
+          nextSha: next !== undefined ? next : (listing[to] || { sha: '' }).sha,
+          merges: mine.slice(0, mine.length - ((served.reviewsShort || {})[label] || 0)),
+        }
         if ((served.reviewsBadSha || []).includes(label)) out.merges[0] = { ...out.merges[0], sha: 'not-a-sha' }
       } else if (label.startsWith('locate')) {
         const want = dataLine(prompt, 'IDS') || []
@@ -1180,8 +1192,9 @@ try {
     // At the bound every merge is listed, as it was before; with none, the section says none.
     const sixty = await execute(newRepo(), { gate: 'G3' }, { ...served, merges: manyMerges(60) })
     if (sixty.result.verdict !== 'tag ready' || reviewsOf(sixty).split('\n').filter((l) => /^- \d{12} .*cleared by https/.test(l)).length !== 60) fail(`60 cleared merges: verdict ${sixty.result.verdict}, ${reviewsOf(sixty).split('\n').filter((l) => l.startsWith('- ')).length} lines listed`)
+    // A count of none still deals one Reviews agent, which reads the listing's length and no merge (#1210).
     const zero = await execute(newRepo(), { gate: 'G3' }, { ...served, merges: [] })
-    if (zero.n('reviews') !== 0 || zero.result.verdict !== 'tag ready' || !/\nnone\n/.test(reviewsOf(zero))) fail(`no merge since the previous tag: ${zero.n('reviews')} Reviews agents, verdict ${zero.result.verdict}, section ${JSON.stringify(reviewsOf(zero))}`)
+    if (zero.n('reviews') !== 1 || JSON.stringify(zero.calls.filter((c) => c.label.startsWith('reviews')).map((c) => dataLine(c.prompt, 'LINES'))) !== '[[1,0]]' || zero.result.verdict !== 'tag ready' || !/\nnone\n/.test(reviewsOf(zero))) fail(`no merge since the previous tag: ${zero.n('reviews')} Reviews agents, verdict ${zero.result.verdict}, section ${JSON.stringify(reviewsOf(zero))}`)
     // A batch that is not read whole is named, in the reasons and the report, and never read as cleared.
     const named = (r, re) => r.result.verdict === 'tag withheld' && r.result.reasons.some((x) => re.test(x)) && re.test(reviewsOf(r))
     const nothing = await execute(newRepo(), { gate: 'G3' }, { ...served, merges: manyMerges(95), nothingFrom: ['reviews-2'] })
@@ -1221,6 +1234,45 @@ try {
     if (!refusedNoCount.result.refused || !/- not read: the run was refused before Reviews, so no review of a merge since g2-local-slice was read/.test(reviewsOf(refusedNoCount))) fail(`a refused run with no count: open reviews ${JSON.stringify(reviewsOf(refusedNoCount))}`)
     const drifted = driftAll.splice(offSchema)
     if (drifted.length !== 3 || !drifted.every((d) => /^scope: \$\.mergeCount: /.test(d))) fail(`the runs with a count that is no integer drifted from the schema other than in mergeCount:\n  ${drifted.join('\n  ')}`)
+  }
+  // 22. #1210: the Scope agent's count and each batch's shas are held to the listing the Reviews
+  //     agents read. Each agent returns the listing's length and the sha on the line after its
+  //     last; a count the listing does not have, a listing that runs past the last batch, and two
+  //     agents that read a boundary line differently each withhold the tag, naming the lines.
+  checks++
+  {
+    const driftBefore = driftAll.length
+    const served = { gates: { G3: READY } }
+    const reviewsOf = (r) => section(r.result.report.text, 'Open reviews') || ''
+    const named = (r, re) => r.result.verdict === 'tag withheld' && r.result.reasons.some((x) => re.test(x)) && re.test(reviewsOf(r))
+    // The ticket's input: a count of 60 for a listing of 90 deals two full batches and leaves 61 to 90.
+    const under = await execute(newRepo(), { gate: 'G3' }, { ...served, merges: manyMerges(90), mergeCount: 60 })
+    if (!named(under, /the Scope agent counted 60 merges since g2-local-slice, and the listing reviews-1 and reviews-2 read has 90: the reviews of the merges on lines 61 to 90 were not read/)) fail(`a count of 60 for a listing of 90: ${under.n('reviews')} Reviews agents, verdict ${under.result.verdict}, reasons ${JSON.stringify(under.result.reasons)}`)
+    // Each agent is asked for the listing's length and the line after its last; the agent of a count
+    // of none is dealt no line, so its prompt lists none.
+    const asked = (r, label) => commands(r.prompt(label))
+    if (!asked(under, 'reviews-1').some((c) => new RegExp(`\\blog --first-parent --merges --format=%H g2-local-slice\\.\\.${SHA} \\| wc -l$`).test(c)) || !asked(under, 'reviews-2').some((c) => new RegExp(`\\blog --first-parent --merges --format=%H g2-local-slice\\.\\.${SHA} \\| sed -n '61p'$`).test(c))) fail(`the Reviews prompts do not ask for the listing's length and the line after the batch: ${JSON.stringify(asked(under, 'reviews-2'))}`)
+    // A count of none for a listing of 90, which would otherwise start no agent to see it.
+    const none = await execute(newRepo(), { gate: 'G3' }, { ...served, merges: manyMerges(90), mergeCount: 0 })
+    if (asked(none, 'reviews-1').some((c) => /--format=%H%x09%s/.test(c)) || !asked(none, 'reviews-1').some((c) => /\| sed -n '1p'$/.test(c))) fail(`the Reviews prompt of a count of none lists merges, or does not ask for line 1: ${JSON.stringify(asked(none, 'reviews-1'))}`)
+    if (none.n('reviews') !== 1 || !named(none, /the Scope agent counted 0 merges since g2-local-slice, and the listing reviews-1 read has 90: the reviews of the merges on lines 1 to 90 were not read/)) fail(`a count of 0 for a listing of 90: ${none.n('reviews')} Reviews agents, verdict ${none.result.verdict}, reasons ${JSON.stringify(none.result.reasons)}`)
+    // A count past the listing: 95 for 90 deals lines the listing does not have.
+    const over = await execute(newRepo(), { gate: 'G3' }, { ...served, merges: manyMerges(90), mergeCount: 95 })
+    if (!named(over, /the Scope agent counted 95 merges since g2-local-slice, and the listing reviews-1, reviews-2, reviews-3 and reviews-4 read has 90: the batches were dealt lines 91 to 95, which the listing does not have/)) fail(`a count of 95 for a listing of 90: verdict ${over.result.verdict}, reasons ${JSON.stringify(over.result.reasons)}`)
+    // Two agents that read a boundary line differently: reviews-2's line 61 is not reviews-3's first.
+    const seam = await execute(newRepo(), { gate: 'G3' }, { ...served, merges: manyMerges(95), reviewsNextSha: { 'reviews-2': OTHER } })
+    const sha61 = String(61).padStart(40, '0').slice(0, 12)
+    if (!named(seam, new RegExp(`reviews-2 read "${OTHER}" on line 61 of the listing since g2-local-slice, and reviews-3 read ${sha61} there, so the merges on lines 31 to 90 may not be the lines they were dealt and were not read`))) fail(`a boundary read two ways: verdict ${seam.result.verdict}, reasons ${JSON.stringify(seam.result.reasons)}`)
+    // A listing that runs past the last batch, though its length agrees with the count.
+    const past = await execute(newRepo(), { gate: 'G3' }, { ...served, merges: manyMerges(95), reviewsNextSha: { 'reviews-4': 'd'.repeat(40) } })
+    if (!named(past, new RegExp(`reviews-4 read "${'d'.repeat(40)}" on line 96 of the listing since g2-local-slice, past the 95 merges the Scope agent counted, so the merges from line 96 were not read`))) fail(`a listing past the last batch: verdict ${past.result.verdict}, reasons ${JSON.stringify(past.result.reasons)}`)
+    // A length that is no count says the count is unchecked; the schema refuses it, so this run drifts there only.
+    const offSchema = driftAll.length
+    const noLength = await execute(newRepo(), { gate: 'G3' }, { ...served, merges: manyMerges(95), reviewsListing: { 'reviews-1': null } })
+    if (!named(noLength, /the Scope agent counted 95 merges since g2-local-slice, and reviews-1 returned null as the listing's length, so whether the listing has 95 is unknown/)) fail(`a listing length of null: verdict ${noLength.result.verdict}, reasons ${JSON.stringify(noLength.result.reasons)}`)
+    const drifted = driftAll.splice(offSchema)
+    if (drifted.length !== 1 || !/^reviews-1: \$\.listingLines: /.test(drifted[0])) fail(`the run with a listing length of null drifted other than in listingLines:\n  ${drifted.join('\n  ')}`)
+    if (driftAll.length > driftBefore) fail(`schema drift or thrown thunks in the #1210 runs:\n  ${driftAll.slice(driftBefore).join('\n  ')}`)
   }
 } catch (e) {
   console.error(`gate-evidence_tests: the script could not run: ${e && e.stack ? e.stack : e}`)
