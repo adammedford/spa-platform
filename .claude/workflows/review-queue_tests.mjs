@@ -2721,6 +2721,27 @@ try {
     if (skipped.outcome !== 'skipped' || env.batches.length) fail(`#1175's shape, its head recorded: outcome ${skipped.outcome} with ${env.batches.length} message agent(s), expected skipped with none`)
   }
 
+  // A batch the messages fill to exactly the sum is full, not over it (#1191): the first batch's
+  // last message is padded so the batch holds exactly M1175 characters, and it stays in that batch.
+  // A limit taken as "at or over" moves it into the next, which batchFaults names as a message that
+  // fitted in the batch before.
+  checks++
+  {
+    let sum = 0
+    let last = 0
+    while (sum + lengthOf(MESSAGES1175[last]) <= M1175) sum += lengthOf(MESSAGES1175[last++])
+    last--
+    const pad = M1175 - sum
+    const EXACT = MESSAGES1175.map((c, i) => (i === last ? { ...c, message: c.message.replace('\n\nCo-Authored-By: t', `\n\n${'x'.repeat(pad - 2)}\n\nCo-Authored-By: t`) } : c))
+    env = run({ prs: [1175] }, served1175(EXACT))
+    const r = resultOf(1175, await execute(env))
+    const first = env.batches[0] ? env.batches[0].asked : []
+    const held = first.reduce((s, c) => s + c.length, 0)
+    if (r.outcome !== 'recorded') fail(`a batch filled to the sum: outcome ${r.outcome} at ${JSON.stringify(r.stage)}, expected recorded`)
+    if (first.length !== last + 1 || held !== M1175) fail(`a batch filled to the sum: the first batch holds ${first.length} message(s) of ${held} characters, expected ${last + 1} of exactly ${M1175}`)
+    for (const f of batchFaults(env, EXACT)) fail(`a batch filled to the sum: ${f}`)
+  }
+
   // Messages the inventory can return in one piece cost no agent, and one it returns other than
   // whole is read again by a message agent rather than searched as it stands: a small pull request
   // whose inventory returns no text, and one whose last message came back a character short. An
