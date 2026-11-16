@@ -984,6 +984,18 @@ try {
       const prompt = (env.mutations.find((x) => x.test === B) || { prompt: '' }).prompt
       if (!prompt.includes(`The test: ${B}, run by ${F}.`)) fail(`PR 214 with the stated basename ${B} borrowing the candidate ${F}: its mutation prompt does not name ${F} as the project that runs it`)
     }
+    // Only a bare basename borrows, and only from a file it is the last path segment of: a path cell
+    // whose text another candidate's path ends in, and a basename that another file's name only ends
+    // in, keep their own project. Neither guard changes the verdict, since such a row stays a catch
+    // either way; it changes which file the mutation agent is told to run (review of #804).
+    for (const [label, cell, other] of [
+      ['stated path cell on project tools beside the candidate', F, `x/${F}`],
+      ['stated basename on project tools beside the candidate', B, `tools/my_${B}`],
+    ]) {
+      await verdictOf({ statedMutations: [stated(cell, 1, -1, 'tools')], candidates: [comp(other, other, other)] }, cell, RED)
+      const prompt = (env.mutations.find((x) => x.test === cell) || { prompt: '' }).prompt
+      if (!prompt.includes(`The test: ${cell}, run by tools.`)) fail(`PR 214 with the ${label} ${other}: its mutation prompt does not keep tools as the project that runs ${cell}, so it borrowed a file it does not name`)
+    }
     for (const [label, shape, test, red, extra] of [
       ['stated by its path on the directory project tools, red on a sibling file\'s test', { statedMutations: [stated(F, 1, -1, 'tools')] }, F, SIBLING, {}],
       ['nominated by its path on the directory project tools, red on a sibling file\'s test', {}, F, SIBLING, { nominations: nom(F, 'tools') }],
