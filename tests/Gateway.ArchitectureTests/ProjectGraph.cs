@@ -41,6 +41,23 @@ public sealed class ProjectGraph
     public bool Contains(string name) => projects.ContainsKey(name);
 
     /// <summary>
+    /// The names of the projects a tree holds that the solution must list, from the tree's project
+    /// file paths, in ordinal order. Build output (<c>bin/</c>, <c>obj/</c>) holds copies, and
+    /// <c>spikes/</c> is outside the solution by design. <c>.scratch/</c> is left out because
+    /// overnight runs write probes under <c>.scratch/&lt;slug&gt;/log/</c>, which git ignores: a
+    /// project file there is no project of this repository's, and the main checkout keeps them
+    /// (#1274).
+    /// </summary>
+    public static IEnumerable<string> ProjectsATreeHolds(IEnumerable<string> projectFiles) =>
+        projectFiles
+            .Select(path => path.Replace('\\', '/'))
+            .Where(path => !OutsideTheSolution.Any(directory => path.Contains(directory, StringComparison.Ordinal)))
+            .Select(path => System.IO.Path.GetFileNameWithoutExtension(path))
+            .Order(StringComparer.Ordinal);
+
+    private static readonly string[] OutsideTheSolution = ["/bin/", "/obj/", "/spikes/", "/.scratch/"];
+
+    /// <summary>
     /// Everything a project reaches through project references, directly or not, excluding itself.
     /// A-01 needs the closure and not the direct list: a test identity provider reached through one
     /// more project is still compiled into the gateway.
