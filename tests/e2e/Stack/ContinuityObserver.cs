@@ -27,6 +27,32 @@ public static class ContinuityBounds
     public static readonly TimeSpan Row6SessionCalls = TimeSpan.FromMinutes(5);
 
     /// <summary>
+    /// Row 6: how long before its expiry the gateway refreshes a session's access token, a copy of
+    /// <c>AccessTokenSource.RefreshBeforeExpiry</c> (plan row 3.8), which is internal to
+    /// <c>Platform.Identity</c>; <c>RollingDeployLoopTests</c> holds it to that file (#1203).
+    /// </summary>
+    public static readonly TimeSpan Row6RefreshBeforeExpiry = TimeSpan.FromMinutes(1);
+
+    /// <summary>
+    /// Row 6: how long after the row's first sign-in the operator launches <c>deploy.sh</c> (#1203), by
+    /// <see cref="Row6Launch"/> on the cell's token life, the refresh margin and the sign-in period.
+    /// </summary>
+    public static TimeSpan Row6LaunchAfterFirstSignIn => Row6Launch(DeployedStack.AccessTokenLifetime, Row6RefreshBeforeExpiry, Row6SignInEvery);
+
+    /// <summary>
+    /// The earliest moment, after the first sign-in, from which a deployment launched puts a session's
+    /// refresh inside the replacement interval, whatever the lag from the launch to the interval (#1203).
+    /// A session refreshes <paramref name="validity"/> less <paramref name="refreshBeforeExpiry"/> after
+    /// its sign-in and calls for longer than that (<see cref="Row6SessionCalls"/>), and a new one signs in
+    /// every <paramref name="signInEvery"/> until the interval ends, so refreshes fall one period apart
+    /// from the first one on. An interval at least one period long that starts no sooner than one period
+    /// before the first refresh therefore holds one; the 2026-11-14 run's lasted about 130 s against a
+    /// 60 s period (#348).
+    /// </summary>
+    public static TimeSpan Row6Launch(TimeSpan validity, TimeSpan refreshBeforeExpiry, TimeSpan signInEvery) =>
+        validity - refreshBeforeExpiry - signInEvery;
+
+    /// <summary>
     /// Row 6: the straddling login's callback must come within the handler's default remote
     /// authentication timeout, 15 minutes (Q150;
     /// https://learn.microsoft.com/dotnet/api/microsoft.aspnetcore.authentication.remoteauthenticationoptions.remoteauthenticationtimeout).
