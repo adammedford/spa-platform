@@ -4,8 +4,8 @@
   under the managed experience" (`wayfinder:research`), on the map #1251.
 - **Date:** 2026-11-16.
 - **Branch:** `research/aws-testing-policy`, pushed and never merged, as the map rules.
-- **Method:** docs-only. Every policy sentence quoted below was read on 2026-11-16 from the page
-  that owns it, downloaded over plain HTTPS with no credential and reduced to text: AWS's
+- **Method:** docs-only. Every policy sentence quoted below, except where marked carried, was read
+  on 2026-11-16 from the page that owns it, downloaded over plain HTTPS with no credential and reduced to text: AWS's
   penetration testing policy, the Amazon EC2 testing policy (the page the penetration policy calls
   the "Stress Test policy"), the DDoS simulation testing policy, the AWS Acceptable Use Policy, the
   AWS Service Terms, the knowledge-centre article on security assessments, the Account Management
@@ -59,10 +59,12 @@
 5. **A DDoS simulation is out of reach for this project.** It needs a pre-approved partner and a
    target under AWS Shield Advanced, and the supported-services page says "AWS Shield is not
    supported" under the new experience.
-6. **One load-test measure sits on the forbidden side when run on AWS (inference):** driving one
-   app's traffic until it "exhausts the upstream connection bound" is demonstrating a
-   denial-of-service condition in the policy's words. Run that probe in the local Docker tier,
-   which is not AWS, and hold the deployed sitting to a rate the cell is expected to serve.
+6. **One load-test measure sits on the forbidden side when run on AWS, by a cautious reading; no
+   page states it:** driving one app's traffic until it "exhausts the upstream connection bound"
+   is demonstrating a denial-of-service condition in the policy's words. Against that reading: the
+   bound is a small per-app constant, so reaching it takes no flood. The safe course is to run
+   that probe in the local Docker tier, which is not AWS, and hold the deployed sitting to a rate
+   the cell is expected to serve.
 7. **Three notice periods are published, and they disagree:** "at least two (2) weeks" for a
    Simulated Events request (penetration testing page), "at least 14 business days" for a stress
    test over the policy's limits (knowledge centre), and "at least 14 days" for a DDoS simulation
@@ -81,7 +83,7 @@
    self-hosted software. Clause 12.15 does forbid disclosing the outcome: "Customer shall not
    publish or disclose to any third party any opinions relating to, or test results, benchmarking
    or comparative study involving any Product without the prior written consent of Ping Identity."
-   This repository is public (the stand-in costs finding), so a PingFederate latency or throughput
+   This repository is public (`gh repo view --json visibility`, 2026-11-16), so a PingFederate latency or throughput
    figure in an issue, a finding or `tools/bench/results` would be disclosure. The trial terms
    still hold: test or mock data only, not production.
 10. **Cognito may carry sign-in load only inside its quotas, and is not a penetration target.** Its
@@ -314,7 +316,9 @@ second per task, p99 latency, memory and the cost of reading S3. Against the pag
   (`contracts/upstream-contract.md`), is by design an attempt to show that one tenant can starve
   the rest. On AWS that is a test that "purposefully attempt[s] to overwhelm the target" with
   "connection flooding", and a tool that "demonstrates a DoS condition". The pages give no
-  exemption for a small one against one's own task. The local tier (Docker at 0.25 vCPU and 1 GB
+  exemption for a small one against one's own task. Against this reading: the bound is a small
+  per-app constant, reached by holding connections and not by a flood, and the policy's examples
+  are volumetric; no page settles it. The local tier (Docker at 0.25 vCPU and 1 GB
   against the stand-ins) is outside AWS and outside these policies, and it holds the same bound, a
   constant in `Platform.Proxy`. Recommendation: the exhaustion probe is a local-tier measure; the
   deployed sitting ramps to a stated rate and stops at the first sustained error or latency
@@ -337,8 +341,9 @@ What the experience does change:
   Shield is not supported.", and AWS Shield is on the list headed "AWS services not supported for our
   new AWS experience" [supported]. A DDoS simulation needs a Shield Advanced subscription (section 2.2), so it would need "Activate advanced
   AWS features" first. The map plans none.
-- **AWS Support is on the Free Tier list**, and `support:*` is in the managed policies' allowed
-  actions [scp], so the route for an unlisted service ("work directly with AWS Support") is not
+- **AWS Support is on the Free Tier list**, and `support:*` is among the actions the Free Tier and
+  Paid Plan service policies exempt from their deny (`AllowFreeTierServices`,
+  `AllowPaidTierServices`) [scp], so the route for an unlisted service ("work directly with AWS Support") is not
   closed by policy. Whether a support case of that kind is answered on the project's support plan:
   unverified.
 - **One Region.** The stress-test page's same-Region rule is met by construction: the cell and any
@@ -363,8 +368,8 @@ are unverified: reading them is a credentialed step in AWS Settings.
   `ec2:CreateNatGateway`, `ec2:RunInstances`, `dynamodb:CreateTable`, `kms:CreateKey`,
   `cognito-idp:CreateUserPool`, `secretsmanager:CreateSecret` and `ecr:CreateRepository`.
   `ecs:RunTask` is not in the list. "Pause idle resources" (about 5 days before) and "Pause top cost
-  drivers" (about 4 days before) act on EC2, RDS, SageMaker, Lambda and Bedrock, none of which the
-  cell runs.
+  drivers" (about 4 days before) act on EC2, RDS, SageMaker, Lambda and Bedrock; `infra/`
+  declares no instance, database, function or endpoint of those services.
 
 Consequence for a sitting: both early denial and the pause are driven by the month's projected and
 actual spend, not by request rate. A load test trips the limit only by what it costs.
@@ -392,8 +397,10 @@ Rates, `us-east-2`, from the offer files (section 6 gives each file's version):
 | Cognito, Essentials tier (`user_pool_tier = "ESSENTIALS"`) | $0.015 per monthly active user; the offer file lists a free band of 10,000 | [o-cog] |
 | Cognito quota increase, `UserAuthentication` | $20 per added request-a-second for a full month, $45 for a partial month | [o-cog] |
 
-An LCU is the largest of: 25 new connections a second, 3,000 active connections a minute, 1 GB an
-hour to container targets, 1,000 rule evaluations a second [p-elb].
+"You are charged only on the dimension with the highest usage. An LCU contains: 25 new connections
+per second. 3,000 active connections per minute ... 1 GB per hour for Amazon Elastic Compute Cloud
+(EC2) instances, containers, and IP addresses as targets ... 1,000 rule evaluations per second"
+[p-elb]. The table below takes processed bytes as the highest dimension, an assumption.
 
 **Assumptions, all this file's and none measured:** one hour at a steady 200 requests a second
 (720,000 requests), half assets and half API calls; one S3 GET per asset request; one DynamoDB read
@@ -463,8 +470,8 @@ The agreement itself [ping] ("Effective May 9, 2025") was re-read today for test
 - **Clause 12.15, Marketing and Publicity.** "Customer shall not publish or disclose to any third
   party any opinions relating to, or test results, benchmarking or comparative study involving any
   Product without the prior written consent of Ping Identity." This is the term with a consequence
-  here. The stand-in costs finding (`research/p2-7-stand-in-costs`) established that this
-  repository is public. A PingFederate response time, throughput figure, scan result or comparison
+  here. This repository is public (`gh repo view --json visibility` returned `PUBLIC` on
+  2026-11-16). A PingFederate response time, throughput figure, scan result or comparison
   with Cognito written to an issue, a finding, `docs/gaps.md` or `tools/bench/results` is published
   to third parties. The spec either keeps Ping-specific results out of the repository and its
   tracker, reports the gateway's own numbers with the provider's share removed, or obtains Ping's
@@ -586,8 +593,7 @@ Ping endpoint of the project. Nothing in this file was tested.
 
 **Carried from earlier findings, not re-read today:** the DevOps evaluation licence's terms (30
 days, not for production, images from the last 90 days, "Trial Product" on accepting the EULA), from
-`research/pingfederate-evaluation-licence-image-and-config` (read 2026-11-04); that this repository
-is public, from `research/p2-7-stand-in-costs` (read 2026-11-16).
+`research/pingfederate-evaluation-licence-image-and-config` (read 2026-11-04).
 
 **Not established:**
 
