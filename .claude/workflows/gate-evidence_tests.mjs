@@ -8,8 +8,9 @@
 // served fixture as its prompt asks. The Scope agent serves the ladder, the tag listings, origin's
 // main, the gate's row of the gates table, the table lines of the export, the test id register and
 // the gate register (#328, #403), the roadmap script's row and ticket states, the change requests,
-// the open issues, CI, the merges since the previous tag with their review records, and the durable
-// results it reads from disk under the run's log for the base it resolved; the Locate agents serve
+// the open issues, CI, the count of merges since the previous tag, and the durable results it reads
+// from disk under the run's log for the base it resolved; the Reviews agents serve the merges on the
+// lines of the listing their prompt names, each with its review record (#1207); the Locate agents serve
 // the tests citing the ids their prompt names; the Prove agents play each item their prompt lists
 // and write its result file; the Row-audit agents serve each row's merges; the Report agent writes
 // the report its prompt carries and creates or edits the issue its prompt names. No agent, gh, git
@@ -109,6 +110,9 @@ const GATE_REGISTER = fs.existsSync(path.join(top, GATES_DOC)) ? { exists: true,
 // An Evidence table row's cells, split on the pipes the report does not escape.
 const cells = (line) => line.split(/(?<!\\)\|/).slice(1, -1).map((c) => c.trim())
 
+const MERGES = [{ sha: 'e'.repeat(40), subject: 'Merge task 6.2: the composed suite', pr: 47, head: 'f'.repeat(40), cleared: true, record: 'https://github.com/adammedford/spa-platform/pull/47#issuecomment-1' }]
+// n merges, each cleared, with distinct shas; open names the 1-based lines whose review is open.
+const manyMerges = (n, open = []) => Array.from({ length: n }, (_, i) => ({ sha: String(i + 1).padStart(40, '0'), subject: `Merge task issue-${i + 1}: work ${i + 1}`, pr: 2000 + i, head: String(i + 1).padStart(40, 'b'), cleared: !open.includes(i + 1), record: open.includes(i + 1) ? 'no record names the head' : `https://github.com/adammedford/spa-platform/pull/${2000 + i}#issuecomment-1` }))
 const made = []
 process.on('exit', () => { for (const dir of made) fs.rmSync(dir, { recursive: true, force: true }) })
 const newRepo = () => {
@@ -152,7 +156,13 @@ const testsFor = (served, id) => {
 // served: { ladder, tagsReachable, tagsAll, originMain, baseResolved, gates, rowStates, ticketStates, changeRequests,
 //           openIssues, ci, merges, tests: {id: [test]}, outcome: {test: 'proved'|'did-not-fail'|
 //           'other-failed'|'red'|'one-mutation'}, audit: {row: [merge]}, deployedIds,
-//           nothingFrom: [label], the agents that return nothing, as a failed agent does }
+//           nothingFrom: [label], the agents that return nothing, as a failed agent does,
+//           mergeCount, the count the Scope agent returns when it is not the merges' own,
+//           previousTag, the previous tag the Scope agent returns when it is not the ladder's own,
+//           reviewsShort: {label: n}, the entries a Reviews agent leaves off the end of its batch,
+//           reviewsLong: {label: n}, the entries of the next lines it adds to the end of its batch,
+//           reviewsBadSha: [label], the Reviews agents whose first entry's sha is no commit id,
+//           fetchFails, the error of the Scope agent's fetch when it fails }
 function stub(env, scriptArgs, served) {
   const calls = []
   let inFlight = 0
@@ -183,7 +193,7 @@ function stub(env, scriptArgs, served) {
         const gates = { ...GATES, ...(served.gates || {}) }
         const gd = gates[gname]
         const prevIdx = ladder.findIndex((l) => l.gate === gname)
-        const prev = ladder.slice(0, Math.max(0, prevIdx)).reverse().find((l) => reach.includes(l.tag))
+        const prev = served.previousTag !== undefined ? { tag: served.previousTag } : ladder.slice(0, Math.max(0, prevIdx)).reverse().find((l) => reach.includes(l.tag))
         const dir = path.join(LOG, 'results', base)
         const durable = fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.endsWith('.json')).sort().map((f) => JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'))) : []
         env.durableServed = durable.length
@@ -201,9 +211,17 @@ function stub(env, scriptArgs, served) {
           changeRequests: served.changeRequests || [], changeRequestsRead: served.changeRequestsRead || { ok: true, why: '' }, openIssues: served.openIssues || [],
           ci: served.ci || { url: 'https://github.com/adammedford/spa-platform/actions/runs/1', sha: base, jobs: [{ name: 'Documents', conclusion: 'success' }, { name: 'Build and test', conclusion: 'skipped' }] },
           lastFull: { sha: 'd'.repeat(40), url: 'https://github.com/adammedford/spa-platform/actions/runs/0' },
-          merges: served.merges || [{ sha: 'e'.repeat(40), subject: 'Merge task 6.2: the composed suite', pr: 47, head: 'f'.repeat(40), cleared: true, record: 'https://github.com/adammedford/spa-platform/pull/47#issuecomment-1' }],
+          mergeCount: served.mergeCount !== undefined ? served.mergeCount : (served.merges || MERGES).length,
           durable,
         }
+        if (served.fetchFails) out = { ...out, fetched: false, reason: served.fetchFails }
+      } else if (label.startsWith('reviews')) {
+        const [from, to] = dataLine(prompt, 'LINES')
+        env.reviewLines = env.reviewLines || []
+        env.reviewLines.push([from, to])
+        const mine = (served.merges || MERGES).slice(from - 1, to + ((served.reviewsLong || {})[label] || 0))
+        out = { merges: mine.slice(0, mine.length - ((served.reviewsShort || {})[label] || 0)) }
+        if ((served.reviewsBadSha || []).includes(label)) out.merges[0] = { ...out.merges[0], sha: 'not-a-sha' }
       } else if (label.startsWith('locate')) {
         const want = dataLine(prompt, 'IDS') || []
         env.locateIds = env.locateIds || []
@@ -295,14 +313,14 @@ const fail = (msg) => failures.push(msg)
 let checks = 0
 
 try {
-  // 1. Box 2: meta names gate-evidence and the five phases; exactly the arguments of #80 ->
+  // 1. Box 2: meta names gate-evidence and the six phases; exactly the arguments of #80 ->
   //    "Arguments" are accepted, and anything else stops the run before any agent.
   checks++
   {
     const meta = loadMeta()
     if (!meta || meta.name !== 'gate-evidence') fail(`meta.name is ${meta && meta.name}, expected gate-evidence`)
     const titles = ((meta && meta.phases) || []).map((p) => p.title)
-    if (titles.join() !== 'Scope,Locate,Prove,Row audit,Report') fail(`meta phases ${titles.join(', ')}; expected Scope, Locate, Prove, Row audit, Report`)
+    if (titles.join() !== 'Scope,Reviews,Locate,Prove,Row audit,Report') fail(`meta phases ${titles.join(', ')}; expected Scope, Reviews, Locate, Prove, Row audit, Report`)
     for (const [label, a] of [
       ['an unknown argument', { files: ['x'] }],
       ['dryRun, which this workflow does not take', { dryRun: true }],
@@ -508,7 +526,8 @@ try {
     if (!/deployed, not run here \(would run it: the deployed gate runs/.test(tableRow(dep.result.report.text, 'F-01'))) fail(`the deployed row does not name what would run it: ${tableRow(dep.result.report.text, 'F-01')}`)
     // The open reviews are the range's merges (docs/agents/landing-work.md -> "Gates"), so a direct
     // commit on trunk, such as a generated roadmap refresh, is not read as a merge with no review.
-    if (!commands(ready.prompt('scope')).some((c) => /\blog --first-parent --merges\b.*<previousTag>\.\.<base>/.test(c))) fail('the Scope prompt does not list the merges since the previous tag with --first-parent --merges')
+    if (!commands(ready.prompt('scope')).some((c) => /\brev-list --count --first-parent --merges <previousTag>\.\.<base>/.test(c))) fail('the Scope prompt does not count the merges since the previous tag with --first-parent --merges')
+    if (!commands(ready.prompt('reviews-1')).some((c) => new RegExp(`\\blog --first-parent --merges --format=%H%x09%s g2-local-slice\\.\\.${SHA} \\| sed -n '1,1p'`).test(c))) fail(`the Reviews prompt does not list its lines of the merges since the previous tag with --first-parent --merges: ${JSON.stringify(commands(ready.prompt('reviews-1')).filter((c) => /\blog\b/.test(c)))}`)
     // A row's merges are every merge naming it, not the first-parent line alone: a row landed through
     // an overnight run has its "Merge task <id>" under the trunk's "Land the overnight run" merge (#1143).
     const step2 = (ready.prompt('audit-1').match(/^2\. Per row:[^\n]*/m) || [''])[0]
@@ -1134,6 +1153,74 @@ try {
     if (g9.result.refused || !g9would.length) fail(`G9 with a register row was not located: ${g9.labels.join(', ')}; ${JSON.stringify(g9.result.reasons)}`)
     for (const w of g9would) if (!/#1011's sitting/.test(w) || !/#1005's deployed class/.test(w)) fail(`G9's wouldRun does not name #1011's sitting and #1005's deployed class: ${w}`)
     if (driftAll.length > driftBefore) fail(`schema drift or thrown thunks in the ticket-row runs:\n  ${driftAll.slice(driftBefore).join('\n  ')}`)
+  }
+  // 21. #1207: the merges since the previous tag are read thirty to a Reviews agent, never by the
+  //     Scope agent, whose reply could not hold the 90 since g5-phase-1-accepted; a batch that
+  //     comes back short or not at all withholds the tag; past sixty merges the report counts the
+  //     cleared ones; a Scope agent that returns nothing is not reported as a failed fetch.
+  checks++
+  {
+    const driftBefore = driftAll.length
+    const served = { gates: { G3: READY } }
+    const reviewsOf = (r) => section(r.result.report.text, 'Open reviews') || ''
+    const schemaOf = (r, label) => ((r.calls.find((c) => c.label === label) || {}).schema || {}).properties || {}
+    // 95 merges, one open on line 64: four agents, each given its own lines and no more than thirty.
+    const env = newRepo()
+    const many = await execute(env, { gate: 'G3' }, { ...served, merges: manyMerges(95, [64]) })
+    if ('merges' in schemaOf(many, 'scope') || !('mergeCount' in schemaOf(many, 'scope'))) fail('the Scope schema still carries the merges, or no mergeCount')
+    if (many.n('reviews') !== 4 || JSON.stringify(env.reviewLines.sort((a, b) => a[0] - b[0])) !== '[[1,30],[31,60],[61,90],[91,95]]') fail(`95 merges were dealt as ${JSON.stringify(env.reviewLines)} to ${many.n('reviews')} Reviews agents, expected 1-30, 31-60, 61-90 and 91-95`)
+    if (env.peak > 3) fail(`${env.peak} agents were in flight with the Reviews phase, over maxParallel's default of 3`)
+    const openSha = String(64).padStart(40, '0').slice(0, 12)
+    if (many.result.verdict !== 'tag withheld' || many.result.reasons.filter((x) => /has an open review/.test(x)).join() !== `merge ${openSha} since g2-local-slice has an open review`) fail(`one open review among 95 merges: verdict ${many.result.verdict}, reasons ${JSON.stringify(many.result.reasons)}`)
+    const text = reviewsOf(many)
+    const lines = text.split('\n').filter((l) => l.startsWith('- '))
+    if (lines.length !== 2 || !lines[0].startsWith(`- ${openSha} `) || !lines[0].endsWith(`: pull request ${cite(2063)}, open (no record names the head)`)) fail(`with 95 merges the report's open reviews are not the one open merge and a count: ${JSON.stringify(lines)}`)
+    if (!/^- 94 of the 95 merges read are each cleared by a review record: \S+\/reviews-<n>\.json list them/.test(lines[1] || '')) fail(`with 95 merges the report does not count the 94 cleared ones and name the phase files: ${lines[1]}`)
+    for (const k of [1, 2, 3, 4]) if (!fs.existsSync(path.join(env.repo, LOG_REL, `${DATE}-${SHA.slice(0, 12)}`, `reviews-${k}.json`))) fail(`reviews-${k}.json, which the report names, is not in the run log`)
+    // At the bound every merge is listed, as it was before; with none, the section says none.
+    const sixty = await execute(newRepo(), { gate: 'G3' }, { ...served, merges: manyMerges(60) })
+    if (sixty.result.verdict !== 'tag ready' || reviewsOf(sixty).split('\n').filter((l) => /^- \d{12} .*cleared by https/.test(l)).length !== 60) fail(`60 cleared merges: verdict ${sixty.result.verdict}, ${reviewsOf(sixty).split('\n').filter((l) => l.startsWith('- ')).length} lines listed`)
+    const zero = await execute(newRepo(), { gate: 'G3' }, { ...served, merges: [] })
+    if (zero.n('reviews') !== 0 || zero.result.verdict !== 'tag ready' || !/\nnone\n/.test(reviewsOf(zero))) fail(`no merge since the previous tag: ${zero.n('reviews')} Reviews agents, verdict ${zero.result.verdict}, section ${JSON.stringify(reviewsOf(zero))}`)
+    // A batch that is not read whole is named, in the reasons and the report, and never read as cleared.
+    const named = (r, re) => r.result.verdict === 'tag withheld' && r.result.reasons.some((x) => re.test(x)) && re.test(reviewsOf(r))
+    const nothing = await execute(newRepo(), { gate: 'G3' }, { ...served, merges: manyMerges(95), nothingFrom: ['reviews-2'] })
+    if (!named(nothing, /reviews-2 returned nothing: the reviews of the merges on lines 31 to 60 of the listing since g2-local-slice were not read/)) fail(`a null reviews-2: verdict ${nothing.result.verdict}, reasons ${JSON.stringify(nothing.result.reasons)}`)
+    const short = await execute(newRepo(), { gate: 'G3' }, { ...served, merges: manyMerges(95), reviewsShort: { 'reviews-4': 1 } })
+    if (!named(short, /reviews-4 returned 4 of its 5 merges: the reviews of the merges on lines 91 to 95 of the listing since g2-local-slice were not read/)) fail(`a short reviews-4: verdict ${short.result.verdict}, reasons ${JSON.stringify(short.result.reasons)}`)
+    const long = await execute(newRepo(), { gate: 'G3' }, { ...served, merges: manyMerges(95), reviewsLong: { 'reviews-1': 1 } })
+    if (!named(long, /reviews-1 returned 31 of its 30 merges: the reviews of the merges on lines 1 to 30 of the listing since g2-local-slice were not read/)) fail(`a long reviews-1: verdict ${long.result.verdict}, reasons ${JSON.stringify(long.result.reasons)}`)
+    const badSha = await execute(newRepo(), { gate: 'G3' }, { ...served, merges: manyMerges(95), reviewsBadSha: ['reviews-3'] })
+    if (!named(badSha, /reviews-3 returned a merge whose sha is no commit id: the reviews of the merges on lines 61 to 90 of the listing since g2-local-slice were not read/)) fail(`a malformed sha from reviews-3: verdict ${badSha.result.verdict}, reasons ${JSON.stringify(badSha.result.reasons)}`)
+    const twice = manyMerges(31)
+    twice[30] = { ...twice[30], sha: twice[0].sha }
+    const dup = await execute(newRepo(), { gate: 'G3' }, { ...served, merges: twice })
+    if (!named(dup, /two entries the Reviews agents returned name one merge/)) fail(`one merge returned twice: verdict ${dup.result.verdict}, reasons ${JSON.stringify(dup.result.reasons)}`)
+    const noCount = await execute(newRepo(), { gate: 'G3' }, { ...served, mergeCount: -1 })
+    if (noCount.n('reviews') !== 0 || !named(noCount, /the Scope agent returned -1 as the count of merges since g2-local-slice, so no review was read/)) fail(`a count of -1: ${noCount.n('reviews')} Reviews agents, reasons ${JSON.stringify(noCount.result.reasons)}`)
+    // A previous tag base does not reach starts no Reviews agent: the listing's range would name no trunk history.
+    const noTag = await execute(newRepo(), { gate: 'G3' }, { ...served, previousTag: 'g9-unreached', merges: manyMerges(95) })
+    if (noTag.n('reviews') !== 0 || !named(noTag, /the Scope agent returned previous tag "g9-unreached", which is no tag base reaches, so no review of a merge since it was read/)) fail(`a previous tag base does not reach: ${noTag.n('reviews')} Reviews agents, verdict ${noTag.result.verdict}, reasons ${JSON.stringify(noTag.result.reasons)}`)
+    // A refused run starts no Reviews agent, and its report says the reviews were not read.
+    const refused = await execute(newRepo(), { gate: 'G3', base: 'feature' }, { ...served, baseResolved: OTHER, merges: manyMerges(95, [64]) })
+    if (!refused.result.refused || refused.labels.join() !== 'scope,report' || !/- not read: the run was refused before Reviews, so no review of the 95 merges since g2-local-slice was read/.test(reviewsOf(refused)) || /\nnone\n/.test(reviewsOf(refused))) fail(`a refused run: dispatched ${refused.labels.join(', ')}; open reviews ${JSON.stringify(reviewsOf(refused))}`)
+    // The two halts after Scope are told apart.
+    const dead = await execute(newRepo(), { gate: 'G3' }, { ...served, nothingFrom: ['scope'] })
+    if (!/^the Scope agent returned nothing/.test(dead.result.halted || '') || /the fetch of origin failed/.test(dead.result.halted || '') || dead.calls.length !== 1) fail(`a null Scope agent: ${JSON.stringify(dead.result)}`)
+    const unfetched = await execute(newRepo(), { gate: 'G3' }, { ...served, fetchFails: 'could not resolve host' })
+    if (unfetched.result.halted !== 'the fetch of origin failed: could not resolve host; progress is unverified, and nothing was proved or reported' || unfetched.calls.length !== 1) fail(`a failed fetch: ${JSON.stringify(unfetched.result)}`)
+    if (driftAll.length > driftBefore) fail(`schema drift or thrown thunks in the Reviews runs:\n  ${driftAll.slice(driftBefore).join('\n  ')}`)
+    // A count that is no integer deals no batch either: null, which the count's arithmetic would read as
+    // none. The Scope schema refuses such a reply, so these three runs drift from it, and only there.
+    const offSchema = driftAll.length
+    const nullCount = await execute(newRepo(), { gate: 'G3' }, { ...served, mergeCount: null })
+    if (nullCount.n('reviews') !== 0 || !named(nullCount, /the Scope agent returned null as the count of merges since g2-local-slice, so no review was read/)) fail(`a count of null: ${nullCount.n('reviews')} Reviews agents, verdict ${nullCount.result.verdict}, reasons ${JSON.stringify(nullCount.result.reasons)}`)
+    const half = await execute(newRepo(), { gate: 'G3' }, { ...served, mergeCount: 1.5 })
+    if (half.n('reviews') !== 0 || !named(half, /the Scope agent returned 1\.5 as the count of merges since g2-local-slice, so no review was read/)) fail(`a count of 1.5: ${half.n('reviews')} Reviews agents, verdict ${half.result.verdict}, reasons ${JSON.stringify(half.result.reasons)}`)
+    const refusedNoCount = await execute(newRepo(), { gate: 'G3', base: 'feature' }, { ...served, baseResolved: OTHER, mergeCount: null })
+    if (!refusedNoCount.result.refused || !/- not read: the run was refused before Reviews, so no review of a merge since g2-local-slice was read/.test(reviewsOf(refusedNoCount))) fail(`a refused run with no count: open reviews ${JSON.stringify(reviewsOf(refusedNoCount))}`)
+    const drifted = driftAll.splice(offSchema)
+    if (drifted.length !== 3 || !drifted.every((d) => /^scope: \$\.mergeCount: /.test(d))) fail(`the runs with a count that is no integer drifted from the schema other than in mergeCount:\n  ${drifted.join('\n  ')}`)
   }
 } catch (e) {
   console.error(`gate-evidence_tests: the script could not run: ${e && e.stack ? e.stack : e}`)

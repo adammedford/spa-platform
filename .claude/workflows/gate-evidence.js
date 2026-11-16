@@ -3,7 +3,8 @@ export const meta = {
   description: 'Before a gate is tagged: read what the gate requires at trunk, find every test citing each exit-test id, prove each hermetic one by mutation in a throwaway worktree, audit the ladder stage\'s rows for done, and report the evidence with a DRAFT tag message as one <gate> evidence, <date> issue',
   whenToUse: 'In a foreground session, launched by scriptPath, by the integrator before tagging a gate; it never tags, merges or pushes, and a second run on the same base reuses the first run\'s mutation results',
   phases: [
-    { title: 'Scope', detail: 'one agent reads the gates table, the gate register, the ladder, the stage\'s rows, the tags, origin\'s main, CI, the merges since the previous tag with their review records, and the durable results for this base' },
+    { title: 'Scope', detail: 'one agent reads the gates table, the gate register, the ladder, the stage\'s rows, the tags, origin\'s main, CI, the count of merges since the previous tag, and the durable results for this base' },
+    { title: 'Reviews', detail: 'one agent per thirty merges since the previous tag, at most maxParallel in flight: each merge\'s pull request, merged head and review record' },
     { title: 'Locate', detail: 'at most three agents, ids batched: every test citing each id, its project, owner, tier and whether CI runs it, both proofs, and what would run a clause this run does not' },
     { title: 'Prove', detail: 'at most maxParallel agents, items dealt round-robin across ids and cut at mutationCap, each in its own detached worktree at base: a baseline, then a mutation of what the test guards per item' },
     { title: 'Row audit', detail: 'one agent per four landed or part-landed rows: merges, Outstanding lines and the ownership check between each merge and its first parent; skipped when auditRows is false' },
@@ -21,7 +22,8 @@ export const meta = {
 // register, read from their table lines, and the ids neither tiers (#328), whether the gates table
 // or the gate register defines the gate, and a register gate's ids, tiers and criteria, read from its
 // table lines (#403), the id list after only and skipIds, the Locate batches, the ranking, the round-robin dealing under the cap, which results are reused, each test's and each
-// id's verdict, each row's done, the verdict and its reasons, the report body and its dedupe. The
+// id's verdict, each row's done, the lines of the merge listing each Reviews agent reads and whether
+// it returned them all (#1207), the verdict and its reasons, the report body and its dedupe. The
 // agents read git and gh, run tests and mutations, and write the issue.
 // Test companion: gate-evidence_tests.mjs beside this file.
 //
@@ -93,6 +95,12 @@ const CAP = A.mutationCap || 4
 const AUDIT_ROWS = A.auditRows !== false
 const LOG = `${REPO}/.scratch/gate-evidence/log` // git-ignored (.gitignore: .scratch/*/log/)
 const LOCATE_MAX = 3
+// One agent's reply holds REVIEWS_PER_AGENT merges at most, and the report lists each cleared merge
+// up to MERGE_LINES_MAX of them: the Scope agent once returned every merge since the previous tag,
+// and the 90 since g5-phase-1-accepted passed its output limit, as their lines would have passed an
+// issue body's (#1207).
+const REVIEWS_PER_AGENT = 30
+const MERGE_LINES_MAX = 60
 const ROWS_PER_AUDIT = 4
 const RUNNERS = ['dotnet', 'terraform', 'python']
 const RESULTS = ['proved', 'did-not-fail', 'baseline-red', 'timed-out', 'could-not-run']
@@ -157,9 +165,10 @@ const SCOPE = S({
   openIssues: { type: 'array', items: S({ number: int, title: str, rows: strs, label: str, assignee: str }) },
   ci: S({ url: str, sha: str, jobs: { type: 'array', items: S({ name: str, conclusion: str }) } }),
   lastFull: S({ sha: str, url: str }),
-  merges: { type: 'array', items: S({ sha: str, subject: str, pr: int, head: str, cleared: bool, record: str }) },
+  mergeCount: int,
   durable: { type: 'array', items: { type: 'object' } },
 })
+const REVIEWS = S({ merges: { type: 'array', items: S({ sha: str, subject: str, pr: int, head: str, cleared: bool, record: str }) } })
 const TEST = S({
   test: str, project: str, runner: { type: 'string', enum: [...RUNNERS, 'none'] }, owner: str,
   role: { type: 'string', enum: ['composed', 'owner', 'other'] }, tier: TIER, inCi: bool, notInCiWhy: str, guards: str,
@@ -610,8 +619,18 @@ const reportText = (s) => {
     list('Rows not done', s.rowsNotDone.map((r) => `${r.row} (${r.owner}): ${r.why.join('; ')}`))
   }
   L.push('', '## Open reviews', '', `No gate tag is cut while any review of a change it covers is open (docs/agents/landing-work.md -> "Gates"). Merges since ${s.previousTag || 'the previous gate tag'}:`, '')
-  if (s.merges.length) for (const m of s.merges) L.push(`- ${m.sha.slice(0, 12)} ${m.subject}: ${m.pr ? `pull request ${'#' + m.pr}, ` : 'no pull request, '}${m.cleared ? `cleared by ${m.record}` : `open${m.record ? ` (${m.record})` : ''}`}`)
-  else L.push('none')
+  // Every merge with an open review is listed. Past MERGE_LINES_MAX the cleared ones are counted, and
+  // the Reviews agents' phase files in the run log list them, so the body stays an issue's size (#1207).
+  const unread = s.reviewProblems || []
+  const mergeLine = (m) => `- ${m.sha.slice(0, 12)} ${m.subject}: ${m.pr ? `pull request ${'#' + m.pr}, ` : 'no pull request, '}${m.cleared ? `cleared by ${m.record}` : `open${m.record ? ` (${m.record})` : ''}`}`
+  const cleared = s.merges.filter((m) => m.cleared)
+  if (s.merges.length <= MERGE_LINES_MAX) s.merges.forEach((m) => L.push(mergeLine(m)))
+  else {
+    s.merges.filter((m) => !m.cleared).forEach((m) => L.push(mergeLine(m)))
+    L.push(`- ${cleared.length} of the ${s.merges.length} merges read are each cleared by a review record: ${s.runLog}/reviews-<n>.json list them, each with its pull request and its record.`)
+  }
+  unread.forEach((p) => L.push(`- not read: ${p}`))
+  if (!s.merges.length && !unread.length) L.push('none')
   L.push('', '## DRAFT tag message', '', 'A draft for the tagger, not a record: the tag is cut by hand, and only once nothing above is withheld.', '', '```text', ...s.draft, '```')
   // The tracked-file half is not asserted here: the Report agent's checkout line below is its evidence,
   // and it can say a file changed.
@@ -651,9 +670,31 @@ DATE ARGUMENT: ${JSON.stringify(A.date || '')}
 5. rowStates: in a throwaway worktree at base, \`git -C ${REPO} worktree add --detach ${WT}/scope-<base's first 12> <base>\`, run \`python3 -I tools/roadmap.py --json\` there and return its "rows" object as it prints it as rowStates, and its "tickets" object as it prints it as ticketStates; then remove the worktree. The roadmap script is the derivation: never derive a row's state yourself.
 6. changeRequests: the open change requests, which are the issues labelled change-request (docs/agents/tracker-policy.md -> "Change requests"; #435), read in full or reported unread, never derived: the script decides which rows wait on which request. Three reads: \`cd ${REPO} && gh label list --search change-request --json name\`; \`cd ${REPO} && gh issue list --state open --label change-request --limit 500 --json number,title,state,labels,body,blocking\`; and \`cd ${REPO} && gh api graphql -F owner='{owner}' -F name='{repo}' -f query='query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { requests: issues(states: OPEN, labels: ["change-request"]) { totalCount } open: issues(states: OPEN) { totalCount } } }'\`. changeRequests is one entry per issue of that listing, raw: number, title, state (as gh prints it, OPEN or CLOSED), labels (the label names), rowsLine (the body's first line that begins **Rows:**, verbatim, or "" when it has none), and blocking (each node of its blocking list as {number, state}, closed ones included). changeRequestsRead is {ok, why}: ok is true only when the label listing includes the exact name change-request, both gh listings and the graphql query succeeded, the change-request listing's length equals requests.totalCount, and the open-issue listing of the next sentence, before you filter it, has a length equal to open.totalCount; otherwise ok is false and why names the check that failed and what it read (a missing label, a failed command with its error, or the two counts). A listing that is short or empty with exit 0 is the case this check exists for: it must read as unread, never as "no request is open". openIssues: \`cd ${REPO} && gh issue list --state open --limit 500 --json number,title,body,labels,assignees\`, each issue whose title or body names a row of rows or ends " evidence, <date>", with the rows it names, its first label and its first assignee ("" for none).
 7. ci: the GitHub Actions run of base, \`cd ${REPO} && gh run list --commit <base> --json url,headSha,databaseId\` and \`cd ${REPO} && gh run view <id> --json jobs\`, with each job's name and conclusion. lastFull: walking \`git -C ${REPO} log --first-parent --format=%H <base>\`, the most recent commit whose run's Build and test and Terraform jobs both ran and succeeded: {sha, url}.
-8. merges: every merge on \`git -C ${REPO} log --first-parent --merges --format=%H%x09%s <previousTag>..<base>\` (docs/agents/landing-work.md -> "Gates"; a direct commit, such as a generated roadmap refresh, is not one) with its subject, the pull request it merged (0 when none), and head, the merged head: the merge's second parent, \`git -C ${REPO} rev-parse <merge>^2\`. For each with a pull request: \`cd ${REPO} && gh api --paginate --slurp repos/{owner}/{repo}/issues/<pr>/comments > ${LOG}/<date>-<base's first 12>/pr-<pr>-comments.json\` and the same of \`repos/{owner}/{repo}/pulls/<pr>/reviews\`, then pipe \`{"comments": <comments>, "reviews": <reviews>}\` to \`python3 -I tools/review_record.py <head>\`, run from a throwaway worktree at base: cleared is true when it exits 0, and record is the URL it prints, or its refusal line when it does not.
+8. mergeCount: how many merges trunk took since the previous tag, the number \`git -C ${REPO} rev-list --count --first-parent --merges <previousTag>..<base>\` prints, its range <base> alone when previousTag is "" (docs/agents/landing-work.md -> "Gates"; a direct commit, such as a generated roadmap refresh, is not one). Return the number and list none of them: the Reviews agents read each merge and its review record.
 9. durable: every JSON file in ${LOG}/results/<base>/, each parsed, \`cat ${LOG}/results/<base>/*.json\` ([] when the directory is absent). Never read another base's directory.
 Return every field; reason is "" when the fetch succeeded.`
+
+// Step 3 finds a merge's pull request by its merged head, through GitHub's "List pull requests
+// associated with a commit", which returns the merged pull request that brought the commit to the
+// default branch (https://docs.github.com/en/rest/commits/commits#list-pull-requests-associated-with-a-commit).
+const reviewsPrompt = (ctx, range, b, k, phaseFile) => {
+  const wt = `${WT}/reviews-${ctx.base.slice(0, 12)}-${k}`
+  return `Reviews ${k}: read the review record of each merge on lines ${b.from} to ${b.to} of the listing below (#1207; docs/agents/landing-work.md -> "Gates"). You read and report: you prove nothing and write nothing outside the run log and one throwaway worktree.
+
+${HOUSE}
+
+PHASE FILE: ${phaseFile}
+Write your return value to the PHASE FILE as JSON before you return.
+WORKTREE: ${wt}
+LINES: ${JSON.stringify([b.from, b.to])}
+
+The base is ${ctx.base}.
+1. Your merges: \`git -C ${REPO} log --first-parent --merges --format=%H%x09%s ${range} | sed -n '${b.from},${b.to}p'\`, which prints ${b.to - b.from + 1} line${b.to === b.from ? '' : 's'}, each a merge's sha, a tab and its subject. The other lines of that listing are other agents': read none of them.
+2. \`git -C ${REPO} worktree add --detach ${wt} ${ctx.base}\`.
+3. Per merge: sha and subject as printed; head, the merged head, the merge's second parent, \`git -C ${REPO} rev-parse <merge>^2\`; pr, the pull request it merged, the one whose head commit is that head, which \`cd ${REPO} && gh api repos/{owner}/{repo}/commits/<head>/pulls --jq '.[] | "\\(.number) \\(.head.sha)"'\` lists with each pull request's head (0 when none has that head). For each with a pull request: \`cd ${REPO} && gh api --paginate --slurp repos/{owner}/{repo}/issues/<pr>/comments > ${ctx.runLog}/pr-<pr>-comments.json\` and the same of \`repos/{owner}/{repo}/pulls/<pr>/reviews\`, then pipe \`{"comments": <comments>, "reviews": <reviews>}\` to \`python3 -I tools/review_record.py <head>\`, run from the WORKTREE: cleared is true when it exits 0, and record is the URL it prints, or its refusal line when it does not. For a merge with no pull request, cleared is false and record is "".
+4. Remove the WORKTREE.
+Return merges: one entry per line of step 1, in its order, and no other. A merge you could not read is still returned, cleared false, with why in record: the script reads a missing entry as a batch that was not read.`
+}
 
 const locatePrompt = (ctx, ids, k, phaseFile) => `Locate ${k}: find every test that cites each id below, and say what proves it (#80 -> "Phase Locate"). You read at base and run nothing.
 
@@ -728,7 +769,9 @@ END REPORT`
 phase('Scope')
 const wantGate = A.gate || 'first untagged'
 const scope = await run(scopePrompt(wantGate), { label: 'scope', phase: 'Scope', schema: SCOPE })
-if (!scope || !scope.fetched) return { halted: `the fetch of origin failed${scope && scope.reason ? `: ${scope.reason}` : ''}; progress is unverified, and nothing was proved or reported`, agents: agentsRun }
+// A Scope agent that returned nothing failed or was skipped; it did not report a failed fetch (#1207).
+if (!scope) return { halted: 'the Scope agent returned nothing: it failed or was skipped, so whether origin was fetched is unknown; progress is unverified, and nothing was proved or reported', agents: agentsRun }
+if (!scope.fetched) return { halted: `the fetch of origin failed${scope.reason ? `: ${scope.reason}` : ''}; progress is unverified, and nothing was proved or reported`, agents: agentsRun }
 const date = A.date || scope.date
 if (!/^\d{4}-\d{2}-\d{2}$/.test(date || '')) return { halted: `the Scope agent returned date ${JSON.stringify(scope.date)}; nothing was proved or reported`, agents: agentsRun }
 const base = scope.base
@@ -783,19 +826,47 @@ const writeReport = async (s) => {
 }
 const ci = scope.ci || { url: '', sha: '', jobs: [] }
 const lastFull = scope.lastFull || { sha: '', url: '' }
-const merges = scope.merges || []
-const openReviews = merges.filter((m) => !m.cleared)
+const previousTag = (g && g.previousTag) || ''
+const since = previousTag || 'the first commit'
+const mergeCount = scope.mergeCount
 const argsLine = Object.fromEntries(KNOWN_ARGS.filter((k) => A[k] !== undefined).map((k) => [k, A[k]]))
 
 if (refusals.length) {
-  const reasons = [...refusals, ...openReviews.map((m) => `merge ${m.sha.slice(0, 12)} since the previous tag has an open review`)]
+  // A refused run starts no Reviews agent, as it starts no Locate, Prove or Row-audit agent: its
+  // report says the reviews were not read, and the run that is not refused reads them.
+  const reasons = [...refusals]
   const report = await writeReport({
     title, gate, tag, base, date, args: argsLine, runLog, verdict: 'tag withheld', reasons, refused: true,
-    table: [], criteria: [], noProof: [], rowsNotDone: [], merges, previousTag: g && g.previousTag,
+    table: [], criteria: [], noProof: [], rowsNotDone: [], merges: [], previousTag: g && g.previousTag,
+    reviewProblems: [`the run was refused before Reviews, so no review of ${Number.isInteger(mergeCount) ? `the ${mergeCount} merge${mergeCount === 1 ? '' : 's'}` : 'a merge'} since ${since} was read`],
     draft: draftOf({ gate, exitTest: def.exitTest, base, ci, lastFull, table: [] }),
   })
   return { gate, tag, base, date, verdict: 'tag withheld', reasons, refused: true, counts: { proved: 0, didNotFail: 0, notRunHere: 0, notMutated: 0 }, rowsNotDone: [], report, runLog, agents: agentsRun }
 }
+
+// The merges since the previous tag, read REVIEWS_PER_AGENT to an agent (#1207). The script deals the
+// listing's lines and holds each agent to the number of its own: a batch that comes back short or
+// long, with a sha that is no commit id, or not at all, is named among the reasons and never read as
+// merges with no open review (CODING_STANDARDS.md -> "A check fails closed"). It compares no sha
+// with the listing, which only an agent reads. base is a commit id here: refusalsOf refuses any
+// other, and a refused run has returned above.
+phase('Reviews')
+const reviewProblems = []
+let reviewBatches = []
+if (previousTag && !(scope.tagsReachable || []).includes(previousTag)) reviewProblems.push(`the Scope agent returned previous tag ${JSON.stringify(previousTag)}, which is no tag base reaches, so no review of a merge since it was read`)
+else if (!Number.isInteger(mergeCount) || mergeCount < 0) reviewProblems.push(`the Scope agent returned ${JSON.stringify(mergeCount)} as the count of merges since ${since}, so no review was read`)
+else reviewBatches = Array.from({ length: Math.ceil(mergeCount / REVIEWS_PER_AGENT) }, (_, i) => ({ from: i * REVIEWS_PER_AGENT + 1, to: Math.min(mergeCount, (i + 1) * REVIEWS_PER_AGENT) }))
+const reviewed = await parallel(reviewBatches.map((b, i) => () => run(reviewsPrompt(ctx, previousTag ? `${previousTag}..${base}` : base, b, i + 1, `${runLog}/reviews-${i + 1}.json`), { label: `reviews-${i + 1}`, phase: 'Reviews', schema: REVIEWS })))
+const merges = []
+reviewBatches.forEach((b, i) => {
+  const want = b.to - b.from + 1
+  const got = reviewed[i] && reviewed[i].merges
+  const whole = Array.isArray(got) && got.length === want
+  if (whole && got.every((m) => /^[0-9a-f]{40}$/.test(m.sha))) { merges.push(...got); return }
+  reviewProblems.push(`reviews-${i + 1} returned ${whole ? 'a merge whose sha is no commit id' : Array.isArray(got) ? `${got.length} of its ${want} merges` : 'nothing'}: the reviews of the merges on lines ${b.from} to ${b.to} of the listing since ${since} were not read`)
+})
+if (new Set(merges.map((m) => m.sha)).size !== merges.length) reviewProblems.push(`two entries the Reviews agents returned name one merge, so a merge since ${since} was not read`)
+const openReviews = merges.filter((m) => !m.cleared)
 
 const gateIds = resolved.filter((x) => x.tiers)
 // A register problem that names no gate cannot rule out that the register also defines this export
@@ -912,6 +983,7 @@ for (const c of requests) if (c.stray) reasons.push(`change request ${'#' + c.nu
 for (const r of table) for (const p of r.per) if (p.verdict !== 'proved') reasons.push(`${r.id} is not proved at the ${TIER_WORD[p.tier]} tier: ${p.verdict}`)
 for (const t of allTests) if (t.status === 'did-not-fail') reasons.push(`${t.test}, citing ${t.id}, did not fail under mutation`)
 for (const r of rowsNotDone) reasons.push(`row ${r.row} is not done`)
+for (const p of reviewProblems) reasons.push(p)
 for (const m of openReviews) reasons.push(`merge ${m.sha.slice(0, 12)} since ${g.previousTag || 'the previous tag'} has an open review`)
 for (const x of unjudged) reasons.push(x)
 // #80 -> "Phase Prove": a red baseline means the report says trunk is not green here, per project.
@@ -925,7 +997,7 @@ for (const c of cleanups) {
 const verdict = reasons.length ? 'tag withheld' : 'tag ready'
 const report = await writeReport({
   title, gate, tag, base, date, args: argsLine, runLog, verdict, reasons, refused: false,
-  table, criteria: def.criteria, noProof, rowsNotDone, merges, previousTag: g.previousTag,
+  table, criteria: def.criteria, noProof, rowsNotDone, merges, reviewProblems, previousTag: g.previousTag,
   draft: draftOf({ gate, exitTest: def.exitTest, base, ci, lastFull, table }),
 })
 return {
