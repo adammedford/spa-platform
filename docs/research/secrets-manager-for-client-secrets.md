@@ -16,14 +16,15 @@
   `infra/envs/poc/apps/main.tf` and its `tests/root.tftest.hcl`, `infra/bootstrap/ci-role.tf`
   (`ReadCellParameters`), `tools/scripts/verify-teardown.sh` (header and readers), and the resolution of
   "The gateway's client assertion key: generation, storage, the public key's registration and rotation"
-  (#953). Primary pages were fetched on 2026-11-16 and are listed in section 8 with what each gave.
+  (#953). Primary pages were fetched on 2026-11-16; each is linked at its claim and named in section 8.
   **Executed:** `git` and `gh` reads; unauthenticated HTTPS downloads of nuget.org's flat-container index,
   nuspecs and registration pages, of AWS's public service-reference JSON, and of markdown copies of AWS and
   Ping documentation pages, parsed with `python3 -I`; a read of `obj/project.assets.json` files left by an
   earlier restore in the main checkout. **Not done:** no `aws` CLI call, no `terraform plan` or `apply`, no
   credential step, no read of the cell, no `dotnet restore` or build, nothing run against Cognito, Secrets
   Manager or PingFederate. The `aws-mcp` connector failed to connect. A claim no page read states is marked
-  "not found". Prices are the pricing ticket's (#1221); section 7 names cost drivers only.
+  "not found". Prices belong to "What every P2-7 stand-in costs per sitting-hour and per idle month, and
+  whether the project plan supports each service" (#1221); section 7 names cost drivers only.
 
 ## Answer in brief
 
@@ -343,8 +344,8 @@ nuspecs at `https://api.nuget.org/v3-flatcontainer/awssdk.secretsmanager/{versio
 | 4.1.1 (newest) | 2026-11-12 | Apache-2.0 | `[4.1.0, 5.0.0)` | Lifts Core from 4.0.102.x to 4.1.x in every graph that carries it |
 | 4.1.0 | 2026-11-12 | Apache-2.0 | `[4.1.0, 5.0.0)` | The same |
 | 4.0.100.26 (newest 4.0) | 2026-11-10 | Apache-2.0 | `[4.0.103, 5.0.0)` | Lifts Core past both floors below |
-| 4.0.100.20 | 2026-10-19 | Apache-2.0 | `[4.0.102.12, 5.0.0)` | Equals the `AWSSDK.DynamoDBv2` 4.0.108 floor: no move in `Platform.Identity` and the gateway; lifts `Platform.Registry` alone from 4.0.102.9 |
-| 4.0.100.16 | 2026-10-08 | Apache-2.0 | `[4.0.102.9, 5.0.0)` | Equals the `AWSSDK.SimpleSystemsManagement` 4.0.104.2 floor: no move in any graph |
+| 4.0.100.20 | 2026-10-19 | Apache-2.0 | `[4.0.102.12, 5.0.0)` | Equals the `AWSSDK.DynamoDBv2` 4.0.108 floor: no move in the gateway; lifts the graphs still at 4.0.102.9 that carry `Platform.Registry` (itself, `spactl`, which references it, and its test graphs) |
+| 4.0.100.16 | 2026-10-08 | Apache-2.0 | `[4.0.102.9, 5.0.0)` | Equals the `AWSSDK.SimpleSystemsManagement` 4.0.104.2 floor: no move in any graph read |
 
 Each nuspec's licence is `<license type="expression">Apache-2.0</license>`; each has the one dependency. The
 five listed versions are listed and not deprecated in the registration pages. 4.0.100.16 is from the same
@@ -356,8 +357,9 @@ The assumption here is that the package would be referenced by `Platform.Registr
 `ParameterStoreClientSecretSource` lives and which `docs/dependencies.md` assigns `AWSSDK.SimpleSystemsManagement`
 to. An earlier restore's `project.assets.json` in the main checkout shows `Platform.Registry`, `spactl` and
 `Platform.Hosting` at Core 4.0.102.9 and `Platform.Identity` and the gateway at 4.0.102.12. Those files were
-read, not regenerated: **no restore was run**, so "moves no other version" is arithmetic on the nuspecs, to be
-confirmed by a trial restore as "Phase 2 package facts" did for DynamoDB. `Directory.Packages.props` and
+read, not regenerated, and the test projects' graphs were not read: **no restore was run**, so "no move" is
+arithmetic on the nuspecs, to be confirmed by a trial restore of the kind the `AWSSDK.DynamoDBv2` pin comment
+records (#216). `Directory.Packages.props` and
 `docs/dependencies.md` are the integrator's: the package is a change request.
 
 ## 5. IAM, the resource policy, CloudTrail, and deletion against teardown
@@ -383,8 +385,9 @@ same shape `iam.tf` records for Parameter Store's key. The CI plan role's `ReadC
 roles" or "users or roles in other AWS accounts"; "To grant permission to retrieve secret values, you can
 attach policies to secrets or identities."
 ([Resource-based policies](https://docs.aws.amazon.com/secretsmanager/latest/userguide/auth-and-access_resource-policies.html))
-In one account the identity policy is enough, and the module's allowlist "admits no repository, key or
-parameter policy" (`tests/module.tftest.hcl`), so none is the fit. A deny-all-but-the-task-role policy is
+In one account the identity policy is enough. The secret would sit in the apps root, whose test holds "one
+secret parameter per definition, and no other" and where P-02 admits "one parameter" per app, so a policy
+resource is one more type for that test to learn; none is the fit. A deny-all-but-the-task-role policy is
 possible; no page read recommends it for this case.
 
 **CloudTrail.** "Secrets Manager writes entries to your AWS CloudTrail log for all Secrets Manager operations
@@ -396,9 +399,10 @@ and `SecretVersionDeletion`.
 "Secrets Manager logs all events as management events."
 ([intro, Pricing](https://docs.aws.amazon.com/secretsmanager/latest/userguide/intro.html))
 `SecretString` is "Sensitive: ... the service does not include it in AWS CloudTrail log entries."
-(`GetSecretValue`, above.) So every read of a client secret, by whom and of which secret, is an audit record
-the account already keeps: evidence for the map's "enterprise secret store" control that needs no new
-resource. No comparison with Parameter Store's records is made here; that page was not read.
+(`GetSecretValue`, above.) So every read of a client secret, by whom and of which secret, is a CloudTrail
+event: evidence for the map's "enterprise secret store" control that needs no new resource, "If you enable
+AWS CloudTrail on your account" (the same Pricing section). Whether the project's account has a trail, and
+where its events can be read, was not read. No comparison with Parameter Store's records is made here; that page was not read.
 
 **Deletion against teardown.** "Deletes a secret and all of its versions ... The minimum recovery window is
 7 days. The default recovery window is 30 days." "When a secret is scheduled for deletion, you cannot
@@ -469,8 +473,8 @@ Standard tier, at `/spa-platform/{cell}/issuers/{issuer}/assertion-key`, generat
   ([pricing](https://aws.amazon.com/secrets-manager/pricing/), read 2026-11-16 through a summarising fetch;
   figures are the examples', not confirmed for `us-east-2`). The count is one per app (two fixture apps
   today), plus one per issuer if the assertion key moves, plus an administrator secret if a function rotates
-  against PingFederate. Standard parameters cost nothing (ADR-0003), so this is the whole of the idle cost
-  and it scales with apps.
+  against PingFederate. Standard parameters cost nothing (ADR-0003), so this charge is new, runs for as long
+  as the secrets stand and scales with apps; under the map's cost rule they stand only during a sitting.
 - **Marked for deletion: no charge** (section 5), so a force-deleted or scheduled secret stops billing at
   destroy.
 - **API calls:** the gateway reads once per reference per process, so calls are negligible; a re-reading
@@ -482,7 +486,8 @@ Standard tier, at `/spa-platform/{cell}/issuers/{issuer}/assertion-key`, generat
   group adds CloudWatch Logs.
 - **Egress for a function in the VPC** (PingFederate only): a NAT gateway or a Secrets Manager interface
   endpoint, which `docs/plan/05-infrastructure-and-cost.md` puts at "about $33 each plus data" and "about
-  $7 per endpoint per zone" a month. This is the one driver that could meet the map's ceiling by itself.
+  $7 per endpoint per zone" a month. It is the largest driver met, and it matters to the idle ceiling only
+  if left standing between sittings; the comparison is the pricing ticket's.
 - **CloudTrail:** "AWS CloudTrail stores the first copy of all management events for free"; a second trail
   or S3 delivery is charged. (All quotes in the last four bullets:
   [intro, Pricing](https://docs.aws.amazon.com/secretsmanager/latest/userguide/intro.html).)
@@ -530,6 +535,7 @@ claim above.
   Secrets Manager plugin.
 - Whether the Local tier's AWS stand-in serves Secrets Manager or the Parameter Store reference path.
 - The Region's price table values (the pricing ticket's), and the billing of a reference read.
+- Whether the project's account has a CloudTrail trail, and the test projects' package graphs.
 - The Resource Groups Tagging API's own supported-services page (it did not load); the Resource Groups
   table was read in its place.
 - The service authorization reference's HTML page (it did not load); the service-reference JSON was read in
