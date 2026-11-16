@@ -2749,6 +2749,15 @@ try {
       r = resultOf(1175, await execute(env))
       if (r.outcome !== 'failed' || !String(r.stage).startsWith('inventory: ') || !String(r.stage).includes(C1175[77]) || env.batches.length || env.posted.length) fail(`a commit message with ${what}: outcome ${r.outcome} at ${JSON.stringify(r.stage)} with ${env.batches.length} message agent(s), expected failed at the inventory naming ${C1175[77]} with none`)
     }
+    // An entry with no full sha cannot be asked for by a message agent or named in a finding, so it
+    // fails the review at the inventory too, though its message came back whole (#1190): an entry
+    // with no sha, one with the abbreviated sha git prints by default, and an entry that is null.
+    const NO_SHA = 'inventory: a commit message came back with no sha to read it by'
+    for (const [what, unnamed] of Object.entries({ 'no sha': (c) => { const { sha: _, ...rest } = c; return rest }, 'an abbreviated sha': (c) => ({ ...c, sha: c.sha.slice(0, 7) }), 'a null entry': () => null })) {
+      env = run({ prs: [1175] }, servedSmall(), { inventoryMessages: (list) => list.map((c, i) => (i === 1 ? unnamed(c) : c)) })
+      r = resultOf(1175, await execute(env))
+      if (r.outcome !== 'failed' || r.stage !== NO_SHA || env.batches.length || env.posted.length) fail(`a commit message with ${what}: outcome ${r.outcome} at ${JSON.stringify(r.stage)} with ${env.batches.length} message agent(s) and ${env.posted.length} comment(s) posted, expected failed at ${JSON.stringify(NO_SHA)} with none`)
+    }
   }
 
   // A message that comes back other than whole fails the review at the inventory, naming its commit,
