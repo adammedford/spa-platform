@@ -48,6 +48,12 @@ no trust store holds, which must fail as untrusted, and one against a port nothi
 show the script reaches the workstation's trust store and does not step round it, which a double
 cannot show.
 
+**--task and --keepalive (#1197).** A named task is the hop or a failure naming it, never a fall
+back to another. --keepalive's requests are the curl double's recorded calls, made while the aws
+double holds start-session open for the world's start_session_seconds; that none is left running
+once the session ends is read from the process table, by the case's directory, which every process
+the script's copy forks names.
+
 **A universal held on every run:** nothing either script prints names the account id. Task ARNs
 carry it, and the output of a sitting is posted to a public repository (#122's rule).
 
@@ -81,7 +87,8 @@ CELL = "poc"
 SECRETS = (ACCOUNT,)
 
 # The real tools the scripts read their answers with. Everything else is absent.
-TOOLS = ("awk", "sed", "tr", "cat", "mktemp", "rm", "dirname")
+# sleep is --keepalive's, between its requests.
+TOOLS = ("awk", "sed", "tr", "cat", "mktemp", "rm", "dirname", "sleep")
 
 
 def terraform_local(path: pathlib.Path, name: str, cell: str = CELL) -> str:
@@ -283,6 +290,12 @@ def aws_double(argv: list[str], case: pathlib.Path) -> int:
             # A line on the session's stderr in no shape the CLI's errors take, for the one case that
             # holds tunnel.sh's filter to what it does with such a line.
             sys.stderr.write(world.get("start_session_stderr", ""))
+            # A session that lasts a while, as a real one does until Ctrl-C or the idle timeout, for
+            # the cases that hold --keepalive to what it does while a session lasts and after.
+            if "start_session_seconds" in world:
+                import time
+                sys.stdout.flush()
+                time.sleep(world["start_session_seconds"])
             if "ctrl_c_then_stderr" in world:
                 interrupted(world["ctrl_c_then_stderr"])
             status = world["start_session_status"]
@@ -637,6 +650,202 @@ class TunnelForwardsThroughTheTaskToTheAlb(CompanionTestCase):
         result = case.run(TUNNEL, "--help")
         self.assertEqual(0, result.status, result.output)
         self.assertIn("after the shell's prompt", " ".join(result.stdout.split()))
+
+class TunnelForwardsThroughANamedTask(CompanionTestCase):
+    """#1197: --task <task id> forwards through that task, and exits 1 naming it when it is not a
+    running task of the gateway service that a session can reach. Without the option the script
+    picks as before, which the cases above hold."""
+
+    TWO = ("aaaa0000aaaa0000aaaa0000aaaa0000", "bbbb0000bbbb0000bbbb0000bbbb0000")
+
+    def two_task_world(self, **second: object) -> dict:
+        world = default_world()
+        world["clusters"][CLUSTER][SERVICE] = [task(self.TWO[0]), task(self.TWO[1], **second)]
+        return world
+
+    def test_the_named_task_is_the_hop_even_when_another_comes_first(self):
+        # The default picks the first; naming the second is the case the default would get wrong.
+        case = Case(self, world=self.two_task_world())
+        result = case.run(TUNNEL, "--local-port", str(free_port()), "--task", self.TWO[1])
+        self.assertEqual(0, result.status, result.output)
+        self.assertNoUnexpectedCall(case)
+        sessions = case.start_sessions()
+        self.assertEqual(1, len(sessions), result.output)
+        self.assertEqual(f"ecs:{CLUSTER}_{self.TWO[1]}_{self.TWO[1]}-2222222222", sessions[0]["options"]["target"])
+        self.assertIn(f"through task {self.TWO[1]}", result.stdout)
+
+    def test_a_task_that_is_not_a_running_task_of_the_service_exits_1_naming_it(self):
+        other = "ffff0000ffff0000ffff0000ffff0000"
+        case = Case(self, world=self.two_task_world())
+        result = case.run(TUNNEL, "--local-port", str(free_port()), "--task", other)
+        self.assertEqual(1, result.status, result.output)
+        self.assertEqual([], case.start_sessions(), "a session started through another task")
+        self.assertNoUnexpectedCall(case)
+        self.assertIn(f"task {other} is not a running task of {SERVICE} in {CLUSTER}", result.stderr)
+
+    def test_a_named_task_a_session_cannot_reach_exits_1_and_takes_no_other(self):
+        for second, why in (({"exec_on": False}, "ECS Exec off"), ({"agent": "PENDING"}, "ExecuteCommandAgent is PENDING")):
+            with self.subTest(why=why):
+                case = Case(self, world=self.two_task_world(**second))
+                result = case.run(TUNNEL, "--local-port", str(free_port()), "--task", self.TWO[1])
+                self.assertEqual(1, result.status, result.output)
+                self.assertEqual([], case.start_sessions(), "it fell back to a task it was not given")
+                self.assertIn(f"task {self.TWO[1]} of {SERVICE} in {CLUSTER} cannot carry a session", result.stderr)
+                self.assertIn(why, result.stderr)
+                self.assertNotIn(self.TWO[0], result.stderr)
+
+    def test_a_service_with_no_running_task_names_the_task_asked_for(self):
+        world = default_world()
+        world["clusters"][CLUSTER][SERVICE] = []
+        case = Case(self, world=world)
+        result = case.run(TUNNEL, "--local-port", str(free_port()), "--task", self.TWO[0])
+        self.assertEqual(1, result.status, result.output)
+        self.assertEqual([], case.start_sessions())
+        self.assertIn(f"task {self.TWO[0]} is not a running task of {SERVICE}", result.stderr)
+
+    def test_a_value_that_is_not_a_task_id_is_refused_before_any_aws_call(self):
+        for value in ("", "abc/def", f"arn:aws:ecs:{REGION}:<account>:task/{CLUSTER}/{self.TWO[0]}", "AAAA 0000"):
+            with self.subTest(value=value):
+                case = Case(self)
+                result = case.run(TUNNEL, "--local-port", str(free_port()), "--task", value)
+                self.assertEqual(2, result.status, result.output)
+                self.assertIn("--task", result.stderr)
+                self.assertEqual([], case.aws_calls())
+
+    def test_the_option_needs_a_value(self):
+        case = Case(self)
+        result = case.run(TUNNEL, "--task")
+        self.assertEqual(2, result.status, result.output)
+        self.assertEqual([], case.aws_calls())
+
+
+class TunnelKeepsAnIdleSessionOpen(CompanionTestCase):
+    """#1197: --keepalive <seconds> sends a request to /healthz through the forwarded port at that
+    interval for as long as the session lasts, and stops when it ends. The session here is the aws
+    double holding start-session open for start_session_seconds."""
+
+    def lasting_case(self, seconds: float) -> Case:
+        world = default_world()
+        world["start_session_seconds"] = seconds
+        case = Case(self, world=world)
+        self.addCleanup(self.end_leftovers, case)
+        return case
+
+    @staticmethod
+    def leftovers(case: Case) -> list[str]:
+        """Every process whose command line names the case's directory: the script's copy, and so a
+        keepalive loop forked from it, runs from there."""
+        listing = subprocess.run(["/bin/ps", "-axo", "pid=,command="], capture_output=True, text=True,
+                                 check=True).stdout
+        return [line.strip() for line in listing.splitlines() if str(case.dir) in line]
+
+    def end_leftovers(self, case: Case):
+        # Only matters when a mutation leaves a loop running: it must not outlive the test run.
+        import signal
+        for line in self.leftovers(case):
+            try:
+                os.kill(int(line.split()[0]), signal.SIGKILL)
+            except (ProcessLookupError, ValueError):
+                pass
+
+    def test_it_requests_healthz_through_the_forwarded_port_at_the_interval(self):
+        case = self.lasting_case(3.6)
+        port = free_port()
+        result = case.run(TUNNEL, "--local-port", str(port), "--keepalive", "1")
+        self.assertEqual(0, result.status, result.output)
+        self.assertNoUnexpectedCall(case)
+        calls = case.curl_calls()
+        # One a second over a session of 3.6 seconds; at least two leaves the machine room to be slow.
+        self.assertGreaterEqual(len(calls), 2, result.output)
+        self.assertLessEqual(len(calls), 4, "more requests than the interval allows")
+        for call in calls:
+            argv = call["argv"]
+            self.assertEqual(f"https://app1.spa-poc.test:{port}/healthz", argv[-1])
+            # Through the forwarded port and nowhere else: the name is pinned to the loopback and no
+            # proxy from the environment carries it away.
+            self.assertEqual(f"app1.spa-poc.test:{port}:127.0.0.1", argv[argv.index("--resolve") + 1])
+            self.assertEqual("*", argv[argv.index("--noproxy") + 1])
+            for flag in ("-k", "--insecure"):
+                self.assertNotIn(flag, argv)
+
+    def test_a_longer_interval_makes_fewer_requests(self):
+        case = self.lasting_case(3.6)
+        result = case.run(TUNNEL, "--local-port", str(free_port()), "--keepalive", "2")
+        self.assertEqual(0, result.status, result.output)
+        self.assertEqual(1, len(case.curl_calls()), result.output)
+
+    def test_none_is_left_running_after_the_session_ends(self):
+        case = self.lasting_case(2.5)
+        result = case.run(TUNNEL, "--local-port", str(free_port()), "--keepalive", "1")
+        self.assertEqual(0, result.status, result.output)
+        made = len(case.curl_calls())
+        self.assertGreaterEqual(made, 1, result.output)
+        # The loop looks for the session once a second, so give it two and a half.
+        import time
+        time.sleep(2.5)
+        self.assertEqual([], self.leftovers(case), "a keepalive is still running after the session ended")
+        self.assertEqual(made, len(case.curl_calls()), "a request was made after the session ended")
+
+    def test_ctrl_c_leaves_none_running(self):
+        # Ctrl-C goes to the whole foreground group, the loop among it. Killed by it or ignoring it,
+        # the loop is gone once the session is.
+        case = self.lasting_case(1.5)
+        case.world["ctrl_c_then_stderr"] = "plugin: closing the session\n"
+        case.save()
+        result = case.run(TUNNEL, "--local-port", str(free_port()), "--keepalive", "1", own_group=True)
+        self.assertEqual(0, result.status, result.output)
+        import time
+        time.sleep(2.5)
+        self.assertEqual([], self.leftovers(case), "a keepalive is still running after Ctrl-C")
+
+    def test_the_session_s_exit_status_is_still_the_script_s(self):
+        case = self.lasting_case(1.5)
+        case.world["start_session_status"] = 255
+        case.save()
+        result = case.run(TUNNEL, "--local-port", str(free_port()), "--keepalive", "1")
+        self.assertEqual(255, result.status, result.output)
+
+    def test_without_the_option_no_request_is_made(self):
+        case = self.lasting_case(2.5)
+        result = case.run(TUNNEL, "--local-port", str(free_port()))
+        self.assertEqual(0, result.status, result.output)
+        self.assertEqual([], case.curl_calls())
+
+    def test_without_the_option_curl_is_not_needed(self):
+        case = Case(self)
+        case.remove("curl")
+        result = case.run(TUNNEL, "--local-port", str(free_port()))
+        self.assertEqual(0, result.status, result.output)
+
+    def test_with_the_option_curl_is_needed(self):
+        case = Case(self)
+        case.remove("curl")
+        result = case.run(TUNNEL, "--local-port", str(free_port()), "--keepalive", "60")
+        self.assertEqual(2, result.status, result.output)
+        self.assertIn("curl", result.stderr)
+        self.assertEqual([], case.aws_calls())
+
+    def test_an_interval_that_is_not_a_whole_number_of_seconds_is_refused(self):
+        for value in ("", "0", "01", "1.5", "-3", "x"):
+            with self.subTest(value=value):
+                case = Case(self)
+                result = case.run(TUNNEL, "--local-port", str(free_port()), "--keepalive", value)
+                self.assertEqual(2, result.status, result.output)
+                self.assertIn("--keepalive", result.stderr)
+                self.assertEqual([], case.aws_calls())
+
+    def test_the_header_says_an_idle_session_ends_where_that_is_set_and_how_to_hold_one(self):
+        case = Case(self)
+        result = case.run(TUNNEL, "--help")
+        self.assertEqual(0, result.status, result.output)
+        header = " ".join(result.stdout.split("\nOptions\n")[0].split())
+        self.assertIn("idle timeout", header)
+        self.assertIn("20 minutes", header)
+        # Where it is set: the account's Session Manager preferences.
+        self.assertIn("Session Manager preferences", header)
+        self.assertIn("Idle session timeout", header)
+        self.assertIn("--keepalive", header)
+        self.assertEqual([], case.aws_calls())
 
 
 class TunnelReadsItsNamesFromTheOutputsDocument(CompanionTestCase):
