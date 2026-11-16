@@ -148,7 +148,7 @@ const strs = { type: 'array', items: str }
 const TIERS = ['H', 'L', 'D']
 const TIER = { type: 'string', enum: TIERS }
 const SCOPE = S({
-  fetched: bool, reason: str, date: str, base: str, originMain: str,
+  fetched: bool, reason: str, date: str, runId: str, base: str, originMain: str,
   tagsReachable: strs, tagsAll: strs,
   ladder: { type: 'array', items: S({ stage: str, gate: str, tag: str }) },
   gate: S({
@@ -664,7 +664,7 @@ GATE: ${JSON.stringify(wantGate)}
 BASE ARGUMENT: ${JSON.stringify(A.base || '')}
 DATE ARGUMENT: ${JSON.stringify(A.date || '')}
 
-1. \`git -C ${REPO} fetch origin --tags\`. If it fails, stop: fetched false, reason its error, every other field empty. originMain is \`git -C ${REPO} ls-remote origin refs/heads/main\`, its sha. base is the BASE ARGUMENT resolved with \`git -C ${REPO} rev-parse --verify <it>^{commit}\`, or originMain when it is "". date is the DATE ARGUMENT, or \`date +%F\` when it is "". Record the checkout as it is now, \`mkdir -p ${LOG}/<date>-<base's first 12>\` and \`git -C ${REPO} status --porcelain --untracked-files=all > ${LOG}/<date>-<base's first 12>/checkout-at-start.txt\`.
+1. \`git -C ${REPO} fetch origin --tags\`. If it fails, stop: fetched false, reason its error, every other field empty. originMain is \`git -C ${REPO} ls-remote origin refs/heads/main\`, its sha. base is the BASE ARGUMENT resolved with \`git -C ${REPO} rev-parse --verify <it>^{commit}\`, or originMain when it is "". date is the DATE ARGUMENT, or \`date +%F\` when it is "". runId is what \`date -u +%Y%m%dT%H%M%SZ\` prints, read once, now, whatever the DATE ARGUMENT: it names this run's report file. Record the checkout as it is now, \`mkdir -p ${LOG}/<date>-<base's first 12>\` and \`git -C ${REPO} status --porcelain --untracked-files=all > ${LOG}/<date>-<base's first 12>/checkout-at-start.txt\`.
 2. tagsReachable: \`git -C ${REPO} for-each-ref --merged <base> --format=%(refname:short) refs/tags\`. tagsAll: \`git -C ${REPO} for-each-ref --format=%(refname:short) refs/tags\` together with the names \`git -C ${REPO} ls-remote --tags origin\` prints.
 3. ladder: docs/roadmap.md at base, its ladder table, one {stage, gate, tag} per row in order, tag without backticks ("—" where it has none).
 4. gate: the GATE, or, when it is "first untagged", the first ladder row whose tag is not in tagsReachable. From docs/plan/01-plan.md at base, the gates table's row for it: defined true, and exitTest, the exit test cell verbatim; when that table has no row for it, defined false, exitTest "", ids [] and criteria [], since the script reads a gate defined after the export from gateRegister below and never from your reading. phase is a label only, 1 for a gate of that table and 2 for G6 to G8, which Phase 2 adds; it admits or refuses nothing. ids: the exit test split into test ids, each with the tiers the cell itself requires of it ("H" hermetic, "L" local, "D" deployed; "in both tiers" is H and D; a range "X to Y" names every id between; "the deployed subset" is every N- id whose row in docs/plan/04-tests.md or contracts/test-ids.md has a Tier cell that includes D, plus any it adds), and tiers [] for an id the cell gives no tier: never tier one yourself, since the script tiers it from idTables. idTables: two entries, one per document that lists test ids, each {document, lines}: document "docs/plan/04-tests.md" (the export) with lines every line \`git -C ${REPO} show <base>:docs/plan/04-tests.md | grep -E '^[|]'\` prints, and document "contracts/test-ids.md" (the test id register) with lines every line \`git -C ${REPO} show <base>:contracts/test-ids.md | grep -E '^[|]'\` prints, each in the order printed, verbatim. Copy the lines as printed and never drop, add, reorder or edit one: the script reads the tables, the ranges and the tiers from them. gateRegister: the gate register, ${GATES_DOC}, which defines the gates added after the export: exists, whether \`git -C ${REPO} cat-file -e <base>:${GATES_DOC}\` succeeds; lines, when it does, every line \`git -C ${REPO} show <base>:${GATES_DOC} | grep -E '^[|]'\` prints, in the order printed, verbatim, under the same rule as idTables, else []. The script reads each gate's row, its ids and tiers and its criteria from those lines, so copy them whatever gate you were asked for. criteria: for a gate whose exit test names the acceptance criteria, each criterion of docs/plan/01-plan.md's acceptance table with its proving ids, else []. previousTag: the tag of the nearest earlier ladder row that is in tagsReachable. rows: the ladder stage's **Plan rows.** in docs/roadmap.md, each with its owner and Done-when clause from docs/plan/03-workstreams-and-tasks.md and the test ids that clause names. A row written issue-N is a ticket, named by a stage cut after the export (#990): its owner is the **Owner:** line of \`cd ${REPO} && gh issue view N --json body\`, its doneWhen that body's "## Acceptance criteria" section verbatim, and its ids the ids of this step's ids list that section names, since a section can name an id of another gate (N-16) or a name that is no test id (F-T1).
@@ -778,6 +778,12 @@ if (!scope) return { halted: 'the Scope agent returned nothing: it failed or was
 if (!scope.fetched) return { halted: `the fetch of origin failed${scope.reason ? `: ${scope.reason}` : ''}; progress is unverified, and nothing was proved or reported`, agents: agentsRun }
 const date = A.date || scope.date
 if (!/^\d{4}-\d{2}-\d{2}$/.test(date || '')) return { halted: `the Scope agent returned date ${JSON.stringify(scope.date)}; nothing was proved or reported`, agents: agentsRun }
+// Two runs on one base and date share their run log, so the report file is named by the run: a run's
+// Report agent that posts before it writes then finds no file, never the earlier run's report (#1212).
+// The script has no clock, so the Scope agent reads one; a run id that is no clock reading would name
+// another path, so it stops the run as a bad date does.
+const runId = scope.runId
+if (!/^\d{8}T\d{6}Z$/.test(runId || '')) return { halted: `the Scope agent returned run id ${JSON.stringify(runId)}, which is no \`date -u +%Y%m%dT%H%M%SZ\` reading, so no report file can be named for this run; nothing was proved or reported`, agents: agentsRun }
 const base = scope.base
 const runLog = `${LOG}/${date}-${String(base).slice(0, 12)}`
 // The script chooses the gate; the Scope agent's reading of the gates table is used only when it read
@@ -818,7 +824,7 @@ const writeReport = async (s) => {
   phase('Report')
   const text = reportText(s)
   const target = reportTarget()
-  const outFile = `${runLog}/report.md`
+  const outFile = `${runLog}/report-${runId}.md`
   const rep = await run(reportPrompt(ctx, text, target, outFile), { label: 'report', phase: 'Report', schema: REPORTED })
   const ck = (rep && rep.checkout) || { trackedChanged: ['the Report agent returned nothing'], newUntracked: [] }
   const left = (rep && rep.worktreesLeft) || [] // empty-ok: a null Report is named in ck and in reason, so the checkout line reads dirty

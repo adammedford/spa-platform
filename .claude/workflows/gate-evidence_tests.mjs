@@ -167,7 +167,14 @@ const testsFor = (served, id) => {
 //           as the merges' own, so a served mergeCount that differs is a Scope agent's miscount,
 //           reviewsListing: {label: n}, the listing's length a Reviews agent returns when it is not
 //           the merges' own; a label served undefined returns a reply with no listingLines,
-//           fetchFails, the error of the Scope agent's fetch when it fails }
+//           fetchFails, the error of the Scope agent's fetch when it fails,
+//           runId, the run id the Scope agent returns when it is not the next of the clock's
+//           (undefined returns a reply with none), reportPostsFirst, a Report agent that runs
+//           its gh command before it writes the report (#1212) }
+// The run id each Scope agent reads, `date -u +%Y%m%dT%H%M%SZ` as the clock would print it, one second
+// later each run, so two runs on one base and date share a run log and never a report file.
+let runClock = 0
+const nextRunId = () => `20261021T${String(++runClock).padStart(6, '0')}Z`
 function stub(env, scriptArgs, served) {
   const calls = []
   let inFlight = 0
@@ -204,7 +211,7 @@ function stub(env, scriptArgs, served) {
         env.durableServed = durable.length
         write(path.join(LOG, `${DATE}-${base.slice(0, 12)}`, 'checkout-at-start.txt'), '')
         out = {
-          fetched: true, reason: '', date: DATE, base, originMain,
+          fetched: true, reason: '', date: DATE, runId: Object.hasOwn(served, 'runId') ? served.runId : nextRunId(), base, originMain,
           tagsReachable: reach, tagsAll: served.tagsAll || reach, ladder,
           gate: gd
             ? { gate: gname, phase: 1, defined: true, exitTest: gd.exitTest, previousTag: prev ? prev.tag : '', ids: gd.ids, criteria: gd.criteria || [], rows: gd.rows }
@@ -272,11 +279,19 @@ function stub(env, scriptArgs, served) {
         const text = block(prompt, 'REPORT')
         const outFile = (/^OUTPUT FILE: (\S+)$/m.exec(prompt) || [])[1]
         const fmt = dataLine(prompt, 'CHECKOUT FORMAT')
+        // The file its gh command posts, and what that file held when it posted: before it wrote the
+        // report when served.reportPostsFirst, as the second G6 run's Report agent did (#1212).
+        const bodyFile = (commands(prompt).map((c) => /^cd \S+ && gh issue (?:edit|create) .*--body-file (\S+)$/.exec(c)).find(Boolean) || [])[1]
+        const posted = () => (bodyFile && fs.existsSync(bodyFile) ? fs.readFileSync(bodyFile, 'utf8') : null)
+        env.reports = env.reports || []
+        const seen = { outFile, bodyFile, existedBefore: fs.existsSync(outFile), body: served.reportPostsFirst ? posted() : undefined }
         write(outFile, text.replace(/^CHECKOUT: pending$/m, fmt.clean))
+        if (!served.reportPostsFirst) seen.body = posted()
+        env.reports.push(seen)
         const target = dataLine(prompt, 'REPORT ISSUE')
         let issue = 0
-        if (target.mode === 'edit') { issue = target.issue; env.gh.push({ action: 'edit', issue, title: target.title }) }
-        if (target.mode === 'create') { issue = 950; env.gh.push({ action: 'create', title: target.title }) }
+        if (target.mode === 'edit') { issue = target.issue; env.gh.push({ action: 'edit', issue, title: target.title, body: seen.body }) }
+        if (target.mode === 'create') { issue = 950; env.gh.push({ action: 'create', title: target.title, body: seen.body }) }
         out = { checkout: served.reportCheckout || { trackedChanged: [], newUntracked: [] }, worktreesLeft: [], issue, url: `https://github.com/adammedford/spa-platform/issues/${issue}`, posted: true, reason: '' }
       } else throw new Error(`unexpected agent label ${label}`)
       const bad = validate(opts.schema, out)
@@ -1279,6 +1294,46 @@ try {
     const driftedMissing = driftAll.splice(offSchemaMissing)
     if (driftedMissing.length !== 1 || !/^reviews-2: .*listingLines/.test(driftedMissing[0])) fail(`the run with no listing length drifted other than in listingLines:\n  ${driftedMissing.join('\n  ')}`)
     if (driftAll.length > driftBefore) fail(`schema drift or thrown thunks in the #1210 runs:\n  ${driftAll.slice(driftBefore).join('\n  ')}`)
+  }
+  // 23. #1212: two runs on one base and date share a run log, and each posts the report it wrote. The
+  //     second G6 run of 2026-11-15 posted the first run's report.md, which sat at the path it was told
+  //     to write, before it wrote its own. Each run's report file is named by the run id its Scope
+  //     agent reads, so a Report agent that posts before it writes finds no file instead of another
+  //     run's; a run id that is no clock reading stops the run before any other agent.
+  checks++
+  {
+    const driftBefore = driftAll.length
+    const env = newRepo()
+    const served = { gates: { G3: READY } }
+    const a = await execute(env, { gate: 'G3' }, served)
+    // The second run differs from the first only in its CI run, so its report is another text.
+    const ci = { url: 'https://github.com/adammedford/spa-platform/actions/runs/2', sha: SHA, jobs: [{ name: 'Documents', conclusion: 'success' }] }
+    const b = await execute(env, { gate: 'G3' }, { ...served, ci, reportPostsFirst: true, openIssues: [{ number: 950, title: `G3 evidence, ${DATE}`, rows: [], label: '', assignee: '' }] })
+    // The stub's clock is the one the Scope prompt asks the agent to read.
+    if (!commands(a.prompt('scope')).includes('date -u +%Y%m%dT%H%M%SZ')) fail(`the Scope prompt asks for no run id read from the clock: ${JSON.stringify(commands(a.prompt('scope')).filter((c) => /date/.test(c)))}`)
+    const [ra, rb] = env.reports || []
+    if (!ra || !rb) fail(`two runs reported ${(env.reports || []).length} time(s)`)
+    else {
+      if (a.result.runLog !== b.result.runLog) fail(`the two runs on one base and date have run logs ${a.result.runLog} and ${b.result.runLog}, so this case is not #1212's`)
+      if (a.result.report.text === b.result.report.text) fail('the two runs\' reports are one text, so a stale post would not show')
+      for (const [r, x, label] of [[ra, a, 'first'], [rb, b, 'second']]) {
+        if (r.bodyFile !== r.outFile || x.result.report.file !== r.outFile) fail(`the ${label} run's gh command posts ${r.bodyFile}, its OUTPUT FILE is ${r.outFile} and its return names ${x.result.report.file}`)
+        if (path.dirname(r.outFile) !== x.result.runLog) fail(`the ${label} run's report file ${r.outFile} is not in its run log ${x.result.runLog}`)
+      }
+      if (ra.outFile === rb.outFile) fail(`both runs write and post ${ra.outFile}`)
+      if (rb.existedBefore) fail(`the second run's report file ${rb.outFile} existed before its Report agent wrote it`)
+      if (rb.body === ra.body || rb.body === a.result.report.text) fail('the second run\'s Report agent, posting before it wrote, posted the first run\'s report')
+      if (rb.body !== null) fail(`the second run's Report agent posted before it wrote and found a file: ${String(rb.body).slice(0, 120)}`)
+      if (fs.readFileSync(ra.outFile, 'utf8') !== a.result.report.text) fail('the first run\'s report file no longer holds its report')
+    }
+    // A run id that is no clock reading, or none, stops the run after Scope: no report path is named
+    // from it and no other agent runs.
+    for (const [label, runId] of [['a date', DATE], ['an empty run id', ''], ['a path', '../x'], ['no run id', undefined]]) {
+      const r = await execute(newRepo(), { gate: 'G3' }, { ...served, runId })
+      if (!/^the Scope agent returned run id /.test((r.result && r.result.halted) || '') || r.calls.length !== 1) fail(`${label}: ${r.calls.length} agent(s) ran; returned ${JSON.stringify(r.result).slice(0, 200)}`)
+    }
+    const drifted = driftAll.splice(driftBefore)
+    if (drifted.length !== 1 || !/^scope: \$\.runId: /.test(drifted[0])) fail(`the #1212 runs drifted from the schema other than in the missing run id:\n  ${drifted.join('\n  ')}`)
   }
 } catch (e) {
   console.error(`gate-evidence_tests: the script could not run: ${e && e.stack ? e.stack : e}`)
