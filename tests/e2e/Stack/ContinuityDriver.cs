@@ -189,8 +189,10 @@ public sealed class ContinuityDriver : IAsyncDisposable
     /// and submitted once every old task has stopped and the tunnel answers again. A task ECS has
     /// asked to stop still answers while it drains, and the tunnel still answers through a draining
     /// hop, so a callback submitted on the desired status alone can meet an old task; and a sign-in
-    /// that fails while the tunnel does not answer is the restart's gap, tried again on the next turn,
-    /// where one that fails while it answers ends the row (#348, the sitting of 2026-11-14).
+    /// that fails when the tunnel did not answer at some moment while it ran is the restart's gap,
+    /// tried again on the next turn, though the tunnel answers again by the failure, where one that
+    /// fails while it answered throughout ends the row (#348, the sitting of 2026-11-14; #1211). The
+    /// tunnel is probed every <see cref="TunnelWatch.Every"/> while a sign-in runs (<see cref="TunnelWatch"/>).
     /// <para>
     /// The row passes only when a session refreshes inside the interval from the first new task's
     /// start to the last old task's stop, so it says on standard output when to launch
@@ -213,6 +215,8 @@ public sealed class ContinuityDriver : IAsyncDisposable
     /// <summary>Row 6's levers on the cell: ECS through the AWS CLI, the tunnel, and Chromium.</summary>
     private sealed class CellLevers(ContinuityDriver driver) : IRollingDeployCell
     {
+        private readonly TunnelWatch watch = new(driver.TunnelAnswersAsync, Task.Delay, TimeProvider.System);
+
         private Profile? straddling;
 
         public Task<IReadOnlyList<EcsTaskState>> ListedAsync(CancellationToken ct) => driver.Ecs.ListedAsync(ct);
@@ -221,7 +225,10 @@ public sealed class ContinuityDriver : IAsyncDisposable
 
         public Task<bool> TunnelAnswersAsync(CancellationToken ct) => driver.TunnelAnswersAsync(ct);
 
-        public async Task<SessionCookies> SignInAsync(CancellationToken ct) => (await driver.SignInAsync(driver.App1)).Cookies;
+        public Task<bool> TunnelAnsweredSinceAsync(DateTimeOffset since, CancellationToken ct) => Task.FromResult(watch.AnsweredSince(since));
+
+        public Task<SessionCookies> SignInAsync(CancellationToken ct) =>
+            watch.WhileAsync(async () => (await driver.SignInAsync(driver.App1)).Cookies, ct);
 
         public Task<IReadOnlyList<Step>> CallEverySecondAsync(int session, SessionCookies cookies, CancellationToken ct) =>
             driver.CallEverySecondAsync(session, cookies, ct);

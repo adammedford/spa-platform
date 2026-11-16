@@ -5,7 +5,8 @@ namespace Gateway.E2ETests.Deployed;
 /// <summary>
 /// A double for what row 6's loop reads and pulls (#1203): ECS's old and new tasks and the tunnel, each
 /// a function of the time since the row started, on a clock that moves only when the loop pauses or a
-/// sign-in takes time, so no test sleeps. A sign-in fails, by default, while the tunnel does not answer.
+/// sign-in takes time, so no test sleeps. A sign-in fails, by default, when the tunnel does not answer
+/// at some second while it runs, and it fails at its end, as a Playwright wait that ran out does (#1211).
 /// </summary>
 internal sealed class ScriptedCell : IRollingDeployCell
 {
@@ -59,18 +60,36 @@ internal sealed class ScriptedCell : IRollingDeployCell
 
     public Task<bool> TunnelAnswersAsync(CancellationToken ct) => Task.FromResult(Tunnel(Now));
 
+    /// <summary>The tunnel probed every second since <paramref name="since"/> and now, as the cell's <see cref="TunnelWatch"/> probes it.</summary>
+    public Task<bool> TunnelAnsweredSinceAsync(DateTimeOffset since, CancellationToken ct) => Task.FromResult(TunnelAnsweredOver(since - Epoch, Now));
+
     public Task<SessionCookies> SignInAsync(CancellationToken ct)
     {
         TimeSpan at = Now;
-        if (SignInFails?.Invoke(at) ?? !Tunnel(at))
+        TimeSpan takes = SignInTakes(at);
+        Clock.Advance(takes);
+        if (SignInFails?.Invoke(at) ?? !TunnelAnsweredOver(at, at + takes))
         {
             SignInsFailed.Add(at);
             throw new TimeoutException("the provider's page did not load");
         }
 
         SignedIn.Add(at);
-        Clock.Advance(SignInTakes(at));
         return Task.FromResult(new SessionCookies("[double]"));
+    }
+
+    /// <summary>Whether the tunnel answers at every whole second from <paramref name="from"/> to <paramref name="to"/>, both ends included.</summary>
+    private bool TunnelAnsweredOver(TimeSpan from, TimeSpan to)
+    {
+        for (TimeSpan at = from; at < to; at += TimeSpan.FromSeconds(1))
+        {
+            if (!Tunnel(at))
+            {
+                return false;
+            }
+        }
+
+        return Tunnel(to);
     }
 
     public Task<IReadOnlyList<Step>> CallEverySecondAsync(int session, SessionCookies cookies, CancellationToken ct) =>
