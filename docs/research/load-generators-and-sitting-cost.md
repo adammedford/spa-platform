@@ -41,7 +41,8 @@
    omission and has had no push since 2024-03-03 and no release.
 3. **Two are ruled out by licence or by the plan.** NBomber is "not free for organizational use".
    AWS's Distributed Load Testing solution is Apache-2.0 and its services are on the project plan's
-   list, but it is a CloudFormation stack outside the platform root, with a web console, Cognito,
+   lists (its IAM roles were not checked against the plan's managed policies), but it is a
+   CloudFormation stack outside the platform root, with a web console, Cognito,
    API Gateway, Step Functions and a $3.00 dashboard per scenario that outlives the test: it breaks
    the map's cost rule. Locust (MIT) is a closed model: its wait time "can only constrain the
    throughput".
@@ -50,7 +51,8 @@
    address $0.005, load balancer $0.0225. The S3 and DynamoDB gateway endpoints are free.
 5. **Traffic costs about $1.08 per million asset requests**, on stated assumptions: S3 GET $0.40,
    the request log line $0.25 to ingest and $0.02 through the NAT, the DynamoDB session read $0.25,
-   load balancer capacity $0.16. A loaded hour is $0.39 at 100 requests a second and $3.90 at 1,000.
+   load balancer capacity $0.16. An API call reads the session twice and no object: $0.93 per
+   million. A loaded hour is $0.39 at 100 requests a second and $3.90 at 1,000.
 6. **A four-hour sitting is $1.53 at 100 requests a second and $8.54 at 1,000**, with two of the
    four hours under load. The fixed part is $0.70; the rest is request volume, which nothing
    measured yet bounds. The rate the two 0.25 vCPU tasks can sustain is the load test's own first
@@ -164,7 +166,7 @@ official Vegeta or wrk2 image was found.
   the cost of reading S3 on every asset request, which is the thing the map wants measured; only
   the deployed tier measures it. Whether moto saturates before a 0.25 vCPU gateway does is not
   known, and a run has to show moto's own CPU to rule it out.
-- **The mock API** answers from loopback in microseconds. The upstream connection bound
+- **The mock API** answers over loopback with no network distance. The upstream connection bound
   (`contracts/upstream-contract.md`) can be exhausted locally only if the mock API is made slow on
   purpose.
 - **The identity provider stand-in** matters at login and refresh only. A run that replays sessions
@@ -228,20 +230,26 @@ pulled through the NAT: the k6 image is about 105 MB, half a cent a pull.
 
 **What one request costs.** From the source, not from the plan:
 
-- **S3.** Every asset request is one `GetObject` (`S3ObjectStore.cs`), with the browser's
-  `If-None-Match` passed on, so a revalidation is still a billed GET. $0.0000004 a request
-  (`AmazonS3`, `USE2-Requests-Tier2`): **$0.40 per million**. It travels by the gateway endpoint,
-  not the NAT. An API request reads no object.
-- **DynamoDB reads.** Every request with a session is one `GetItem` with `ConsistentRead = true`,
-  and the store keeps no cache (`DynamoDbSessionTable.cs`, `DynamoDbSessionStore.cs`). "Strongly
-  consistent reads consume one RRU per 4 KB or part thereof", at $0.125 per million units
-  (`AmazonDynamoDB`, `USE2-ReadRequestUnits`). The item holds the protected ticket with the tokens;
-  its size is unmeasured. **Assumed 4 to 8 KB, 2 units: $0.25 per million**; $0.125 if it fits in
-  4 KB.
+- **S3.** Every asset request, `GET` or `HEAD`, makes exactly one `GetObject`: the handler in
+  `Assets.cs` resolves one key (the shell for an extensionless path) and calls the store once, with
+  no second read on a miss. The browser's `If-None-Match` is passed to S3, so a revalidation still
+  sends a request; that S3 bills a 304 as a GET was not read today and is assumed. $0.0000004 a
+  request (`AmazonS3`, `USE2-Requests-Tier2`): **$0.40 per million**. It travels by the gateway
+  endpoint, not the NAT. An API request reads no object.
+- **DynamoDB reads.** Each read is a `GetItem` with `ConsistentRead = true`, and the store keeps
+  no cache (`DynamoDbSessionTable.cs`, `DynamoDbSessionStore.cs`). An asset or `/bff` request reads
+  the session once, when the cookie is authenticated. A proxied `/api` call reads it **twice**: once
+  there, and once more under the session's gate before the token is used (`AppSessions.cs`,
+  `AccessTokenSource.cs`); a refresh adds re-reads. "Strongly consistent reads consume one RRU per
+  4 KB or part thereof", at $0.125 per million units (`AmazonDynamoDB`, `USE2-ReadRequestUnits`).
+  The item holds the protected ticket with the tokens; its size is unmeasured, and the session-store
+  finding modelled it at 6 KB. **Assumed 4 to 8 KB, 2 units a read: $0.25 per million asset
+  requests, $0.50 per million API calls**; half that if the item fits in 4 KB.
 - **DynamoDB writes.** `SlidingExpiration` is false and the store is replaced only on a token
   refresh, so a request writes nothing. A login writes the item once: "1 WRU per 1 KB", $0.625 per
-  million units (`USE2-WriteRequestUnits`). **10,000 logins at 8 units are $0.05.** A refresh adds a
-  lease put and delete and one replace.
+  million units (`USE2-WriteRequestUnits`). **10,000 logins at 8 units are $0.05.** The `appId` index
+  takes a write of its own per item, a unit each and under a cent in all. A refresh adds a lease put
+  and delete and one replace.
 - **Logs.** The gateway writes one `request` line per request at Information
   (`RequestTelemetry.cs`); the mock API holds `Microsoft.AspNetCore` at Warning. The line's size is
   unmeasured. **Assumed 500 bytes: 0.5 GB per million, $0.25** at $0.50 per GB
@@ -250,9 +258,14 @@ pulled through the NAT: the k6 image is about 105 MB, half a cent a pull.
 - **Load balancer capacity.** A capacity unit is the highest of 25 new connections a second, 3,000
   active connections a minute, 1 GB an hour and 1,000 rule evaluations a second. With kept-alive
   connections and one rule, bytes lead. **Assumed 20 KB a request and response: 20 GB per million,
-  $0.16.**
+  $0.16.** The fixture apps are far smaller (`fixtures/spa`: an index of 1.2 to 1.5 KB and one
+  3.8 KB script), so a run against them alone is nearer $0.04.
 
-Sum, per million asset requests: **$1.08**. Per million API requests: $0.68 at the same sizes.
+Sum, per million asset requests: **$1.08**. Per million API calls: **$0.93** at the same sizes
+(two session reads, no object). The table prices every request as an asset request.
+
+These lines assume the generator prints a summary. A generator that writes one result line per
+request to its own log stream pays the same $0.50 per GB and the same NAT rate again.
 
 **The two worked rates.** Nothing measured says what two 0.25 vCPU tasks sustain. 100 requests a
 second is 360,000 an hour, $0.39; 1,000 a second is 3.6 million an hour, $3.90. The second is a
@@ -293,6 +306,8 @@ nothing.
 | Sitting | four hours standing, generator on for four, two under load | assumed |
 | Request rate | 100 and 1,000 a second, both tasks together | assumed; unmeasured |
 | Request mix | every request an asset request with a session | assumed, as the dearer case |
+| Generator output | a summary, not a line per request | assumed |
+| A 304 from S3 | billed as a GET request | assumed; not read |
 | Session item | 4 to 8 KB | assumed; unmeasured |
 | Request log line | 500 bytes, one per request | one per request is read; the size is assumed |
 | Bytes through the load balancer | 20 KB a request | assumed |
@@ -306,7 +321,9 @@ nothing.
 - `curl` of the offer files below, parsed with `python3 -I`.
 - `curl` of each tool's `LICENSE` and `README` from `raw.githubusercontent.com`, of
   `tsenart/vegeta` `lib/targets.go` and `lib/attack.go`, and of `grafana/k6`
-  `js/modules/k6/http/request.go` at `v2.4.0`; `grep` over them. The GitHub API was read for each
+  `js/modules/k6/http/request.go` at `v2.4.0`, and of `locustio/locust`
+  `docs/writing-a-locustfile.rst` at `2.47.0` (the "can only constrain the throughput" sentence is
+  at line 177); `grep` over them. The GitHub API was read for each
   repository's latest release and, for wrk2, its last push.
 - `docker manifest inspect` of `grafana/k6:2.4.0`, `ghcr.io/hatoo/oha:latest`,
   `locustio/locust:2.47.0` and `fortio/fortio:latest`: each lists `linux/amd64` and `linux/arm64`.
