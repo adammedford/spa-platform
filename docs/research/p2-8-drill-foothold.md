@@ -29,16 +29,18 @@
    input, off by default) and it could carry the network half by hand.
 4. **Cells cannot be told apart in the role's trust policy.** AWS says `aws:SourceArn` cannot name a
    cluster. `iam:PassRole` on the launcher is the only thing that keeps cell B's role out of cell
-   A's cluster. This belongs to the ticket on what cells share.
+   A's cluster. And on the default inputs the two cells share one AWS-managed KMS key: there is no
+   per-cell key for the drill to be refused by. Both belong to the ticket on what cells share.
 5. **CloudTrail is the trustworthy record of a refused API call, and it splits in two.** Refused
-   Parameter Store and KMS calls are management events: free, in Event history, for 90 days.
+   Parameter Store and KMS calls are management events: free, in Event history, for 90 days. (For
+   Parameter Store that class is inferred from two tables, not stated by AWS in a sentence.)
    Refused S3 object reads and DynamoDB item reads are data events: they need a trail with data
    event selectors, at $0.000001 an event. The caller's own error is an index into that record, not
    evidence.
 6. **A refused network reach mostly leaves no REJECT record.** Flow logs record what security
    groups and network ACLs decide. A packet from cell A to cell B's private address is allowed out
-   by cell A's security group and then has no route, so cell A's flow log says ACCEPT and cell B's
-   says nothing. The evidence is cell B's flow log showing no accepted flow from cell A's addresses,
+   by cell A's security group and then has no route, so cell A's flow log should say ACCEPT and
+   cell B's nothing. That is reasoned from the documents and the module, not observed. The evidence is cell B's flow log showing no accepted flow from cell A's addresses,
    beside proof that the log was live.
 7. **Two cells on the root's default address range would make the network half meaningless.** Both
    would be `10.20.0.0/16`, and "cell B's load balancer address" would route inside cell A. This
@@ -90,9 +92,10 @@ Read from `infra/modules/cell/` at `adf0273`; none of this was applied.
   repositories only, and write streams to the cell's one log group only (`iam.tf`,
   `PullCellImages` and `WriteTaskLogs`). So the drill image is either pushed to one of those two
   repositories or is a public image, and the drill's `awslogs` configuration names the gateway's
-  log group with its own stream prefix. A pull from a public registry needs no ECR permission; that
-  is how the cell's sample image already runs. Whether a suitable public image exists was not
-  checked.
+  log group with its own stream prefix. The cell's sample image is a public one
+  (`public.ecr.aws/nginx/nginx-unprivileged`) and the execution role holds no grant for it, which
+  is read as: a public pull needs no ECR permission. No AWS page stating that was found, so it is
+  **unsourced**. Whether a suitable public image exists was not checked.
 - **No new resource type.** `aws_ecs_task_definition` is already in the allowlist of
   `the_module_declares_only_the_cell_s_intended_resource_types`. No service is declared: nothing
   keeps a drill task running.
@@ -117,7 +120,9 @@ off" removes from the gateway's role.
 the condition keys `ecs:cluster`, `ecs:enable-execute-command`, `ecs:capacity-provider`,
 `ecs:task-cpu` and `ecs:task-memory` among others, and the dependent action `iam:PassRole` with
 `iam:PassedToService` values `ecs-tasks.amazonaws.com, ecs.amazonaws.com`. `ecs:subnet` and
-`ecs:auto-assign-public-ip` exist as keys but are not listed on `RunTask`'s row.
+`ecs:auto-assign-public-ip` exist as keys but are not listed on `RunTask`'s row. So IAM cannot hold
+a launch to the gateway's subnets and security group: the launch script does that, and
+`RunTask`'s CloudTrail event records the network configuration it was given.
 <https://docs.aws.amazon.com/service-authorization/latest/reference/list_ecs.html>
 
 **Read.** "A user can pass a role ARN as a parameter in any API operation that uses the role to
@@ -202,16 +207,24 @@ gateway, which uses the same role.
 | Drill attempt against cell B | Event class | Where it appears | Source |
 | --- | --- | --- | --- |
 | `ssm:GetParameter`, `GetParameters`, `GetParametersByPath` on the client secrets and the key ring | Management | Event history, free, 90 days | "Systems Manager logs all control plane operations to CloudTrail as management events"; the page's data-event table lists only control channels, managed nodes and execution previews. That `GetParameter` is a control plane operation in this sense is inferred from the two tables, not stated. |
-| `kms:Decrypt` on a key | Management | Event history | "CloudTrail logs all AWS KMS operations, including ... cryptographic operations, such as GenerateDataKey and Decrypt"; "You cannot exclude AWS KMS ... events from Event history". |
+| `kms:Decrypt` on a key, where a cell has one (see "The KMS key" below) | Management | Event history | "CloudTrail logs all AWS KMS operations, including ... cryptographic operations, such as GenerateDataKey and Decrypt"; "You cannot exclude AWS KMS ... events from Event history". |
 | `s3:GetObject` on the bucket | Data | A trail or event data store with a data event selector for `AWS::S3::Object` | "By default, CloudTrail doesn't log data events. The CloudTrail Event history doesn't record data events." |
 | `dynamodb:GetItem`, `Query` on the session table | Data | A trail with a selector for `AWS::DynamoDB::Table` | DynamoDB lists `GetItem` and `Query` under "DynamoDB data plane events in CloudTrail". |
-| `ecs:RunTask` by the launcher | Management | Event history | It also records which role was passed: "`PassRole` is not an API call ... no CloudTrail logs are generated for IAM `PassRole`. To review what roles are passed ... review the CloudTrail log that created or modified the AWS resource receiving the role." |
+| `ecs:RunTask` by the launcher | Management | Event history | Its request names the task definition and the network configuration, not the role, unless a role override was given. "`PassRole` is not an API call ... no CloudTrail logs are generated for IAM `PassRole`. To review what roles are passed ... review the CloudTrail log that created or modified the AWS resource receiving the role": here that is the task definition's registration. The role each refused call ran under is in that call's own record, as `sessionIssuer`. |
 
 <https://docs.aws.amazon.com/systems-manager/latest/userguide/monitoring-cloudtrail-logs.html>
 <https://docs.aws.amazon.com/kms/latest/developerguide/logging-using-cloudtrail.html>
 <https://docs.aws.amazon.com/awscloudtrail/latest/userguide/logging-management-events-with-cloudtrail.html>
 <https://docs.aws.amazon.com/AmazonS3/latest/userguide/cloudtrail-logging-s3-info.html>
 <https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/logging-using-cloudtrail.html>
+
+**Read from the repository: the KMS key.** By default a cell has no KMS key of its own. `iam.tf`
+says the client secrets are SecureStrings "under the AWS-managed key the apps root chose" and that
+"No kms:Decrypt is granted here"; a customer-managed key exists only when
+`data_protection_kms_key_id` is set. The AWS-managed key is one per project and Region, so two
+cells share it. The map's drill lists cell B's "KMS key" among its targets: on the default inputs
+that target does not exist as a per-cell thing, and what keeps cell A from cell B's secrets is the
+Parameter Store path in the task role's policy alone.
 
 **Read: Event history.** "The event history provides a viewable, searchable, downloadable, and
 immutable record of the past 90 days of management events in an AWS Region ... There are no
@@ -242,7 +255,7 @@ Two senses of "plan".
 
 | Service | Free Tier list | Paid Plan list | Not supported | What the managed policy's allowlist holds |
 | --- | --- | --- | --- | --- |
-| AWS CloudTrail | listed | (inherits) | | `cloudtrail:*`, `cloudtrail-data:*` |
+| AWS CloudTrail | listed | not relisted; the Paid Plan policy's allowlist holds the same five entries in this column | | `cloudtrail:*`, `cloudtrail-data:*` |
 | Amazon Virtual Private Cloud (flow logs are EC2 API actions) | listed | | | `ec2:*`, `logs:*` |
 | Amazon Elastic Container Service | listed | | | `ecs:*` |
 | AWS Identity and Access Management (the policy simulator is `iam:Simulate*`) | listed | | | `iam:*` |
@@ -317,7 +330,7 @@ second cell's pricing research.
 | CloudTrail Event history | CloudTrail, from the service's side of the call | No: the role holds no `cloudtrail:` action, and the history is "immutable" | Evidence for the Parameter Store and KMS attempts. |
 | A trail's data events in S3 | CloudTrail | No, if the trail's bucket is outside every cell's grants | Evidence for the S3 and DynamoDB attempts. |
 | Flow logs | The VPC | No: the role holds no `ec2:` or `logs:` action beyond the execution role's stream writes, which are a different role | Evidence for the network half, with the limits in section 3. |
-| `RunTask`'s own management event | CloudTrail | No | Evidence of what the drill was: which task definition, role, subnets and security group. |
+| `RunTask`'s own management event | CloudTrail | No | Evidence of what the drill was: which task definition revision, subnets and security group. The role is that revision's. |
 
 Three rules follow, each from the reading above and none of them run.
 
@@ -404,8 +417,9 @@ network half means something only when the two ranges do not overlap.
 ### Creating the flow log
 
 **Read.** A flow log to CloudWatch Logs needs an IAM role that `vpc-flow-logs.amazonaws.com` can
-assume, with log-stream write permissions, and the creator needs `iam:PassRole` on it. That is one
-more role in the cell or beside it, and one more `iam:PassRole` for whoever applies.
+assume, with log-stream write permissions. That is one more role in the cell or beside it.
+**Not verified:** that whoever creates the flow log needs `iam:PassRole` on that role. The page
+read does not say so, though it is the usual rule for a role handed to a service.
 <https://docs.aws.amazon.com/vpc/latest/userguide/flow-logs-iam-role.html>
 
 "After you create a flow log, you can't change its configuration or the flow log record format",
@@ -435,7 +449,7 @@ time spent. Third-party attack-simulation tools were not read; nothing here rest
 | --- | --- | --- | --- | --- |
 | The mock-provider assertions the project has (ADR-0016, P-03) | No | No | That the configuration's task-role policy names this cell's resources only | Anything the provider computes at apply, and any policy not in the configuration |
 | Access Analyzer `CheckAccessNotGranted` | Yes | No: it takes a policy document | "Checks whether the specified access isn't allowed by a policy", given actions and resources. $0.002 a request. | It reads one policy. It does not combine the bucket policy, the trust policy or the managed policies. |
-| IAM `SimulateCustomPolicy` | Yes | No: policies are passed as strings | "The simulation does not perform the API operations; it only checks the authorization" | "The simulation does not automatically retrieve policies for the specified resources"; "does not support resource control policies (RCPs)" |
+| IAM `SimulateCustomPolicy` | Yes | No: "The policies are provided as strings" | "The simulation does not perform the API operations; it only checks the authorization" | "The simulation does not automatically retrieve policies for the specified resources"; the simulator "does not support resource control policies (RCPs)" (user guide) |
 | IAM `SimulatePrincipalPolicy` | Yes | Yes: it reads the role's attached policies | The same, for the role as deployed | The same limits; "Simulation of resource-based policies isn't supported for IAM roles" |
 | Access Analyzer internal access findings | Yes | Yes | Which principals in the account can reach a chosen resource | Not available in the project: no analyzer can be created. $9.00 a monitored resource where it is. |
 | Reachability Analyzer | Yes | Yes | A hop-by-hop path, or the component that blocks it | "The source and destination resources must be in the same VPC or in VPCs that are connected through a VPC peering connection or a transit gateway." Two cells are neither, so the cross-cell path cannot be posed. It also appears blocked (section 2). |
@@ -519,7 +533,9 @@ trail, no simulator call, no policy check. No statement here about what AWS does
 **Open after this finding.**
 
 - Whether a refused same-account `GetObject` is delivered as a data event with `AccessDenied`.
-- Whether `iam:PassRole` is checked at `RunTask` with no override.
+- Whether `iam:PassRole` is checked at `RunTask` with no override, and whether creating a flow log
+  needs it.
+- Whether a public image pull needs no grant on the execution role.
 - Whether Reachability Analyzer and the custom policy checks run in the project at all.
 - The project's selected Region and plan, and so the prices that apply.
 - Which image the drill runs, and whether it is public or pushed to a cell repository.
