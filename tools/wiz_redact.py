@@ -46,7 +46,10 @@ tools/wiz_redact_tests.py holds each rule to a case. It applies ten rules, in th
 10. The SSM session id after `SessionId:` or `sessionId` becomes `<elided>`, as tunnel.sh's
    session manager plugin prints it on its `Starting session with SessionId: ...`,
    `Port 8443 opened for sessionId ....` and `Exiting session with sessionId: ....` lines, or as
-   a JSON member (#1004); a sentence's closing full stop and a member's quotes are kept.
+   a JSON member (#1004); a sentence's closing full stop and a member's quotes are kept. The id
+   inside the brackets of the plugin's `Connection accepted for session [...]` line, which it
+   prints when a client connects through the forwarded port, becomes `[<elided>]` (#1196); a
+   sentence with `for session` and no bracketed id is kept.
 
 It catches shapes, not meaning, so the skill still reads the result once as a reviewer would.
 
@@ -155,6 +158,9 @@ USER_POOL_ID = re.compile(r"(?<![A-Za-z0-9])[a-z]{2}(?:-[a-z]+)+-\d_(?=[a-z]*[0-
 SSM_SESSION_ID = re.compile(
     r"((?<![A-Za-z0-9_])SessionId\b\"?[ \t]*:?[ \t]*\"?)[^\s\"',;]*[^\s\"',;.]", re.IGNORECASE
 )
+# The plugin's `Connection accepted for session [<id>]` line names no SessionId key (#1196): the id
+# is a single word between the brackets, which are kept.
+SSM_SESSION_BRACKETED = re.compile(r"(for session \[)[^\]\s]+(\])", re.IGNORECASE)
 
 
 def in_a_hash(match: re.Match) -> bool:
@@ -274,6 +280,7 @@ def redact(text: str, keep_last_four: bool = False) -> str:
     text = HCL_ID_IN_CLIENT_SHAPE.sub(r"\1<elided>\2", text)
     text = USER_POOL_ID.sub("<user-pool>", text)
     text = SSM_SESSION_ID.sub(lambda m: f"{m.group(1)}<elided>", text)
+    text = SSM_SESSION_BRACKETED.sub(r"\1<elided>\2", text)
     return text
 
 
