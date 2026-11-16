@@ -78,7 +78,9 @@ Set-Cookie holds the correlation cookie. The clock is that log line's duration_m
      T0's clock, the workstation's: from the describe-tasks before the one that saw it to that
      one's answer. The report says past, before or across the bound, or that no T0 was seen. No
      further restart and nothing done to the service (the circuit breaker rolls back on its own);
-     the files hold the restarts so far and the breach row
+     the files hold the restarts so far and the breach row, which in the .txt lists the task's log
+     lines as read_lines() kept them, one indented line each in stream order, or one marker line
+     when none was retained (#921)
   4  incomplete: a deployment not stable within the waiter's bound, an expected log line absent
      after a bounded wait, the probe never reaching the new task, another stop, a malformed task
      id, deployment id, control-plane instant or 302 duration, or any other failure once restart
@@ -1093,6 +1095,30 @@ def _cell(value: Optional[float]) -> str:
     return "-" if value is None else f"{value:.0f}"
 
 
+NO_LINES = "log lines: none retained at read time (stream absent or no readable gateway lines returned)"
+
+
+def breach_lines(record: dict) -> List[str]:
+    """The breach row's log lines (#921 Q207 to Q209): each line read_lines() kept, published, in
+    stream order and uncapped, as its ms from the restart's zero, its own ts, then route, status,
+    duration_ms or msg as present; one marker line when none was kept."""
+    zero = (record.get("zero") or {}).get("ns")
+    kept = record.get("lines")
+    kept = [line for line in kept if isinstance(line, dict)] if isinstance(kept, list) else []
+    if not kept:
+        return ["    " + NO_LINES]
+    printed = []
+    for line in kept:
+        at = line.get("ts_ns")
+        since = ms(at, zero) if is_measurement(at) and is_measurement(zero) else None
+        text = f"    log line: {_cell(since)} ms, ts {line.get('ts')}"
+        for name in ("route", "status", "duration_ms", "msg"):
+            if name in line:
+                text += f", {name} {line[name]}"
+        printed.append(text)
+    return printed
+
+
 def report(facts: dict, records: List[dict], ending: str, reason: str) -> str:
     """The .txt, rendered from publish_document()'s copy with nothing passed over the result."""
     poll = facts.get("poll_seconds", 1)
@@ -1152,6 +1178,8 @@ def report(facts: dict, records: List[dict], ending: str, reason: str) -> str:
             if record["stop"].get("after_t0"):
                 row += f"; {record['stop']['after_t0']}"
         lines.append(row)
+        if state == "breach":
+            lines += breach_lines(record)
     widest = {}
     for record in records:
         for name in ("t0", "healthy"):

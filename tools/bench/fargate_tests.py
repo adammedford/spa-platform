@@ -199,6 +199,22 @@ def run_case(document: dict, outputs: dict = None, region: str = REGION, extra=(
     return Run(case, done)
 
 
+# The Q209 marker a breach row prints when no log line was retained (#921), copied from the ticket.
+NO_LINES = "    log lines: none retained at read time (stream absent or no readable gateway lines returned)"
+
+
+def log_block(txt: str, index: int) -> list:
+    """The indented lines under restart <index>'s row of the .txt's per-restart table."""
+    lines = txt.splitlines()
+    row = next(i for i, line in enumerate(lines) if line.startswith(f"#{index} task "))
+    block = []
+    for line in lines[row + 1:]:
+        if not line.startswith(" "):
+            break
+        block.append(line)
+    return block
+
+
 class CaseBase(unittest.TestCase):
     def assertNoSecrets(self, run: Run):
         for name, text in (("txt", run.txt), ("json", run.json_path.read_text() if run.json_path.exists() else None),
@@ -394,6 +410,48 @@ class Endings(CaseBase):
         self.assertLess(seen["after_ns"], seen["at_ns"])
         self.assertRegex(run.txt, r"#2 task \w+ breach: .*S - T0 -?\d+\.\.-?\d+ cross-clock.*; stopped "
                                   r"ServiceSchedulerInitiated: [^\n]*; seen at T0 \+ -?\d+\.\.-?\d+ s, before the T0 \+ 60 s hard bound")
+        # The breach row is followed by the task's kept log lines, one indented line each in stream order
+        # (#921 Q205 to Q208): the plan's five, no 302 since no probe reached the task, and "-" for the
+        # ms since a breach comes before the zero is read.
+        block = log_block(run.txt, 2)
+        self.assertEqual(len(restarts[1]["lines"]), len(block), block)
+        expected = [r"msg Now listening on: http://\[::\]:8080 account<account id> x<account id>y ",
+                    r"msg Registry revision 42 \(\"etag\"\) is live with 1 app\(s\)\.$",
+                    r"route health, status 503, duration_ms 1\.2$", r"route health, status 200, duration_ms 1\.2$",
+                    r"route health, status 200, duration_ms 1\.2$"]
+        self.assertEqual(len(expected), len(block), block)
+        for printed, kept, tail in zip(block, restarts[1]["lines"], expected):
+            self.assertRegex(printed, r"^    log line: - ms, ts " + re.escape(kept["ts"]) + ", " + tail)
+        # Only the breach row (Q206): the complete restart 1 kept lines too and prints none.
+        self.assertTrue(restarts[0]["lines"])
+        self.assertEqual([], log_block(run.txt, 1))
+        self.assertNoSecrets(run)
+
+    def test_a_breach_whose_stream_is_absent_prints_the_marker_under_its_row(self):
+        plans = [plan() for _ in range(10)]
+        plans[1] = plan(health=[None, ["initial", "Elb.InitialHealthChecking"], ["unhealthy", "Target.ResponseCodeMismatch"]],
+                        stop_at_sample=3, stream=False)
+        run = run_case(world(plans))
+        self.assertEqual(3, run.code, run.stderr)
+        self.assertNoUnexpectedCalls(run)
+        self.assertEqual([], run.json["restarts"][1]["lines"])
+        self.assertEqual([NO_LINES], log_block(run.txt, 2))
+        self.assertNoSecrets(run)
+
+    def test_a_breach_whose_stream_holds_only_discarded_events_prints_the_marker_under_its_row(self):
+        plans = [plan() for _ in range(10)]
+        plans[1] = plan(health=[None, ["initial", "Elb.InitialHealthChecking"], ["unhealthy", "Target.ResponseCodeMismatch"]],
+                        stop_at_sample=3, log=[["text", f"plain text {FOREIGN_FORMS}", 900], ["text", "[1, 2]", 1000],
+                                               ["text", json.dumps({"msg": f"no ts {FOREIGN}"}), 1100]])
+        run = run_case(world(plans))
+        self.assertEqual(3, run.code, run.stderr)
+        self.assertNoUnexpectedCalls(run)
+        # The stream was read, and its three events are ones read_lines() keeps none of.
+        stream = f"{GATEWAY}/{GATEWAY}/{run.json['restarts'][1]['task_id']}"
+        self.assertTrue([call for call in run.aws("logs", "get-log-events") if stream in call])
+        self.assertEqual([], fargate.read_lines([{"message": item[1], "timestamp": 1} for item in plans[1]["log"]]))
+        self.assertEqual([], run.json["restarts"][1]["lines"])
+        self.assertEqual([NO_LINES], log_block(run.txt, 2))
         self.assertNoSecrets(run)
 
     def test_a_breach_before_any_t0_sample_is_reported_unplaced_and_exits_3(self):
@@ -429,6 +487,9 @@ class Endings(CaseBase):
         self.assertEqual(4, run.code, run.stderr)
         self.assertIn("has no registry_live line", run.json["reason"])
         self.assertEqual(1, len(run.aws("ecs", "update-service")))
+        # An incomplete restart keeps its lines in the .json and prints none under its row (#921 Q206).
+        self.assertTrue(run.json["restarts"][0]["lines"])
+        self.assertEqual([], log_block(run.txt, 1))
 
     def test_a_probe_that_never_reaches_the_new_task_is_incomplete(self):
         plans = [plan(probe_lands=["old"]) for _ in range(10)]
@@ -986,6 +1047,9 @@ class TheSecrecyMatrix(CaseBase):
         self.assertIn("ab<account id>" + "c" * 26, row["stop"]["reason"])
         self.assertIn("stopped ServiceSchedulerInitiated: Task failed ELB health checks in (target-group <arn>) account<account id>", run.txt)
         self.assertIn("account<account id>", row["marks"]["listening"]["msg"])
+        # The listening line's foreign id lands as its placeholder under the breach row too (#921).
+        self.assertIn("msg Now listening on: http://[::]:8080 account<account id> x<account id>y a<account id> ab<account id>",
+                      "\n".join(log_block(run.txt, 2)))
         self.assertEqual("Elb.<account id>", row["samples"][1]["reason"])
         # The reason the task's id stays whole in, on stderr and in both files.
         self.assertRegex(run.stderr, rf"^fargate: breach: the scheduler stopped task {task_id(102)} for failing the load balancer's "
@@ -1238,6 +1302,28 @@ class TheProse(unittest.TestCase):
         for doc in (module, " ".join(fargate.redact.__doc__.split())):
             for old in ("One exception", "Nothing this script reads", "tunnel.sh's session filter", "every line written passed through"):
                 self.assertNotIn(old, doc)
+
+    def test_endings_row_3_says_the_txt_breach_row_lists_the_tasks_log_lines(self):
+        module = " ".join(fargate.__doc__.split())
+        self.assertIn("the files hold the restarts so far and the breach row, which in the .txt lists the task's log lines "
+                      "as read_lines() kept them, one indented line each in stream order, or one marker line when none was "
+                      "retained (#921) 4 incomplete:", module)
+
+
+class TheBreachLines(unittest.TestCase):
+    """report() on a published breach record, for what no run reaches: a breach comes before the
+    zero is read, so only here does a line's ms from zero print as a number (#921 Q207)."""
+
+    def test_a_line_prints_its_ms_from_the_zero_when_the_restart_has_one(self):
+        zero = 1_000_000_000_000_000_000
+        record = {"index": 1, "complete": False, "task_id": task_id(100), "zero": {"source": "pullStoppedAt", "ns": zero},
+                  "stop": {"code": "ServiceSchedulerInitiated", "reason": "health checks", "after_t0": None},
+                  "lines": [{"ts": "2001-09-09T01:46:41.5000000+00:00", "ts_ns": zero + 1_500_000_000, "event_timestamp_ms": 5,
+                             "route": "health", "status": 503, "duration_ms": 1.2},
+                            {"ts": fargate.MALFORMED, "event_timestamp_ms": 6}]}
+        block = log_block(fargate.report({}, [record], "breach", "the reason"), 1)
+        self.assertEqual(["    log line: 1500 ms, ts 2001-09-09T01:46:41.5000000+00:00, route health, status 503, duration_ms 1.2",
+                          "    log line: - ms, ts <malformed>"], block)
 
 
 class TheDoubles(unittest.TestCase):
