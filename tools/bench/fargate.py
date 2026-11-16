@@ -28,7 +28,9 @@ gateway image digest the document's. The new task is the one whose startedBy is 
 deployment's id from update-service's answer, polled with describe-tasks while the old deployment's
 task still runs beside it. A restart ends stable again, the old task's drain and stop included:
 the target group's deregistration delay, 30 s (infra/modules/cell/alb.tf, #347), then SIGTERM and
-up to the container's stopTimeout, 30 s (ecs.tf).
+up to the container's stopTimeout, 30 s (ecs.tf). The benchmark runs on one task: a service whose
+desiredCount is not 1, the cell's multi_task shape, is refused before restart 1, since one old and
+new pair is what #286 Q135 and #305 Q9 measure and two tasks would be a different measurement (#975).
 
 **Clocks.** Three, never mixed without a label:
   task           the gateway's own log lines' `ts` and the metadata endpoint's StartedAt, both
@@ -69,8 +71,9 @@ Set-Cookie holds the correlation cookie. The clock is that log line's duration_m
   0  ten clean restarts
   2  a usage error, a refusal, a failed AWS call or any other failure before restart 1's
      update-service is sent (no Region, no outputs document for it, no credentials, a missing tool,
-     the service not stable on gatewayImage, a malformed image digest, caller account or hop task
-     id); nothing is written
+     a service whose desiredCount is not 1, the service not stable on gatewayImage or running more
+     or fewer tasks than one, a malformed image digest, caller account or hop task id); nothing is
+     written
   3  a breach: the scheduler stopped the new task for failing the load balancer's health checks
      (#286 Q148), the first such stop ending the run wherever it falls. ecs.tf's reading of the
      target group's defaults (#171) puts that stop past the T0 + 60 s hard bound, three failures 30 s
@@ -325,7 +328,7 @@ def _each(kind):
 # a restart from Bench.restart(), a line from read_lines(). A number nothing validated is the marker.
 _FACTS = _fields({"commit": _commit, "image_digest": _identifier(IMAGE_DIGEST), "task_definition": _text,
                   "platform_version": _text, "region": _text, "restarts": _measured, "poll_seconds": _measured,
-                  "check_interval_s": _measured, "app_host": _text})
+                  "check_interval_s": _measured, "app_host": _text, "tasks": _measured})
 _WINDOW = _fields({"after_ns": _measured, "at_ns": _measured})
 _SAMPLE = _fields({"at_ns": _measured, "state": _text, "reason": _text})
 _PROBE = _fields({"at_ns": _measured, "status": _optional(valid_status)})
@@ -694,6 +697,11 @@ class Bench:
             raise Refused("get-caller-identity named no well-formed account id.")
         self.account = account
         service = self.describe_service()
+        # The one-task premise (A restart; #975 Q213), checked on the answer before anything waits.
+        desired = service.get("desiredCount")
+        if desired != 1 or isinstance(desired, bool):
+            raise Refused(f"{self.service}'s desiredCount is {'none' if desired is None else desired}, not 1: the benchmark "
+                          "runs on one task, one old and new pair per restart. Apply the cell with multi_task = false first.")
         balancers = service.get("loadBalancers") or []
         if not balancers or not balancers[0].get("targetGroupArn") or not balancers[0].get("containerName"):
             raise Refused(f"{self.service} has no load balancer target group.")
@@ -712,14 +720,16 @@ class Bench:
             raise Refused(f"{self.service} is not stable: the services-stable waiter gave up.")
         self.require_settled()
         running = self.running_tasks()
-        if len(running) != 1 or _container(running[0], self.container).get("imageDigest") != self.digest:
+        if len(running) != 1:
+            raise Refused(f"{self.service} is not stable on gatewayImage: it runs {len(running)} tasks, not one.")
+        if _container(running[0], self.container).get("imageDigest") != self.digest:
             raise Refused(f"{self.service} is not stable on gatewayImage: its running task does not carry that digest.")
         family_revision = _last_segment(service["taskDefinition"])
         self.facts = {
             "commit": self.commit(), "image_digest": self.digest, "task_definition": family_revision,
             "platform_version": running[0].get("platformVersion") or service.get("platformVersion"),
             "region": self.region, "restarts": RESTARTS, "poll_seconds": self.options.poll_seconds,
-            "check_interval_s": CHECK_INTERVAL_S, "app_host": self.app_host,
+            "check_interval_s": CHECK_INTERVAL_S, "app_host": self.app_host, "tasks": desired,
         }
 
     def commit(self) -> str:
@@ -813,7 +823,10 @@ class Bench:
         self.restarts.append(record)
         outgoing = self.running_tasks()
         if len(outgoing) != 1:
-            raise (Refused if index == 1 else Incomplete)(f"{self.service} runs {len(outgoing)} tasks before restart {index}, not one.")
+            # require_settled() has passed, so a second task here is a change under the run (#975 Q214).
+            raise (Refused if index == 1 else Incomplete)(
+                f"{self.service} runs {len(outgoing)} tasks before restart {index}, not one: the benchmark runs on one task, "
+                "and a second task between settled restarts means the service changed under the run.")
         record["hop_task"] = self.open_forward(outgoing[0], refuse=index == 1)
         try:
             # Counted before the call: once it is sent, the service may have changed (Endings: 4).
@@ -1127,7 +1140,7 @@ def report(facts: dict, records: List[dict], ending: str, reason: str) -> str:
     lines = [
         "Startup benchmark, Fargate half (#305 for #178)",
         f"commit {facts.get('commit')}, image {facts.get('image_digest')}, task definition {facts.get('task_definition')}, "
-        f"platform version {facts.get('platform_version')}, Region {facts.get('region')}",
+        f"platform version {facts.get('platform_version')}, Region {facts.get('region')}, tasks {facts.get('tasks')}",
         "clocks: task (the gateway's log line ts and the metadata endpoint's StartedAt, one microVM), control plane "
         "(describe-tasks createdAt, pullStartedAt, pullStoppedAt, startedAt = S), workstation (describe-target-health "
         f"polled every {f'{poll:g}' if is_measurement(poll) else poll} s: T0 and target healthy). A log clock is the line's own ts; "
@@ -1252,8 +1265,9 @@ def main(argv: List[str]) -> int:
         # restart now is the new task's pull and start (about 30 s), up to the T0 + 60 s third check,
         # the probe, the 30 s drain, up to the 30 s stopTimeout, the waiter's 15 s polls and the exec
         # read: about three minutes, so about half an hour for ten.
-        bench.say(f"ten restarts, about half an hour: each runs two tasks side by side, and the old one drains for "
-                  f"30 s and stops before the service is stable (#305 Q12, alb.tf's deregistration delay)")
+        bench.say(f"ten restarts, about half an hour, on one task: each restart runs the old task and the new one side by "
+                  f"side, and the old one drains for 30 s and stops before the service is stable (#305 Q12, alb.tf's "
+                  f"deregistration delay; #975)")
     except Refused as refusal:
         err(refusal.message)
         return EXIT_USAGE

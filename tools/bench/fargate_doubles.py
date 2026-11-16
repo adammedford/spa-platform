@@ -86,6 +86,7 @@ def plan(**changes) -> dict:
     entry = {
         "hidden_polls": 1,                       # list-tasks calls before the new task is listed
         "decoy": True,                           # a task of no deployment of ours, listed first
+        "decoy_stays": False,                    # True: the decoy still runs once the rollout settles (#975)
         "health": [None, ["initial", "Elb.RegistrationInProgress"], ["initial", "Elb.InitialHealthChecking"],
                    ["healthy", None]],
         "stop_at_sample": None,                  # a stop for health after this many samples
@@ -107,16 +108,23 @@ def plan(**changes) -> dict:
     return entry
 
 
-def world(plans=None, **changes) -> dict:
+def world(plans=None, second_task=None, **changes) -> dict:
+    """second_task seeds a second running task of the settled deployment, on the digest unless its
+    dict says otherwise (#975): {"hidden_until": 2} keeps it out of preflight's list-tasks, the first,
+    so that it appears between preflight and restart 1."""
     plans = plans if plans is not None else [plan() for _ in range(10)]
     first = 1
+    tasks = {str(first): {"n": first, "startedBy": "ecs-svc/1000000000000000001", "desired": "RUNNING",
+                          "last": "RUNNING", "created_ms": 0, "plan": None, "digest": DIGEST}}
+    if second_task is not None:
+        tasks["2"] = dict(tasks[str(first)], n=2, **second_task)
     document = {
         "credentials": True,
         "td_image": IMAGE,
+        "desired_count": 1,                      # describe-services' desiredCount; None leaves it out
         "deployments": [{"id": "ecs-svc/1000000000000000001", "status": "PRIMARY", "rolloutState": "COMPLETED",
                          "taskDefinition": TD_ARN}],
-        "tasks": {str(first): {"n": first, "startedBy": "ecs-svc/1000000000000000001", "desired": "RUNNING",
-                               "last": "RUNNING", "created_ms": 0, "plan": None, "digest": DIGEST}},
+        "tasks": tasks,
         "plans": plans,
         "restart": 0,
         "current": str(first),
@@ -286,6 +294,8 @@ def answer_aws(case: pathlib.Path, argv: list) -> int:
         out = {"services": [{"serviceName": SERVICE, "taskDefinition": TD_ARN, "platformVersion": "LATEST",
                              "loadBalancers": [{"targetGroupArn": TG_ARN, "containerName": GATEWAY, "containerPort": 8080}],
                              "deployments": document["deployments"]}]}
+        if document["desired_count"] is not None:
+            out["services"][0]["desiredCount"] = document["desired_count"]
     elif shape == "ecs describe-task-definition" and options.get("task-definition") == TD_ARN:
         out = {"taskDefinition": {"taskDefinitionArn": TD_ARN, "containerDefinitions": [
             {"name": GATEWAY, "image": document["td_image"],
@@ -307,7 +317,7 @@ def answer_aws(case: pathlib.Path, argv: list) -> int:
         document["current"] = document["new"]
         document["deployments"] = [dict(document["deployments"][0], rolloutState="COMPLETED")]
         for task in document["tasks"].values():
-            if task.get("decoy"):
+            if task.get("decoy") and not entry["decoy_stays"]:
                 task["desired"], task["last"] = "STOPPED", "STOPPED"
         save(case, document)
         return 0
