@@ -8,7 +8,10 @@
   `docs/plan/01-plan.md` -> "Trust boundaries and threats" (the seven boundaries, T1 to T18),
   `docs/plan/06-phase-2-and-risks.md`, `docs/gaps.md` (GAP-13 to GAP-16, GAP-27),
   `docs/plan/07-evidence.md` ("The two runs"), `docs/agents/review.md` ("The bar for a finding",
-  "The review record"), `docs/adr/README.md`. Public sources were downloaded over plain HTTPS with
+  "The review record"), `docs/adr/README.md`, ADR-0007. A search for threat rows beyond T18 (`T19`
+  and above, and the word "threat") over `docs/adr/`, `.scratch/phase-2/`, `contracts/`,
+  `docs/roadmap.md`, `docs/runbooks/` and `GLOSSARY.md` found only citations of T1 to T18, so "the
+  Phase 2 additions have no threat rows" below means in those paths. Public sources were downloaded over plain HTTPS with
   no credential on 2026-11-16 and read as raw text (`curl`, then `grep` and `python3 -I`), so every
   section number, count and quotation below comes from the source's own text and not from a
   summary; section 7 lists each one. **Not done:** no review of the threat model was performed.
@@ -26,24 +29,25 @@
    `draft-ietf-oauth-browser-based-apps` redirects to **RFC 10017, "OAuth 2.0 for Browser-Based
    Applications", BCP 212, August 2026** (the last draft revision was 27). Its section 6.1,
    "Backend for Frontend (BFF)", is the pattern this gateway implements, and it carries 10 MUST,
-   6 SHOULD and 1 SHOULD NOT statements. RFC 9700 is BCP 240, January 2025. ASVS is at **5.0.0**
+   6 SHOULD and 1 SHOULD NOT by keyword count. RFC 9700 is BCP 240, January 2025. ASVS is at **5.0.0**
    (published 30 May 2025), whose chapter numbers differ from 4.x: OAuth and OIDC is now V10.
 2. **A threat model review, as the sources practise it, answers the Manifesto's fourth question,
    "Did we do a good enough job?"**, and OWASP's cheat sheet gives that question six checks: does
    the model reflect the system, have all threats been identified, has each a response, do the
    mitigations reduce risk to an acceptable level, is the model documented, can the mitigations be
-   tested. Four of the six are an audit of rows that exist; one ("all threats identified") needs an
-   enumeration method.
+   tested. Four of the six are an audit of rows that exist, "is it documented" is already answered
+   by the map's `contracts/threats.md`, and one ("all threats identified") needs an enumeration
+   method.
 3. **The method that fits is two passes, not one of the five named methods alone.** Pass one audits
    each of T1 to T18 as it stands: mitigation against the yardstick clauses, test ids against what
    the mitigation claims. Pass two enumerates by **STRIDE per element** over the trust-boundaries
    table and the Phase 2 elements (durable store, key ring, cells, fragments), which have no threat
-   rows yet; it is the only named method whose input the repository already has. Attack trees fit
+   rows in the paths searched; it is the only named method whose input the repository already has. Attack trees fit
    one or two goals at most (T14 is the candidate). PASTA needs business objectives and a business
    stakeholder the map does not have; LINDDUN answers a privacy question nobody has asked, and the
    review record should say privacy was not covered.
 4. **The yardstick is the two BCPs first, ASVS second.** RFC 10017 section 6.1 and RFC 9700
-   section 2 are short (17 and 35 normative statements), written for exactly this architecture, and
+   section 2 are short (17 and 35 requirement keywords by count), written for exactly this architecture, and
    a gap against them is a sentence with a section number. ASVS 5.0.0 does not prescribe a level;
    it says "Most applications should be striving to achieve" Level 2. The gateway's own part is
    V10.1, V10.2 and V10.5 (10 requirements; V10.3, V10.4, V10.6 and V10.7 bind the upstream APIs
@@ -61,7 +65,8 @@
    SP 800-53 CA-2(1) says impartial assessors do not "assess their own work"; SSDF PW.2.1 asks for
    review by people "who were not involved with the design and/or" automated processes. A fresh
    session meets "not involved" in the sense of context, and no source says whether that is enough.
-   One research paper reports that language models score their own output higher than people do.
+   One research paper reports that language models score their own output higher than others'
+   output that people judge equal.
    CA-2(1) names the remedy for a reviewer inside the developer's chain: the results are
    "carefully reviewed and analyzed by independent teams of experts". Here that is a person, so the
    record has to be one a person can re-perform: every row with a verdict, the clause it was
@@ -135,7 +140,7 @@ its mitigations, and a review can only check that the plan states them.
 | 2.1, 4.11 | "Clients and authorization servers MUST NOT expose URLs that forward the user's browser to arbitrary URIs obtained from a query parameter" | T9 | A redirecting endpoint other than `returnUrl` that no row names |
 | 2.1, 4.7 | "Clients MUST prevent Cross-Site Request Forgery" at the redirection endpoint; PKCE or a state value "securely bound to the user agent" | T3, T17 | A row whose test proves the cookie's prefix and not the binding of the callback to the browser that started it |
 | 2.1.1, 4.5 | "Clients MUST prevent authorization code injection"; PKCE is RECOMMENDED for confidential clients; the challenge or nonce "MUST be transaction-specific and securely bound to the client and the user agent" | T3 | A mitigation that names PKCE "at the provider" and no test of the client half |
-| 2.1, 4.4 | A mix-up defence is REQUIRED "When an OAuth client can interact with more than one authorization server" | None of T1 to T18 names mix-up | A missing row, or a missing written reason the condition is not met, once a cell holds a second provider profile |
+| 2.1, 4.4 | A mix-up defence is REQUIRED "When an OAuth client can interact with more than one authorization server" | By the table's text, no row among T1 to T18 uses the word; the code and the contracts were not read for it | If the condition is met (a cell with a second provider profile would be the case to ask about): a missing row, or a missing written reason it is not met |
 | 2.3, 4.10.2 | Access tokens "SHOULD be audience-restricted" | T11 | Already written into the row: "One audience per app in Phase 1" |
 | 2.2.1 | Authorization and resource servers "SHOULD use mechanisms for sender-constraining access tokens" | T11; the deferred-features table | A SHOULD not followed, with the reason written: the form the plan already uses for sender-constrained tokens ("a PingFederate decision") |
 | 2.5 | Asymmetric client authentication is RECOMMENDED | The plan's `private_key_jwt` option | A recommendation not followed while per-app secrets remain, with no row that says so |
@@ -154,12 +159,12 @@ to avoid deploying more than one application in a single origin".
 | Clause | Says | Rows | Form of a gap |
 | --- | --- | --- | --- |
 | 6.1.3.1 | "the BFF MUST act as a confidential client" and "MUST use the OAuth 2.0 Authorization Code grant" | T1, T3 | None expected in form; the row to check it against is the boundary "Gateway to identity provider" |
-| 6.1.3.2 | Cookies: MUST `Secure`, MUST `HttpOnly`, SHOULD `SameSite=Strict`, SHOULD path `/`, SHOULD NOT set `Domain`, SHOULD use "the __Host-Http- prefix" | T2, T12, T17 | A difference in wording to resolve: the rows say `__Host-` and do not mention `SameSite`; the plan elsewhere says `form_post` would need `SameSite=None` on login-state cookies. Each is a SHOULD, so the gap's form is a deviation without a written reason |
+| 6.1.3.2 | Cookies: MUST `Secure`, MUST `HttpOnly`, SHOULD `SameSite=Strict`, SHOULD path `/`, SHOULD NOT set `Domain`, SHOULD use a prefix "indicating the cookie was set via HTTP, for example, by using the __Host-Http- prefix" | T2, T12, T17 | A deviation from a SHOULD is a gap only when no reason is written. Here one is: ADR-0007 chooses `__Host-`, Fetch Metadata and antiforgery "not SameSite", for the reason section 6.1.3.3.1 itself gives, and records `SameSite=Lax` and, for one profile, `SameSite=None`. So the form of a gap is narrower: the threat table does not cite the ADR, or a clause the ADR does not speak to (`__Host-Http-` is the RFC's example of a prefix "indicating the cookie was set via HTTP"; the rows say `__Host-`) |
 | 6.1.3.3 | "The BFF MUST implement a proper CSRF defense"; `SameSite` alone "falls short when the BFF is hosted alongside other applications within the same site" | T2 | The clause describes this platform's sibling-SPA case exactly; a gap would be a state-changing path the Fetch Metadata and antiforgery checks do not cover |
 | 6.1.3.6 | "the BFF MUST enforce strict outbound request controls by validating destination hosts before forwarding requests"; a configurable proxy "MUST ensure that it only allows requests to explicitly permitted hosts and paths" | T5 | A row that proves hosts and not paths, or the reverse |
-| 6.1.4.1 | Request proxying through the user's browser is not mitigated by a BFF | T1 | A row that claims more than the pattern gives: T1's mitigation covers theft of tokens, and no row states the residual |
+| 6.1.4.1 | Request proxying through the user's browser is not mitigated by a BFF | T1 | A row that claims more than the pattern gives. T1's mitigation is about theft of tokens; the boundaries table already says page script "may be hostile". The question the review would ask is whether the residual (requests made through the user's own session) is written anywhere as accepted |
 | 6.1.4.1 | "security vulnerabilities in the BFF can have a significant impact on the application" | T14 | Already written: accepted in Phase 1, cells in Phase 2 |
-| 6.1.3.4, 6.1.3.5 | The BFF sees all traffic; resource servers need to know of it for rate limiting | T16, the deferred rate-limiting row | A consideration no row or deferred feature records |
+| 6.1.3.4, 6.1.3.5 | The BFF sees all traffic; resource servers need to know of it for rate limiting | T16, the deferred rate-limiting row | A consideration that neither a row nor a deferred feature records, if the review finds one; rate limiting itself is recorded as deferred |
 
 ### OWASP ASVS 5.0.0 (published 30 May 2025)
 
@@ -197,7 +202,7 @@ to avoid deploying more than one application in a single origin".
   can be "the decision is not written down", which no test id would ever show.
 - **The report shape.** "Traditional penetration testing reports issues 'by exception,' only
   listing failures. However, an ASVS certification report should include scope, a summary of all
-  requirements checked, the requirements where exceptions were noted, and guidance on resolving
+  requirements checked, the requirements where execptions [sic] were noted, and guidance on resolving
   issues. Some requirements may be non-applicable ... and this must be noted in the report."
   OWASP certifies nobody: a claim of "ASVS L2" would be self-assessed, and must be worded so.
 
@@ -315,8 +320,8 @@ Each item is taken from a source or from this repository's own practice, named b
    already decided both.
 9. **A part the person re-performs.** CA-2(1)'s fallback is review of the results by someone
    independent. `docs/plan/07-evidence.md` records the repository doing this once already: the
-   real-handler run was "Run by: An independent reviewer. I rebuilt it, re-ran it and got the same
-   result." What share of rows a person re-performs is not given by any source read here; it is a
+   real-handler run's "Run by" cell reads "An independent reviewer. I rebuilt it, re-ran it and got
+   the same result." What share of rows a person re-performs is not given by any source read here; it is a
    decision for the spec.
 
 One limit the repository states about its own review records carries over unchanged: every record
@@ -333,7 +338,7 @@ estimate that includes them is a floor.
 | Choice | Recommended | Why, from the sources | Estimated cost in session time | Considered and not recommended |
 | --- | --- | --- | --- | --- |
 | Method | The four questions as the frame. Pass one: an audit of T1 to T18 by the cheat sheet's six review checks. Pass two: STRIDE per element over the seven boundaries and the Phase 2 elements. Optionally one attack tree, for T14 | Question four is what a review is; STRIDE is the cheat sheet's default for a technical design and the only method whose input (boundaries, request path) exists; the 2006 article gives a stopping rule a person can check | Pass one: 18 rows, each read against its clauses and its tests' source; about one reviewer session. Pass two: an element list first (seven boundaries, plus four Phase 2 areas of unknown element count), then up to six categories an element; about one further session. A tree for T14: a fraction of a session. Mutation proof of a row's tests is extra and is the dearest part; `gate-evidence` already does it per test id | PASTA: seven stages, business objectives and a business stakeholder, none of which exists here. LINDDUN: a privacy analysis over the same diagram, a second full pass for a question out of scope. Attack trees for every row: a tree a goal, with no stopping rule across goals |
-| Yardstick | RFC 10017 section 6.1 with sections 5 and 9.4, and RFC 9700 section 2 with the client-side parts of section 4, as the content yardstick. ASVS 5.0.0 Level 2 for V10.1, V10.2, V10.5, V3 and V7 as the checklist. The cheat sheet's six checks for the model's shape | The BCPs are IETF consensus on this exact architecture and are short. ASVS gives pass or fail items and the positive report shape, and names the BFF pattern in V10.1.1 | RFC 10017 section 6.1: 17 normative statements. RFC 9700 section 2: 35, of which the client's share is under half. Together a fraction of a session to map to rows, once, and the mapping is reusable in `contracts/threats.md`. ASVS core set at L1 and L2: 9 + 19 + 18 = 46 requirements, about half a session. The wider set (V4, V12, V13, V14, V16, V9, V11) adds 110 requirements across all levels, about one more session, much of it about the cell and not the threat table | All of ASVS Level 2 (253 requirements): most of V1, V2, V5, V6, V8 and V17 would be "not applicable". ASVS Level 3 as the pass mark: its OAuth items (PAR, sender-constrained tokens, `private_key_jwt`) are provider decisions the plan has deferred to the profile |
+| Yardstick | RFC 10017 section 6.1 with sections 5 and 9.4, and RFC 9700 section 2 with the client-side parts of section 4, as the content yardstick. ASVS 5.0.0 Level 2 for V10.1, V10.2, V10.5, V3 and V7 as the checklist. The cheat sheet's six checks for the model's shape | The BCPs are IETF consensus on this exact architecture and are short. ASVS gives pass or fail items and the positive report shape, and names the BFF pattern in V10.1.1 | RFC 10017 section 6.1: 17 requirement keywords. RFC 9700 section 2: 35 keywords, of which the client's share was not counted (many bind the authorization server). Together a fraction of a session to map to rows, once, and the mapping is reusable in `contracts/threats.md`. ASVS core set at L1 and L2: 9 + 19 + 18 = 46 requirements, about half a session. The wider set (V4, V12, V13, V14, V16, V9, V11) adds 110 requirements across all levels, about one more session, much of it about the cell and not the threat table | All of ASVS Level 2 (253 requirements): most of V1, V2, V5, V6, V8 and V17 would be "not applicable". ASVS Level 3 as the pass mark: its OAuth items (PAR, sender-constrained tokens, `private_key_jwt`) are provider decisions the plan has deferred to the profile |
 | Severity scale | A plain four-level scale with written definitions, each finding carrying likelihood and impact in the words the plan's risk table already uses, the attacker by RFC 9700's A1 to A5, and its kind. The Risk Rating matrix is a ready rule for combining likelihood and impact | It scores every kind of finding this review produces; it matches the scale already in `docs/plan/06-phase-2-and-risks.md`; "accepted in writing" needs a level a person can read without a calculator | Writing the definitions: once, in the spec. Then a minute or two a finding | CVSS 4.0: eleven metrics a finding and no way to enter a finding with no exploit path; fits the penetration test's findings, not these. The full Risk Rating method: sixteen factors a finding, four of which only Adam can give, under OWASP's own disclaimer |
 | Record | Section 4's nine items: a row-by-row record in `contracts/threats.md`, one issue per finding, and a share of rows re-performed by Adam | CA-2(1)'s fallback for an assessor in the developer's chain; ASVS's report shape; the repository's "mutate, do not infer" | Agent time: inside the passes above. Adam's time: set by the share of rows he re-performs, which no source fixes | A findings-only report: cannot show what was checked. A second same-model session reviewing the first: adds no viewpoint the first lacked, by the sources' own account of independence |
 
@@ -348,6 +353,8 @@ estimate that includes them is a floor.
   procedure; the name is from later Microsoft and Shostack material that was not read.
 - **ISO and IEC standards on assessor independence** are behind a paywall and were not read; nothing
   here relies on them.
+- **Whether Phase 2's additions have threat rows anywhere outside the paths searched** (Method
+  names them); none was found in them.
 - **How many elements Phase 2 adds.** The map names four areas; the element list is the review's
   first output, so every cost that includes pass two is a floor.
 - **Session-time costs.** Unmeasured estimates throughout.
