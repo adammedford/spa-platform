@@ -61,8 +61,8 @@
    `workflow` and others to condition keys for GitHub, and advises "Use immutable identifiers, not
    names". IAM refuses a GitHub trust policy with no `sub` condition or one that is "solely a
    wildcard" (section 2).
-7. **Environments' required reviewers work today, for free, with no AWS involved, and leave a record
-   an API reads back.** A job that references an environment "must follow any protection rules for
+7. **Environments' required reviewers are available today, for free, with no AWS involved, and leave
+   a record an API reads back.** A job that references an environment "must follow any protection rules for
    the environment before running or accessing the environment's secrets." The record is
    `GET /repos/{owner}/{repo}/actions/runs/{run_id}/approvals`: `state`, `comment`, `user`,
    `environments`. So the approval step and its evidence are available as a stand-in on their own;
@@ -127,7 +127,9 @@ and the SAML set. All match `iam:*Provider*`. The Terraform resource
 `aws_iam_openid_connect_provider.github` in `infra/bootstrap/ci-role.tf` calls the create and get
 actions, so an apply with `create_github_oidc_provider = true` is refused under either plan. The
 statement carries no condition, so no principal in a project escapes it. SAML federation is denied
-by the same pattern.
+by the same pattern. Because the whole answer rests on this statement, the page was also fetched raw
+with `curl` and searched: `iam:*Provider*` and `DenyIAMRestrictedActions` each occur twice, once
+under `AllowFreeTierServices`'s policy and once under `AllowPaidTierServices`'s.
 
 **The provider is required.** "Create a role for OpenID Connect federation"
 (<https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_create_for-idp_oidc.html>, read
@@ -349,7 +351,7 @@ job and its environment secrets.
 **May the author approve their own run?** By default, yes: the prevention is an option. "Reviewing
 deployments"
 (<https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/review-deployments>,
-read 2026-11-16): "If the targeted environment is configured to prevent self-approvals for
+read 2026-11-16; its sentences also came back split and are joined at the split): "If the targeted environment is configured to prevent self-approvals for
 deployments, you will not be able to approve a deployment from a workflow run you initiated." With
 one account that leaves two shapes, both inferred:
 
@@ -414,12 +416,17 @@ model for a team of one"). A second GitHub account with write access, held by a 
 the only thing read that changes this. Whether a GitHub App's or a bot account's review counts
 toward a required approval was not read.
 
-**Plan availability, not found.** The plan callouts of "About protected branches" and "About
-rulesets" did not come back from either page. The rulesets page's extraction gave a sentence about
-"customers on GitHub Team and GitHub Enterprise plans" that reads as a fragment about a narrower
-feature, so it is not relied on. The API shows branch protection is in force on this public Free
-repository; for rulesets, and for either feature on a private Free repository, the availability is
-**not found** here.
+**Plan availability.** The plan callouts of "About protected branches" and "About rulesets" did not
+come back from either page. The rulesets page's extraction gave a sentence about "customers on
+GitHub Team and GitHub Enterprise plans" that reads as a fragment about a narrower feature, so it is
+not relied on. "GitHub's plans"
+(<https://docs.github.com/en/get-started/learning-about-github/githubs-plans>, read 2026-11-16)
+lists, for GitHub Free for personal accounts, "Deployment protection rules for public
+repositories", and for GitHub Pro, under "Advanced tools and insights in private repositories",
+"Required pull request reviewers", "Multiple pull request reviewers" and "Protected branches". By
+inference, a private repository on Free has neither protected branches nor required reviews; the
+page does not say so in a sentence. The API shows branch protection in force on this public Free
+repository. For rulesets on either plan the availability is **not found** here.
 
 ## 5. Session duration, and what stops a run from running up the bill
 
@@ -548,8 +555,12 @@ For:
   `.../actions/permissions/fork-pr-contributor-approval` (`first_time_contributors`);
   `.../actions/permissions/access` (HTTP 422, "Access policy only applies to internal and private
   repositories").
+- `.../actions/variables` (no variable: `AWS_PLAN_ROLE_ARN` is unset, as ADR-0016 decision 3 says)
+  and `.../actions/runs?per_page=1` (the latest run, to see the API answer; nothing is drawn from
+  it).
 - `curl` of <https://servicereference.us-east-1.amazonaws.com/v1/iam/iam.json> and of the CodeBuild
-  price list for `us-east-2`, each parsed with `python3 -I`. No credential.
+  price list for `us-east-2`, each parsed with `python3 -I`; `curl` of the managed-policies page,
+  searched with `grep` for the deny statement (section 1). No credential.
 - Repository files read at `adf0273`, as the Method bullet lists.
 
 **Not executed:** any `aws` call, any `terraform` command, any workflow run, any token request, any
@@ -585,6 +596,7 @@ a page, not from an observation.
 | <https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches> | Required reviews, the administrator exemption, bypass lists; plan callout not found |
 | <https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/about-rulesets> | Bypass by role, team or app; plan callout not found |
 | <https://docs.github.com/en/billing/concepts/product-billing/github-actions> | Free usage for public repositories (list items paraphrased) |
+| <https://docs.github.com/en/get-started/learning-about-github/githubs-plans> | What Free and Pro personal plans list for public and private repositories; silent on rulesets |
 
 **Could not verify:**
 
@@ -595,6 +607,7 @@ a page, not from an observation.
 - that a fork's pull request cannot fetch an OIDC token (inferred, section 2);
 - how long a job waits for review, who counts as the initiator of a scheduled or app-started run,
   and how a bypass is recorded (section 3);
-- plan availability of rulesets, and of branch protection on a private Free repository (section 4);
+- plan availability of rulesets; that a private Free repository lacks branch protection is inferred
+  from the plans page (section 4);
 - everything about the CodeBuild runner beyond the tutorial page (section 6);
 - `aws-actions/configure-aws-credentials`, which was not read.
