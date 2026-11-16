@@ -12,6 +12,18 @@ Start with the operator session in [README.md](README.md). Docker Desktop must b
 buildx (decision D-2 in `docs/dependencies.md`), and the Session Manager plugin must be installed
 for the readiness wait's tunnel unless `--url` is given.
 
+Docker Desktop must also use the containerd image store. Step 2 builds each image with
+`--sbom=true --provenance=mode=max`, and those attestations make the pushed tag an image index.
+The classic image store cannot hold an image index, so with it Docker's default builder, the docker
+driver, fails the build and nothing is pushed (`tools/scripts/deploy.sh`'s header, #783;
+https://docs.docker.com/build/metadata/attestations/). Turn it on before you run `deploy.sh`:
+Docker Desktop, Settings, General, **Use containerd for pulling and storing images**, then Apply
+(https://docs.docker.com/desktop/features/containerd/). Images in the classic store are hidden
+after the switch, which costs nothing here because each build pulls its base again (`--pull`). To
+check, run `docker info --format '{{.DriverStatus}}'`: with the containerd store it prints
+`[[driver-type io.containerd.snapshotter.v1]]`, and output without that `driver-type` line means
+the classic store (https://docs.docker.com/engine/storage/containerd/).
+
 ## A deployment to a running cell
 
 ```bash

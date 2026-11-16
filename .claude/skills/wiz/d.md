@@ -29,7 +29,8 @@ cutover is adds and in-place changes (the table, the ring's grants, D6's network
 count, deployment and shutdown settings). A second `must be replaced`, or any `will be destroyed`,
 stops the sitting as rule 2 says, and the human reads the plan outside the wizard. The scripts that
 apply inside D keep their confirm on launch: `deploy.sh` in D0 and D6 with C1's shape, `teardown.sh`
-in D10 with T's case list.
+in D10 with T's case list. D6's is given before `tools/wiz_d6.sh`'s call, since the lever launches
+`deploy.sh` later, on the driver's line, with nobody asked again.
 
 **Parts read from the tree at run time.** D names two parts by ticket and spells neither: the G6
 block of `infra/envs/poc/platform/terraform.tfvars.example` (#338's store and ring keys, #347's two
@@ -46,6 +47,16 @@ and before D2's end, and a failed D2 whichever way the human then answers, first
 closes the sitting browser, as D2 says, and a failed D2 with no convergence read says what the cell
 is before the question, as D2 says too. A declined D10 is recorded as "not run: declined", keeps
 D2's copy of `terraform.tfvars`, and the sitting ends naming where it is.
+
+A row whose driver is fixed during the run (#1205) is run from a worktree holding the fix, with
+`--project <worktree>/tests/e2e` in the row's command and
+`SPA_E2E_OUTPUTS="$PWD/infra/envs/poc/outputs.json"` added to its switches: the prelude leaves the
+call in the main checkout, whose `seed.sh` and `deploy.sh` wrote that file, and a worktree has none,
+so without it the test dies in seconds. Its evidence goes to a directory of its own, named in the
+post. Row 3 runs first, from that worktree with those switches, since it mutates nothing, and the
+fixed row runs only after row 3 passes from that worktree. Its post names the branch and the commit
+the driver came from (`git -C <worktree> rev-parse --abbrev-ref HEAD` and `git -C <worktree>
+rev-parse HEAD`).
 
 **D0, the fresh deploy and the live login (#348 Q22).** The root is absent (Stage 0). Fetch and
 fast-forward first (rule 8) and name the commit: D0 deploys the commit `main` is on, which is the
@@ -269,7 +280,9 @@ Then the reads, each as `shown aws ...`, and what each must show:
    settings:environment[?starts_with(name, 'Session__') || starts_with(name, 'DataProtection__')]}"`:
    `stopTimeout` 30, `Session__Store` dynamodb, the table name, the ring prefix.
 3. The target group: `elbv2 describe-target-group-attributes --target-group-arn "$TG" --query
-   "Attributes[?Key=='deregistration_delay.timeout_seconds']"`: 30.
+   "Attributes[?Key=='deregistration_delay.timeout_seconds'].[Key,Value]" --output text`: 30. A read
+   that returns a `Value` asks for text, because JSON prints a `Value` on a line apart from its
+   `Key` and `shown`'s redaction then elides it as a parameter's.
 4. The service and its tasks: `ecs describe-services --cluster spa-poc --services gateway --query
    'services[0].{desired:desiredCount,running:runningCount,deployment:deploymentConfiguration,
    publicIp:networkConfiguration.awsvpcConfiguration.assignPublicIp}'`: two running, 100% / 200%,
@@ -280,7 +293,7 @@ Then the reads, each as `shown aws ...`, and what each must show:
    index, time to live on `expiresAt`.
 6. The ring: `ssm describe-parameters --parameter-filters Key=Path,Values=/spa-platform/poc/data-protection/
    --query 'Parameters[].{name:Name,type:Type}'`, then for each name `ssm list-tags-for-resource
-   --resource-type Parameter --resource-id "$NAME"`: the three tags of `contracts/resource-tags.md`
+   --resource-type Parameter --resource-id "$NAME" --query 'TagList[].[Key,Value]' --output text`: the three tags of `contracts/resource-tags.md`
    on each. `describe-parameters` returns no values.
 7. The task policy: `iam list-role-policies --role-name "$ROLE"` and `iam list-attached-role-policies
    --role-name "$ROLE"`, then each inline policy with `iam get-role-policy --role-name "$ROLE"
@@ -309,7 +322,7 @@ that runs a row:
 export SPA_E2E_STACK=deployed SPA_E2E_PLATFORM_CONFIG="$PWD/$E/platform-config.json" SPA_E2E_EVIDENCE="$PWD/$E/continuity"
 git check-ignore -q "$E/continuity/x" && mkdir -p "$E/continuity"     # the class refuses a directory git does not ignore
 shown dotnet test --project tests/e2e -- --filter-method "Gateway.E2ETests.Deployed.ContinuityTests.Row<n>_*" \
-  --report-xunit-junit --results-directory "$E/results-row<n>"
+  --report-xunit-junit --results-directory "$E/results-row<n>" | tee "$E/row<n>-test.out"
 ```
 
 The selector is the class summary's, read from the tree before D0; a summary that names another
@@ -319,8 +332,8 @@ client trace id in the request line's stream, pulls the row's own lever, and wri
 evidence file under `SPA_E2E_EVIDENCE`, holding no cookie, token or key; a rerun of a row reads
 that file and spends only the attempts and wall time left (10 attempts and 15 minutes for a
 two-task row, reruns included), and a spent row reports `not proved:` without pulling a lever, so a
-fresh budget needs a fresh evidence directory, named in the post. The junit file and the evidence
-file are the row's bundle files. Each run reads the class summary's mutations and levers for the
+fresh budget needs a fresh evidence directory, named in the post. The junit file, the evidence
+file and `row<n>-test.out`, the run's output as the terminal showed it, are the row's bundle files. Each run reads the class summary's mutations and levers for the
 row before asking for the approval; the three rows that mutate get it as follows, and a lever or a
 mutation the summary does not name stops the sitting:
 
@@ -333,16 +346,34 @@ mutation the summary does not name stops the sitting:
   task is RUNNING, and use the id it prints; with none, say so when asking: the row then refuses and
   stops nothing. Its evidence file then records not proved and names only the exception, so post it as
   not proved with the refusal's line from the test's output. A refusal spends no attempt.
-- **D6 (row 6, F1; #348 Q29).** The class drives for up to 40 minutes while the operator deploys:
-  start the row's `dotnet test` in the background first, then `deploy.sh` on the same commit as C1
-  runs it (confirm on launch, C1's shape: the one replacement is the task definition), with no
-  tunnel started while it runs. Once `deploy.sh` prints its pass line, restart `tunnel.sh` through a
-  new task as D2 does: stop it, note the UTC time, start it again in the background (keep the id it
-  prints after `through task`), run `verify-tunnel.sh /healthz`, and note the time it passed. The
-  old hop's task drains during the roll, so requests through it fail before the stop; the gap is
-  recorded as missing coverage and the new hop's id kept. The class reads the old and new task ids
-  and both image digests from ECS and posts nothing itself; `deploy.sh`'s wait names both new task
-  ids, and those go into the post.
+- **D6 (row 6, F1; #348 Q29, #1203).** The class drives for up to 40 minutes while the operator
+  deploys, and `tools/wiz_d6.sh` (#1204) is the lever: it waits for the driver's line starting
+  `row6: launch deploy.sh now`, runs `deploy.sh` on the same commit as C1 runs it, and on
+  `deploy.sh`'s pass line stops `tunnel.sh` and starts it again through a new task, as D2 does by
+  hand. The launch waits for that line, written `ContinuityBounds.Row6LaunchAfterFirstSignIn` after
+  the first sign-in, because a session's refresh must fall inside the deployment interval, and on
+  2026-11-14 a deployment launched straight after the test started ended before any session
+  refreshed, twice. Ask for `deploy.sh`'s confirm on launch, C1's shape (the one replacement is the
+  task definition), before the one call that starts both, in the background, with no tunnel started
+  by hand while it runs:
+
+  ```bash
+  shown dotnet test --project tests/e2e -- --filter-method "Gateway.E2ETests.Deployed.ContinuityTests.Row6_*" \
+    --report-xunit-junit --results-directory "$E/results-row6" > "$E/row6-test.out" &
+  tools/wiz_d6.sh --test-pid $! --test-output "$E/row6-test.out" --record "$R"; echo "wiz_d6 exit=$?"; wait
+  ```
+
+  The lever runs bare, not under `shown`: it writes `deploy.sh`'s command and output and its own
+  `wiz_d6:` lines to the record itself, and prints `deploy.sh`'s output redacted. Under `dotnet test`
+  the driver's line never reaches `"$E/row6-test.out"`, since the testing platform keeps a test's
+  standard output from it, so until #1216 decides how the row runs the lever waits out its 600 s
+  and exits 1 having launched nothing: the row then runs on with no deployment, and is posted as
+  what it reports. After the lever's exit 0, run `shown tools/scripts/verify-tunnel.sh /healthz` and
+  note the time it passed; from the lever's `tunnel stopped at` time to that one is the gap, recorded
+  as missing coverage, and the id after `through task` is the new hop's. The old hop's task drains
+  during the roll, so requests through it fail before the stop. The class reads the old and new task
+  ids and both image digests from ECS and posts nothing itself; `deploy.sh`'s wait names both new
+  task ids, and those go into the post.
 - **D7 (row 7; #348 Q31).** The class onboards app 3 with #212's F-07 flow (the apps root's plan
   and apply of app 3's three creates, `spactl release publish`, `app add`, `wait` on both tasks) and
   offboards it after the row, failed or not. Show C3's step 1 addresses as the mutations, and the
@@ -353,9 +384,15 @@ mutation the summary does not name stops the sitting:
 Rows 3, 5, 8 and 9 mutate nothing and run on approval of the command. Each row's post, `## D<n>,
 row n` on #348, carries the command, the test's verdict line (`passed`, or the message starting
 `failed:` or `not proved:`), the task ids the evidence file names, the attempts spent and the wall
-time, the junit and evidence files by SHA-256, and for D4, D6 and D7 the lever's output lines. A
-`not proved:` row is posted as not proved, never as passed, and the question of "Failure, and the
-way out" follows.
+time, the junit, evidence and output files by SHA-256, and for D4 and D6 the lever's output lines:
+D4's refusal or stop line from the test's output, D6's `wiz_d6:` lines and `deploy.sh`'s pass line.
+Row 7's test prints none of its onboarding's plan, apply or `spactl` output, so D7's post says the
+offboarding ran inside the test and names the apps root's plan exit, the 0 above, as the proof.
+`python3 -I tools/wiz_row_post.py <n> --bundle "$E"` (#1204) writes the draft from the bundle: the
+heading with the verdict, the evidence file's reason, attempts, wall time and observations, and the
+three files' SHA-256. The command, the lever's lines and the task ids `deploy.sh` named are the
+sitting's to add; read the whole draft once, then post it. A `not proved:` row is posted as not
+proved, never as passed, and the question of "Failure, and the way out" follows.
 
 **D10, the teardown and the restore (row 10; #361 Q12).** As T: show `teardown.sh`'s header step
 list as the case list (it now deletes the ring prefix and the table too), confirm on launch, and

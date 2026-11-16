@@ -166,6 +166,30 @@ body closes its ticket at the merge, whatever the description says: 83f53f0, the
 closed #105, which #120's description named on a `Ticket: #105` line and never after a closing
 keyword, through a sentence in its body saying a later session would close it.
 
+**It lists the overnight answers that wait on the landing, and does not wait for them** (#531).
+After its refusals and before the merge call, `tools/land.sh` runs `tools/overnight_answers.py` over
+the `## Questions:` comments on the open `Overnight <date>` issues, and prints one line for each
+question that names the pull request's number or a number its description closes:
+
+```
+land: #<issue> Overnight <date> Q<n> names #<number>, a Confirm covers it: <its first line>
+land: #<issue> Overnight <date> Q<n> names #<number>, no Confirm covers it: <its first line>
+```
+
+"A Confirm covers it" says Adam has answered the question, perhaps no. "No Confirm covers it" says
+the answer is open or pre-accepted, so provisional. Neither says what the answer is: read it on the
+issue. A line is a report, neither an instruction nor an authority. Nothing listed stops the merge,
+and a reader that fails prints one line, `land: could not read the Overnight issues' questions`, and
+the merge proceeds, the departure from `CODING_STANDARDS.md` -> "A check fails closed" that #531
+decided.
+
+**Read them before writing the body.** With `--subject` given, nothing pauses between the list and
+the merge call, and the body is fixed by then. So run the reader first, from the repository:
+`python3 -I tools/overnight_answers.py --number <pr> --number <each ticket it closes> --lookup`. It
+prints the same lines without the `land: ` prefix and writes nothing. What a confirmed answer asks
+of this merge, a line in the merge body or a closing comment, the landing session does. A question
+no Confirm covers goes to Adam before the merge, who may Confirm it first or land without it.
+
 The body says what was verified and how; write it to a file and pass `--body-file <path>`, so it
 rides in the merge commit rather than staying on the pull request. A named pipe or a process
 substitution, `--body-file <(...)`, works as well; `-` does not, because the script keeps standard
@@ -242,7 +266,7 @@ The session that will launch the overnight run prepares it, and launches `.claud
 
 `tools/overnight_preflight.sh --fixture <path> <date>` judges each launch precondition and prints the launch arguments; its header says what each line checks, and `<date>` is the morning the run ends. Set `standingAnswer` to the grant the human gave for this launch, which is off unless given (ADR-0021 decision 3). The printed `skip` already holds the candidates of the demoted, shape, adr and decision lines. Name with `--skip`, and run again, each other ticket a lane cannot finish, so the arguments and the fixture both carry it. A ticket the claims line lists as held is read as claimed, so no lane takes it; one with an open box a lane can build is freed by the rename that line prints, once its remaining local and remote claims are checked, since the rename frees no same-id branch origin still holds; the rest stay held.
 
-`node .claude/workflows/overnight_harness.mjs .claude/workflows/overnight.js <path>` runs the script on that fixture with every agent mocked, and passes before the launch. The file is git-ignored, and today only the main checkout holds it: a fresh clone or a worktree has none. Check that it is there and is the intended mock before running it; if it is absent, stop and resolve that first, and report no mock pass without it. A landing on `main` or a tracker edit moves the forecast, so after either, run preflight and the mock run again, last before the launch.
+`node .claude/workflows/overnight_tests.mjs --forecast <path>` is the forecast run: it runs the script on that fixture with every agent mocked and no synthetic scenario, and its last line, starting `overnight_tests: forecast: pass:`, is read before the launch. It is the overnight script's tracked test companion, so a fresh clone or a worktree runs it as the main checkout does. The git-ignored `overnight_harness.mjs` it replaces is retired: a copy still in a checkout is deleted, never run. A landing on `main` or a tracker edit moves the forecast, so after either, run preflight and the forecast run again, last before the launch.
 
 ## The morning's launches
 

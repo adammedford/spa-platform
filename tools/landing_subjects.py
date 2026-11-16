@@ -13,13 +13,16 @@ main it could not have been corrected at all (#287, #296).
 
 This reads every commit from the base to HEAD, whatever its parents, and judges each whose subject
 is a full landing, by the same reading as roadmap.py's LANDED_SUBJECT less its "part of" branch:
-for each line of its message that starts `Ticket: #<n>` (the line the overnight run and
-docs/agents/landing-work.md put in a merge body), it reads issue n's body through gh and holds the
-commit when that body has an open `- [ ]` box, naming the commit, the issue and each open box by
-its place among the body's boxes. A "Merge part of task" subject is never judged: it says the row is
-unfinished, and tools/check.sh holds it to its Outstanding lines instead (#291). A full-landing
-subject with no Ticket line is never judged either; it is named in a note, since the merges from
-before the tracker moved to GitHub carry none.
+for each line of its message that starts `Ticket: #<n>`, it reads issue n's body through gh and
+holds the commit when that body has an open `- [ ]` box, naming the commit, the issue and each open
+box by its place among the body's boxes. That line is written by overnight.js's integrate step, into
+the body of each task merge it makes on the run branch; docs/agents/landing-work.md calls that
+merge the ticket's merge body in a run-branch landing. A foreground landing carries no such line in
+its merge: the guide puts its tickets in the pull request description, and tools/land.sh merges it
+on the server, so that merge is never in a range this reads (#897). A "Merge part of task" subject
+is never judged: it says the row is unfinished, and tools/check.sh holds it to its Outstanding lines
+instead (#291). A full-landing subject with no Ticket line is never judged either; it is named in a
+note, since the merges from before the tracker moved to GitHub carry none.
 
 A full landing is held on a second ground too (#388). On 2026-10-24 the run wrote "Merge task P2-2"
 over #340, all its boxes ticked, directly after "Merge part of task issue-338", whose ticket and

@@ -44,10 +44,11 @@ and every agent call answered by a sentinel, as .claude/workflows/overnight_test
 script either halts on a bad launch before its first agent or reaches Collect. node is required:
 without it the case fails, naming it.
 
-**The harness fixture is read back whole (#485).** A case run with --fixture reads the file it
+**The forecast fixture is read back whole (#485).** A case run with --fixture reads the file it
 wrote and compares it with the arguments printed, the forecast's tickets and the ready-for-agent ids
-the skip leaves. The harness itself, .claude/workflows/overnight_harness.mjs, is git-ignored and not
-in the checkout, so no case runs it; the fixture's keys are the ones it reads.
+the skip leaves. The forecast run itself, `node .claude/workflows/overnight_tests.mjs --forecast
+<path>`, is proved by that companion's default run (#740), so no case here runs it; the fixture's
+keys are the ones it reads.
 
 The cases run at the same time on the threads of tools/companion_runner.py; each keeps to its own
 throwaway directory and passes its own environment to what it runs.
@@ -1425,7 +1426,7 @@ class ClaimsBlockerTests(PreflightTestCase):
 
 
 class FixtureTests(PreflightTestCase):
-    """#485: --fixture writes the overnight harness's input, `{args, tickets, expect}`, from the
+    """#485: --fixture writes the forecast run's input, `{args, tickets, expect}`, from the
     forecast, and --skip names what the launch plan skips besides the lines' candidates."""
 
     def test_the_fixture_holds_the_arguments_the_forecasts_tickets_and_what_integrates(self):
@@ -1445,13 +1446,13 @@ class FixtureTests(PreflightTestCase):
             # (#711).
             "expect": {"integrated": ["issue-10", "2.1", "6.9"], "skippedForBlocker": [], "startsBefore": [],
                        "note": "6.9 is needs-triage and integrates only if Route sends it to an agent, as "
-                               "the mock route of the harness does; on the night a route to a human "
+                               "the mock route of the forecast run does; on the night a route to a human "
                                "leaves it out"},
         }, json.loads(fixture.read_text()))
         self.assertNotIn("standingAnswer", fixture.read_text())
         # The stdout contract holds: the verdict, then the arguments, last.
         self.assertEqual(14, len(result.lines), result.stdout)
-        self.assertIn(f"overnight_preflight: wrote the harness fixture {fixture}", result.stderr)
+        self.assertIn(f"overnight_preflight: wrote the forecast fixture {fixture}", result.stderr)
 
     def test_the_shape_and_claims_lines_candidates_are_in_the_written_skip(self):
         case = Case(self)
@@ -1495,7 +1496,7 @@ class FixtureTests(PreflightTestCase):
         self.assertEqual(["issue-16", "issue-15"], expect["skippedForBlocker"])
 
     def test_a_needs_triage_ticket_outside_the_skip_is_expected_to_integrate_with_the_note(self):
-        # #711: the harness's mock routes every needs-triage ticket to an agent, so 6.9 and 6.11
+        # #711: the forecast run's mock routes every needs-triage ticket to an agent, so 6.9 and 6.11
         # integrate under it; 6.10 is in the skip and is not written; and the note says the routing
         # is Route's.
         tickets = TICKETS + [ticket("6.10", 359, "ws6-verification", "needs-triage"),
@@ -1507,7 +1508,7 @@ class FixtureTests(PreflightTestCase):
         expect = json.loads(fixture.read_text())["expect"]
         self.assertEqual(["issue-10", "2.1", "issue-12", "6.9", "6.11"], expect["integrated"])
         self.assertEqual("6.9, 6.11 are needs-triage and integrate only if Route sends them to an agent, "
-                         "as the mock route of the harness does; on the night a route to a human leaves "
+                         "as the mock route of the forecast run does; on the night a route to a human leaves "
                          "that one out", expect["note"])
 
     def test_a_needs_triage_ticket_a_ready_for_human_blocker_holds_goes_to_a_human(self):
@@ -1526,7 +1527,7 @@ class FixtureTests(PreflightTestCase):
         self.assertEqual(["issue-10", "6.8"], expect["integrated"])
         self.assertEqual(["issue-14"], expect["skippedForBlocker"])
         self.assertEqual("6.8 is needs-triage and integrates only if Route sends it to an agent, as the "
-                         "mock route of the harness does; on the night a route to a human leaves it out",
+                         "mock route of the forecast run does; on the night a route to a human leaves it out",
                          expect["note"])
 
     def test_a_needs_triage_ticket_waiting_on_a_ticket_no_lane_runs_skips_on_the_blocker(self):
@@ -1567,7 +1568,7 @@ class FixtureTests(PreflightTestCase):
         result = case.run("--fixture", str(fixture), DATE)
         self.assertEqual(1, result.status)
         self.assertFalse(fixture.exists())
-        self.assertIn("overnight_preflight: no harness fixture written: the forecast failed", result.stderr)
+        self.assertIn("overnight_preflight: no forecast fixture written: the forecast failed", result.stderr)
 
     def test_a_bad_invocation_is_refused_before_anything_runs(self):
         case = Case(self)
@@ -1662,9 +1663,9 @@ run(JSON.parse(given), agent, () => {}, () => {}, async (xs) => Promise.all(xs.m
                 self.assertIn("bad launch", halted)
                 self.assertIn("standingAnswer:", halted)
 
-    def test_the_harness_sees_a_bad_argument(self):
+    def test_the_launch_case_sees_a_bad_argument(self):
         # The validation this companion relies on refuses what it should, so a pass above is the
-        # validation passing and not the harness missing it.
+        # validation passing and not the launch case missing it.
         halted = self.launch({"repo": "relative", "date": DATE, "wt": "/x", "standingAnswer": True})
         self.assertIn("repo:", halted["halted"])
 

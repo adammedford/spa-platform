@@ -852,6 +852,8 @@ const sinceHeadsOf = (records, inv) => {
 // dotted name in the parenthesis after a bare method is the whole name (#695). withClass false
 // reads only the first form: in a cell someone wrote, 'Nom (Assert.Null)' has the second form's
 // shape and names no class, so there the parenthesis names the whole test only when it ends in it.
+// It reads a whole name, as a runner prints it, which never carries free text after its groups;
+// nominated() reads a cell's start and narrows the first form to three parts (#809).
 // A unittest subtest prints its message in brackets, its parameters in a parenthesis or both after
 // the class one, 'test_x (pkg.Class) [msg] (k='v')', and is read without them (#793): on #792 the
 // greedy parenthesis took both groups, the name read as the bare test_x, and a candidate Class.test_x
@@ -870,6 +872,12 @@ const dotted = (f, withClass = true) => {
 // 'test_x (pkg.Class.test_x)' is read as its whole dotted name, by dotted() as mutationRow reads a
 // failing name, so another class's test_x is not this one; 'test_x (pkg.Class)' is read as test_x,
 // since a qualifier such as '(Assert.Null)' has its shape, and keeps pkg.Class as its cls (#808).
+// In a cell the parenthesis names the whole test only in unittest's printed module.Class.method
+// shape, three or more dotted parts ending in the bare name (#809): 'Nom (Assert.Nom)', a qualifier
+// ending in the name, reads as Nom, where it read as the test Assert.Nom. The cell is read by the
+// unittest form at its start, whatever follows the closing parenthesis, so 'test_x (pkg.C.test_x)
+// red on Assert' reads as pkg.C.test_x, its trailing text kept in why by the '(nominated as <cell>)'
+// suffix; dotted() alone misses the whole cell there, and it read as the bare test_x.
 // mutationRow holds a failing name unittest printed to that class, since only a Python run prints
 // one: on #764 the bare reading took another class's red test_x for the nomination. A failing name
 // xUnit printed, 'Ns.Class.Nom', is matched by the bare name, so 'Nom (Assert.Null)' still reads
@@ -886,15 +894,17 @@ const dotted = (f, withClass = true) => {
 // unless the whole cell is itself a candidate's test. A backtick leaves every cell before any of
 // this is read, since a Broken cell cannot hold one and its row would read as none, forgetting a
 // hold on it, and '`Nom`' is the test Nom. A cell of backticks and spaces alone names no test.
+const NOMINATED_UNITTEST = /^([A-Za-z_]\w*)\s*\(([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+)\)/
 const nominated = (s, byTest, i = 0) => {
   const cell = (s.test || '').replace(/`/g, '').trim()
   if (!cell) return { ...s, test: `(nomination ${i + 1} names no test)`, why: `the Standards axis nomination names no test: ${s.why}`, kind: 'nominated', cls: '', unnamed: true }
   const bare = (/^[^\s(]*/.exec(cell) || [''])[0]
-  const whole = dotted(cell, false)
+  const lead = (NOMINATED_UNITTEST.exec(cell) || [cell])[0]
+  const whole = dotted(lead, false)
   const prose = /\s/.test(cell.split('(')[0].trim()) && (byTest.has(cell) || !byTest.has(bare))
   const test = prose ? cell
-    : whole !== bare && whole.endsWith(`.${bare}`) ? whole : bare || cell
-  const classed = dotted(cell)
+    : whole !== bare && whole.endsWith(`.${bare}`) && whole.split('.').length >= 3 ? whole : bare || cell
+  const classed = dotted(lead)
   const cls = test === bare && classed !== bare ? classed.slice(0, -bare.length - 1) : ''
   const why = test === s.test ? s.why : `${s.why} (nominated as ${s.test})`
   return { ...(byTest.get(test) || byTest.get(bare)), ...s, test, why, kind: 'nominated', cls }
@@ -926,9 +936,21 @@ const mutationList = (inv, standards, d, prior = { held: null, clearers: [] }) =
   // names, as before. A later record's reproduced cell in that spelling answers the same candidate
   // (#901): on #802 the later cell 'x_tests.py (companion)' did not name the candidate
   // 'tools/x_tests.py', so the answered row was mutated again.
+  const wholeCandidates = candidates.filter((c) => c.file && (c.project === c.file || /\.mjs$/.test(c.file)) && [c.file, c.file.split('/').pop()].includes(c.test))
   const wholeFor = (cell) => {
     const [, f] = /^(\S+) \(companion\)$/.exec((cell || '').trim()) || []
-    return f ? candidates.filter((c) => c.file && (c.project === c.file || /\.mjs$/.test(c.file)) && [c.file, c.file.split('/').pop()].includes(c.test) && [c.file, c.file.split('/').pop()].includes(f)) : []
+    return f ? wholeCandidates.filter((c) => [c.file, c.file.split('/').pop()].includes(f)) : []
+  }
+  // A stated or nominated cell that is a bare basename, with no candidate of its text, takes its file
+  // and project from the one whole-file candidate whose file ends in it, as wholeFor reads a held
+  // cell (#804): the same-text lookup misses a basename cell beside a path candidate. None, or two
+  // files, and it keeps what it had, a row with no file. The row keeps its own test, the author's or
+  // the Standards axis's cell, so the candidate keeps its own row too.
+  const borrowed = (m) => {
+    if (m.file || !m.test || m.test.includes('/')) return m
+    const hits = wholeCandidates.filter((c) => c.file.endsWith(`/${m.test}`))
+    if (new Set(hits.map((c) => c.file)).size !== 1) return m
+    return { ...hits[0], ...m, file: hits[0].file, project: hits[0].project }
   }
   const held = prior.held ? [...prior.held.rows].reverse().flatMap((h) => {
     const base = { mutation: h.broken, quote: h.broken, failed: -1, total: -1, kind: 'held', heldBy: h.url, cell: h.test }
@@ -943,8 +965,8 @@ const mutationList = (inv, standards, d, prior = { held: null, clearers: [] }) =
   const touched = (c) => [c.file, c.breaks].some((f) => f && reviewed.has(f))
   const all = [
     ...held,
-    ...(inv.statedMutations || []).map((s) => ({ ...byTest.get(s.test), ...s, kind: 'stated' })),
-    ...((standards && standards.nominations) || []).map((s, i) => nominated(s, byTest, i)), // empty-ok: a null Standards axis fails the pull request before mutationList runs, so standards is never null here
+    ...(inv.statedMutations || []).map((s) => borrowed({ ...byTest.get(s.test), ...s, kind: 'stated' })),
+    ...((standards && standards.nominations) || []).map((s, i) => borrowed(nominated(s, byTest, i))), // empty-ok: a null Standards axis fails the pull request before mutationList runs, so standards is never null here
     ...candidates.filter(touched).map((c) => ({ ...c, kind: 'candidate' })),
     ...candidates.filter((c) => !touched(c)).map((c) => ({ ...c, kind: 'candidate' })),
   ]
@@ -1000,6 +1022,18 @@ const mutationRow = (n, m, i, got) => {
   // Anything else stays a catch, failing closed to the verdict (#794): a test that adds to the name,
   // 'x_tests.py (check: ...)' scoping one check of it or 'x_tests.py (companion)', and a Terraform
   // test file, whose run is its whole directory, so a sibling file's red run would read as its own.
+  // A row with no file names its file another way, or stays a catch (#804). On #794 a stated or held
+  // row naming a whole companion with no same-text candidate read caught elsewhere when its own run
+  // went red, and a stated or nominated one was did-not-fail, with no acceptance route. A stated or
+  // nominated row with no file is its whole file when its own project is its cell and that cell is a
+  // repository path to a .py file (ownPy below): the agent is told to run that file alone, so no
+  // sibling file can go red in it. A directory project, a bare basename and a Terraform test file,
+  // whose run is its directory, stay a catch. A basename cell takes its file and project from the one
+  // whole-file candidate whose file ends in it (borrowed() in mutationList), and is read by the rule
+  // above. A candidate with no file is the inventory's omission and stays a catch (#805). A held row
+  // whose cell names no candidate is out of scope: its project is empty, and the mutation agent does
+  // not report the project it ran, so nothing says its run was that file. It stays a caught row,
+  // which the verdict answers by accepting it.
   const cell = (m.test || '').trim()
   // A Node companion is run as `node <file>`, so its run is its file whatever project the inventory's
   // cell names (#938): on #796 a stated row on overnight_tests.mjs took the directory as its project.
@@ -1007,7 +1041,8 @@ const mutationRow = (n, m, i, got) => {
   // known by the .mjs file its cell names; that makes it only a caught row, which the verdict still
   // has to answer (#1069), since only a candidate's file, not the author's cell, shows the run was it.
   const nodeFile = /\.mjs$/.test(m.file || '') || /\.mjs$/.test((/^[^\s(]*/.exec(cell) || [''])[0])
-  const wholeFile = !!m.file && (m.project === m.file || nodeFile) && (cell === m.file || cell === m.file.split('/').pop())
+  const ownPy = !m.file && (m.kind === 'stated' || m.kind === 'nominated') && m.project === cell && /^\S+\/\S+\.py$/.test(cell)
+  const wholeFile = ownPy || (!!m.file && (m.project === m.file || nodeFile) && (cell === m.file || cell === m.file.split('/').pop()))
   // A nomination's cls, from a cell 'test_x (pkg.Class)', is that class when unittest printed the
   // failing name, and nothing when xUnit did (#808); see nominated().
   const nameIn = (f) => (m.cls && UNITTEST_PRINTED.test(f) ? `${m.cls}.${m.test}` : m.test)

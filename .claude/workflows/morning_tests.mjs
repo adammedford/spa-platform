@@ -1027,7 +1027,9 @@ try {
   //    filer, the comments index and the poster. At the default maxParallel the after pass groups a
   //    night of eight tickets of every kind into at most three appliers and drops none of them; its
   //    body readers pack the questions and Confirm comments in order toward BATCH_BYTES, a packing
-  //    target and no cap (#661). Each return counts what ran.
+  //    target and no cap (#661). Each return counts what ran. The one budget these replaced grew as
+  //    seven in #78 -> "Agent budget", nine after #292, ten after #319, eleven after #514, before
+  //    #1082 split it by pass.
   checks++
   {
     const morning = await execute(newRepo(), { date: DATE }, { followUps: FU287 })
