@@ -91,6 +91,7 @@ tools/check.sh --full --port 5180               # and the tests, the smoke test,
 - **The gateway never references `fixtures/TestIdp`** (A-01), and the mock API references no `Platform.*` project (A-02).
 - **A workstream project references `Platform.Abstractions` and no other workstream's project** (A-03). Only `Gateway` references them all.
 - **Only `Platform.Identity` references the token-management package** (A-04).
+- **Never publish a PingFederate result.** The repository and its tracker are public. Ping's terms for the evaluation licence forbid publishing test results or opinions about the product without its written consent (#1269). A result is anything that records the real product's behaviour: its output, log lines, error text, timings, a suite's pass or fail against it, or a finding against it. It goes to the local store `~/Projects/spa-platform-private/`, never into a commit, a branch, an issue, a comment or a CI log, and no public workflow runs PingFederate. These are not results: Ping's documentation, the gateway's `pingfederate` profile, and runs against `fixtures/TestIdp` or Cognito.
 
 ## Where the work stands
 
