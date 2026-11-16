@@ -30,6 +30,7 @@ the thing it guards").
 """
 from __future__ import annotations
 
+import json
 import os
 import pathlib
 import random
@@ -96,6 +97,17 @@ def session(port: int) -> subprocess.Popen:
         [sys.executable, "-c", "import time; time.sleep(120)", "ssm", "start-session",
          "--document-name", "AWS-StartPortForwardingSessionToRemoteHost",
          "--parameters", f'{{"host":["x"],"portNumber":["443"],"localPortNumber":["{port}"]}}'],
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def plugin(port: int) -> subprocess.Popen:
+    """A process shaped as the session-manager-plugin the CLI runs: its arguments carry the request
+    as json.dumps writes it, with a space after each colon (awscli/customizations/sessionmanager.py)."""
+    request = json.dumps({"Target": "ecs:spa-poc_x_y", "DocumentName": "AWS-StartPortForwardingSessionToRemoteHost",
+                          "Parameters": {"host": ["x"], "portNumber": ["443"], "localPortNumber": [str(port)]}})
+    return subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(120)", "{}", "us-east-2", "StartSession", "", request,
+         "https://ssm.us-east-2.amazonaws.com"],
         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
@@ -214,6 +226,18 @@ class OnThePassLine(Case):
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertIn(f"wiz_d6: no tunnel was running on local port {self.port}; none was stopped\n", self.record_text())
         self.assertIn(f"wiz_d6: through task {NEW_TASK}\n", self.record_text())
+
+    def test_the_cli_s_plugin_child_that_holds_the_port_is_stopped_too(self) -> None:
+        test, old = self.alive_test(), self.old_tunnel()
+        held, other = plugin(self.port), plugin(self.port + 1)
+        self.addCleanup(self.end, held)
+        self.addCleanup(self.end, other)
+        self.said("now")
+        done = self.run_d6(test.pid, "--wait", "10")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIsNotNone(old.poll(), "the CLI was not stopped")
+        self.assertIsNotNone(held.poll(), "the plugin holding the port was left running")
+        self.assertIsNone(other.poll(), "a plugin on another port was stopped")
 
     def test_a_tunnel_on_another_local_port_is_left_running(self) -> None:
         test, other = self.alive_test(), self.old_tunnel(self.port + 1)

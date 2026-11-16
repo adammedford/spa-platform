@@ -26,9 +26,16 @@
 #      with deploy.sh's own status, 0 included.
 #   4. On the pass line it stops every running tunnel.sh on --local-port (8443 by default): a
 #      tunnel.sh execs into `aws ssm start-session`, so it is the process whose arguments name
-#      AWS-StartPortForwardingSessionToRemoteHost with that localPortNumber. A tunnel on another
-#      port is left alone. TERM first, then KILL after ten seconds. It writes the time the last one
-#      ended to the record, or that none was running.
+#      AWS-StartPortForwardingSessionToRemoteHost with that localPortNumber. The CLI runs the
+#      session-manager-plugin as a child, which holds the local port, and a TERM to the CLI alone
+#      leaves it running: the CLI ignores only SIGINT, SIGQUIT and SIGTSTP around the plugin's
+#      check_call and forwards no signal to it, so the CLI dies and the plugin keeps the port, and
+#      tunnel.sh's restart then refuses a busy port. The plugin's arguments carry the same request
+#      as json.dumps writes it, `"localPortNumber": ["<port>"]` with a space, so the pattern takes
+#      both processes. https://github.com/aws/aws-cli/blob/v2/awscli/customizations/sessionmanager.py
+#      and ignore_user_entered_signals in https://github.com/aws/aws-cli/blob/v2/awscli/compat.py.
+#      A tunnel on another port is left alone. TERM first, then KILL after ten seconds. It writes
+#      the time the last one ended to the record, or that none was running.
 #   5. It starts tools/scripts/tunnel.sh --local-port <port> [--keepalive <seconds>] again in the
 #      background, where it outlives this script, with its output in --tunnel-log (by default
 #      tunnel-d6-<UTC time>.out beside --test-output, in the bundle), and waits up to --tunnel-wait
@@ -135,8 +142,9 @@ if ! grep -q '^deploy: pass:' "$WORK/deploy.out"; then
   CODE=$DEPLOYED fail "deploy.sh exited $DEPLOYED without its pass line; no tunnel was stopped or started"
 fi
 
-# 4. Stop the tunnel on this port: tunnel.sh has exec'd into the session, so it is the session.
-SESSION="AWS-StartPortForwardingSessionToRemoteHost.*\"localPortNumber\":\\[\"${PORT}\"\\]"
+# 4. Stop the tunnel on this port: tunnel.sh has exec'd into the CLI, and the CLI's plugin child holds
+# the port, so both are stopped. The optional space after the colon is the plugin's json.dumps.
+SESSION="AWS-StartPortForwardingSessionToRemoteHost.*\"localPortNumber\": ?\\[\"${PORT}\"\\]"
 pids="$(pgrep -f -- "$SESSION")"
 if [ -z "$pids" ]; then
   record "no tunnel was running on local port $PORT; none was stopped"
@@ -147,8 +155,9 @@ else
     pgrep -f -- "$SESSION" > /dev/null || break
     sleep 1
   done
+  # One of the pids may already be gone, which makes kill's status non-zero; the wait still runs.
   # shellcheck disable=SC2086
-  pgrep -f -- "$SESSION" > /dev/null && kill -KILL $pids 2> /dev/null && sleep 1
+  if pgrep -f -- "$SESSION" > /dev/null; then kill -KILL $pids 2> /dev/null; sleep 1; fi
   pgrep -f -- "$SESSION" > /dev/null && fail "the tunnel on local port $PORT (pid $(echo $pids)) did not stop; no tunnel was started"
   record "tunnel stopped at $(now)"
 fi
