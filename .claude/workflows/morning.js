@@ -65,8 +65,10 @@ export const meta = {
 // verify agent and writes nothing. It fails only on a question number no questions comment yields; a
 // leading "no" is a normal override, listed and never a failure.
 //
-// Agent budget (#78 -> "Agent budget"). The morning pass (#1082): Replay 1, Verify 1, and Hand-over
-// 1 comments index (#969) and 1 poster, or none when the hand-over is identical to the latest earlier
+// Agent budget: seven in #78 -> "Agent budget"; #292 added the follow-ups reader and filer (nine),
+// #319 the comments index (ten), #514 the window reader (eleven); #1082 then split that budget by
+// pass. The morning pass (#1082): Replay 1, Verify 1, and Hand-over 1 comments index (#969) and 1
+// poster, or none when the hand-over is identical to the latest earlier
 // one: four, besides the one reader of the night's earlier hand-overs when there is one and its
 // re-reads, at most READ_RETRIES for each comment a reader returned changed (#724). The issue lookup
 // is the Replay agent's first step, not an agent of its own. A re-run whose open pull request's
