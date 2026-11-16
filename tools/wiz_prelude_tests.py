@@ -67,7 +67,15 @@ or the record. The same sitting asked three times for alice's password and got a
 clipboard and nothing else, the clipboard is emptied after 45 seconds by a job that does not hold the
 call's output open, and a failed read touches the clipboard not at all.
 
-Checkout inputs: .claude/skills/wiz/*.md .gitignore infra/modules/idp-cognito/main.tf tests/e2e/Program.cs tests/e2e/SittingBrowser/Observations.cs tests/e2e/SittingBrowser/ObservationLine.cs tests/e2e/SittingBrowser/SittingBrowser.cs tests/e2e/SittingBrowser/SittingCommand.cs
+**Sitting D's levers and drafts (#1205).** The run of 2026-11-14 found four gaps in `d.md` by failing:
+D6 gave no launch time, a driver fixed mid-run had no route, D1's `Value` reads came back elided and
+D7 asked for lines its test never prints. `SkillRunsSittingDsLeversAndDrafts` holds D6 to the driver's
+`LaunchLine` and to flags `tools/wiz_d6.sh` takes, on the file the row's run writes; each row's run to
+the output file `tools/wiz_row_post.py` reads; D1's `Value` reads to `--output text`, with the
+redactor's own elision of a JSON `Value` as the reason; and the worktree route to `SPA_E2E_OUTPUTS`
+as `DeployedStack.cs` names it. It holds the wording and the names, not a run: D runs on a cell.
+
+Checkout inputs: .claude/skills/wiz/*.md .gitignore infra/modules/idp-cognito/main.tf tests/e2e/Program.cs tests/e2e/Stack/RollingDeployLoop.cs tests/e2e/Stack/ContinuityObserver.cs tests/e2e/Stack/DeployedStack.cs tools/wiz_d6.sh tools/wiz_row_post.py tools/wiz_redact.py tests/e2e/SittingBrowser/Observations.cs tests/e2e/SittingBrowser/ObservationLine.cs tests/e2e/SittingBrowser/SittingBrowser.cs tests/e2e/SittingBrowser/SittingCommand.cs
 """
 from __future__ import annotations
 
@@ -805,6 +813,109 @@ class SkillGivesEachSittingItsOwnWayOutOfALostClaude(unittest.TestCase):
 
     def test_the_new_session_keeps_the_lost_sittings_pin(self) -> None:
         self.assertIn("runs no `--pin`", self.item)
+
+class SkillRunsSittingDsLeversAndDrafts(unittest.TestCase):
+    """D1's reads print their values, D6 runs its lever, rows 3 to 9 post the drafter's draft (#1205)."""
+
+    STACK = ROOT / "tests" / "e2e" / "Stack"
+    LEVER = ROOT / "tools" / "wiz_d6.sh"
+    DRAFTER = ROOT / "tools" / "wiz_row_post.py"
+
+    def setUp(self) -> None:
+        self.text = (SKILL / "d.md").read_text()
+
+    def section(self, start: str, end: str) -> str:
+        found = re.search(re.escape(start) + r".*?(?=" + re.escape(end) + ")", self.text, re.S)
+        self.assertIsNotNone(found, f"d.md has no text from {start!r} to {end!r}")
+        return found.group(0)
+
+    @staticmethod
+    def flat(text: str) -> str:
+        return " ".join(text.split())
+
+    def d6(self) -> str:
+        return self.section("- **D6 (row 6", "- **D7 (row 7")
+
+    def lever_line(self) -> str:
+        found = [line for line in self.d6().splitlines() if "tools/wiz_d6.sh --" in line]
+        self.assertEqual(len(found), 1, f"D6 should run the lever on one line: {found}")
+        return found[0].strip()
+
+    def test_d6_waits_for_the_drivers_line_and_says_why(self) -> None:
+        source = (self.STACK / "RollingDeployLoop.cs").read_text()
+        launch = re.search(r'public const string LaunchLine = "([^"]+)";', source)
+        self.assertIsNotNone(launch, "RollingDeployLoop.cs has no LaunchLine")
+        bullet = self.flat(self.d6())
+        self.assertIn(f"`{launch.group(1)}`", bullet)
+        self.assertIn("a session's refresh must fall inside the deployment interval", bullet)
+        bound = "Row6LaunchAfterFirstSignIn"
+        self.assertIn(f"public static TimeSpan {bound}", (self.STACK / "ContinuityObserver.cs").read_text())
+        self.assertIn(f"`ContinuityBounds.{bound}`", bullet)
+
+    def test_d6_runs_the_lever_bare_with_flags_it_takes_on_the_file_the_row_writes(self) -> None:
+        line = self.lever_line()
+        self.assertTrue(self.LEVER.is_file())
+        # The lever writes deploy.sh's output and its own lines to the record; under `shown` they would go twice.
+        self.assertTrue(line.startswith("tools/wiz_d6.sh "), line)
+        lever = self.LEVER.read_text()
+        flags = re.findall(r"(?<![\w-])--[a-z][a-z-]+", line)
+        self.assertIn("--test-output", flags)
+        for flag in flags:
+            self.assertIn(f"{flag})", lever, f"wiz_d6.sh takes no {flag}")
+        written = re.findall(r'> "(\$E/[^"]+)" &$', self.d6(), re.M)
+        read = re.findall(r'--test-output "([^"]+)"', line)
+        self.assertEqual(len(written), 1, "D6 should start the row once in the background, its output to a file")
+        self.assertEqual(read, written)
+
+    def test_d6s_confirm_on_launch_is_given_before_the_levers_call(self) -> None:
+        rule = self.flat(self.section("**Rule 2 for D.**", "**Parts read from the tree"))
+        self.assertIn("D6's is given before `tools/wiz_d6.sh`", rule)
+
+    def test_d1s_reads_of_a_value_print_it(self) -> None:
+        d1 = self.section("**D1, the configuration as decided", "**D3 to D9")
+        items = [self.flat(item) for item in re.split(r"\n(?=\d\. )", d1) if re.search(r"\bValue\b", item)]
+        self.assertGreaterEqual(len(items), 2, "D1's target group and tag reads should both name Value")
+        for item in items:
+            renamed = re.search(r"\{[^}]*:\s*Value\b", item)
+            self.assertTrue("--output text" in item or renamed, f"this read's Value comes back elided: {item}")
+
+    def test_the_redactor_elides_a_json_value_apart_from_its_key_and_keeps_text(self) -> None:
+        # Why D1 asks for text: pretty-printed JSON puts Key and Value on lines of their own.
+        def redacted(text: str) -> str:
+            return subprocess.run(["python3", "-I", str(ROOT / "tools" / "wiz_redact.py"), "--stream"], input=text,
+                                  capture_output=True, text=True, timeout=60, check=True).stdout
+        json_shape = '[\n    {\n        "Key": "deregistration_delay.timeout_seconds",\n        "Value": "30"\n    }\n]\n'
+        self.assertIn('"Value": "<elided>"', redacted(json_shape))
+        text_shape = "deregistration_delay.timeout_seconds\t30\nProject\tspa-platform\n"
+        self.assertEqual(redacted(text_shape), text_shape)
+
+    def test_each_row_writes_the_output_file_the_drafter_reads(self) -> None:
+        self.assertIn('bundle / f"row{n}-test.out"', self.DRAFTER.read_text())
+        rows = self.section("**D3 to D9, #358's class", "- **D4 (row 4")
+        self.assertIn('| tee "$E/row<n>-test.out"', rows)
+        self.assertIn('> "$E/row6-test.out" &', self.d6())
+
+    def test_rows_3_to_9_post_the_drafters_draft(self) -> None:
+        self.assertTrue(self.DRAFTER.is_file())
+        post = self.flat(self.section("Rows 3, 5, 8 and 9 mutate nothing", "**D10, the teardown"))
+        self.assertIn('`python3 -I tools/wiz_row_post.py <n> --bundle "$E"`', post)
+        self.assertIn("writes the draft", post)
+
+    def test_only_d4_and_d6_post_lever_lines_and_d7_names_its_proof(self) -> None:
+        post = self.flat(self.section("Rows 3, 5, 8 and 9 mutate nothing", "**D10, the teardown"))
+        self.assertIn("for D4 and D6 the lever's output lines", post)
+        self.assertNotIn("D4, D6 and D7", post)
+        self.assertIn("the offboarding ran inside the test", post)
+        self.assertIn("the apps root's plan", post)
+
+    def test_a_driver_fixed_mid_run_runs_from_a_worktree_on_the_main_checkouts_outputs(self) -> None:
+        variable = re.search(r'OutputsVariable = "([^"]+)"', (self.STACK / "DeployedStack.cs").read_text())
+        self.assertIsNotNone(variable, "DeployedStack.cs has no OutputsVariable")
+        way_out = self.flat(self.section("**Failure, and the way out.**", "**D0, the fresh deploy"))
+        self.assertIn(f'{variable.group(1)}="$PWD/infra/envs/poc/outputs.json"', way_out)
+        self.assertIn("after row 3 passes from that worktree", way_out)
+        self.assertIn("names the branch and the commit the driver came from", way_out)
+
 
 class GuardedInit(Sitting):
     """N's step 2 runs a root's `init` under the guard the decision on #760 gives, as `shown guarded_init <root>`."""
