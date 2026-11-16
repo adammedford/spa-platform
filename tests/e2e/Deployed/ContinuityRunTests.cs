@@ -235,7 +235,8 @@ public sealed class ContinuityRunTests : IDisposable
     /// <summary>
     /// A row whose driver stops fails with the verdict line its evidence file holds (#1194): the
     /// message starts <c>not proved:</c> (Q138), names the exception's type and carries its message,
-    /// and is <see cref="RowResult.Assert"/>'s failure, which the runner prints with no type before it. Before #1194 the row rethrew the exception, and the output read
+    /// and is <see cref="RowResult.Assert"/>'s failure, which the runner prints with no type before it.
+    /// Before #1194 the row rethrew the exception, and the output read
     /// <c>Gateway.E2ETests.Stack.HoldTimeoutException : no request to …</c> while the file read
     /// <c>NotProved</c> (#348, D5).
     /// </summary>
@@ -269,10 +270,13 @@ public sealed class ContinuityRunTests : IDisposable
     /// <summary>
     /// The stopped row's message goes through <see cref="Redacted.Text"/> before it reaches the output or
     /// the evidence file, which held only the exception's type before #1194, and the failure carries no
-    /// inner exception, whose message xUnit would print as it came (N-16).
+    /// inner exception, whose message xUnit would print as it came (N-16). The canary sits where
+    /// <see cref="Redacted.Text"/> looks, in an absolute URL's query: a value the message carries
+    /// anywhere else, such as a cookie header written out as text, passes through as it came, as it
+    /// reached the output before #1194 (the review of #1194 ran that case).
     /// </summary>
     [Fact]
-    public async Task A_stopped_rows_message_carries_no_code_state_or_cookie_into_the_output_or_the_evidence_file()
+    public async Task A_stopped_rows_message_carries_no_code_or_state_from_a_urls_query_into_the_output_or_the_evidence_file()
     {
         HttpRequestException leaky = new($"GET https://app1.spa-poc.test:8443/signin-oidc?code={Canary}&state={Canary} failed: connection reset");
 
