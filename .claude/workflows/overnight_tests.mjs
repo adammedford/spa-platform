@@ -2556,11 +2556,14 @@ const forkOf = (prompt) => (/Otherwise fork from [^:]+: forkSha = (\S+?)\. Take 
   const MARKER = 'forecast-marker: the script ran'
   const marker = path.join(dir, 'marker.js')
   fs.writeFileSync(marker, `console.log(${JSON.stringify(MARKER)})\nreturn { integrated: [], skipped: [] }\n`)
-  const base = JSON.parse(fs.readFileSync(fixturePath, 'utf8'))
+  // Always the 2026-10-20 fixture (Q73), whatever fixture the default run was given: the pass line's numbers are that
+  // file's, so a later fixture named as the second argument must not fail this section for being another file.
+  const forecastFixture = path.join(here, 'fixtures', '2026-10-20-tickets.json')
+  const base = JSON.parse(fs.readFileSync(forecastFixture, 'utf8'))
   const write = (name, value) => { const f = path.join(dir, name); fs.writeFileSync(f, JSON.stringify(value)); return f }
   const PASS = `overnight_tests: forecast: pass: 23 integrated, 6 skipped for a blocker, 3 ordering checks, on ${path.basename(scriptPath)}`
-  const passed = forecast(fixturePath, scriptPath)
-  if (passed.status !== 0 || lastLine(passed) !== PASS) fail(`#740: the forecast run on ${path.basename(fixturePath)} did not pass: exit ${passed.status}, last line ${JSON.stringify(lastLine(passed))}, stderr ${JSON.stringify((passed.stderr || '').slice(0, 400))}`)
+  const passed = forecast(forecastFixture, scriptPath)
+  if (passed.status !== 0 || lastLine(passed) !== PASS) fail(`#740: the forecast run on ${path.basename(forecastFixture)} did not pass: exit ${passed.status}, last line ${JSON.stringify(lastLine(passed))}, stderr ${JSON.stringify((passed.stderr || '').slice(0, 400))}`)
   if (passed.stdout.includes('waiting on') || /overnight_tests: pass:/.test(passed.stdout)) fail('#740: the forecast run ran the default run\'s checks or printed its pass line')
   for (const key of ['args', 'tickets', 'expect']) {
     const { [key]: _, ...rest } = base
@@ -2592,7 +2595,7 @@ const forkOf = (prompt) => (/Otherwise fork from [^:]+: forkSha = (\S+?)\. Take 
   // A script that returns no run result fails the forecast, rather than passing on checks that read nothing.
   const empty = path.join(dir, 'empty.js')
   fs.writeFileSync(empty, 'return undefined\n')
-  const none = forecast(fixturePath, empty)
+  const none = forecast(forecastFixture, empty)
   if (none.status !== 1 || !none.stdout.includes('not a run result')) fail(`#740: a forecast whose script returned nothing did not fail: exit ${none.status}, stdout ${JSON.stringify(none.stdout.slice(0, 400))}`)
   // A mock sleep for an owner the cost table lacks is refused, not slept as NaN.
   let refusedOwner = false
