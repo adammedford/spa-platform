@@ -28,13 +28,24 @@ public sealed class FingerprintTests
     [Fact]
     public void Member_order_and_whitespace_do_not_change_the_fingerprint()
     {
+        // contracts/registry.example.json's app1 with its fragment, members in another order at every level
+        // (the fragment, its oauth, its apis[0] and its csp among them) and other whitespace.
+        // Red if the canonical form stops sorting members inside fragments[].
         string reordered = """
-            {"apps":[{"session":{"lifetimeMinutes":480},"csp":{"img-src":["data:"]},
+            {"apps":[{"fragments":[
+                {"entry":"entry.js","csp":{"img-src":["https://images.spa-poc.test"]},
+                 "apis":[{"timeoutSeconds":20,"upstream":"http://127.0.0.1:5081","name":"reports"}],
+                 "release":"2026-10-12.1",
+                 "oauth":{"resource":"https://reports.spa-poc.test","scopes":["openid","https://reports.spa-poc.test/read"],
+                          "clientSecretRef":"ssm:/spa-platform/poc/apps/app1/fragments/reports/client-secret:1",
+                          "clientId":"2example34567890","issuer":"cognito-poc"},
+                 "fragmentId":"reports"}],
+              "session":{"lifetimeMinutes":480},"csp":{"img-src":["data:"]},
               "apis":[{"timeoutSeconds":30,"upstream":"http://127.0.0.1:5080","name":"orders"}],
               "oauth":{"resource":"https://orders.spa-poc.test","scopes":["openid","profile","https://orders.spa-poc.test/read"],
                        "clientSecretRef":"ssm:/spa-platform/poc/apps/app1/client-secret:1","clientId":"1example23456789","issuer":"cognito-poc"},
               "release":"2026-10-10.1","host":"app1.spa-poc.test:8443","appId":"app1"}],
-             "revision":42,"schemaVersion":1}
+             "revision":42,"schemaVersion":2}
             """;
 
         Assert.Equal(Only(Examples.Text("registry.example.json")).Fingerprint, Only(reordered).Fingerprint);
@@ -43,9 +54,11 @@ public sealed class FingerprintTests
     [Fact]
     public void The_fingerprint_is_the_sha256_of_the_entry_with_sorted_members_and_no_whitespace()
     {
-        // Written out by hand from contracts/registry.example.json, not produced by the code under test.
+        // Written out by hand from contracts/registry.example.json, not produced by the code under test:
+        // app1 with its fragment, members sorted at every level, arrays in the author's order.
+        // Red if the fingerprint drops or reorders fragments, or hashes anything but the whole entry.
         const string canonical =
-            """{"apis":[{"name":"orders","timeoutSeconds":30,"upstream":"http://127.0.0.1:5080"}],"appId":"app1","csp":{"img-src":["data:"]},"host":"app1.spa-poc.test:8443","oauth":{"clientId":"1example23456789","clientSecretRef":"ssm:/spa-platform/poc/apps/app1/client-secret:1","issuer":"cognito-poc","resource":"https://orders.spa-poc.test","scopes":["openid","profile","https://orders.spa-poc.test/read"]},"release":"2026-10-10.1","session":{"lifetimeMinutes":480}}""";
+            """{"apis":[{"name":"orders","timeoutSeconds":30,"upstream":"http://127.0.0.1:5080"}],"appId":"app1","csp":{"img-src":["data:"]},"fragments":[{"apis":[{"name":"reports","timeoutSeconds":20,"upstream":"http://127.0.0.1:5081"}],"csp":{"img-src":["https://images.spa-poc.test"]},"entry":"entry.js","fragmentId":"reports","oauth":{"clientId":"2example34567890","clientSecretRef":"ssm:/spa-platform/poc/apps/app1/fragments/reports/client-secret:1","issuer":"cognito-poc","resource":"https://reports.spa-poc.test","scopes":["openid","https://reports.spa-poc.test/read"]},"release":"2026-10-12.1"}],"host":"app1.spa-poc.test:8443","oauth":{"clientId":"1example23456789","clientSecretRef":"ssm:/spa-platform/poc/apps/app1/client-secret:1","issuer":"cognito-poc","resource":"https://orders.spa-poc.test","scopes":["openid","profile","https://orders.spa-poc.test/read"]},"release":"2026-10-10.1","session":{"lifetimeMinutes":480}}""";
         string expected = "sha256:" + Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(canonical)));
 
         Assert.Equal(expected, Only(Examples.Registry()).Fingerprint);
