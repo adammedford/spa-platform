@@ -191,64 +191,59 @@ public sealed class ContinuityDriver : IAsyncDisposable
     /// hop, so a callback submitted on the desired status alone can meet an old task; and a sign-in
     /// that fails while the tunnel does not answer is the restart's gap, tried again on the next turn,
     /// where one that fails while it answers ends the row (#348, the sitting of 2026-11-14).
+    /// <para>
+    /// The row passes only when a session refreshes inside the interval from the first new task's
+    /// start to the last old task's stop, so it says on standard output when to launch
+    /// <c>deploy.sh</c>: one line starting <see cref="RollingDeployLoop.LaunchLine"/>, written
+    /// <see cref="ContinuityBounds.Row6LaunchAfterFirstSignIn"/> after the first sign-in completed. A
+    /// session refreshes <see cref="DeployedStack.AccessTokenLifetime"/> less
+    /// <see cref="ContinuityBounds.Row6RefreshBeforeExpiry"/> after its sign-in and a new one signs in
+    /// every <see cref="ContinuityBounds.Row6SignInEvery"/>, so from the first refresh on there is one
+    /// every period, and an interval at least a period long that starts no sooner than a period
+    /// before the first refresh holds one, however long the deployment takes to reach its interval
+    /// (<see cref="ContinuityBounds.Row6Launch"/>). Launched sooner, the interval can end before any
+    /// session refreshes: launched 40 s in on 2026-11-14, the first refresh came 17 s after it ended
+    /// (#1203). The loop is <see cref="RollingDeployLoop"/>, whose decisions a test proves against
+    /// doubles for ECS and the tunnel.
+    /// </para>
     /// </summary>
-    public async Task<ContinuityObserver.RollingDeploy> RollingDeployAsync(TimeSpan bound, CancellationToken ct)
+    public Task<ContinuityObserver.RollingDeploy> RollingDeployAsync(TimeSpan bound, CancellationToken ct) =>
+        new RollingDeployLoop(new CellLevers(this), TimeProvider.System, Console.Out).RunAsync(bound, ct);
+
+    /// <summary>Row 6's levers on the cell: ECS through the AWS CLI, the tunnel, and Chromium.</summary>
+    private sealed class CellLevers(ContinuityDriver driver) : IRollingDeployCell
     {
-        IReadOnlyList<EcsTaskState> old = [.. (await Ecs.ListedAsync(ct)).Where(task => task.LastStatus == "RUNNING")];
-        HashSet<string> oldIds = [.. old.Select(task => task.Id)];
-        List<Task<IReadOnlyList<Step>>> sessions = [];
-        Stopwatch elapsed = Stopwatch.StartNew();
-        TimeSpan nextSignIn = TimeSpan.Zero;
-        Step? start = null;
-        Step? callback = null;
-        Profile? straddling = null;
-        bool ended = false;
-        while (!ended && elapsed.Elapsed < bound)
+        private Profile? straddling;
+
+        public Task<IReadOnlyList<EcsTaskState>> ListedAsync(CancellationToken ct) => driver.Ecs.ListedAsync(ct);
+
+        public Task<IReadOnlyList<EcsTaskState>> DescribeAsync(IReadOnlyList<string> ids, CancellationToken ct) => driver.Ecs.DescribeAsync(ids, ct);
+
+        public Task<bool> TunnelAnswersAsync(CancellationToken ct) => driver.TunnelAnswersAsync(ct);
+
+        public async Task<SessionCookies> SignInAsync(CancellationToken ct) => (await driver.SignInAsync(driver.App1)).Cookies;
+
+        public Task<IReadOnlyList<Step>> CallEverySecondAsync(int session, SessionCookies cookies, CancellationToken ct) =>
+            driver.CallEverySecondAsync(session, cookies, ct);
+
+        public async Task<Step> StartLoginAsync(CancellationToken ct)
         {
-            if (elapsed.Elapsed >= nextSignIn)
-            {
-                try
-                {
-                    (_, SessionCookies cookies) = await SignInAsync(App1);
-                    sessions.Add(CallEverySecondAsync(sessions.Count + 1, cookies, ct));
-                    nextSignIn += ContinuityBounds.Row6SignInEvery;
-                }
-                catch (Exception failed) when (failed is PlaywrightException or TimeoutException)
-                {
-                    if (await TunnelAnswersAsync(ct))
-                    {
-                        throw;
-                    }
-                }
-            }
-
-            IReadOnlyList<EcsTaskState> listed = await Ecs.ListedAsync(ct);
-            EcsTaskState[] fresh = [.. listed.Where(task => !oldIds.Contains(task.Id))];
-            if (start is null && fresh.Length > 0 && fresh.All(task => task.LastStatus != "RUNNING"))
-            {
-                straddling = await stack.OpenAsync();
-                start = await BrowserStepAsync(straddling, App1, "login-start", "/bff/login", "bff", 302, () => stack.StopAtProviderLoginAsync(straddling, () => straddling.GotoAsync(App1.Url("/bff/login").ToString())));
-            }
-
-            IReadOnlyList<EcsTaskState> before = await Ecs.DescribeAsync([.. oldIds], ct);
-            if (straddling is not null && callback is null && before.All(task => task.StoppedAt is not null) && await TunnelAnswersAsync(ct))
-            {
-                Profile held = straddling;
-                callback = await BrowserStepAsync(held, App1, "callback", "/signin-oidc", "callback", 302, async () =>
-                {
-                    await stack.CompleteLoginAsync(held, App1);
-                    await held.WaitSignedInAsync(App1);
-                });
-            }
-
-            ended = callback is not null && before.All(task => task.StoppedAt is not null) && fresh.Length > 0 && fresh.All(task => task.LastStatus == "RUNNING");
-            await Task.Delay(TimeSpan.FromSeconds(5), ct);
+            Profile held = straddling = await driver.stack.OpenAsync();
+            return await BrowserStepAsync(held, driver.App1, "login-start", "/bff/login", "bff", 302,
+                () => driver.stack.StopAtProviderLoginAsync(held, () => held.GotoAsync(driver.App1.Url("/bff/login").ToString())));
         }
 
-        IReadOnlyList<IReadOnlyList<Step>> calls = await Task.WhenAll(sessions);
-        IReadOnlyList<EcsTaskState> stopped = await Ecs.DescribeAsync([.. oldIds], ct);
-        IReadOnlyList<EcsTaskState> replacements = [.. (await Ecs.ListedAsync(ct)).Where(task => !oldIds.Contains(task.Id))];
-        return new ContinuityObserver.RollingDeploy([.. stopped.Select(task => task.Task)], [.. replacements.Select(task => task.Task)], calls, start, callback);
+        public Task<Step> CompleteLoginAsync(CancellationToken ct)
+        {
+            Profile held = straddling ?? throw new InvalidOperationException("the straddling login was not started");
+            return BrowserStepAsync(held, driver.App1, "callback", "/signin-oidc", "callback", 302, async () =>
+            {
+                await driver.stack.CompleteLoginAsync(held, driver.App1);
+                await held.WaitSignedInAsync(driver.App1);
+            });
+        }
+
+        public Task PauseAsync(TimeSpan delay, CancellationToken ct) => Task.Delay(delay, ct);
     }
 
     private async Task<IReadOnlyList<Step>> CallEverySecondAsync(int session, SessionCookies cookies, CancellationToken ct)
