@@ -1826,20 +1826,48 @@ try {
   //     inventory, two axes, two mutations, one verdict and one post: 7, so 21, 22 with the launch
   //     agent (#687) and 23 with the queue too. The return reports exactly the agents that ran, and no
   //     more than the slot count are ever in flight at once. One pull request's mutations start while
-  //     another is still under review.
+  //     another is still under review: with three or more slots the order is forced by holds, not by
+  //     timers, since a loaded machine can fire the stub's timers out of their millisecond order (#1192).
   checks++
   {
     const four = (n) => pr(n, ['tests/q.cs'], { candidates: [cand(`Q${n}a`), cand(`Q${n}b`), cand(`Q${n}c`), cand(`Q${n}d`)] })
     const WIDE3 = { 301: four(301), 302: four(302), 303: four(303) }
-    // 301 reviews fast, 302 slowly, 303 in between; every other agent takes a few milliseconds.
+    // 301 reviews fast, 302 slowly, 303 in between; every other agent takes a few milliseconds. The
+    // delays make the pipelines overlap for the slot bound; no assertion rests on their order.
     const delay = (label) => {
       const [kind, n] = label.split(':')
       if (kind === 'standards' || kind === 'spec') return { 301: 2, 302: 40, 303: 15 }[n] || 1
       return kind === 'mutate' ? 5 + Number(label.split(':')[2]) : 3
     }
+    // The overlap's order by cause (#1192): 301's Standards axis ends only once 302's has started, so
+    // 301's mutations, which wait for both its axes, start after it; and 302's Standards axis ends only
+    // once 301's first mutation has started. The stub calls hold after it logs `start <label>`, so a
+    // hold called for a label is that agent's start. A wait gives up after GIVE_UP ms, so a script that
+    // cannot overlap the two fails the assertion below, naming the wait, and does not hang the run.
+    // Only with three or more slots: with fewer, a held axis can sit on the slot its release needs.
+    const GIVE_UP = 5000
+    const AFTER = { 'standards:301': 'standards:302', 'standards:302': 'mutate:301:1' }
+    const ordered = () => {
+      const started = new Set()
+      const waits = new Map()   // label -> the releases waiting for it to start
+      const gaveUp = []
+      const hold = (label) => {
+        started.add(label)
+        for (const release of waits.get(label) || []) release()
+        waits.delete(label)
+        const on = AFTER[label]
+        if (!on || started.has(on)) return undefined
+        return new Promise((resolve) => {
+          const timer = setTimeout(() => { gaveUp.push(`${label} waited ${GIVE_UP} ms for ${on} to start`); resolve() }, GIVE_UP)
+          waits.set(on, [...(waits.get(on) || []), () => { clearTimeout(timer); resolve() }])
+        })
+      }
+      return { hold, gaveUp }
+    }
     for (const [slots, queued, want] of [[2, false, 22], [1, false, 22], [3, true, 23], [5, false, 22]]) {
+      const order = slots >= 3 ? ordered() : { hold: undefined, gaveUp: [] }
       env = run({ prs: queued ? undefined : [301, 302, 303], maxParallel: slots, maxMutationsPerPr: 2 }, WIDE3,
-        { delay, queue: { baseTip: sha('c'), prs: [301, 302, 303].map((n) => ({ number: n, head: WIDE3[n].head, baseRef: 'main' })), error: '' } })
+        { delay, hold: order.hold, queue: { baseTip: sha('c'), prs: [301, 302, 303].map((n) => ({ number: n, head: WIDE3[n].head, baseRef: 'main' })), error: '' } })
       result = await execute(env)
       const what = `three pull requests, ${slots} slot(s)${queued ? ', from the queue' : ''}`
       if (result.agents !== env.calls.length) fail(`${what}: the return reports ${result.agents} agents, ${env.calls.length} ran`)
@@ -1849,7 +1877,7 @@ try {
       if (slots >= 3) {
         // Overlap: 301's first mutation starts while 302's Standards axis is still running.
         const at = (e) => env.events.indexOf(e)
-        if (!(at('start mutate:301:1') >= 0 && at('start standards:302') >= 0 && at('start standards:302') < at('start mutate:301:1') && at('start mutate:301:1') < at('end standards:302'))) fail(`${what}: PR 301's mutations did not start while PR 302 was under review: ${env.events.join(', ')}`)
+        if (!(at('start mutate:301:1') >= 0 && at('start standards:302') >= 0 && at('start standards:302') < at('start mutate:301:1') && at('start mutate:301:1') < at('end standards:302'))) fail(`${what}: PR 301's mutations did not start while PR 302 was under review${order.gaveUp.length ? ` (${order.gaveUp.join('; ')})` : ''}: ${env.events.join(', ')}`)
       }
     }
   }
