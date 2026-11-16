@@ -6,18 +6,20 @@
   map rules.
 - **Method:** docs-only. Repository reading at commit `adf0273` (origin/main on 2026-11-16):
   `docs/agents/aws-rules.md`, `tools/aws-project.env` (the Region name alone: `us-east-2`),
-  `infra/modules/cell` (`ecs.tf`, `network.tf`, `alb.tf`, `storage.tf`, `variables.tf`),
+  `infra/modules/cell` (`ecs.tf`, `network.tf`, `alb.tf`, `storage.tf`, `iam.tf`, `variables.tf`),
   `infra/bootstrap` (`variables.tf`, `main.tf`, and the resource **types** in the local state file,
   no values), `docs/plan/05-infrastructure-and-cost.md`, ADR-0003,
   `src/Platform.Telemetry/PlatformTelemetryExtensions.cs` and `RequestTelemetry.cs`,
-  `.github/workflows/*.yml` (the `runs-on` lines). The repository's visibility and the owner's GitHub
-  plan were read with `gh`. **Prices:** every rate below is the US East (Ohio), `us-east-2`, rate from
+  `.github/workflows/*.yml` (the `runs-on` lines). The repository's visibility was read with `gh`. **Prices:** every rate below is the US East (Ohio), `us-east-2`, rate from
   AWS's public price-list offer files
   (`https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/<offer>/current/us-east-2/index.json`),
   downloaded over plain HTTPS with no credential on 2026-11-16 and parsed with `python3 -I`. The
   marketing price pages were also fetched on 2026-11-16, but their Region tables do not render to a
   text fetch: they gave the billing **rules** (proration, what is free, what a deleted resource costs)
-  and us-east-1 worked examples, not the Ohio figures. Section 9 lists each offer file with its
+  and us-east-1 worked examples, not the Ohio figures. The `aws.amazon.com` price pages and
+  the `docs.github.com` pages reached this session as a fetch tool's summary with quotations, not as
+  page text; the `docs.aws.amazon.com` pages came back as page text. A quotation from the first two
+  kinds is the tool's relay of the page. Section 9 lists each offer file with its
   version, and each page with what it gave. **Not done:** no `aws` CLI call, no `terraform plan` or
   `apply`, no credential step, no read of the cell; the `aws-mcp` connector failed to connect. So the
   project's plan type (Free or Paid) is **unverified** (`aws freetier get-account-plan-state` is a
@@ -44,8 +46,8 @@
      provider, so it needs "Activate advanced AWS features" or another design. Read, not tested;
      the applied bootstrap root has no OIDC provider in its state, which agrees.
    - **The repository is public, not private.** Standard runners are free and required reviewers
-     are available on the owner's Free plan. Were it made private, required reviewers would need
-     GitHub Enterprise, and the Free plan would give $12 of included compute a month.
+     are available to a public repository on every plan. Were it made private, required reviewers
+     would need GitHub Enterprise, and GitHub Free would give $12 of included compute a month.
    - **"Managed rotation" does not apply to these secrets.** It exists for secrets owned by Aurora,
      RDS, DocumentDB, Redshift, ECS Service Connect, and a list of partners that has neither Cognito
      nor Ping. An OAuth client secret rotates by a Lambda function, which costs well under a cent
@@ -60,10 +62,17 @@
    `aws/secretsmanager` at no charge, and ALB access logs accept SSE-S3 only, so a customer managed
    key cannot be used there at all. One chosen anyway is $1 a month, prorated hourly, and free
    while scheduled for deletion.
-6. **A spend limit stops the stand-ins from being created, not from running.** The spend-limit
-   policy denies `secretsmanager:CreateSecret`, `kms:CreateKey`, `lambda:CreateFunction`,
-   `ecs:CreateService` and `firehose:CreateDeliveryStream` as the project nears its limit: a sitting
-   started near the limit fails at apply.
+6. **A spend limit first stops the stand-ins from being created, then stops everything.** With
+   the optional early control on, about seven days before the limit the managed policy denies
+   `secretsmanager:CreateSecret`, `kms:CreateKey`, `lambda:CreateFunction`, `ecs:CreateService` and
+   `firehose:CreateDeliveryStream`, so a sitting started then fails at apply while "resources that
+   are already running stay running". At the limit "AWS pauses your project and stops all
+   resources". A spend limit needs the Paid Plan and is at least $20.
+7. **Per sitting-hour:** about **$0.05** for the likely set and **$0.15** for the dearest supported
+   set. Only about $0.005 an hour of the likely set is a fixed hourly charge (three secrets at
+   $0.0016 and one more GB of task memory at $0.0036); the rest is volume (traces, log megabytes,
+   invocations), so a quiet hour costs less. A second service makes the fixed part $0.016 an hour,
+   and EMF at 200 series adds $0.082 an hour.
 
 ## The totals table
 
@@ -73,7 +82,7 @@ applied (gate off, or the platform root destroyed). Volumes are assumptions, giv
 
 | Stand-in | Per 4-hour sitting | Idle month, standing | Idle month, cost rule | Bills while the cell is destroyed | Free Tier | Paid Plan |
 | --- | --- | --- | --- | --- | --- | --- |
-| Secrets Manager, 3 secrets, 1,000 API calls | $0.012 | $1.20 | $0 | No: a secret marked for deletion is free | Yes | Yes |
+| Secrets Manager, 3 secrets, 1,000 API calls | $0.012 | $1.20 | $0 | No, **if the destroyed root owns them**: a secret marked for deletion is free. Declared in the apps root, where the parameters are today, they outlive the platform root's destroy at $1.20 a month | Yes | Yes |
 | Rotation Lambda (rotation by function, 100 runs bound) | $0.013 | $0 | $0 | No; its log group, if kept, cents | Yes | Yes |
 | Collector as a sidecar, fits the 0.25 vCPU / 1 GB task | $0 | $0 | $0 | No | Yes | Yes |
 | Collector as a sidecar, task grows to 0.25 vCPU / 2 GB | $0.014 | $2.60 | $0 | No | Yes | Yes |
@@ -93,17 +102,20 @@ applied (gate off, or the platform root destroyed). Volumes are assumptions, giv
 
 | Total against the ceiling | Per 4-hour sitting (ceiling $5) | Idle month, standing (ceiling $2) | Idle month, cost rule (ceiling $2) |
 | --- | --- | --- | --- |
-| **Likely set**: secrets and rotation Lambda, sidecar at the next task size, logs, subscription to Lambda, X-Ray, access logs, Actions | **$0.19: within** | **$3.83: over** ($1.23 and within, if the sidecar fits the present task; either figure +$0.88 if health checks are traced) | **under $0.02: within** |
+| **Likely set**: secrets and rotation Lambda, sidecar at the next task size, logs, subscription to Lambda, X-Ray, access logs, Actions | **$0.19: within** | **$3.83: over** ($1.23 and within, if the sidecar fits the present task; either figure +$0.88 if health checks are traced) | **under $0.02: within**, provided the secrets are in the root the destroy removes; $1.22 if they sit in the apps root and it stands |
 | **Dearest supported set**: the likely set with a second service in place of the sidecar, plus EMF at 200 series, Firehose and a customer managed key | **$0.59: within** | **$73: over** | **under $0.02: within** |
 | Private CA added to either (unsupported, out of scope) | +$0.33 or +$2.94 with one certificate: still within | +$50 or +$400: over | $0 |
+
+Per sitting-hour the likely set is $0.19 / 4 = **$0.05** and the dearest $0.59 / 4 = **$0.15**.
 
 Reading it: per sitting, nothing matters. Per month, three lines carry all the risk, and each is
 closed by the cost rule: the secrets ($0.40 each a month), anything on Fargate, and EMF series.
 
 ## 1. Region, plan and the supported-services lists
 
-The Region is `us-east-2`: `AWS_REGION` in `tools/aws-project.env`, `region` in the three roots'
-`terraform.tfvars` and `backend.hcl`, and the `spa-platform` profile's `region` line. The plan's own
+The Region is `us-east-2`: `AWS_REGION` in `tools/aws-project.env`, `region` in the identity root's
+`terraform.tfvars` and `backend.hcl` and in the bootstrap root's `terraform.tfvars`, and the
+`spa-platform` profile's `region` line. The plan's own
 cost model (`docs/plan/05-infrastructure-and-cost.md` -> "Cost model") is written for us-east-1; the
 ALB, Fargate ARM and public-address rates it quotes are the same in the us-east-2 offer files.
 
@@ -145,8 +157,15 @@ The managed policies behind the lists are on
   `ec2:CreateNatGateway`, `lambda:CreateFunction`, `kms:CreateKey`, `secretsmanager:CreateSecret`,
   `acm-pca:CreateCertificateAuthority`, `firehose:CreateDeliveryStream`, `route53:CreateHostedZone`,
   and `lambda:InvokeFunction`. Existing resources are not named as deleted, so standing charges
-  continue; what stops is a new sitting's apply. This is the fact the map's "CI holding AWS
-  credentials" item waits for.
+  continue; what stops is a new sitting's apply.
+  <https://docs.aws.amazon.com/accounts/latest/reference/create-spend-limit.html> (read 2026-11-16)
+  places this about seven days before the limit, as an optional early control ("All your resources
+  that are already running stay running"), and says of the limit itself: "AWS pauses your project
+  and stops all resources. Your data is preserved." "You must be on a Paid Plan to create a spend
+  limit", and the minimum is "the greater of $20 or a conservative estimate of your likely spend".
+  So a runaway workflow is bounded by the limit, not by the ceiling, and the brake is the whole
+  project pausing. This is the fact the map's "CI holding AWS credentials" item waits for. Whether
+  a paused project still accrues the monthly charges (a secret, a key) was not stated.
 
 **Plan and credits.** On the Free plan "No charges incur during usage" and the "Account closes when
 credits are depleted or when the plan duration ends" (six months, $100 to $200 of credits); on the
@@ -333,7 +352,7 @@ file) and was not costed further.
 ## 6. GitHub Actions and AWS's side of OIDC
 
 **The ticket says "this private repository". It is public** (`gh repo view`: `visibility: PUBLIC`,
-owner a user account on the `free` plan, read 2026-11-16).
+owner a user account, read 2026-11-16).
 
 | Item | Rate | Source (read 2026-11-16) |
 | --- | --- | --- |
@@ -348,7 +367,7 @@ owner a user account on the `free` plan, read 2026-11-16).
 | Environment secrets | on GitHub Free, public repositories only; private needs Pro, Team or Enterprise | same page |
 
 - **As it stands (public):** a deployment workflow costs $0 and environments with required reviewers
-  are available on the Free plan. "You can list up to six users or teams as reviewers", and
+  are available on every plan. "You can list up to six users or teams as reviewers", and
   self-review can be prevented, which with one maintainer leaves nobody to approve; that is the
   trust-policy and approvals tickets' matter.
 - **If the repository were private:** required reviewers need GitHub Enterprise, so the approval
@@ -407,8 +426,8 @@ would need an explicit `kms:Decrypt`, as the comment in `iam.tf` already says of
 **Executed (2026-11-16), none of it against AWS credentials or the cell:**
 
 - `git fetch`, `git worktree add`, and reads of the repository at `adf0273`.
-- `gh issue view` for the ticket and its map; `gh repo view --json visibility,isPrivate,owner` and
-  `gh api user --jq .plan.name` (public; `free`).
+- `gh issue view` for the ticket and its map; `gh repo view --json visibility,isPrivate,owner`
+  (public).
 - `curl` of the public price-list offer files for `us-east-2`, parsed with `python3 -I`. Offer,
   version, publication date:
   `AWSSecretsManager` 20261111195606 (2026-11-11); `awskms` 20261108172342 (2026-11-08);
@@ -431,7 +450,7 @@ would need an explicit `kms:Decrypt`, as the comment in `iam.tf` already says of
   pages. **Not fetched:** the S3, VPC, Elastic Load Balancing and Cloud Map price pages; their rates
   are from the offer files alone.
 - AWS documentation: the supported-services page; the managed SCP and RCP page; "Choosing a plan";
-  the Secrets Manager user guide (introduction, managed rotation, managed external secrets and its
+  "Create a spend limit in AWS Settings"; the Secrets Manager user guide (introduction, managed rotation, managed external secrets and its
   partner list, deleting a secret) and FAQ; "Access logs for your Application Load Balancer" and
   "Enable access logs"; "Log group-level subscription filters"; "Embedding metrics within logs";
   "What is IAM?".
@@ -440,7 +459,10 @@ would need an explicit `kms:Decrypt`, as the comment in `iam.tf` already says of
 **Not verified, and why:**
 
 - The project's plan type, its credit balance and whether a spend limit is set: a credentialed call
-  or AWS Settings.
+  or AWS Settings. (A spend limit, if one is set, implies the Paid Plan.) What a paused project
+  still accrues.
+- Which root would own the secrets: today's parameters are in the apps root, which the platform
+  root's destroy does not remove.
 - That the plan policy in fact refuses `iam:CreateOpenIDConnectProvider`: read from the published
   policy, not attempted.
 - Whether the collector fits the present 0.25 vCPU / 1 GB task, and every volume (log megabytes,
