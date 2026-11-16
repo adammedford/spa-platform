@@ -50,6 +50,11 @@ claims you verified and how. When it closes a change request whose decision comm
 
 A commit that changes a steering document carries an `Authority:` trailer, which `.github/steering.py` has already held to an issue or a comment that exists. Whether what it cites decides the change is the Spec axis's question (ADR-0023 decision 3): read the cited ticket's acceptance criteria, or the cited comment, and report a steering change that neither decides.
 
+**Review checklist for steering text.** Compare the applied text to the whole quoted replacement
+and its applicable approval. For an insertion or removal, compare the neighboring paragraphs as
+well. Use current main to check that the quoted context still fits. Record a missing or stale
+quotation as a Spec finding and request the complete current quotation and approval.
+
 ## CI has already run
 
 Every open pull request here carries a green `Documents`, and a green `Build and test` and

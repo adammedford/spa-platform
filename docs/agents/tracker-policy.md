@@ -129,6 +129,29 @@ ADR-0020 records the decision and its reasons. What it adds to `docs/agents/issu
   the ticket as `Authority: #<n>` (`docs/agents/landing-work.md`), and an approval covers the body
   as it stood when given. A proposal that a confirmed answer will commit, under
   `## Proposed steering changes` or in a grill's proposals, is quoted the same way.
+- **Steering change template.** Use the template below to file an ordinary ticket that needs
+  approval of exact steering text. Use the Change requests rules when those rules require a
+  change request.
+
+  ```markdown
+  **Owner:** integrator
+  **Touches:** <steering paths>
+
+  ## What to build
+
+  <Why the change is needed and the exact destination in each file.>
+
+  ## Proposed steering changes
+
+  <For each edit, label the path and section and quote the complete text as it will read.
+  For an insertion or removal, quote the neighboring paragraphs. Quote a table row with its
+  header, a non-prose edit with the smallest enclosing object, or a new file in full.>
+
+  ## Acceptance criteria
+
+  - [ ] The applied text matches the approved quotation, including adjacent context where required.
+  - [ ] The change cites the applicable approval and records its verification in the Answer.
+  ```
 
 ## Lifecycle: not labels
 
