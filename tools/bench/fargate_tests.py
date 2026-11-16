@@ -261,6 +261,8 @@ class TenCleanRestarts(CaseBase):
         first_update = self.result.stdout.index("restart 1/10")
         self.assertIn("ten restarts, about half an hour", self.result.stdout[:first_update])
         self.assertIn(f"drains for {deregistration_delay()} s and stops", self.result.stdout[:first_update])
+        # The one-task premise (#975 Q215).
+        self.assertIn("on one task: each restart runs the old task and the new one side by side", self.result.stdout[:first_update])
 
     def test_the_new_task_is_the_primary_deployments_while_two_deployments_overlap(self):
         # The world lists a decoy task of another deployment first, and the old task beside the new
@@ -363,6 +365,9 @@ class TenCleanRestarts(CaseBase):
         self.assertIn("task definition spa-platform-poc:7", facts)
         self.assertIn("platform version 1.4.0", facts)
         self.assertIn(f"Region {REGION}", facts)
+        # The shape measured, the service's desiredCount (#975 Q217).
+        self.assertTrue(facts.endswith(", tasks 1"), facts)
+        self.assertEqual(1, self.result.json["facts"]["tasks"])
         self.assertIn("clocks: task", self.result.txt)
         # The facts, on the .txt's line and in the .json, name the image by digest alone: no
         # account id, raw or redacted, and no repository URI, raw, account-redacted or replaced.
@@ -611,6 +616,81 @@ class Endings(CaseBase):
                 self.assertIsNone(run.json)
                 self.assertEqual([], run.aws("ecs", "update-service"))
                 self.assertNoSecrets(run)
+
+
+# The three messages a one-task premise gives before restart 1, and restart()'s (#975 Q213, Q214).
+SHAPE_MESSAGE = "not 1: the benchmark runs on one task, one old and new pair per restart. Apply the cell with multi_task = false"
+COUNT_MESSAGE = "is not stable on gatewayImage: it runs 2 tasks, not one."
+DIGEST_MESSAGE = "is not stable on gatewayImage: its running task does not carry that digest."
+RESTART_MESSAGE = ("the benchmark runs on one task, and a second task between settled restarts means the service "
+                   "changed under the run.")
+
+
+class TheOneTaskShape(CaseBase):
+    """The benchmark measures one old and new pair (#286 Q135, #305 Q9), so it runs on the cell's
+    one-task shape and refuses #347's multi_task shape before restart 1, each refusal naming its own
+    cause (#975)."""
+
+    def assertRefusedSaying(self, run, says, *not_saying):
+        self.assertEqual(2, run.code, run.stderr)
+        self.assertIsNone(run.txt)
+        self.assertIsNone(run.json)
+        self.assertEqual([], run.aws("ecs", "update-service"))
+        self.assertIn(says, run.stderr)
+        for other in not_saying:
+            self.assertNotIn(other, run.stderr)
+        self.assertNoUnexpectedCalls(run)
+        self.assertNoSecrets(run)
+
+    def test_two_tasks_on_the_digest_are_the_shape_refusal_not_the_digest_one(self):
+        run = run_case(world(desired_count=2, second_task={}))
+        self.assertRefusedSaying(run, f"{SERVICE}'s desiredCount is 2, {SHAPE_MESSAGE}", DIGEST_MESSAGE, COUNT_MESSAGE)
+        # Refused on describe-services' answer, before the waiter or any task is listed.
+        self.assertEqual([], run.aws("ecs", "wait"))
+        self.assertEqual([], run.aws("ecs", "list-tasks"))
+
+    def test_a_service_that_names_no_desired_count_of_1_is_the_shape_refusal(self):
+        # None: the answer names none. True and "1" equal or spell 1 without being the number.
+        for given, said in ((None, "none"), (True, "True"), ("1", "1")):
+            with self.subTest(given):
+                run = run_case(world(desired_count=given))
+                self.assertRefusedSaying(run, f"{SERVICE}'s desiredCount is {said}, {SHAPE_MESSAGE}", DIGEST_MESSAGE)
+
+    def test_one_task_on_a_wrong_digest_is_the_digest_refusal_not_the_shape_one(self):
+        document = world()
+        document["tasks"]["1"]["digest"] = "sha256:" + "ff" * 32
+        run = run_case(document)
+        self.assertRefusedSaying(run, f"{SERVICE} {DIGEST_MESSAGE}", SHAPE_MESSAGE, COUNT_MESSAGE)
+
+    def test_two_running_tasks_under_a_desired_count_of_1_are_the_count_refusal(self):
+        run = run_case(world(second_task={}))
+        self.assertRefusedSaying(run, f"{SERVICE} {COUNT_MESSAGE}", SHAPE_MESSAGE, DIGEST_MESSAGE)
+
+    def test_a_second_task_before_restart_1_is_refused_with_why(self):
+        # Hidden from preflight's list-tasks, the first; restart 1's, the second, sees it.
+        run = run_case(world(second_task={"hidden_until": 2}))
+        self.assertRefusedSaying(run, f"{SERVICE} runs 2 tasks before restart 1, not one: {RESTART_MESSAGE}", SHAPE_MESSAGE)
+        self.assertEqual(2, len(run.aws("ecs", "list-tasks", "--cluster", CLUSTER, "--service-name", SERVICE,
+                                        "--desired-status", "RUNNING")))
+
+    def test_a_second_task_between_settled_restarts_is_incomplete_with_why(self):
+        # Restart 1's decoy still runs once its rollout settles: restart 2 finds two tasks.
+        plans = [plan(decoy_stays=True)] + [plan() for _ in range(9)]
+        run = run_case(world(plans))
+        self.assertEqual(4, run.code, run.stderr)
+        self.assertEqual(1, len(run.aws("ecs", "update-service")))
+        self.assertEqual("incomplete", run.json["ending"])
+        self.assertEqual(f"{SERVICE} runs 2 tasks before restart 2, not one: {RESTART_MESSAGE}", run.json["reason"])
+        self.assertEqual([True, False], [r["complete"] for r in run.json["restarts"]])
+        self.assertNoUnexpectedCalls(run)
+        self.assertNoSecrets(run)
+
+    def test_the_docstring_states_the_premise_in_a_restart(self):
+        module = " ".join(fargate.__doc__.split())
+        paragraph = module[module.index("**A restart**"):module.index("**Clocks.**")]
+        self.assertIn("The benchmark runs on one task: a service whose desiredCount is not 1, the cell's multi_task shape, "
+                      "is refused before restart 1, since one old and new pair is what #286 Q135 and #305 Q9 measure "
+                      "and two tasks would be a different measurement (#975).", paragraph)
 
 
 class TheZero(CaseBase):
