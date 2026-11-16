@@ -10,21 +10,21 @@
 #
 # --skip names, comma-separated, the tickets the launch plan skips besides the lines' candidates;
 # they join the printed arguments' skip. --fixture writes, at <path>, whose directory must exist, the
-# input of the overnight harness (.claude/workflows/overnight_harness.mjs, git-ignored), which each
+# input of the forecast run (`node .claude/workflows/overnight_tests.mjs --forecast <path>`), which each
 # prep used to build by hand from collect's JSON (#485): `{args, tickets, expect}`, with args the
 # printed arguments, their skip joined by the tickets the claims line lists as held, tickets the
 # forecast's, verbatim, and expect.integrated the forecast's ready-for-agent and needs-triage ids
 # outside that skip, less expect.skippedForBlocker: the ready ones a skipped ticket blocks, directly
 # or through another of them, which overnight.js skips on the blocker. A needs-triage ticket is
-# expected because the harness's mock route sends every one to an agent (#711), and expect.note,
+# expected because the forecast run's mock route sends every one to an agent (#711), and expect.note,
 # written when there is one, says it integrates only if Route sends it to an agent; one with a
 # ready-for-human blocker is not expected, since overnight.js routes it to a human whatever its route
 # agent returns (#379), and it stops the ready ones it blocks as a skipped ticket does, as does a
 # blocker collect lists with no lane (blocked, claimed, foreground, ready-for-human). A held ticket
 # is in the fixture's skip and not the printed one: the forecast reads it as claimed, so no lane takes it either way, but a rename
 # before launch frees it for the run (#484). expect.startsBefore is written empty, as is
-# standingAnswer left out of args: the harness reads both, and they are the human's to fill. A
-# failed forecast writes no fixture: one with no tickets would pass the harness and prove nothing.
+# standingAnswer left out of args: the forecast run reads both, and they are the human's to fill. A
+# failed forecast writes no fixture: one with no tickets would pass the forecast run and prove nothing.
 #
 # Why (#378). Before #349's launch the preconditions were checked by hand, from memory notes, over
 # about eight separate commands. Each is a refusal or a wasted night when missed: collect refuses a
@@ -879,13 +879,13 @@ args["skip"] = list(dict.fromkeys(named + given))
 print(json.dumps(args))
 if fixture:
     if ok != "true":
-        print("overnight_preflight: no harness fixture written: the forecast failed", file=sys.stderr)
+        print("overnight_preflight: no forecast fixture written: the forecast failed", file=sys.stderr)
         sys.exit(0)
     tickets = json.load(open(collect))["tickets"]
     held = [line.strip() for line in open(held) if line.strip()]
     skip = list(dict.fromkeys(named + held + given))
     # A needs-triage ticket gets a lane once Route sends it to an agent, as the mock route of the
-    # harness does every one (#711), except one with a ready-for-human blocker, which overnight.js routes to
+    # forecast run does every one (#711), except one with a ready-for-human blocker, which overnight.js routes to
     # a human whatever its route agent returns (heldBy, #379).
     status = {t["id"]: t["status"] for t in tickets}
     human = {t["id"] for t in tickets if t["status"] == "needs-triage"
@@ -915,16 +915,16 @@ if fixture:
         one = len(triaged) == 1
         be, verb, them, left = ("is", "integrates", "it", "it") if one else ("are", "integrate", "them", "that one")
         expect["note"] = (", ".join(triaged) + f" {be} needs-triage and {verb} only if Route sends {them} "
-                          "to an agent, as the mock route of the harness does; on the night a route to a "
+                          "to an agent, as the mock route of the forecast run does; on the night a route to a "
                           f"human leaves {left} out")
     written = {"args": {**args, "skip": skip}, "tickets": tickets, "expect": expect}
     with open(fixture, "w") as out:
         json.dump(written, out, indent=1)
         out.write("\n")
-    print(f"overnight_preflight: wrote the harness fixture {os.path.abspath(fixture)}: {len(tickets)} "
+    print(f"overnight_preflight: wrote the forecast fixture {os.path.abspath(fixture)}: {len(tickets)} "
           f"tickets, {len(integrated)} expected to integrate, {len(blocked)} skipped for a blocker, "
           f"{len(skip)} skipped; add standingAnswer to its args, and startsBefore to its expect, before "
-          "the harness runs it",
+          "the forecast run reads it",
           file=sys.stderr)
 ' "$repo" "$date" "$wt" "$scratch/collect.json" "$scratch/candidates" "$scratch/shape-candidates" \
   "$scratch/adr-candidates" "$scratch/decision-candidates" "$scratch/held" "$given_skip" "$forecast_ok" \
