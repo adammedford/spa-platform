@@ -427,6 +427,23 @@ class RuleTenSsmSessionIds(InBothModes):
             '{"SessionId": "<elided>", "Status": "Connected"} SessionIds: 2\n',
         )
 
+    def test_the_plugins_connection_accepted_line_masks_the_id_and_keeps_its_brackets(self) -> None:
+        # The plugin's fourth line, printed when a client connects through the forwarded port, as
+        # the G6 continuity sitting of 2026-11-13 printed it (#1196).
+        self.assertRedactsInBothModes(
+            "Waiting for connections...\n"
+            "Connection accepted for session [adam-0a1b2c3d4e5f67890].\n"
+            "Connection accepted for session [0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d-q2w3e4r5t6y7u8i9o0p1a2s3d4]\n",
+            "Waiting for connections...\n"
+            "Connection accepted for session [<elided>].\n"
+            "Connection accepted for session [<elided>]\n",
+        )
+
+    def test_a_sentence_with_for_session_and_no_bracketed_id_is_kept(self) -> None:
+        text = ("Stage 3 waits for session two to end.\n"
+                "Wait for session [] to fill, then for session [two words].\n")
+        self.assertRedactsInBothModes(text, text)
+
     def test_a_cookie_whose_name_ends_in_sessionid_keeps_rule_fives_shape(self) -> None:
         # The key must start a word: rule 5 elides the cookie's value and keeps its name and `=`.
         self.assertRedactsInBothModes(
