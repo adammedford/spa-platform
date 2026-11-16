@@ -821,17 +821,26 @@ try {
       if (env.mutations.some((x) => x.test !== 'Nom')) fail(`${label}: a mutation agent ran for a nomination that names no test`)
     }
     // A Python unittest cell is read as its whole dotted name: red on its own class it reads
-    // reproduced, red only on another class's same-named method it is did-not-fail.
-    for (const [red, want] of [['test_x (pkg.C.test_x)', 'reproduced'], ['test_x (pkg.Other.test_x)', 'did-not-fail']]) {
-      const PY = { 208: [{ test: 'test_x (pkg.C.test_x)', project: 'tests/py', why: 'asserts a constant' }] }
-      env = run({ prs: [208] }, NOM, { nominations: PY, mutate: { 'pkg.C.test_x': { ...row('reproduced', 1, 10), failingNames: [red] } } })
-      result = await execute(env)
-      const m = (resultOf(208, result).mutations || []).find((x) => x.kind === 'nominated') || {}
-      if (m.test !== 'pkg.C.test_x' || m.result !== want) fail(`PR 208 with the nomination "test_x (pkg.C.test_x)" red on ${red}: row ${JSON.stringify({ test: m.test, result: m.result })}, expected pkg.C.test_x ${want}`)
+    // reproduced, red only on another class's same-named method it is did-not-fail. Text after the
+    // closing parenthesis leaves that reading as it is (#809): the cell is read by the unittest form
+    // at its start, and the trailing text stays in why.
+    for (const cell of ['test_x (pkg.C.test_x)', 'test_x (pkg.C.test_x) red on Assert']) {
+      for (const [red, want] of [['test_x (pkg.C.test_x)', 'reproduced'], ['test_x (pkg.Other.test_x)', 'did-not-fail']]) {
+        const PY = { 208: [{ test: cell, project: 'tests/py', why: 'asserts a constant' }] }
+        env = run({ prs: [208] }, NOM, { nominations: PY, mutate: { 'pkg.C.test_x': { ...row('reproduced', 1, 10), failingNames: [red] } } })
+        result = await execute(env)
+        const m = (resultOf(208, result).mutations || []).find((x) => x.kind === 'nominated') || {}
+        if (m.test !== 'pkg.C.test_x' || m.result !== want) fail(`PR 208 with the nomination "${cell}" red on ${red}: row ${JSON.stringify({ test: m.test, result: m.result })}, expected pkg.C.test_x ${want}`)
+        const prompt = (env.mutations.find((x) => x.test === 'pkg.C.test_x') || {}).prompt || ''
+        if (!prompt.includes(`asserts a constant (nominated as ${cell})`)) fail(`PR 208 with the nomination "${cell}": its why did not reach the mutation prompt with the cell's text`)
+      }
     }
-    // Only the parenthesis that ends in the bare name names the whole test, spaces before it or not: a
-    // dotted qualifier such as '(Assert.Null)', and the pre-3.11 'test_x (pkg.C)', read as the bare name.
-    for (const [cell, want] of [['Nom (Assert.Null)', 'Nom'], ['test_x (pkg.C)', 'test_x'], ['test_x  (pkg.C.test_x)', 'pkg.C.test_x']]) {
+    // Only unittest's printed module.Class.method shape names the whole test, spaces before it or
+    // not: three or more dotted parts ending in the bare name (#809). A dotted qualifier such as
+    // '(Assert.Null)', or one ending in the bare name such as '(Assert.Nom)', and the pre-3.11
+    // 'test_x (pkg.C)', read as the bare name; text after the parenthesis changes none of it. The
+    // form is read only at the cell's start: 'Nom see Nom (a.b.Nom)', the first word a candidate, is Nom.
+    for (const [cell, want] of [['Nom (Assert.Null)', 'Nom'], ['Nom (Assert.Nom)', 'Nom'], ['test_x (pkg.C)', 'test_x'], ['test_x  (pkg.C.test_x)', 'pkg.C.test_x'], ['test_x (pkg.C.test_x) red on Assert', 'pkg.C.test_x'], ['Nom see Nom (a.b.Nom)', 'Nom']]) {
       env = run({ prs: [208] }, NOM, { nominations: { 208: [{ test: cell, project: 'tests/py', why: 'asserts a constant' }] }, mutate: { [want]: row('reproduced', 1, 10) } })
       result = await execute(env)
       const m = (resultOf(208, result).mutations || []).find((x) => x.kind === 'nominated') || {}
@@ -841,7 +850,8 @@ try {
     // failing name unittest printed, in either form, the row is the nomination only when that name's
     // class is pkg.C, so another class's test_x red alone is did-not-fail, as it was before the bare
     // reading. A failing name in no unittest form, as xUnit prints 'Ns.Class.Nom', is matched by the
-    // bare name, so 'Nom (Assert.Null)' red on its own test still reproduces (#764).
+    // bare name, so 'Nom (Assert.Null)' red on its own test still reproduces (#764), as 'Nom
+    // (Assert.Nom)' does now that it reads as Nom (#809). Text after the parenthesis keeps its class.
     for (const [cell, red, want] of [
       ['test_x (pkg.C)', 'test_x (pkg.C)', 'reproduced'],
       ['test_x (pkg.C)', 'test_x (pkg.C.test_x)', 'reproduced'],
@@ -851,6 +861,9 @@ try {
       ['test_x (pkg.C)', 'test_x (other.pkg.Cx)', 'did-not-fail'],
       ['Nom (Assert.Null)', 'Platform.Registry.Tests.NomTests.Nom', 'reproduced'],
       ['Nom (Assert.Null)', 'Platform.Registry.Tests.NomTests.Nom(kind: "a.b")', 'reproduced'],
+      ['Nom (Assert.Nom)', 'Platform.Registry.Tests.NomTests.Nom', 'reproduced'],
+      ['test_x (pkg.C) red on Assert', 'test_x (pkg.C.test_x)', 'reproduced'],
+      ['test_x (pkg.C) red on Assert', 'test_x (pkg.Other.test_x)', 'did-not-fail'],
     ]) {
       const bare = cell.split(' ')[0]
       env = run({ prs: [208] }, NOM, { nominations: { 208: [{ test: cell, project: 'tests/py', why: 'asserts a constant' }] }, mutate: { [bare]: { ...row('reproduced', 1, 10), failingNames: [red] } } })
