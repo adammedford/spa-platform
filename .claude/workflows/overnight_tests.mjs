@@ -3,6 +3,19 @@
 // fixtures under fixtures/, and run by CI's Documents job on every push (#213, ADR-0027).
 //
 //   node .claude/workflows/overnight_tests.mjs [script] [fixture]
+//   node .claude/workflows/overnight_tests.mjs --forecast <fixture> [script]
+//
+// The second form is the forecast run (#740), read before an overnight launch: the script, overnight.js beside this
+// file by default, on the forecast fixture tools/overnight_preflight.sh --fixture wrote, with fixture.args used
+// verbatim, every agent mocked as below, and no synthetic ticket, conflict, flake, change request or short run. It
+// makes only the four scheduling checks the default run makes, written once for both: the integrated and the
+// skipped-for-blocker sets match expect, no implement starts before an integrated blocker, each startsBefore pair
+// holds, and no lane logs waiting on a ticket that has integrated. A fixture missing args, tickets or expect, or
+// otherwise malformed (an owner the mock has no sleep for among them), exits 2 naming what is wrong before the script
+// runs. Its stall limit is eight times the fixture's summed mock sleeps, a chosen safety factor, never under 30 s, and
+// a finished run must leave no timer behind. Its last line is `overnight_tests: forecast: pass: <n> integrated, <n>
+// skipped for a blocker, <n> ordering checks, on <script>`, or `overnight_tests: forecast: FAILED, ...` with exit 1.
+// The default run spawns it on fixtures/2026-10-20-tickets.json and requires that pass line (Q73).
 //
 // Defaults: overnight.js beside this file, and fixtures/2026-10-20-tickets.json; a later fixture sits
 // beside that one and is named as the second argument. It is wall-clock timed: a 1 ms tick against
@@ -57,6 +70,210 @@ import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
+
+// Shared by the default run and the forecast run (#740): the mock agent's sleeps, the mock agent, the four
+// scheduling checks and the stall report, each written once. Every mocked implement sleeps three times its owner's
+// cost in ms and every other timed agent 30 ms, so the integrator lane is the slow one, as it is on a real night.
+const MOCK_COST = { integrator: 60, 'ws1-infra': 30, 'ws2-hosting': 20, 'ws3-identity': 30, 'ws4-proxy': 20, 'ws5-fixtures': 10, 'ws6-verification': 30 }
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+const STALLED = Symbol('stalled')
+// A sleep that is no finite, non-negative number would make setTimeout fire at once, so a run would pass on no
+// scheduling at all, or a stall limit fire before the run began: both are refused.
+function mockSleepMs(kind, owner) {
+  const ms = kind === 'implement' ? MOCK_COST[owner] * 3 : 30
+  if (!Number.isFinite(ms) || ms < 0) throw new Error(`the mock has no sleep for the ${kind} of owner ${owner}`)
+  return ms
+}
+// The forecast's stall limit (#740 Q72): eight times the summed mock sleeps, a chosen safety factor, never under 30 s.
+function forecastStallLimitMs(sleeps) {
+  let sum = 0
+  for (const ms of sleeps) {
+    if (typeof ms !== 'number' || !Number.isFinite(ms) || ms < 0) throw new Error(`a mock sleep of ${String(ms)} ms is no finite, non-negative number`)
+    sum += ms
+  }
+  return Math.max(30000, 8 * sum)
+}
+// The mock agent: collect returns the tickets, the resume probe finds nothing on the run branch (#712), the live read
+// sees each ticket unchanged (#721), route sends every ticket to an agent (#711), grill answers by grill(id), and
+// every other agent sleeps, recorded as a start and an end event, then answers by answer(kind, id).
+function mockAgent({ tickets, byId, events, now, prompts = [], grill, answer }) {
+  let calls = 0   // each timed call's ordinal, so an agent's start and end pair up
+  return async (prompt, opts) => {
+    prompts.push({ label: opts.label, prompt })
+    const [kind, id] = opts.label.split(':')
+    // Copies: the script sets a routed ticket's status, and the checks read the statuses collect gave.
+    if (kind === 'collect') return { outcome: 'ok', reason: 'companion', tickets: tickets.map((t) => ({ ...t })), landed: [], base: 'a'.repeat(40), shell: '3.2', shellCommand: '/bin/bash' }
+    if (kind === 'resume') return { merged: false, mergeSha: '', subject: '', notes: 'companion' }
+    if (kind === 'live') return { state: 'OPEN', labels: ['ready-for-agent', 'kind:ticket'], assignees: [], notes: '' }
+    if (kind === 'grill') return grill(id)
+    if (kind === 'route') return { flow: 'agent', reason: 'companion' }
+    if (kind === 'report') return { questions: 0, mainCheckoutClean: true, leftovers: '', issue: 0, url: '' }
+    const ms = mockSleepMs(kind, (byId[id] || {}).owner)
+    const n = ++calls
+    events.push({ at: now(), kind, id, edge: 'start', n })
+    await sleep(ms)
+    events.push({ at: now(), kind, id, edge: 'end', n })
+    return answer(kind, id)
+  }
+}
+function startedIn(events, id) { return events.find((e) => e.kind === 'implement' && e.id === id && e.edge === 'start') }
+function integratedAtIn(events, id) { return (events.filter((e) => e.kind === 'integrate' && e.id === id && e.edge === 'end').pop() || {}).at }
+// The four scheduling checks, which both modes make; want is the set the run must integrate. Returns what integrated.
+function schedulingChecks({ want, expect, result, events, logs, byId, fail }) {
+  const started = (id) => startedIn(events, id)
+  const integratedAt = (id) => integratedAtIn(events, id)
+  // 1. What integrates and what skips.
+  const got = new Set(result.integrated || [])
+  for (const id of want) if (!got.has(id)) fail(`expected ${id} to integrate; it did not`)
+  for (const id of got) if (!want.has(id)) fail(`${id} integrated; the fixture does not expect it`)
+  for (const id of expect.skippedForBlocker) {
+    if (!(result.skipped || []).includes(id)) fail(`expected ${id} skipped for an unintegrated blocker; it was not`)
+    if (started(id)) fail(`${id} started an implement although its blocker never integrated`)
+  }
+  // 2. No implement starts before every blocker that is one of tonight's agent tickets has integrated.
+  for (const e of events.filter((x) => x.kind === 'implement' && x.edge === 'start')) {
+    for (const b of byId[e.id].blockedBy) {
+      if (!(result.integrated || []).includes(b)) continue
+      if (integratedAt(b) === undefined || integratedAt(b) > e.at) fail(`${e.id} started at ${e.at}, before its blocker ${b} integrated`)
+    }
+  }
+  // 3. Ready work goes first: a lane does not idle behind a blocked head.
+  for (const [first, then] of expect.startsBefore) {
+    const a = started(first), b = started(then)
+    if (!a) fail(`${first} never started`)
+    else if (b && a.at > b.at) fail(`${first} started at ${a.at}, after ${then} at ${b.at}: its lane idled behind a blocked ticket`)
+  }
+  // 4. A lane says it is waiting only on tickets that have not integrated yet.
+  for (const l of logs) {
+    const m = /^(\S+): nothing ready; waiting on (.+)$/.exec(l.text)
+    if (!m) continue
+    for (const id of m[2].split(', ')) {
+      const at = integratedAt(id)
+      if (at !== undefined && at < l.at) fail(`${m[1]} logged waiting on ${id} at ${l.at}, after ${id} integrated at ${at}`)
+    }
+  }
+  return got
+}
+// What a run that did not finish within its limit had in flight, under the failure's heading.
+function reportStall({ heading, events, logs, integrated, byId }) {
+  const ended = new Set(events.filter((e) => e.edge === 'end').map((e) => `${e.kind}:${e.id}`))
+  const open = events.filter((e) => e.edge === 'start' && !ended.has(`${e.kind}:${e.id}`)).map((e) => `${e.kind}:${e.id}`)
+  const waiting = {}
+  for (const l of logs) { const m = /^(\S+): nothing ready; waiting on (.+)$/.exec(l.text); if (m) waiting[m[1]] = m[2] }
+  console.log(heading)
+  console.log(`  - agents started and never ended: ${open.length ? open.join(', ') : 'none'}`)
+  for (const [lane, ids] of Object.entries(waiting)) console.log(`  - ${lane} last logged waiting on ${ids}`)
+  const begun = new Set(events.filter((e) => e.kind === 'implement').map((e) => e.id))
+  const unbegun = integrated.filter((id) => !begun.has(id)).map((id) => byId[id])
+  console.log(`  - ${begun.size} implements had started; of those the fixture expects to integrate, these had not:`)
+  for (const t of unbegun) console.log(`      ${t.id} (${t.owner}), blocked by ${t.blockedBy.length ? t.blockedBy.join(', ') : 'nothing'}`)
+}
+
+// Why a forecast fixture cannot run, or '' when it can (#740 Q70): checked whole before any mock is scheduled.
+function forecastFixtureError(fixture) {
+  if (!fixture || typeof fixture !== 'object' || Array.isArray(fixture)) return 'the forecast fixture is not a JSON object'
+  for (const key of ['args', 'tickets', 'expect']) if (!(key in fixture)) return `the forecast fixture lacks \`${key}\``
+  if (!fixture.args || typeof fixture.args !== 'object' || Array.isArray(fixture.args)) return '`args` is not an object'
+  if (!Array.isArray(fixture.tickets)) return '`tickets` is not a list'
+  const ids = new Set()
+  for (const [i, t] of fixture.tickets.entries()) {
+    if (!t || typeof t !== 'object' || typeof t.id !== 'string' || !t.id) return `ticket ${i} has no id`
+    if (ids.has(t.id)) return `ticket ${t.id} appears twice`
+    ids.add(t.id)
+    if (!Object.hasOwn(MOCK_COST, t.owner)) return `ticket ${t.id} has owner ${t.owner}, which the mock has no sleep for`
+    if (!Array.isArray(t.blockedBy) || t.blockedBy.some((b) => typeof b !== 'string')) return `ticket ${t.id} has no blockedBy list`
+  }
+  const expect = fixture.expect
+  if (!expect || typeof expect !== 'object' || Array.isArray(expect)) return '`expect` is not an object'
+  for (const key of ['integrated', 'skippedForBlocker', 'startsBefore']) {
+    if (!(key in expect)) return `the forecast fixture lacks \`expect.${key}\``
+    if (!Array.isArray(expect[key])) return `\`expect.${key}\` is not a list`
+  }
+  for (const key of ['integrated', 'skippedForBlocker'])
+    for (const id of expect[key]) if (!ids.has(id)) return `\`expect.${key}\` names ${id}, which is no ticket of the fixture`
+  for (const [i, pair] of expect.startsBefore.entries())
+    if (!Array.isArray(pair) || pair.length !== 2 || !pair.every((id) => ids.has(id))) return `\`expect.startsBefore\` entry ${i} is not a pair of ticket ids`
+  return ''
+}
+
+// The forecast run (#740): the script on preflight's forecast fixture, fixture.args verbatim, every agent mocked, no
+// synthetic ticket, conflict, flake, change request or short run, and the four scheduling checks alone. Exits 0 on
+// its pass line, 1 when a check fails or the run stalls, 2 when the fixture or the script cannot run.
+async function runForecast(fixtureArg, script) {
+  const finish = async (code) => {
+    await new Promise((r) => process.stdout.write('', r))
+    await new Promise((r) => process.stderr.write('', r))
+    process.exit(code)
+  }
+  const refuse = (why) => { console.error(`overnight_tests: forecast: ${why}`); return finish(2) }
+  if (!fixtureArg) return refuse('usage: node .claude/workflows/overnight_tests.mjs --forecast <fixture> [script]')
+  let fixture
+  try { fixture = JSON.parse(fs.readFileSync(fixtureArg, 'utf8')) } catch (e) { return refuse(`the forecast fixture ${fixtureArg} cannot be read: ${e.message}`) }
+  const why = forecastFixtureError(fixture)
+  if (why) return refuse(why)
+  const { tickets, expect } = fixture
+  const byId = Object.fromEntries(tickets.map((t) => [t.id, t]))
+  // Summed over every ticket of the fixture, not only those expect names, so a wrong expect cannot shorten the
+  // limit: each one's implement, review and integrate, and the one closing check.
+  let limitMs
+  try {
+    limitMs = forecastStallLimitMs([...tickets.flatMap((t) => ['implement', 'review', 'integrate'].map((k) => mockSleepMs(k, t.owner))), mockSleepMs('closing')])
+  } catch (e) { return refuse(e.message) }
+  let tick = 0
+  const events = [], logs = []
+  const clock = setInterval(() => { tick++ }, 1)
+  globalThis.args = fixture.args
+  globalThis.phase = () => {}
+  globalThis.log = (text) => logs.push({ at: tick, text })
+  globalThis.parallel = (fns) => Promise.all(fns.map((f) => f()))
+  globalThis.agent = mockAgent({
+    tickets, byId, events, now: () => tick,
+    grill: () => ({ questions: [], changeRequests: [], adrCandidates: [], draftDecision: '', decided: '', summary: 'forecast' }),
+    answer: (kind, id) => {
+      if (kind === 'implement') return { outcome: 'resolved', branch: `b-${id}`, forkSha: 'f', headSha: 'h', complete: true, outstanding: '', summary: 'forecast', question: '', delegatedDecisions: [], changeRequests: [] }
+      if (kind === 'review') return { outcome: 'committed', headSha: 'h', findingsFixed: [], findingsSkipped: [], summary: 'forecast', question: '', changeRequests: [], changedFiles: [`files/${id}.txt`] }
+      if (kind === 'integrate') return { ok: true, mergeSha: 'm', notes: '', conflictFiles: [], headSha: `verified-${id}`, old: '', redHead: '', reach: '' }
+      if (kind === 'closing') return { ok: true, headSha: 'd'.repeat(40), lastLine: 'check: pass: forecast.', notes: '' }
+      throw new Error(`unexpected agent label ${kind}:${id} in the forecast run`)
+    },
+  })
+  const name = path.basename(script)
+  let limit, result
+  try {
+    const src = fs.readFileSync(script, 'utf8').replace(/^export const meta/m, 'const meta')
+    const run = new Function('return (async () => {' + src + '\n})()')()
+    result = await Promise.race([run, new Promise((res) => { limit = setTimeout(() => res(STALLED), limitMs) })])
+  } catch (e) {
+    clearTimeout(limit)
+    clearInterval(clock)
+    console.error(`overnight_tests: forecast: the script did not run: ${e && e.stack ? e.stack : e}`)
+    return finish(2)
+  }
+  clearTimeout(limit)
+  clearInterval(clock)
+  if (result === STALLED) {
+    reportStall({ heading: `overnight_tests: forecast: FAILED, the script did not finish within ${limitMs / 1000} s, on ${name}:`, events, logs, integrated: expect.integrated, byId })
+    return finish(1)
+  }
+  const failures = []
+  const fail = (msg) => failures.push(msg)
+  let got = new Set()
+  if (!result || typeof result !== 'object') fail(`the script returned ${JSON.stringify(result)}, not a run result`)
+  else got = schedulingChecks({ want: new Set(expect.integrated), expect, result, events, logs, byId, fail })
+  // Cancellation: a finished run leaves no timer behind, neither the stall limit nor the clock.
+  const timers = process.getActiveResourcesInfo().filter((r) => r === 'Timeout').length
+  if (timers) fail(`${timers} timer(s) outlived the run: the stall limit or the clock was not cancelled`)
+  if (failures.length) {
+    console.log(`overnight_tests: forecast: FAILED, ${failures.length} check(s), on ${name}:`)
+    failures.forEach((f) => console.log(`  - ${f}`))
+    return finish(1)
+  }
+  console.log(`overnight_tests: forecast: pass: ${got.size} integrated, ${expect.skippedForBlocker.length} skipped for a blocker, ${expect.startsBefore.length} ordering checks, on ${name}`)
+  return finish(0)
+}
+
+if (process.argv[2] === '--forecast') await runForecast(process.argv[3], process.argv[4] || path.join(here, 'overnight.js'))
+
 const scriptPath = process.argv[2] || path.join(here, 'overnight.js')
 const fixturePath = process.argv[3] || path.join(here, 'fixtures', '2026-10-20-tickets.json')
 const fixture = JSON.parse(fs.readFileSync(fixturePath, 'utf8'))
@@ -190,12 +407,10 @@ const changedFiles = (id) => (id === CONFLICT_ALWAYS || id === NEEDS_HUMAN || !f
 const merges = {}          // id -> integrate calls so far
 const greens = []          // {at, head}, each green mocked integrate, in order: the verified tips (#279)
 const RESOLVE_TIP = 't'.repeat(40)   // the run branch's tip the mocked resolve back-merged
-const cost = { integrator: 60, 'ws1-infra': 30, 'ws2-hosting': 20, 'ws3-identity': 30, 'ws4-proxy': 20, 'ws5-fixtures': 10, 'ws6-verification': 30 }
 
 let tick = 0
 const events = []          // {at, kind, id, edge}
 const logs = []            // {at, text}
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const clock = setInterval(() => { tick++ }, 1)
 
 // The run launches with a skills directory other than the script's default (#501), so every skill path a prompt names
@@ -206,26 +421,12 @@ globalThis.phase = () => {}
 globalThis.log = (text) => logs.push({ at: tick, text })
 globalThis.parallel = (fns) => Promise.all(fns.map((f) => f()))
 const allPrompts = []      // {label, prompt}, every agent's
-let calls = 0              // each mocked agent call's ordinal, so an agent's start and end pair up
-globalThis.agent = async (prompt, opts) => {
-  allPrompts.push({ label: opts.label, prompt })
-  const [kind, id] = opts.label.split(':')
-  // Copies: the script sets a routed ticket's status, and the checks read the statuses collect gave.
-  if (kind === 'collect') return { outcome: 'ok', reason: 'companion', tickets: tickets.map((t) => ({ ...t })), landed: [], base: 'a'.repeat(40), shell: '3.2', shellCommand: '/bin/bash' }
-  if (kind === 'resume') return NOT_MERGED   // the resume probe (#712): nothing of this run is on the run branch yet
-  if (kind === 'live') return LIVE_READY   // the live read (#721): still ready-for-agent
-  if (kind === 'grill') {
-    const asked = id === CARRIED ? { questions: grillQuestions(13), summary: CARRIED_SUMMARY }
-      : id === CARRIED_LOOSE ? { questions: grillQuestions(5), summary: CARRIED_LOOSE_SUMMARY }
-      : { questions: grillQuestions(2) }
-    return byId[id].changeRequest ? grillResult(id) : { ...grillResult(id), ...asked }
-  }
-  if (kind === 'route') return { flow: 'agent', reason: 'companion' }
-  if (kind === 'report') return { questions: 0, mainCheckoutClean: true, leftovers: '', issue: 0, url: '' }
-  const n = ++calls
-  events.push({ at: tick, kind, id, edge: 'start', n })
-  await sleep(kind === 'implement' ? cost[byId[id].owner] * 3 : 30)
-  events.push({ at: tick, kind, id, edge: 'end', n })
+globalThis.agent = mockAgent({ tickets, byId, events, now: () => tick, prompts: allPrompts, grill: (id) => {
+  const asked = id === CARRIED ? { questions: grillQuestions(13), summary: CARRIED_SUMMARY }
+    : id === CARRIED_LOOSE ? { questions: grillQuestions(5), summary: CARRIED_LOOSE_SUMMARY }
+    : { questions: grillQuestions(2) }
+  return byId[id].changeRequest ? grillResult(id) : { ...grillResult(id), ...asked }
+}, answer: (kind, id) => {
   if (kind === 'implement' && id === NEEDS_HUMAN) return { outcome: 'needs-human', branch: 'b', forkSha: 'f', headSha: 'h', complete: false, outstanding: '', summary: 'stopped on a storage question', question: QUESTION, delegatedDecisions: [], changeRequests: changeRequestsOf(kind, id) }
   if (kind === 'implement') return { outcome: 'resolved', branch: 'b', forkSha: 'f', headSha: 'h', complete: true, outstanding: '', summary: 's', question: '', delegatedDecisions: [], changeRequests: changeRequestsOf(kind, id) }
   if (kind === 'review') return { outcome: 'committed', headSha: 'h', findingsFixed: [], findingsSkipped: [], summary: 's', question: '', changeRequests: changeRequestsOf(kind, id, reviewCalls[id] = (reviewCalls[id] || 0) + 1), changedFiles: changedFiles(id) }
@@ -249,15 +450,14 @@ globalThis.agent = async (prompt, opts) => {
   if (kind === 'reset') return { ok: true, head: OLD, notes: `${id}: the run branch is at ${OLD}` }
   // The closing check (#629) answers red, the case the report has to carry without resetting any merge.
   if (kind === 'closing') return CLOSING_RED
-  throw new Error(`unexpected agent label ${opts.label}`)
-}
+  throw new Error(`unexpected agent label ${kind}:${id}`)
+} })
 
 // A scheduler that deadlocks (a lane waiting on a ticket queued behind itself) never settles, and the tick
 // alone would keep the process alive, so the run is bounded. Every mock agent of a passing run on the
 // 2026-10-20 fixture, run one after another, sleeps 3.63 s (23 tickets' implement, review and integrate);
 // 30 s is eight times that and over twenty times a normal run of about 1.3 s (#213).
 const LIMIT_MS = 30000
-const STALLED = Symbol('stalled')
 let limit
 let result
 try {
@@ -274,59 +474,19 @@ clearTimeout(limit)
 clearInterval(clock)
 
 if (result === STALLED) {
-  const ended = new Set(events.filter((e) => e.edge === 'end').map((e) => `${e.kind}:${e.id}`))
-  const open = events.filter((e) => e.edge === 'start' && !ended.has(`${e.kind}:${e.id}`)).map((e) => `${e.kind}:${e.id}`)
-  const waiting = {}
-  for (const l of logs) { const m = /^(\S+): nothing ready; waiting on (.+)$/.exec(l.text); if (m) waiting[m[1]] = m[2] }
-  console.log(`overnight_tests: FAILED, the script did not finish within ${LIMIT_MS / 1000} s, on ${path.basename(scriptPath)}:`)
-  console.log(`  - agents started and never ended: ${open.length ? open.join(', ') : 'none'}`)
-  for (const [lane, ids] of Object.entries(waiting)) console.log(`  - ${lane} last logged waiting on ${ids}`)
-  const begun = new Set(events.filter((e) => e.kind === 'implement').map((e) => e.id))
-  const unbegun = fixture.expect.integrated.filter((id) => !begun.has(id)).map((id) => byId[id])
-  console.log(`  - ${begun.size} implements had started; of those the fixture expects to integrate, these had not:`)
-  for (const t of unbegun) console.log(`      ${t.id} (${t.owner}), blocked by ${t.blockedBy.length ? t.blockedBy.join(', ') : 'nothing'}`)
+  reportStall({ heading: `overnight_tests: FAILED, the script did not finish within ${LIMIT_MS / 1000} s, on ${path.basename(scriptPath)}:`, events, logs, integrated: fixture.expect.integrated, byId })
   process.exit(1)
 }
 
 const failures = []
 const fail = (msg) => failures.push(msg)
-const started = (id) => events.find((e) => e.kind === 'implement' && e.id === id && e.edge === 'start')
-const integratedAt = (id) => (events.filter((e) => e.kind === 'integrate' && e.id === id && e.edge === 'end').pop() || {}).at
+const started = (id) => startedIn(events, id)
+const integratedAt = (id) => integratedAtIn(events, id)
 
-// 1. What integrates and what skips.
+// The four scheduling checks, as the forecast run makes them, on the set this run must integrate: the fixture's,
+// less the tickets the synthetic scenarios fail, and with the synthetic tickets that integrate.
 const want = new Set([...fixture.expect.integrated.filter((id) => id !== CONFLICT_ALWAYS && id !== NEEDS_HUMAN && !FLAKE_FAILED.includes(id)), AFTER_CLOSE.id, TRIAGED.id, REQUEST_AGENT.id])
-const got = new Set(result.integrated || [])
-for (const id of want) if (!got.has(id)) fail(`expected ${id} to integrate; it did not`)
-for (const id of got) if (!want.has(id)) fail(`${id} integrated; the fixture does not expect it`)
-for (const id of fixture.expect.skippedForBlocker) {
-  if (!(result.skipped || []).includes(id)) fail(`expected ${id} skipped for an unintegrated blocker; it was not`)
-  if (started(id)) fail(`${id} started an implement although its blocker never integrated`)
-}
-
-// 2. No implement starts before every blocker that is one of tonight's agent tickets has integrated.
-for (const e of events.filter((x) => x.kind === 'implement' && x.edge === 'start')) {
-  for (const b of byId[e.id].blockedBy) {
-    if (!(result.integrated || []).includes(b)) continue
-    if (integratedAt(b) === undefined || integratedAt(b) > e.at) fail(`${e.id} started at ${e.at}, before its blocker ${b} integrated`)
-  }
-}
-
-// 3. Ready work goes first: a lane does not idle behind a blocked head.
-for (const [first, then] of fixture.expect.startsBefore) {
-  const a = started(first), b = started(then)
-  if (!a) fail(`${first} never started`)
-  else if (b && a.at > b.at) fail(`${first} started at ${a.at}, after ${then} at ${b.at}: its lane idled behind a blocked ticket`)
-}
-
-// 4. A lane says it is waiting only on tickets that have not integrated yet.
-for (const l of logs) {
-  const m = /^(\S+): nothing ready; waiting on (.+)$/.exec(l.text)
-  if (!m) continue
-  for (const id of m[2].split(', ')) {
-    const at = integratedAt(id)
-    if (at !== undefined && at < l.at) fail(`${m[1]} logged waiting on ${id} at ${l.at}, after ${id} integrated at ${at}`)
-  }
-}
+const got = schedulingChecks({ want, expect: fixture.expect, result, events, logs, byId, fail })
 
 // The run's log directory, as overnight.js derives it from the launch's repo: every file an agent writes outside
 // its worktree goes there (#202).
@@ -2378,6 +2538,78 @@ const forkOf = (prompt) => (/Otherwise fork from [^:]+: forkSha = (\S+?)\. Take 
     if (lines.some((l) => l.includes('integration gate red'))) fail(`#1052: the log calls a merge that never ran a gate red: ${lines.join(' | ')}`)
     if (!lines.some((l) => l.includes('no merge made') && l.includes(LINE))) fail(`#1052: the log does not say the merge was refused and why: ${lines.join(' | ')}`)
   }
+}
+
+
+// 41. The forecast run (#740): `--forecast <fixture> [script]` runs the script on a fixture preflight's --fixture
+//     wrote, with every agent mocked and none of the synthetic scenarios above, and makes the four scheduling checks
+//     alone. The default run spawns it on the 2026-10-20 fixture and requires its pass line, whose numbers are those
+//     the retired overnight_harness.mjs printed on that fixture (23, 6, 3). A fixture missing a key, or one the mock
+//     cannot sleep for, exits 2 naming it before the script runs: the marker script below prints a line the moment
+//     it runs, and that line must not appear. A wrong expect fails the checks. The stall limit is eight times the
+//     summed mock sleeps, never under 30 s, and a sleep that is no finite, non-negative number is refused.
+{
+  const self = fileURLToPath(import.meta.url)
+  const forecast = (fixtureArg, script) => spawnSync(process.execPath, [self, '--forecast', fixtureArg, ...(script ? [script] : [])], { encoding: 'utf8', timeout: 120000 })
+  const lastLine = (r) => (r.stdout || '').trim().split('\n').pop()
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'overnight-forecast-'))
+  const MARKER = 'forecast-marker: the script ran'
+  const marker = path.join(dir, 'marker.js')
+  fs.writeFileSync(marker, `console.log(${JSON.stringify(MARKER)})\nreturn { integrated: [], skipped: [] }\n`)
+  const base = JSON.parse(fs.readFileSync(fixturePath, 'utf8'))
+  const write = (name, value) => { const f = path.join(dir, name); fs.writeFileSync(f, JSON.stringify(value)); return f }
+  const PASS = `overnight_tests: forecast: pass: 23 integrated, 6 skipped for a blocker, 3 ordering checks, on ${path.basename(scriptPath)}`
+  const passed = forecast(fixturePath, scriptPath)
+  if (passed.status !== 0 || lastLine(passed) !== PASS) fail(`#740: the forecast run on ${path.basename(fixturePath)} did not pass: exit ${passed.status}, last line ${JSON.stringify(lastLine(passed))}, stderr ${JSON.stringify((passed.stderr || '').slice(0, 400))}`)
+  if (passed.stdout.includes('waiting on') || /overnight_tests: pass:/.test(passed.stdout)) fail('#740: the forecast run ran the default run\'s checks or printed its pass line')
+  for (const key of ['args', 'tickets', 'expect']) {
+    const { [key]: _, ...rest } = base
+    const r = forecast(write(`no-${key}.json`, rest), marker)
+    if (r.status !== 2 || !r.stderr.includes(`lacks \`${key}\``) || r.stdout.includes(MARKER)) fail(`#740: a forecast fixture missing ${key} did not exit 2 naming it before the script ran: exit ${r.status}, stderr ${JSON.stringify(r.stderr)}, stdout ${JSON.stringify(r.stdout)}`)
+  }
+  const structural = [
+    ['not-an-object', [base], 'the forecast fixture is not a JSON object'],
+    ['args-not-an-object', { ...base, args: [] }, '`args` is not an object'],
+    ['tickets-not-a-list', { ...base, tickets: {} }, '`tickets` is not a list'],
+    ['no-id', { ...base, tickets: [...base.tickets, { owner: 'integrator', blockedBy: [] }] }, `ticket ${base.tickets.length} has no id`],
+    ['twice', { ...base, tickets: [...base.tickets, base.tickets[0]] }, `ticket ${base.tickets[0].id} appears twice`],
+    ['unknown-owner', { ...base, tickets: base.tickets.map((t, i) => i === 0 ? { ...t, owner: 'ws9-nobody' } : t) }, `ticket ${base.tickets[0].id} has owner ws9-nobody, which the mock has no sleep for`],
+    ['no-blocked-by', { ...base, tickets: base.tickets.map((t, i) => i === 1 ? { ...t, blockedBy: undefined } : t) }, `ticket ${base.tickets[1].id} has no blockedBy list`],
+    ['expect-not-an-object', { ...base, expect: 'all' }, '`expect` is not an object'],
+    ['no-starts-before', { ...base, expect: { integrated: base.expect.integrated, skippedForBlocker: base.expect.skippedForBlocker } }, 'the forecast fixture lacks `expect.startsBefore`'],
+    ['skipped-not-a-list', { ...base, expect: { ...base.expect, skippedForBlocker: 'issue-1' } }, '`expect.skippedForBlocker` is not a list'],
+    ['bad-pair', { ...base, expect: { ...base.expect, startsBefore: [['x']] } }, '`expect.startsBefore` entry 0 is not a pair of ticket ids'],
+    ['unknown-id', { ...base, expect: { ...base.expect, integrated: [...base.expect.integrated, 'issue-0'] } }, '`expect.integrated` names issue-0, which is no ticket of the fixture'],
+  ]
+  for (const [name, value, said] of structural) {
+    const r = forecast(write(`${name}.json`, value), marker)
+    if (r.status !== 2 || !r.stderr.includes(said) || r.stdout.includes(MARKER)) fail(`#740: the forecast fixture ${name} did not exit 2 with ${JSON.stringify(said)} before the script ran: exit ${r.status}, stderr ${JSON.stringify(r.stderr)}, stdout ${JSON.stringify(r.stdout)}`)
+  }
+  // A ticket the fixture expects to integrate although its blocker is skipped: the checks must catch it.
+  const wrongId = base.expect.skippedForBlocker[0]
+  const wrong = forecast(write('wrong-expect.json', { ...base, expect: { ...base.expect, integrated: [...base.expect.integrated, wrongId], skippedForBlocker: base.expect.skippedForBlocker.slice(1) } }), scriptPath)
+  if (wrong.status !== 1 || !wrong.stdout.startsWith('overnight_tests: forecast: FAILED, ') || !wrong.stdout.includes(`expected ${wrongId} to integrate; it did not`)) fail(`#740: a forecast whose expect is wrong did not fail its checks: exit ${wrong.status}, stdout ${JSON.stringify(wrong.stdout.slice(0, 400))}`)
+  // A script that returns no run result fails the forecast, rather than passing on checks that read nothing.
+  const empty = path.join(dir, 'empty.js')
+  fs.writeFileSync(empty, 'return undefined\n')
+  const none = forecast(fixturePath, empty)
+  if (none.status !== 1 || !none.stdout.includes('not a run result')) fail(`#740: a forecast whose script returned nothing did not fail: exit ${none.status}, stdout ${JSON.stringify(none.stdout.slice(0, 400))}`)
+  // A mock sleep for an owner the cost table lacks is refused, not slept as NaN.
+  let refusedOwner = false
+  try { mockSleepMs('implement', 'ws9-nobody') } catch { refusedOwner = true }
+  if (!refusedOwner) fail('#740: the mock slept for an owner it has no cost for')
+  // The stall limit (Q72): eight times the summed sleeps, floored at 30 s; a malformed sleep is refused.
+  for (const [sleeps, want] of [[[], 30000], [[100, 200], 30000], [[3000, 2000], 40000], [[5000], 40000]]) {
+    let got
+    try { got = forecastStallLimitMs(sleeps) } catch (e) { got = `threw ${e.message}` }
+    if (got !== want) fail(`#740: the stall limit of sleeps ${JSON.stringify(sleeps)} is ${got}, not ${want}`)
+  }
+  for (const bad of [[NaN], [-1], ['30'], [Infinity], [undefined]]) {
+    let threw = false
+    try { forecastStallLimitMs(bad) } catch { threw = true }
+    if (!threw) fail(`#740: the stall limit took the malformed sleeps ${JSON.stringify(bad)}`)
+  }
+  fs.rmSync(dir, { recursive: true, force: true })
 }
 
 if (failures.length) {
