@@ -462,6 +462,22 @@ jobs:
         # holds no copy of the prelude's commands.
         run: python3 -I tools/wiz_prelude_tests.py
 
+      - name: Row 6's lever launches deploy.sh only on the driver's line and moves the tunnel only on its pass line
+        # tools/wiz_d6.sh (#1204) is sitting D's row 6 lever, written by hand three times in the sitting of
+        # 2026-11-14. Its companion runs the real script under /bin/bash against doubles of deploy.sh and
+        # tunnel.sh: no launch when the test has ended or the driver's line (read from
+        # tests/e2e/Stack/RollingDeployLoop.cs) does not come in time, no tunnel moved without the pass
+        # line and deploy.sh's exit kept, and on the pass line the old tunnel stopped, a new one started
+        # and the times and the task id recorded, with nothing printed that names an account or a session.
+        run: python3 -I tools/wiz_d6_tests.py
+
+      - name: A continuity row's draft post names its verdict as the evidence file does and leaves out session ids
+        # tools/wiz_row_post.py (#1204) drafts rows 3 to 9's posts from the bundle. Its companion runs it on
+        # fixture bundles in RowEvidence's shape, read from tests/e2e/Stack/ContinuityEvidence.cs: only
+        # Passed is headed passed, an unknown verdict is refused, session refs are left out and task ids
+        # kept, and each file of the bundle is named with its SHA-256.
+        run: python3 -I tools/wiz_row_post_tests.py
+
       - name: The derived issue labels follow the table, write by name, and delete a label only when nothing carries it
         # tools/issue_labels.py (#680) works out each issue's kind:, area: and vendor: labels and
         # retires the unused default labels, the one write it cannot take back. Its companion runs the
