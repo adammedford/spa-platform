@@ -24,6 +24,11 @@ The plan is in `docs/plan/`. Read the part for your task before you write anythi
 
 ## Rules for every task
 
+- **The gateway is the product; everything else exists to prove something about it.** Before you add
+  or grow a component (a fixture, a suite, a script, a Terraform root, a tool), answer in the ticket
+  or pull request: what does this prove about the gateway, and would an adopter, a team running the
+  gateway in its own estate, reuse the result? `docs/roadmap.md` places each component on the
+  gateway's capability ladder.
 - **Write only inside your owner's paths.** Reading anywhere is fine. `OWNERSHIP.md` lists the paths,
   and `.githooks/pre-push` checks them. How a task lands: `docs/agents/landing-work.md`.
 - **The integrator's paths are off limits**, even for a one-line fix. Need one changed (a contract, a package, a version, a project)? File a change request and stop: `docs/agents/tracker-policy.md` → "Change requests". `SpaPlatform.slnx` and `Directory.Packages.props` are the integrator's.
