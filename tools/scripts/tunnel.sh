@@ -43,7 +43,8 @@
 # the cell module's, which is internal (alb.tf).
 #
 # Run it as the operator's own session: the spa-platform profile, with tools/aws-project.env
-# sourced, after seed.sh. It needs the AWS CLI v2, the Session Manager plugin and python3, and curl with --keepalive.
+# sourced, after seed.sh. It needs the AWS CLI v2, the Session Manager plugin and python3, and
+# curl with --keepalive.
 #
 # It never prints the account id: of a task it names only the id, never the ARN. The session's own
 # stderr goes through the same rule as its reads: an AWS error reaches the terminal as its code

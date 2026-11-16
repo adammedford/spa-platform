@@ -651,6 +651,7 @@ class TunnelForwardsThroughTheTaskToTheAlb(CompanionTestCase):
         self.assertEqual(0, result.status, result.output)
         self.assertIn("after the shell's prompt", " ".join(result.stdout.split()))
 
+
 class TunnelForwardsThroughANamedTask(CompanionTestCase):
     """#1197: --task <task id> forwards through that task, and exits 1 naming it when it is not a
     running task of the gateway service that a session can reach. Without the option the script
@@ -704,7 +705,8 @@ class TunnelForwardsThroughANamedTask(CompanionTestCase):
         self.assertIn(f"task {self.TWO[0]} is not a running task of {SERVICE}", result.stderr)
 
     def test_a_value_that_is_not_a_task_id_is_refused_before_any_aws_call(self):
-        for value in ("", "abc/def", f"arn:aws:ecs:{REGION}:<account>:task/{CLUSTER}/{self.TWO[0]}", "AAAA 0000"):
+        # The ARN carries the real account id, so run()'s universal fails if the refusal echoes it.
+        for value in ("", "abc/def", f"arn:aws:ecs:{REGION}:{ACCOUNT}:task/{CLUSTER}/{self.TWO[0]}", "AAAA 0000"):
             with self.subTest(value=value):
                 case = Case(self)
                 result = case.run(TUNNEL, "--local-port", str(free_port()), "--task", value)
