@@ -1,6 +1,10 @@
 # ADR-0001: Resolve per-app schemes by host through a registry-backed scheme provider
 
-- **Status:** Accepted. Confirmed by Gate G0 item 1 on 11 October 2026 and the Cognito report (items 2 and 3); ADR-0017 records the bounded evidence and freeze decision.
+- **Status:** Accepted. Confirmed by Gate G0 item 1 on 11 October 2026 and the Cognito report (items 2 and 3); ADR-0017 records the bounded evidence and freeze decision. **Amended 2026-11-17 by
+  [ADR-0038](0038-fragments-compose-into-one-shell-at-one-host-each-with-its-own-client-and-release.md):**
+  a host also resolves each of its fragments' `oidc:{appId}:{fragmentId}` schemes, after the
+  app's own two, each signing in to the app's `cookie:{appId}`; any other scheme name still
+  resolves to nothing; the rest of the decision is unchanged.
 - **Date:** 2026-10-11
 - **Deciders:** integrator
 - **Plan ref:** `docs/plan/01-plan.md` → Decisions, D1 (Doc revision 36)
