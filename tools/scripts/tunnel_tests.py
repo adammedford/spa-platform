@@ -620,12 +620,12 @@ class TunnelForwardsThroughTheTaskToTheAlb(CompanionTestCase):
     def test_ctrl_c_leaves_the_filter_to_pass_the_session_s_last_line(self):
         # #505 (#186's S9). Ctrl-C reaches the whole foreground group, the filter among it. The
         # filter ignores it, so the line the plugin prints after it still reaches the terminal, and
-        # through the filter: a denial as its code, any other line with the account masked. Its
-        # trap '' INT states what bash already does for a process substitution in a script, which
-        # runs without job control: "asynchronous commands ignore SIGINT"
-        # (https://www.gnu.org/software/bash/manual/html_node/Signals.html). So this case holds the
-        # behaviour, not the trap line: it turns red if the filter is ever started in a way that
-        # takes the signal, or stops passing a line that arrives after it.
+        # through the filter: a denial as its code, any other line with the account masked. What
+        # makes awk ignore it differs between bash versions: 5.2 starts a process substitution with
+        # SIGINT at its default, and on 5.3 a bare trap '' INT leaves awk with it at its default, so
+        # session_errors resets the trap before ignoring the signal (tunnel.sh says why, #1315). So
+        # this case holds the behaviour, not the trap lines: it turns red if the filter is ever
+        # started in a way that takes the signal, or stops passing a line that arrives after it.
         world = default_world()
         world["ctrl_c_then_stderr"] = (
             f"plugin: closing the session on arn:aws:ecs:{REGION}:{ACCOUNT}:task/{CLUSTER}/0123456789abcdef0123456789abcdef\n"
@@ -1187,8 +1187,13 @@ class VerifyTunnelAgainstTheRealCurl(CompanionTestCase):
         listener.listen(4)
         listener.settimeout(20)
         self.addCleanup(listener.close)
-        handshakes = []
+        requests = []
 
+        # What the client sends once it has the certificate. curl before 8.18 with OpenSSL, and
+        # curl on macOS, refuses inside the handshake (an unknown-ca alert); curl 8.18 with OpenSSL
+        # 3.5 lets the handshake complete and checks the result after it, then closes without a
+        # request. Either way the refusal is that no request byte reaches the server, so that is
+        # what this holds, read before anything is answered.
         def serve():
             try:
                 connection, _ = listener.accept()
@@ -1197,10 +1202,14 @@ class VerifyTunnelAgainstTheRealCurl(CompanionTestCase):
             with connection:
                 try:
                     with context.wrap_socket(connection, server_side=True) as tls:
-                        tls.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
-                        handshakes.append("completed")
+                        tls.settimeout(10)
+                        if tls.recv(4096):
+                            requests.append("a request")
+                            tls.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
+                            return
                 except (ssl.SSLError, OSError):
-                    handshakes.append("refused by the client")
+                    pass
+                requests.append("none")
 
         server = threading.Thread(target=serve, daemon=True)
         server.start()
@@ -1208,7 +1217,7 @@ class VerifyTunnelAgainstTheRealCurl(CompanionTestCase):
         server.join(20)
         self.assertEqual(1, result.status, result.output)
         self.assertIn("does not trust", result.stderr)
-        self.assertEqual(["refused by the client"], handshakes)
+        self.assertEqual(["none"], requests)
 
 
 def main() -> int:

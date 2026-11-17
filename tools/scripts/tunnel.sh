@@ -264,12 +264,18 @@ note "Ctrl-C ends the session"
 # becomes its code, as aws_read's does. Any other line, the plugin's own among them, is passed on
 # with every twelve-digit run masked, which an account id always is. It ignores Ctrl-C, which goes
 # to the whole foreground group: the plugin prints its last lines after it, and the filter ends
-# when they do, at end of input. bash already starts a process substitution with SIGINT ignored,
-# since a script runs without job control and "asynchronous commands ignore SIGINT" then
-# (https://www.gnu.org/software/bash/manual/html_node/Signals.html); the trap says so where the
-# filter is written. Nothing waits for it once the session exits, so its last line can follow the
-# prompt (#505). Written out rather than as {12}, which not every awk reads.
+# when they do, at end of input. The trap is what makes awk ignore it, and it is two lines because
+# one is not enough everywhere. bash 5.2 starts a process substitution with SIGINT at its default,
+# so `trap '' INT` is needed there; bash 5.3 starts it with SIGINT ignored ("asynchronous commands
+# ignore SIGINT", https://www.gnu.org/software/bash/manual/html_node/Signals.html), but a bare
+# `trap '' INT` then leaves the command it runs with SIGINT at its default, and only a reset first
+# leaves it ignored. Seen on 2026-11-17 through /proc/<pid>/status SigIgn of the awk: bash 5.2.21
+# 0x2 with the bare trap, bash 5.3.9 0x4 with it and 0x6 with the reset (#1315). The Ctrl-C
+# cases in tunnel_tests.py hold the behaviour on every bash the companions run under. Nothing waits
+# for the filter once the session exits, so its last line can follow the prompt (#505). Written out
+# rather than as {12}, which not every awk reads.
 session_errors() {
+  trap - INT
   trap '' INT
   awk -v program="$PROGRAM" -v what="the session through task ${TARGET_TASK}" '
     match($0, /An error occurred \([^)]*\)/) {
