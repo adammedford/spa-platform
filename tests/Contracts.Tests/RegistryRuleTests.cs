@@ -106,7 +106,7 @@ public sealed class RegistryRuleTests
             Documents.RegistryFragment(f => f["csp"] = new JsonObject { ["script-src"] = Documents.Strings("'unsafe-inline'") }),
             "the shell's refusals, which a fragment keeps");
 
-        // A shell's own script-src keeps admitting a hash, which the import map needs.
+        // A shell's own script-src keeps admitting a hash, which the import map needs (#980, from #961's C6).
         Schemas.AcceptsRegistry(
             Documents.RegistryEntry(e => e["csp"] = new JsonObject { ["script-src"] = Documents.Strings("'sha256-AAAA'") }),
             "a hash in a shell's script-src");
