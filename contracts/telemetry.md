@@ -5,13 +5,15 @@
 - **Source:** `docs/plan/02-contracts.md` → Telemetry; ADR-0007 → Logging rules this forces
 
 Workstream 6 proposes this contract; the integrator writes it. One JSON log line per request, and
-one event line for each login, refresh, logout and registry swap. Traces carry W3C context to
-upstreams, and metrics are tagged by app.
+one event line for each login, refresh, logout and registry swap, a logout's being one line per
+token set (below). Traces carry W3C context to upstreams, and metrics are tagged by app, and
+`gateway.requests` and `security.rejections` by fragment as well, for a request that resolved one.
 
 | Kind | Names |
 | --- | --- |
-| Log fields | `ts`, `level`, `msg`, `trace_id`, `span_id`, `cell`, `app_id`, `registry_rev`, `route`, `rule`, `session_ref`, `read_refused`, `status`, `duration_ms` |
+| Log fields | `ts`, `level`, `msg`, `trace_id`, `span_id`, `cell`, `app_id`, `fragment_id`, `registry_rev`, `route`, `rule`, `session_ref`, `read_refused`, `status`, `duration_ms` |
 | `route` values | `asset`, `api`, `bff`, `callback`, `health` |
+| Logout revocation line | One per token set a logout finds in the record, the shell's and each fragment's, carrying `app_id`, `session_ref`, `fragment_id` (on a fragment's set only) and `outcome`, one of: `revoked`; `http_{status}`, the provider's refusal; `unreachable`; `deadline_exceeded`, `ProviderDeadline` ran out; `no_refresh_token`; `no_revocation_endpoint`; `no_scheme`, the set's fragment has no live scheme; `client_changed`, the set was recorded to a client the entry no longer names; `gate_timeout`, the set's session gate was not entered within `LogoutGateBudget`. Every outcome but `revoked` is a set left to expire at the provider. |
 | Metrics | `gateway.requests`, `auth.logins`, `auth.refreshes`, `auth.sessions.active`, `security.rejections`, `registry.revision`, `registry.age_seconds`, `registry.rejected`, `proxy.upstream.duration`, `storage.read_refusals` |
 | Never logged | `Authorization`, `Cookie`, `Set-Cookie`, query strings, tokens, authorization codes, state, client secrets, session keys |
 
@@ -32,6 +34,15 @@ and every other request leaves it null. Unlike `rule` and `session_ref`, which e
 whether or not they are null, `UsePlatformTelemetry` writes `read_refused` only on the line of a
 request whose read was refused, and leaves it off every other line (change request
 `contracts/changes/issue-381-object-read-refusal.md`, items 5 and 6; #429).
+
+`fragment_id` names the fragment a request was resolved against: `IFragmentFeature.Fragment.FragmentId`
+of the `IFragmentFeature` that host resolution pins for a request under a known fragment's
+`/fragments/{fragmentId}/` (`contracts/pipeline.md`, stage 4). `UsePlatformTelemetry` reads that
+feature after the rest of the pipeline has returned and, as with `read_refused`, writes
+`fragment_id` only on the line of a request that resolved a fragment and leaves it off every other
+line. A shell's request, a request on a host with no fragments and a request whose `fragmentId`
+names no fragment of the app carry none, so no value an unchecked path segment supplied reaches a
+line or a tag. `gateway.requests` and `security.rejections` carry it as a tag on the same terms.
 
 ## How `rule` and `session_ref` reach the request line
 
@@ -62,9 +73,9 @@ rule id; `contracts/request-gate.md` says the same.
 The request line carries no value forwarded headers settle: no scheme, no client address, no host.
 That is what lets the telemetry stage run before `UsePlatformForwardedHeaders` without logging a
 value the trusted-network rule has not yet been applied to, and it is held by the "Log fields" row
-above: a line is those fields and nothing else, with `read_refused` only on a line that has a value
-for it. The span's own tags are the framework instrumentation's, set when hosting starts the
-activity before any stage runs, so the order of these two stages does not change them.
+above: a line is those fields and nothing else, with `read_refused` and `fragment_id` only on a line
+that has a value for each. The span's own tags are the framework instrumentation's, set when hosting
+starts the activity before any stage runs, so the order of these two stages does not change them.
 
 ## The instruments
 
@@ -78,7 +89,8 @@ that shape is one nobody sees.
 raises the event": `UsePlatformTelemetry` counts it, from the same feature field it logs as `rule`,
 on its own `Platform.Telemetry` meter. One owner then guarantees that the count equals the request
 lines carrying a rule. It is tagged `rule` and `app_id`, and `app_id` is null for a request rejected
-before the app was resolved.
+before the app was resolved; it is tagged `fragment_id` as well only for a request that resolved a
+fragment.
 
 `storage.read_refusals` is the second exception, for the same reason: `UsePlatformTelemetry` counts
 it, on the `Platform.Telemetry` meter, from `IRequestTelemetryFeature.ReadRefused`, the field behind
