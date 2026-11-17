@@ -2024,7 +2024,15 @@ try {
     // table and no followUp of the result, and it is not lost, since its axis's section names it.
     const vp = env.prompts['verdict:287'] || ''
     if (!/failsOn is the input or state on which the finding gives the wrong result, in one sentence/.test(vp)) fail('PR 287: the verdict prompt does not ask for each followUp\'s failsOn, the input or state on which it gives the wrong result, in one sentence (#966)')
-    if (!/cannot name one is not a follow-up: write it in findings under the axis that found it, as a note, and leave it out of followUps; it files nothing/.test(vp)) fail('PR 287: the verdict prompt does not state the note rule for a carried finding with no input it fails on (#966)')
+    if (!/cannot name one, or whose failsOn shows none of the three, is not a follow-up: write it in findings under the axis that found it, as a note, and leave it out of followUps; it files nothing/.test(vp)) fail('PR 287: the verdict prompt does not state the note rule for a carried finding with no input it fails on, or one that shows none of the three cases (#966, #1307)')
+    // The three cases (#1307): a carried finding is a row only when its Fails on shows the gateway, or
+    // a proof of it, wrong. The prompt names each case, and the notes the rule makes of the rest.
+    for (const [name, words] of [
+      ['a gateway behaviour that is wrong', '(1) a gateway behaviour that is wrong'],
+      ['a proof that would pass while the gateway is wrong', '(2) a test, suite, script or sitting step that would pass, or lose its evidence, while the gateway is wrong'],
+      ['process tooling that would land or pass work it should refuse', '(3) process tooling that would land or pass work it should refuse'],
+      ['the notes the rule makes', 'the wording of a document, and a defect in tooling that puts no proof at risk, are notes'],
+    ]) if (!vp.includes(words)) fail(`PR 287: the verdict prompt's follow-up rule does not name ${name}: ${JSON.stringify(words)} (#1307)`)
     if (!vp.includes('"## Follow-ups" table (five columns: Finding, Axis, Where, First carried by, Fails on)')) fail('PR 287: the verdict prompt does not name the five-column follow-ups table (#966)')
     const NOTE = { axis: 'Standards', title: 'The helper reads as a second copy of the parser', where: 'tools/x.py:9', failsOn: ' ', ticket: '', firstCarried: '' }
     env = run({ prs: [287] }, served(EARLIER), { followUps: { 287: [CARRIED[1], NOTE, { ...CARRIED[2], failsOn: '' }] } })
