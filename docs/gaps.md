@@ -42,6 +42,19 @@ full: each of its areas has an entry, or names the entry that carries it, in GAP
   back-channel logout are P2-6's decisions, and ending one subject's sessions is ADR-0028's
   (`docs/adr/0028-back-channel-logout-outside-bff-by-subject.md`).
 
+### GAP-28. No result against the real PingFederate is published
+
+- **Missing.** The project runs PingFederate under Ping's DevOps evaluation licence. It treats
+  Ping's subscription agreement as barring publication of test results or opinions about the
+  product (#1269), so the repository publishes no evidence of the gateway against the real
+  PingFederate. G7's public evidence is the composed suites in the `pingfederate` profile against
+  `fixtures/TestIdp`. The run against the product is recorded only in a local store with no remote.
+- **Risk.** An adopter cannot read from this repository that the gateway works with PingFederate.
+  The profile's fit rests on the test provider's emulation of it.
+- **Found.** #1269's resolution, 2026-11-16, Q4 and Q9.
+- **Closes with.** An adopter's run of the composed suites against its own licensed PingFederate,
+  or Ping's written consent to publish conformance results. Accepted, no plan.
+
 ## What a mature release still needs (GAP-3 to GAP-12)
 
 Each is argued in `docs/roadmap.md` → "What a mature release still needs, and nothing has written
