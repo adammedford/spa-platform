@@ -5,6 +5,9 @@
   is `form_post` and the two login-state cookies are `SameSite=None`, because T13's cost outweighs a
   cross-site `POST` that `__Host-` already covers; `query` and `Lax` stay the default, and the four
   defences below are unchanged.**
+  **Amended 2026-11-17 by [ADR-0039](0039-the-sign-in-chain-step-accepts-any-sec-fetch-site-protected-by-its-continuation.md):** the Fetch Metadata defence gains one exception:
+  `GET /bff/chain`, the sign-in chain step, accepts any `Sec-Fetch-Site` and is protected by its
+  continuation; the rest of that defence and the other three defences are unchanged.
 - **Date:** 2026-10-11
 - **Deciders:** integrator
 - **Plan ref:** `docs/plan/01-plan.md` → Decisions, D7 (Doc revision 36)
