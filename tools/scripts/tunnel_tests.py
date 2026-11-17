@@ -1187,8 +1187,13 @@ class VerifyTunnelAgainstTheRealCurl(CompanionTestCase):
         listener.listen(4)
         listener.settimeout(20)
         self.addCleanup(listener.close)
-        handshakes = []
+        requests = []
 
+        # What the client sends once it has the certificate. curl before 8.18 with OpenSSL, and
+        # curl on macOS, refuses inside the handshake (an unknown-ca alert); curl 8.18 with OpenSSL
+        # 3.5 lets the handshake complete and checks the result after it, then closes without a
+        # request. Either way the refusal is that no request byte reaches the server, so that is
+        # what this holds, read before anything is answered.
         def serve():
             try:
                 connection, _ = listener.accept()
@@ -1197,10 +1202,14 @@ class VerifyTunnelAgainstTheRealCurl(CompanionTestCase):
             with connection:
                 try:
                     with context.wrap_socket(connection, server_side=True) as tls:
-                        tls.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
-                        handshakes.append("completed")
+                        tls.settimeout(10)
+                        if tls.recv(4096):
+                            requests.append("a request")
+                            tls.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
+                            return
                 except (ssl.SSLError, OSError):
-                    handshakes.append("refused by the client")
+                    pass
+                requests.append("none")
 
         server = threading.Thread(target=serve, daemon=True)
         server.start()
@@ -1208,7 +1217,7 @@ class VerifyTunnelAgainstTheRealCurl(CompanionTestCase):
         server.join(20)
         self.assertEqual(1, result.status, result.output)
         self.assertIn("does not trust", result.stderr)
-        self.assertEqual(["refused by the client"], handshakes)
+        self.assertEqual(["none"], requests)
 
 
 def main() -> int:
