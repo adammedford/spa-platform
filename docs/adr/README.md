@@ -56,6 +56,7 @@ Owner: integrator (`docs/plan/01-plan.md` → Workstreams).
 | [0035](0035-analyze-every-build-in-two-tiers-ramped-to-error-with-codeql-required.md) | Analyze source in every build at `10-all`, in a strict and a relaxed tier, with every security rule at error, ramped through pending lines in `.globalconfig`; CodeQL `security-extended` as a required job | — |
 | [0036](0036-scan-every-image-in-ecr-and-in-ci-attest-with-buildkit-and-defer-signing.md) | Scan every image in ECR on push at the basic level and in CI with Trivy, failing CI on a HIGH or CRITICAL finding that has a fix; attest each image with BuildKit's SPDX attestations; defer signing until a verifier other than the signer exists; the pins sweep reads the base-image digests monthly; ECR encryption is AES256 | — |
 | [0037](0037-foreground-confirm-posting.md) | Permit a foreground session to post the human's explicit, parser-checked confirmation with provenance; amends ADR-0021 decision 2 | — |
+| [0038](0038-fragments-compose-into-one-shell-at-one-host-each-with-its-own-client-and-release.md) | Fragments compose into one shell at one host, each with its own client and release; one session record holds a token set per client, each with its own session gate and refresh lease; a fragments document is `schemaVersion: 2`; amends ADR-0024 decision 1 and ADR-0001's decision | — |
 
 Those three open items closed on 2026-10-16, when Gate G0's items 2 and 3 passed against Cognito.
 ADR-0017 records what the run found and amends each of them: ADR-0001's mechanism held, ADR-0005's

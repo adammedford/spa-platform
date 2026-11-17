@@ -4,7 +4,11 @@
   decision 4's margin is `2 × StoreDeadline + 1 s`, so "10 s + 5 s today" is 10 s + 11 s, and
   the margin covers taking the lease as well as the versioned write and clock skew.
   See change request P2-3's second amendment (2026-10-29, #445) for G1's lease budget end to
-  end; the figures are unchanged.
+  end; the figures are unchanged. **Amended 2026-11-17 by
+  [ADR-0038](0038-fragments-compose-into-one-shell-at-one-host-each-with-its-own-client-and-release.md):**
+  decision 1's session gate and refresh lease are one per token set, not one per session key: the
+  shell's lease key stays the session key and a fragment's is `{sessionKey}:{fragmentId}`;
+  `IRefreshLeases` keeps its signature; the other decisions are unchanged.
 - **Date:** 2026-10-20
 - **Deciders:** integrator, on Adam's answers to
   https://github.com/adammedford/spa-platform/issues/218 (wayfinder map #215)
