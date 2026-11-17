@@ -92,7 +92,8 @@ Three readings are the integrator's, because the plan states a shape and not a r
   owns. A frozen document with a typo must fail, not be silently ignored. `platform-config` is the
   exception at its root, because the task environment also carries `Logging`, `ASPNETCORE_*` and
   `OTEL_*`; every section the platform owns inside it is closed.
-- **`schemaVersion` is `const: 1`.** A later shape gets a later number.
+- **`schemaVersion` is `enum: [1, 2]`.** A document whose entries carry any fragment declares `2`; a
+  document with none may declare `1` or `2`. A later shape gets a later number.
 - **An entry requires `appId`, `host`, `release`, `oauth` and `session`.** `apis` and `csp` may be
   absent, which reads as an app with no upstream and an app that adds nothing to the baseline
   content security policy. `session` is required because the plan fixes no default lifetime, and

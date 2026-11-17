@@ -10,12 +10,106 @@ namespace Contracts.Tests;
 public sealed class RegistryRuleTests
 {
     [Fact]
-    public void SchemaVersion_is_one()
+    public void SchemaVersion_is_one_or_two_and_two_when_any_entry_carries_fragments()
     {
-        Schemas.AcceptsRegistry(Documents.Registry(), "schemaVersion 1");
-        Schemas.RejectsRegistry(Documents.Registry(d => d["schemaVersion"] = 2), "schemaVersion 2");
-        Schemas.RejectsRegistry(Documents.Registry(d => d["schemaVersion"] = "1"), "schemaVersion as a string");
+        // ADR-0019 decisions 1 and 2, as decided on #980: a fragments document is a later shape.
+        Schemas.AcceptsRegistry(Documents.Registry(), "the example, which carries a fragment, at schemaVersion 2");
+        Schemas.AcceptsRegistry(
+            Documents.RegistryWithoutFragments(d => d["schemaVersion"] = 1),
+            "schemaVersion 1 with no fragments, which keeps its meaning");
+        Schemas.AcceptsRegistry(Documents.RegistryWithoutFragments(), "schemaVersion 2 with no fragments");
+
+        Schemas.RejectsRegistry(Documents.Registry(d => d["schemaVersion"] = 1), "a fragments document at schemaVersion 1");
+        Schemas.RejectsRegistry(Documents.RegistryWithoutFragments(d => d["schemaVersion"] = 3), "schemaVersion 3");
+        Schemas.RejectsRegistry(Documents.RegistryWithoutFragments(d => d["schemaVersion"] = 0), "schemaVersion 0");
+        Schemas.RejectsRegistry(Documents.Registry(d => d["schemaVersion"] = "2"), "schemaVersion as a string");
         Schemas.RejectsRegistry(Documents.Registry(d => d.Remove("schemaVersion")), "a document with no schemaVersion");
+    }
+
+    [Fact]
+    public void A_fragment_requires_its_id_oauth_and_release_and_carries_no_host_or_session()
+    {
+        Schemas.AcceptsRegistry(Documents.RegistryFragment(f => f.Remove("apis")), "a fragment with no upstream");
+        Schemas.AcceptsRegistry(Documents.RegistryFragment(f => f.Remove("csp")), "a fragment that adds nothing to the policy");
+        Schemas.AcceptsRegistry(Documents.RegistryFragment(f => f.Remove("entry")), "a fragment whose entry is the default");
+
+        Schemas.RejectsRegistry(Documents.RegistryFragment(f => f.Remove("fragmentId")), "a fragment with no fragmentId");
+        Schemas.RejectsRegistry(Documents.RegistryFragment(f => f.Remove("oauth")), "a fragment with no oauth section");
+        Schemas.RejectsRegistry(Documents.RegistryFragment(f => f.Remove("release")), "a fragment with no release");
+        Schemas.RejectsRegistry(
+            Documents.RegistryFragment(f => f["host"] = "reports.spa-poc.test"),
+            "a fragment with a host of its own");
+        Schemas.RejectsRegistry(
+            Documents.RegistryFragment(f => f["session"] = new JsonObject { ["lifetimeMinutes"] = 480 }),
+            "a fragment with a session of its own");
+        Schemas.RejectsRegistry(
+            Documents.RegistryFragment(f => f["oauth"]!.AsObject().Remove("clientSecretRef")),
+            "a fragment oauth section held to the frozen oauth rules");
+        Schemas.RejectsRegistry(Documents.RegistryEntry(e => e["fragments"] = new JsonArray()), "an empty fragment list");
+    }
+
+    [Fact]
+    public void FragmentId_follows_the_appId_rule()
+    {
+        Schemas.AcceptsRegistry(Documents.RegistryFragment(f => f["fragmentId"] = "abc"), "the shortest fragmentId");
+        Schemas.AcceptsRegistry(Documents.RegistryFragment(f => f["fragmentId"] = new string('f', 40)), "a 40-character fragmentId");
+
+        Schemas.RejectsRegistry(Documents.RegistryFragment(f => f["fragmentId"] = "ab"), "a two-character fragmentId");
+        Schemas.RejectsRegistry(Documents.RegistryFragment(f => f["fragmentId"] = new string('f', 41)), "a 41-character fragmentId");
+        Schemas.RejectsRegistry(Documents.RegistryFragment(f => f["fragmentId"] = "Reports"), "an uppercase letter in a fragmentId");
+        Schemas.RejectsRegistry(Documents.RegistryFragment(f => f["fragmentId"] = "app1:reports"), "a colon in a fragmentId");
+    }
+
+    [Fact]
+    public void A_fragment_entry_is_one_js_file_at_the_release_root()
+    {
+        Schemas.AcceptsRegistry(Documents.RegistryFragment(f => f["entry"] = "entry.js"), "the default entry");
+        Schemas.AcceptsRegistry(Documents.RegistryFragment(f => f["entry"] = "e.min.js"), "a dotted entry name");
+        Schemas.AcceptsRegistry(
+            Documents.RegistryFragment(f => f["entry"] = new string('e', 61) + ".js"),
+            "a 64-character entry");
+
+        Schemas.RejectsRegistry(
+            Documents.RegistryFragment(f => f["entry"] = new string('e', 62) + ".js"),
+            "a 65-character entry");
+        Schemas.RejectsRegistry(Documents.RegistryFragment(f => f["entry"] = "a/b.js"), "an entry below the release root");
+        Schemas.RejectsRegistry(Documents.RegistryFragment(f => f["entry"] = "entry.mjs"), "an entry that is not .js");
+        Schemas.RejectsRegistry(Documents.RegistryFragment(f => f["entry"] = ".js"), "an entry with no name");
+    }
+
+    [Fact]
+    public void A_fragment_csp_extends_five_directives_and_no_script_hash_nonce_or_strict_dynamic()
+    {
+        Schemas.AcceptsRegistry(
+            Documents.RegistryFragment(f => f["csp"] = new JsonObject { ["connect-src"] = Documents.Strings("https://reports.spa-poc.test") }),
+            "an origin added to connect-src");
+        Schemas.AcceptsRegistry(
+            Documents.RegistryFragment(f => f["csp"] = new JsonObject { ["script-src"] = Documents.Strings("https://cdn.spa-poc.test") }),
+            "an origin added to script-src");
+
+        Schemas.RejectsRegistry(
+            Documents.RegistryFragment(f => f["csp"] = new JsonObject { ["default-src"] = Documents.Strings("'self'") }),
+            "default-src, which a shell may extend and a fragment may not");
+        Schemas.RejectsRegistry(
+            Documents.RegistryFragment(f => f["csp"] = new JsonObject { ["frame-ancestors"] = Documents.Strings("'self'") }),
+            "frame-ancestors on a fragment");
+        Schemas.RejectsRegistry(
+            Documents.RegistryFragment(f => f["csp"] = new JsonObject { ["script-src"] = Documents.Strings("'strict-dynamic'") }),
+            "'strict-dynamic' in a fragment's script-src");
+        Schemas.RejectsRegistry(
+            Documents.RegistryFragment(f => f["csp"] = new JsonObject { ["script-src"] = Documents.Strings("'NONCE-abc123'") }),
+            "a nonce in a fragment's script-src, in any letter case");
+        Schemas.RejectsRegistry(
+            Documents.RegistryFragment(f => f["csp"] = new JsonObject { ["script-src"] = Documents.Strings("'sha256-AAAA'") }),
+            "a hash in a fragment's script-src");
+        Schemas.RejectsRegistry(
+            Documents.RegistryFragment(f => f["csp"] = new JsonObject { ["script-src"] = Documents.Strings("'unsafe-inline'") }),
+            "the shell's refusals, which a fragment keeps");
+
+        // A shell's own script-src keeps admitting a hash, which the import map needs.
+        Schemas.AcceptsRegistry(
+            Documents.RegistryEntry(e => e["csp"] = new JsonObject { ["script-src"] = Documents.Strings("'sha256-AAAA'") }),
+            "a hash in a shell's script-src");
     }
 
     [Fact]
