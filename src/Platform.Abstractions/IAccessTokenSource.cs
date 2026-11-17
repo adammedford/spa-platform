@@ -22,9 +22,11 @@ public abstract record AccessTokenResult
     public sealed record SessionEnded : AccessTokenResult;
 
     /// <summary>
-    /// The provider could not be reached, or failed the refresh other than with <c>invalid_grant</c>.
-    /// The session is kept. The proxy answers 503 <c>idp_unavailable</c>, which is not a rejection and
-    /// carries no rule id. ADR-0005 and evidence T-A9 and T-A15 named this outcome; change request 4.2
+    /// The provider could not be reached, or failed the refresh other than with <c>invalid_grant</c>; or
+    /// no refresh was started because the host is stopping (change request P2-3's second amendment,
+    /// decision 3); or another writer replaced the session during the refresh and left it with no access
+    /// token. The session is kept. The proxy answers 503 <c>idp_unavailable</c>, which is not a rejection
+    /// and carries no rule id. ADR-0005 and evidence T-A9 and T-A15 named this outcome; change request 4.2
     /// added it after the G1b freeze, as a new type that changes no existing signature.
     /// </summary>
     public sealed record ProviderUnavailable : AccessTokenResult;
