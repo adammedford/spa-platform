@@ -6,9 +6,9 @@
 - **Date:** 2026-11-17.
 - **Branch:** `research/development-run-what-exists`, pushed and never merged, as the map rules.
 - **Method:** repository reading at commit `df4cf96` (origin/main on 2026-11-17, fetched at the start
-  of the session), and four things executed on this workstation (macOS, arm64, .NET SDK 10.0.401)
+  of the session), and three things executed on this workstation (macOS, arm64, .NET SDK 10.0.401)
   from a worktree of that commit: the sitting browser on its local stack, a raw-socket login through
-  that stack's TLS listener, the mock API started by hand, and nothing else. Section 9 lists each
+  that stack's TLS listener, and the mock API started by hand. Section 9 lists each
   and separates it from what was only read. Not done: no AWS call of any kind, no apply, no
   credential step, no read of the deployed cell (the `aws-mcp` connector failed to connect and the
   map rules it out); no `docker` command, so the startup benchmark and `tools/image-check.sh` are
@@ -236,8 +236,9 @@ inventory.
 
 - **What runs it.** `GLOSSARY.md:537-541` defines L as a fresh container of the built gateway image
   under the task's limits against stand-ins. The one runner is `tools/bench/startup.py`, on a
-  workstation by hand and nightly in `.github/workflows/startup-bench.yml`. `tools/check.sh --full`
-  does not run it.
+  workstation by hand and nightly in `.github/workflows/startup-bench.yml`. `tools/check.sh` does
+  not name it: the full check runs at most the test companion of a script a change touches
+  (`tools/check.sh:25-27`), which for the benchmark is `tools/bench/startup_tests.py`.
 - **What it starts.** The gateway image built from `src/Gateway/Dockerfile`, under
   `--cpus 0.25 --memory 1g`; moto in server mode for S3 and Parameter Store, seeded from
   `contracts/` and `fixtures/` (`startup.py:41-45, 566`); a container that serves a static
@@ -290,12 +291,16 @@ development" stands for the same reason.
   `fixtures/TestIdp/TestIdp.csproj`). `TestIdentityProvider.StartAsync` listens on a loopback port
   the system picks (`TestIdentityProvider.cs:248-263`), over plain HTTP, and signs every
   authorization in as `login_hint` or its default subject with no page shown
-  (`TestIdentityProvider.cs:315-323`). It runs only inside a process that constructs it: the
-  harness, `fixtures/Fixtures.Tests`, and so the sitting browser's local stack.
+  (`TestIdentityProvider.cs:315-323`). It runs inside a process that constructs it. The projects that
+  reference it are `tests/Gateway.TestHarness` (and so the sitting browser's local stack),
+  `fixtures/Fixtures.Tests`, `tests/Platform.Identity.Tests` and, outside the solution,
+  `spikes/g0/cognito`.
 - **`fixtures/apps`** holds the two app definitions (hosts `appN.spa-poc.test:8443`, upstreams
   `http://127.0.0.1:5080` and `:5081`, issuer name `cognito-poc`); **`fixtures/spa`** holds one
-  static page and one script per app with no build step. The harness reads both in place; so do
-  the benchmark's seed and the proof cell's `seed.sh`.
+  static page and one script per app with no build step. The harness reads both in place. The
+  benchmark's seed reads `fixtures/spa` in place but takes its registry from
+  `contracts/registry.example.json`, not from `fixtures/apps` (`tools/bench/startup.py:566-594`);
+  the proof cell's `seed.sh` publishes both, as the map's notes record.
 
 ## 7. What the shipped gateway would need to be run by hand with an app
 
@@ -306,8 +311,14 @@ no configuration key selects another implementation; the in-memory ones live in
 `Session:Store` is the one store with an in-memory setting (`src/Platform.Identity/SessionStores.cs`).
 So the published gateway, started as `tools/smoke.sh` starts it, can serve an app only if it is
 given something that answers as S3 and Parameter Store, a registry object and releases in it, a
-client secret, an issuer whose discovery it can read over https, and the platform configuration as
-environment variables. The repository's one recipe for all of that is the benchmark's
+client secret, an issuer whose discovery it can read, and the platform configuration as environment
+variables. On the issuer: `contracts/platform-config.schema.json` admits only an `https`
+authority, but the gateway today also reads discovery over plain HTTP from a loopback IP literal,
+an exception written for the test provider (`src/Platform.Identity/IssuerDirectory.cs:98-107`).
+The run in section 2 shows it in use: the harness's authority is `http://127.0.0.1:<port>` and the
+login completed under the `Production` environment. The benchmark serves its discovery stand-in
+over TLS anyway, against the day the gateway validates its configuration at start-up
+(`tools/bench/startup.py:60-63`). The repository's one recipe for all of that is the benchmark's
 `gateway_environment` and `seed` (`tools/bench/startup.py:405-434, 566`), which uses moto in Docker
 and stops short of a provider that can complete a login. The earlier finding
 `docs/research/local-aws-stand-in.md` (branch `research/local-aws-stand-in`) has the SDK's endpoint
