@@ -70,7 +70,7 @@
     },
     "clients": {
       "type": "object",
-      "description": "One entry per app that has an OAuth client, keyed by appId. spactl app add reads it to complete an app definition.",
+      "description": "One entry per app that has an OAuth client, keyed by appId, and under it one per fragment of that app, keyed by fragmentId, mirroring the registry's nesting. spactl app add reads it to complete an app definition and each of its fragments.",
       "propertyNames": { "$ref": "https://spa-platform.internal/contracts/registry.schema.json#/$defs/appId" },
       "additionalProperties": {
         "type": "object",
@@ -86,6 +86,28 @@
             "type": "integer",
             "minimum": 1,
             "description": "The parameter version. A rotation raises it, and the registry entry's clientSecretRef follows."
+          },
+          "fragments": {
+            "type": "object",
+            "description": "Optional. One entry per fragment of this app that has an OAuth client, keyed by fragmentId; absent for an app with no fragments. spactl app add refuses a definition naming a fragment this lacks.",
+            "propertyNames": { "$ref": "https://spa-platform.internal/contracts/registry.schema.json#/$defs/fragmentId" },
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["clientId", "secretParameter", "secretVersion"],
+              "properties": {
+                "clientId": { "$ref": "https://spa-platform.internal/contracts/registry.schema.json#/$defs/clientId" },
+                "secretParameter": {
+                  "$ref": "#/$defs/parameterName",
+                  "description": "The Parameter Store name holding the fragment client's secret, /spa-platform/{env}/apps/{appId}/fragments/{fragmentId}/client-secret. Never the value."
+                },
+                "secretVersion": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "description": "The parameter version. A rotation raises it, and the fragment's clientSecretRef follows."
+                }
+              }
+            }
           }
         }
       }
