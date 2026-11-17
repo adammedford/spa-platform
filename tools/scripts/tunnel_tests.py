@@ -620,12 +620,12 @@ class TunnelForwardsThroughTheTaskToTheAlb(CompanionTestCase):
     def test_ctrl_c_leaves_the_filter_to_pass_the_session_s_last_line(self):
         # #505 (#186's S9). Ctrl-C reaches the whole foreground group, the filter among it. The
         # filter ignores it, so the line the plugin prints after it still reaches the terminal, and
-        # through the filter: a denial as its code, any other line with the account masked. Its
-        # trap '' INT states what bash already does for a process substitution in a script, which
-        # runs without job control: "asynchronous commands ignore SIGINT"
-        # (https://www.gnu.org/software/bash/manual/html_node/Signals.html). So this case holds the
-        # behaviour, not the trap line: it turns red if the filter is ever started in a way that
-        # takes the signal, or stops passing a line that arrives after it.
+        # through the filter: a denial as its code, any other line with the account masked. What
+        # makes awk ignore it differs between bash versions: 5.2 starts a process substitution with
+        # SIGINT at its default, and on 5.3 a bare trap '' INT leaves awk with it at its default, so
+        # session_errors resets the trap before ignoring the signal (tunnel.sh says why, #1315). So
+        # this case holds the behaviour, not the trap lines: it turns red if the filter is ever
+        # started in a way that takes the signal, or stops passing a line that arrives after it.
         world = default_world()
         world["ctrl_c_then_stderr"] = (
             f"plugin: closing the session on arn:aws:ecs:{REGION}:{ACCOUNT}:task/{CLUSTER}/0123456789abcdef0123456789abcdef\n"
