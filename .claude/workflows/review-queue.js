@@ -128,8 +128,8 @@ export const meta = {
 // the verdict gives none for is no row but a note under its axis, and files nothing. The prompt asks
 // for a row only when that input shows the gateway wrong, a proof of it that would pass or lose its
 // evidence while the gateway is wrong, or process tooling that would land or pass work it should
-// refuse (#1307); any other carried finding it asks for as a note. The review
-// still writes nothing outside its log and its one comment, but for the change requests below.
+// refuse (#1307); any other carried finding it asks for as a note. The review still writes nothing
+// outside its log and its one comment, but for the change requests below.
 //
 // Change requests (#434, from #411 Q5 and #421 Q12). The Spec axis reads the change-request issues
 // each cited ticket is or was blocked by, with their decision comments, as spec sources. It judges
