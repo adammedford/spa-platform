@@ -105,10 +105,15 @@ claims, and the diff stayed in its owner's paths. Record the rest as an `Outstan
 merge body, which `docs/agents/landing-work.md` requires anyway, and end the review comment's
 findings with each carried finding that names no open ticket, in the `## Follow-ups` table the
 review-queue workflow writes, whose `Fails on` cell names the input or state on which the finding
-gives the wrong result; a finding with no such input is a note under its axis, not a row, and files
-nothing. The follow-ups pass (`docs/agents/landing-work.md` -> "The morning's launches") files each
-row as an issue of its own, from the latest record on each pull request into `main` that is open,
-merged since its checkpoint or recorded since it (#292, #514, #1082); a row still unfiled when
+gives the wrong result. A row is for a finding that leaves the gateway, or a proof of it, wrong
+(`AGENTS.md` → "Rules for every task"): its `Fails on` shows a gateway behaviour that is wrong, a
+test, suite, script or sitting step that would pass or lose its evidence while the gateway is wrong,
+or process tooling that would land or pass work it should refuse. A finding with no such input, or
+whose input shows none of the three, is a note under its axis, not a row, and files nothing; the
+wording of a document, and a defect in tooling that puts no proof at risk, are notes. The follow-ups
+pass (`docs/agents/landing-work.md` -> "The morning's launches") files each row as an issue of its
+own, from the latest record on each pull request into `main` that is open, merged since its
+checkpoint or recorded since it (#292, #514, #1082); a row still unfiled when
 `tools/land.sh` merges is named by its `land:` warning (#573), and the next follow-ups pass files
 it, or it is filed by hand first with the finding as the title and the body
 `node .claude/workflows/follow_up_body.mjs <pr> <record-url> <record.md> <row>` prints, whose
