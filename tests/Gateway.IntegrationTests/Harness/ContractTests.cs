@@ -253,7 +253,7 @@ public sealed class ContractTests
         | --- | --- | --- |
         | `GET` on anything else | Navigation | The asset at that path. |
 
-        Every 404 the asset row answers
+        Every 404 the two asset rows answer
         carries `Cache-Control: private, no-store`: a key the store answered as absent, and `another`.
 
         ## Cookies
@@ -262,19 +262,44 @@ public sealed class ContractTests
     [Fact]
     public void The_asset_404s_cache_control_is_the_first_backquote_of_its_sentence_read_across_the_wrap()
     {
-        // The planted sentence wraps between "answers" and "carries", as prose wrapped for the page does.
+        // The planted sentence wraps between "answer" and "carries", as prose wrapped for the page does.
         // Mutation that turns it red: matching the sentence on the section's lines as written, unjoined.
         Assert.Equal("private, no-store", ContractParser.AssetNotFoundCacheControl(Endpoints));
     }
 
+    [Fact]
+    public void A_contract_with_one_asset_row_has_its_404s_cache_control_read_from_that_rows_sentence()
+    {
+        // A contract without #982's fragment asset row says "the asset row answers", not "the two asset
+        // rows answer". Mutation that turns it red: reading only the two-row sentence.
+        string planted = Endpoints.Replace("Every 404 the two asset rows answer", "Every 404 the asset row answers", StringComparison.Ordinal);
+
+        Assert.Equal("private, no-store", ContractParser.AssetNotFoundCacheControl(planted));
+    }
+
+    [Fact]
+    public void The_one_row_sentence_with_another_header_throws_naming_that_sentence()
+    {
+        // A trunk contract's failure names the sentence the trunk has, so its reader is not sent looking
+        // for #982's. Mutation that turns it red: naming the two-row sentence whichever one matched.
+        string planted = Endpoints
+            .Replace("Every 404 the two asset rows answer", "Every 404 the asset row answers", StringComparison.Ordinal)
+            .Replace("`Cache-Control: private, no-store`", "`Pragma: no-cache`", StringComparison.Ordinal);
+
+        InvalidOperationException thrown = Assert.Throws<InvalidOperationException>(() => ContractParser.AssetNotFoundCacheControl(planted));
+
+        Assert.Contains("'Every 404 the asset row answers carries ...' backquotes 'Pragma: no-cache'", thrown.Message, StringComparison.Ordinal);
+    }
+
     [Theory]
-    [InlineData("Every 404 the asset row answers", "Every 404 the asset row has")]
+    [InlineData("Every 404 the two asset rows answer", "Every 404 the two asset rows have")]
+    [InlineData("Every 404 the two asset rows answer", "Every 404 the asset row has")]
     [InlineData("`Cache-Control: private, no-store`", "`Cache-Control: `")]
     [InlineData("`Cache-Control: private, no-store`", "`Pragma: no-cache`")]
     public void The_asset_404_sentence_reworded_or_its_header_changed_throws_naming_the_file_and_the_section(string from, string to)
     {
         // Mutations that turn it red: returning the backquote whatever it holds (the last two rows), or
-        // taking the section's first `Cache-Control:` backquote whatever sentence holds it (the first).
+        // taking the section's first `Cache-Control:` backquote whatever sentence holds it (the first two).
         string planted = Endpoints.Replace(from, to, StringComparison.Ordinal);
 
         InvalidOperationException thrown = Assert.Throws<InvalidOperationException>(() => ContractParser.AssetNotFoundCacheControl(planted));
