@@ -103,6 +103,21 @@ The subject is read by a check: `tools/roadmap.py` derives the roadmap's state f
 subjects, so "Merge task 2.4: ..." lands the row and "Merge part of task 2.4: ..." does not. Run the
 script before the push and commit what it writes, or `.githooks/pre-push` will say so.
 
+**A row whose last work is no merge is closed by the next merge's subject.** A row can end in a
+sitting: its last part is sitting records on a ticket, and no merge is left to name it whole, so
+`tools/roadmap.py` reads it as owed for good (#1219). The next merge names each such row after its
+own ids, behind the word `closing`, under either form: `Merge task issue-1219, closing rows 1.3 and
+6.9: <what landed>`, or `Merge part of task 2.4, closing row 6.9: <what landed>`. `tools/roadmap.py`
+reads every id after `closing` as a row landed whole, and `--check` fails a clause that names
+anything but a plan row, or that closes a row the same range merges in part. A row is closed only
+when no open issue names it, by its title's leading row id, its `**Plan row:**` line or a part
+declaration: `python3 -I tools/landing_subjects.py --closing <row>[,<row>...]` answers that before
+the subject is written, and `tools/check.sh` holds a `closing` clause in the range it judges on the
+same ground. The merge body names, for each row it closes, the tickets whose sitting records
+finished it. The clause is only for a row no merge will name: a row the merge itself lands takes the
+two forms above. The tracker is read before the merge and never by the derivation, which stays a
+function of tags, merge subjects and the plan (ADR-0034).
+
 **Two halves that must land together land as one combined branch**
 (`docs/agents/tracker-policy.md` rule 4). Each half commits on its own owner's branch, and neither
 is pushed alone when it fails the check without the other: on 2026-10-29 #504's half failed

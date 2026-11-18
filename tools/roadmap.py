@@ -12,7 +12,10 @@ markers in `docs/roadmap.md` and `README.md`:
 
     gates closed       `git tag`. docs/agents/landing-work.md makes the tag the record of a gate.
     rows landed        merge subjects, whose form that same page fixes:
-                       "Merge task(s) <id...>: ..." and "Merge part of task <id>: ...".
+                       "Merge task(s) <id...>: ..." and "Merge part of task <id>: ...", either
+                       with a clause ", closing row(s) <row...>" before the colon, which lands
+                       each row it names whole: a row whose last work was a sitting, which no
+                       merge of its own will ever name (#1219).
     rows that exist    the task tables in docs/plan/03-workstreams-and-tasks.md, and the package
                        table in docs/plan/06-phase-2-and-risks.md.
 
@@ -23,7 +26,9 @@ because it reads as coverage.
     tools/roadmap.py            rewrite the generated blocks (also --write)
     tools/roadmap.py --check    fail if they are not what the repository says they should be,
                                 or if the commits between origin/main and HEAD merge one id both
-                                whole and in part (#290)
+                                whole and in part (#290), or carry a `closing` clause that names
+                                anything but a plan row, or closes a row the same range merges in
+                                part (#1219)
     tools/roadmap.py --json     print the same derivation for a program, and write nothing
 
 An unrecognised argument exits 2 and writes nothing, because the default action writes.
@@ -297,6 +302,24 @@ LANDED_INTEGRATOR = re.compile(r"^(I-\d+):\s")
 LANDED_PARENTHESISED = re.compile(r"\((I-\d+)\)")
 
 
+# The clause that closes a row no merge of its own will name (#1219): "Merge task issue-1219, closing
+# rows 1.3 and 6.9: ..." or "Merge part of task 2.4, closing row 6.9: ...". A row can end in a
+# sitting, whose last part is records on a ticket, so the next merge names it after its own ids.
+# Everything after the word up to the subject's colon is the clause; `row` and `rows` are its words,
+# and every other token in it is read as an id the clause closes.
+CLOSING = re.compile(r"[,\s]+closing\b\s*", re.IGNORECASE)
+CLAUSE_WORDS = ("row", "rows")
+
+
+def split_closing(listed: str) -> tuple[str, list[str] | None]:
+    """(the ids before `closing`, the tokens the clause closes), or (listed, None) with no clause."""
+    parts = CLOSING.split(listed, maxsplit=1)
+    if len(parts) == 1:
+        return listed, None
+    tokens = re.split(r"[,\s]+and[,\s]+|[,\s]+", parts[1].strip())
+    return parts[0], [token for token in tokens if token and token.lower() not in CLAUSE_WORDS]
+
+
 def parent(id_: str, rows: list[str]) -> str | None:
     """The plan row an id belongs to, or None.
 
@@ -318,21 +341,25 @@ TICKET = re.compile(r"^issue-\d+$", re.IGNORECASE)
 
 
 def reading(subject: str) -> list[tuple[str, str]]:
-    """Every (id, how) one commit subject lands: how is 'landed' or 'part'.
+    """Every (id, how) one commit subject lands: how is 'landed', 'part' or 'closed'.
 
     The one reading of the subject forms. `landed` folds these into plan rows, `own_states` keeps
     splits and tickets by their own wording, and `merged_both_ways` compares them within a range, so
-    no two of them can read one subject two ways.
+    no two of them can read one subject two ways. An id after `closing` is 'closed' whatever the
+    head before it (#1219): it lands a plan row whole and nothing else, so a ticket or a split there
+    is not read at all, and `closing_problems` fails the range that writes one.
     """
     found: list[tuple[str, str]] = []
     match = LANDED_SUBJECT.match(subject)
     if match:
         how = "part" if match.group(1) else "landed"
-        for token in re.split(r"[,\s]+and[,\s]+|[,\s]+", match.group(2)):
+        head, closed = split_closing(match.group(2))
+        for token in re.split(r"[,\s]+and[,\s]+|[,\s]+", head):
             if ID.match(token):
                 found.append((token, how))
             elif TICKET.match(token):
                 found.append((token.lower(), how))
+        found += [(token, "closed") for token in closed or [] if ID.match(token)]
         return found
     match = LANDED_BRANCH.match(subject)
     if match:
@@ -368,14 +395,18 @@ def merged_both_ways(root: pathlib.Path) -> list[str] | None:
     the range. Ids are compared as the subjects write them: a split such as 2.1b is its own id here,
     and its row's whole landing beside it is no contradiction. With no trunk to compare against
     there is no range: None, which the caller reports rather than passing in silence.
+
+    A row a `closing` clause closes is landed whole by it, so a clause that closes a row the same
+    range merges in part is the same contradiction (#1219).
     """
-    base = trunk(root)
-    if base is None:
+    unlanded = unlanded_range(root)
+    if unlanded is None:
         return None
+    base, commits = unlanded
     seen: dict[str, dict[str, list[str]]] = {}
-    for line in run(["git", "log", "--format=%h %s", f"{base}..HEAD"], root).splitlines():
-        sha, _, subject = line.partition(" ")
+    for sha, subject in commits:
         for id_, how in reading(subject):
+            how = "landed" if how == "closed" else how
             seen.setdefault(id_, {}).setdefault(how, []).append(f"{sha} '{subject}'")
     problems = []
     for id_, by in seen.items():
@@ -387,10 +418,55 @@ def merged_both_ways(root: pathlib.Path) -> list[str] | None:
     return problems
 
 
+def unlanded_range(root: pathlib.Path) -> tuple[str, list[tuple[str, str]]] | None:
+    """(the trunk, each commit between it and HEAD as (short sha, subject)), or None with no trunk."""
+    base = trunk(root)
+    if base is None:
+        return None
+    commits = []
+    for line in run(["git", "log", "--format=%h %s", f"{base}..HEAD"], root).splitlines():
+        sha, _, subject = line.partition(" ")
+        commits.append((sha, subject))
+    return base, commits
+
+
+def closing_problems(root: pathlib.Path, rows: list[str]) -> list[str] | None:
+    """Each `closing` clause between the trunk and HEAD that closes anything but a plan row (#1219).
+
+    The clause lands a plan row whole, so a ticket, a split or an id the plan lacks there is a
+    subject that says a row closed when none did; a clause that names nothing says nothing. `reading`
+    skips such a token, and this refuses the range that would write it into the trunk's history.
+    None with no trunk, as `merged_both_ways` answers.
+    """
+    unlanded = unlanded_range(root)
+    if unlanded is None:
+        return None
+    problems = []
+    for sha, subject in unlanded[1]:
+        match = LANDED_SUBJECT.match(subject)
+        closed = split_closing(match.group(2))[1] if match else None
+        if closed is None:
+            continue
+        if not closed:
+            problems.append(f"{sha} '{subject}' has a `closing` clause that names no row")
+        for token in closed:
+            if token not in rows:
+                problems.append(
+                    f"{sha} '{subject}' closes '{token}', which is not a row in {PLAN_TASKS} or "
+                    f"{PLAN_PHASE2}"
+                )
+    return problems
+
+
 def landed(root: pathlib.Path, rows: list[str]) -> dict[str, str]:
     """Each plan row's state: 'landed', 'part', or absent."""
     state: dict[str, str] = {}
     for id_, how in landings(root):
+        if how == "closed":
+            # A clause closes a plan row whole, and lands nothing it names that is not one (#1219).
+            if id_ not in rows:
+                continue
+            how = "landed"
         row = parent(id_, rows)
         if row is None:
             continue
@@ -412,6 +488,9 @@ def own_states(root: pathlib.Path, rows: list[str]) -> tuple[dict[str, str], dic
     splits: dict[str, str] = {}
     tickets: dict[str, str] = {}
     for id_, how in landings(root):
+        if how == "closed":
+            # A `closing` clause closes plan rows only, so it lands no split and no ticket (#1219).
+            continue
         if TICKET.match(id_):
             into = tickets
         elif id_ not in rows and id_[-1:].isalpha() and parent(id_, rows):
@@ -639,6 +718,16 @@ def main(argv: list[str]) -> int:
         return 1
 
     if check:
+        unclosable = closing_problems(root, rows)
+        if unclosable:
+            for line in unclosable:
+                say(f"  {line}")
+            say()
+            say("ROADMAP FAILED: a `closing` clause names something that is not a plan row. The")
+            say("clause closes plan rows only, which reads each as landed whole (#1219): a ticket")
+            say("or a split goes before `closing`, and an id the plan lacks goes nowhere. Rebuild")
+            say("the branch so that subject is not on it.")
+            return 1
         contradictions = merged_both_ways(root)
         if contradictions is None:
             say(
