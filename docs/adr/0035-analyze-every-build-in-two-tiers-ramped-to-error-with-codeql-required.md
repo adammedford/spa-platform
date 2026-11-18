@@ -14,6 +14,9 @@
   See #619 (merged 2026-10-31 as 6948fec) for CA5359, which decision 13 names as suppressed at
   `RawClient.To`: it was fixed instead, by `TlsLoadBalancer.PinnedTo` in
   `tests/e2e/Stack/TlsLoadBalancer.cs`, which accepts only a certificate with the stack's own key.
+  See #622 for the CI runner's clean-build time that route 1 and decision 14 leave to #606: its
+  `Build` step took 23 s before the analyzers were switched on (run 40961365324, main at e70a3ac)
+  and 44 s after (run 41243212117, main at afdb936), one runner observation each.
 - **Date:** 2026-10-30
 - **Deciders:** integrator, on Adam's answers to #589, #590, #591, #592, #593 and #594 (wayfinder
   map #584)
