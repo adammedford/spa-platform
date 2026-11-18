@@ -79,10 +79,11 @@ PASSED_ASSEMBLY = re.compile(r"(?P<path>/\S+?)/bin/\S+\.dll \([^)]*\) passed\b")
 # infra/ and tools/aws-project.env, the harness reads fixtures/). Each top-level entry a test source
 # names is a key of RUNTIME_ROOTS, with what covers it; tools/test_reach_tests.py fails when a test
 # source names one that is not, so a new runtime read is decided here before it is trusted.
-RUNTIME_READS = ("contracts/", "fixtures/", "infra/", "docs/plan/", "tools/aws-project.env")
+RUNTIME_READS = ("contracts/", "fixtures/", "client/", "infra/", "docs/plan/", "tools/aws-project.env")
 RUNTIME_ROOTS = {
     "contracts": "RUNTIME_READS",
     "fixtures": "RUNTIME_READS",
+    "client": "RUNTIME_READS",
     "infra": "RUNTIME_READS",
     "docs": "RUNTIME_READS names docs/plan/, the one folder of docs/ a test reads (04-tests.md)",
     "tools": "RUNTIME_READS names tools/aws-project.env; tools/spactl is a project",
