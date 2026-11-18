@@ -135,7 +135,8 @@ def task(task_id: str, *, last_status: str = "RUNNING", exec_on: bool = True, ag
 
 def gateway_task(task_id: str) -> dict:
     """One task of the gateway's service: the gateway and the mock API, ECS Exec on and both agents
-    running, as they are until #787. It can carry a session, and the tunnel must never take it."""
+    running, as on a cell last applied before #787 turned Exec off there: the case where it could
+    carry a session, which the tunnel must never take."""
     agents = [{"name": "ExecuteCommandAgent", "lastStatus": "RUNNING"}]
     return {"taskArn": f"arn:aws:ecs:{REGION}:{ACCOUNT}:task/{CLUSTER}/{task_id}",
             "lastStatus": "RUNNING", "desiredStatus": "RUNNING", "enableExecuteCommand": True,
@@ -680,8 +681,8 @@ class TunnelForwardsThroughTheTaskToTheAlb(CompanionTestCase):
 class TunnelForwardsThroughTheBastionNeverAGatewayTask(CompanionTestCase):
     """#1168: the hop is a task of the service the outputs document names as ecsBastionService, and
     the session's target is that task's bastion container. The gateway's service, ecsService, runs a
-    task that could carry a session (ECS Exec is on there until #787), and the tunnel never lists or
-    takes it."""
+    task that could carry a session on a cell last applied before #787 turned Exec off there, and the
+    tunnel never lists or takes it."""
 
     def test_the_target_is_the_bastion_container_of_a_task_of_ecs_bastion_service(self):
         case = Case(self)
