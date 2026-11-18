@@ -137,6 +137,8 @@ public sealed class ArchitectureTests
         // What the assertion is for: a project added beside the others and left out of the solution
         // is named, whatever directory it is in, a dot-directory that is not .scratch/ included, and
         // a directory under .claude/ that is not worktrees/.
+        // Mutation (#1374): widen "/.claude/worktrees/" in OutsideTheSolution to "/.claude/" and this
+        // fails 1 of 27, without Agent.
         Assert.Equal(
             ["Agent", "Forgotten", "Gateway", "Hidden", "Scratch"],
             ProjectGraph.ProjectsATreeHolds(

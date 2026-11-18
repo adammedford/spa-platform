@@ -54,6 +54,8 @@ public sealed class ProjectGraph
     /// <param name="projectFiles">Absolute paths of the project files under <paramref name="root"/>.</param>
     public static IEnumerable<string> ProjectsATreeHolds(string root, IEnumerable<string> projectFiles) =>
         projectFiles
+            // The leading slash lets a directory at the top of the tree, such as .scratch/, match
+            // its entry in OutsideTheSolution, which is written with slashes on both sides.
             .Select(path => "/" + System.IO.Path.GetRelativePath(root, path).Replace('\\', '/'))
             .Where(path => !OutsideTheSolution.Any(directory => path.Contains(directory, StringComparison.Ordinal)))
             .Select(path => System.IO.Path.GetFileNameWithoutExtension(path))
