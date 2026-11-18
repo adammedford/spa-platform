@@ -352,18 +352,51 @@ public sealed class FragmentsRunTests : IDisposable
         Assert.All(RowFacts(), method => Assert.True(method.ReturnType == typeof(Task) && method.GetParameters().Length == 0, $"{method.Name} is not a plain Task Fact"));
     }
 
+    /// <summary>
+    /// Two fragments rows as landing B's contracts/test-ids.md registers them (#989's decision, d71e3d3): this branch's
+    /// register holds none, so the check below is held to this text as well as to the real file.
+    /// </summary>
+    private const string PlantedRegister = """
+        | ID | Attempt | Expect | Tier | Recorded by |
+        | --- | --- | --- | --- | --- |
+        | N-38 | Revoke a fragment's set at logout while a concurrent refresh obtains its successor, O3 (#961): `tests/e2e/Deployed/FragmentsTests.cs`: `FragmentsTests.G9_O3_a_successor_obtained_during_logout_is_refused` | The successor is refused | D | change request #989 (fragments rows) |
+        | F-37 | The hashed import map's cases, O5 (#961): `tests/e2e/Deployed/FragmentsTests.cs`: `FragmentsTests.G9_O5_the_hashed_import_map_cases_in_each_browser` | Each case holds in each sitting browser | D | change request #989 (fragments rows) |
+        """;
+
     [Fact]
     public async Task Every_FragmentsTests_method_the_register_names_is_a_row_fact_of_the_class()
     {
-        // Mutation: renaming G9_O5_the_hashed_import_map_cases_in_each_browser in FragmentsTests fails this test on a tree
-        // whose contracts/test-ids.md holds the fragments rows (landing B's, #989); this branch's base holds none, so
-        // there the copy in RegisteredNames is what the test above guards.
+        // On this branch's base contracts/test-ids.md names no FragmentsTests method, so the real file's check holds
+        // nothing until landing B (#989); the planted rows hold it here.
         string register = await File.ReadAllTextAsync(Path.Combine(Gateway.TestHarness.FixtureFiles.RepositoryRoot, "contracts", "test-ids.md"), Ct);
+
+        AssertEveryNamedMethodIsARowFact(register);
+        // Mutation: renaming G9_O5_the_hashed_import_map_cases_in_each_browser in FragmentsTests fails this line.
+        Assert.Equal(2, AssertEveryNamedMethodIsARowFact(PlantedRegister));
+    }
+
+    [Theory]
+    [InlineData("G9_O5_the_hashed_import_map_cases_in_each_browser`", "G9_O5_missing`")]
+    [InlineData("G9_O3_a_successor_obtained_during_logout_is_refused`", "G9_O3_a_successor_refused`")]
+    public void A_register_naming_a_method_the_class_lacks_fails_naming_the_method(string before, string after)
+    {
+        // Mutation: returning from AssertEveryNamedMethodIsARowFact before its assertions passes this test.
+        string register = PlantedRegister.Replace(before, after, StringComparison.Ordinal);
+        Assert.NotEqual(PlantedRegister, register);
+
+        Xunit.Sdk.XunitException thrown = Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => AssertEveryNamedMethodIsARowFact(register));
+        Assert.Contains(after.TrimEnd('`'), thrown.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>Asserts each method the register names as <c>FragmentsTests.&lt;method&gt;</c> is a row Fact and in <see cref="RegisteredNames"/>; returns how many it names.</summary>
+    private static int AssertEveryNamedMethodIsARowFact(string register)
+    {
         string[] named = [.. System.Text.RegularExpressions.Regex.Matches(register, @"`FragmentsTests\.(?<method>[A-Za-z_][A-Za-z0-9_]*)`", System.Text.RegularExpressions.RegexOptions.None, Gateway.TestHarness.RegexTimeout.Span)
             .Select(match => match.Groups["method"].Value).Distinct(StringComparer.Ordinal)];
         string[] facts = [.. RowFacts().Select(method => method.Name)];
 
-        Assert.All(named, name => Assert.Contains(name, facts));
-        Assert.All(named, name => Assert.Contains(name, RegisteredNames));
+        Assert.All(named, name => Assert.True(facts.Contains(name, StringComparer.Ordinal), $"the register names FragmentsTests.{name}, which is no row Fact of the class"));
+        Assert.All(named, name => Assert.True(RegisteredNames.Contains(name, StringComparer.Ordinal), $"the register names FragmentsTests.{name}, which RegisteredNames does not copy"));
+        return named.Length;
     }
 }
