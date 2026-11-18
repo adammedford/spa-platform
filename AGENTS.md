@@ -45,7 +45,7 @@ The plan is in `docs/plan/`. Read the part for your task before you write anythi
 - **A commit that changes a steering document names its authority** in an `Authority:` trailer. Which documents those are, the trailer's forms and the check that holds it: `docs/agents/landing-work.md` → "A commit that changes a steering document".
 - **Build against `Platform.Testing`**, not against another workstream's branch.
 - **Fill in the entry points the pipeline contract assigns to you, and add no others.** `Program.cs` calls them.
-- **A test id under "Done when" names a behaviour.** Prove it in your own test project, against the doubles. Workstream 6 proves it again in the composed suites. A `B-` id is the exception: the startup benchmark's verdict proves it (ADR-0033).
+- **A test id under "Done when" names a behaviour.** Prove it in your own test project, against the doubles. Workstream 6 proves it again in the composed suites.
 - **A task is done** as `GLOSSARY.md` → "Done" defines it.
 
 ## Who owns what
