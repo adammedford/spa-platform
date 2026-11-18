@@ -40,10 +40,17 @@ ADR-0020 records the decision and its reasons. What it adds to `docs/agents/issu
   #N) describes another ticket's wait and is not read. It also prints as a note, failing nothing, a
   `##` heading outside the ticket's set (`Parent`, `What to build`, `Acceptance criteria`, `Blocked
   by`) and an `**Owner:**` line beside a Touches line that names a path, since rule 5 derives the
-  owner. `.github/workflows/ticket-shape.yml` runs it when an issue carrying `ready-for-agent` is
-  opened, edited or labelled, and on a failure swaps that label for `needs-triage` and comments the
-  failing rule. The words are a list, and a list misfires. The escape is to reword the box, or to
-  make it a ready-for-human ticket blocked by the ticket that builds what it runs; then relabel.
+  owner. It holds none of rule 2's last three sentences, the ones on observation boxes
+  (`GLOSSARY.md` → "Observation box"): no word marks such a box, no field says whether a ticket's
+  open boxes are all of that kind, and which separate ticket's work an observation needs landed
+  first is a judgement, not a word. The session that applies `ready-for-agent` routes each
+  observation box to its own ready-for-human ticket, relabels in place a ticket whose open boxes are
+  all observation boxes, and adds the blocked-by edges that observation ticket needs; a passing
+  check says nothing of any of the three. `.github/workflows/ticket-shape.yml` runs it when an issue
+  carrying `ready-for-agent` is opened, edited or labelled, and on a failure swaps that label for
+  `needs-triage` and comments the failing rule. The words are a list, and a list misfires. The
+  escape is to reword the box, or to make it a ready-for-human ticket blocked by the ticket that
+  builds what it runs; then relabel.
 - **A ticket is filed after a search for what was filed since its subject was last searched.**
   Another session on the same account can file the same ticket while one drafts: #558 duplicated
   #547, filed two and a half hours earlier. Just before `gh issue create`, run
