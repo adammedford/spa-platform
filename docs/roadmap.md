@@ -151,8 +151,8 @@ tenant-aware client stack. That branch is still live for the Cognito items.
 
 **Plan rows.** `1.0`, `1.6a`, `1.1`, `1.8`, `5.5`, `3.0`
 
-**What it buys the gateway.** The right to write `src/Platform.Identity` at all. `AGENTS.md` forbids
-starting it before G1b, and G1b cannot close until this reports.
+**What it buys the gateway.** The right to write `src/Platform.Identity` at all. `contracts/README.md`
+→ "What G1b froze" blocks workstream 3 until G1b closes, and G1b cannot close until this reports.
 
 ### S3 The identity surface is frozen
 
