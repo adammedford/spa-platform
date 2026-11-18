@@ -1,4 +1,4 @@
-# ADR-0039: The sign-in chain step is the one /bff path that accepts any Sec-Fetch-Site, protected by its continuation (amends ADR-0007)
+# ADR-0040: The sign-in chain step is the one /bff path that accepts any Sec-Fetch-Site, protected by its continuation (amends ADR-0007)
 
 - **Status:** Accepted
 - **Date:** 2026-11-17
