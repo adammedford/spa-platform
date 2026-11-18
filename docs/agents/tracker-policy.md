@@ -172,14 +172,16 @@ ADR-0020 records the decision and its reasons. What it adds to `docs/agents/issu
 ## Lifecycle: not labels
 
 The labels in `docs/agents/triage-labels.md` say what an issue needs. Where it stands is held by GitHub's own fields, never by
-a label or a line in the body (ADR-0020). This overrides the `Part of #<parent>` and `Blocked by:`
-body-line fallbacks that the template text of `docs/agents/issue-tracker.md` offers:
+a label or a line in the body (ADR-0020):
 
 | State | Held by | Read from |
 | --- | --- | --- |
 | Claimed | An assignee: `gh issue edit <n> --add-assignee @me`, a session's first write | `assignees` |
 | Blocked | An open blocked-by relationship (`docs/agents/issue-tracker.md` → Blocking) | `issue_dependencies_summary.blocked_by` above zero, from `gh api repos/{owner}/{repo}/issues/<n>`; `gh issue view --json` has no such field |
 | Resolved | Closed, after an `## Answer` comment saying where the work or the answer is | `state` is `CLOSED` |
+
+This overrides the `Part of #<parent>` and `Blocked by:` body-line fallbacks that the template text
+of `docs/agents/issue-tracker.md` offers.
 
 - **Declined** is resolved too: closed as not planned (`gh issue close <n> --reason "not planned"`),
   labelled `wontfix`, with a comment saying why.
@@ -191,7 +193,9 @@ body-line fallbacks that the template text of `docs/agents/issue-tracker.md` off
   cutting a branch alone. What claims a plan row no issue carries: `docs/agents/landing-work.md` →
   "Take a task". `tools/overnight_collect.py` also passes over a
   ticket while a branch named for it, `task/issue-<n>-` or `task/<its plan row>-`, exists with its
-  work not landed, so a part-landed ticket's branch is pruned or renamed before the rest is taken.
+  work not landed, and `tools/prune_branches.py` keeps a part-landed ticket's branch, so that branch
+  is renamed before the rest is taken: the claims line of `tools/overnight_preflight.sh` prints the
+  rename.
 - **A follow-up is not a state of its origin.** It is an issue of its own, and holds the issue it
   came from open neither way ("An issue is held open by its own scope", above).
 
