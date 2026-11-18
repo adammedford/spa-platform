@@ -1030,8 +1030,8 @@ const mutationList = (inv, standards, d, prior = { held: null, clearers: [] }) =
     ...held,
     ...(inv.statedMutations || []).map((s) => {
       const tests = statedList(s.test)
-      const t = tests ? { ...s, tests } : statedName(s, inv.description)
-      return borrowed({ ...byTest.get(t.test), ...t, environment: s.environment || '', kind: 'stated' })
+      const read = tests ? { ...s, tests } : statedName(s, inv.description)
+      return borrowed({ ...(byTest.get(read.test) || byTest.get(s.test)), ...read, environment: s.environment || '', kind: 'stated' })
     }),
     ...((standards && standards.nominations) || []).map((s, i) => borrowed(nominated(s, byTest, i))), // empty-ok: a null Standards axis fails the pull request before mutationList runs, so standards is never null here
     ...candidates.filter(touched).map((c) => ({ ...c, kind: 'candidate' })),
@@ -1074,22 +1074,23 @@ const mutationRow = (n, m, i, got) => {
     countsMatched: null, logFile: m.unnamed ? '-' : mutationLog(n, i),
     environment: ok ? String(got.environment || '').trim() : '',
   }
-  // The environment the break needs (#1327): a run anywhere else cannot show it, so a judged row is
-  // could-not-run, which holds, and a held break re-run on the host reads as unjudged, not as gone.
-  if (m.environment && (row.result === 'reproduced' || row.result === 'did-not-fail') && row.environment !== m.environment) {
-    row.why = `the break needs ${m.environment} and ran in ${row.environment || 'the host'}: ${row.why}`
+  // A judged row (reproduced or did-not-fail) the script cannot take as judged becomes could-not-run,
+  // which holds a stated or held row; removed is proven from git history, wherever the agent ran.
+  const unjudged = (when, why) => {
+    if (!when || (row.result !== 'reproduced' && row.result !== 'did-not-fail')) return
+    row.why = `${why}: ${row.why}`
     row.result = 'could-not-run'
   }
+  // The environment the break needs (#1327): a run anywhere else cannot show it, so a held break
+  // re-run on the host reads as unjudged, not as gone. An environment that is no image name cannot be
+  // written into the Broken cell so that RUN_IN reads it back, and would be lost to the next review.
+  unjudged(row.environment && !/^[^()\s]+$/.test(row.environment), `the agent reported the environment ${JSON.stringify(row.environment)}, which is no image name`)
+  unjudged(m.environment && row.environment !== m.environment, `the break needs ${m.environment} and ran in ${row.environment || 'the host'}`)
   // A name of a listed stated cell (#1327), judged by its own name from the one run: absent from the
   // run, it is could-not-run; reported red with no failing name, which name went red is unknown.
-  if (m.listedIn && (row.result === 'reproduced' || row.result === 'did-not-fail') && ((ok && got.absent) || []).includes(m.test)) {
-    row.why = `${m.test} was not in the run of ${m.listedIn}: ${row.why}`
-    row.result = 'could-not-run'
-  }
-  if (m.listedIn && row.result === 'reproduced' && !row.failingNames.length) {
-    row.why = `the run of ${m.listedIn} went red and named no failing test, so whether ${m.test} did is unknown: ${row.why}`
-    row.result = 'could-not-run'
-  }
+  const own = (f) => `.${dotted(f)}`.endsWith(`.${m.test}`)
+  unjudged(m.listedIn && ((ok && got.absent) || []).some(own), `${m.test} was not in the run of ${m.listedIn}`)
+  unjudged(m.listedIn && row.result === 'reproduced' && !row.failingNames.length, `the run of ${m.listedIn} went red and named no failing test, so whether ${m.test} did is unknown`)
   // A held or candidate break the project caught through other tests, the named one not among them
   // (#684, #689): the tests that went red, which the verdict must accept before the row answers the
   // named test. A stated or nominated row the agent reported reproduced on other tests alone is
@@ -1597,7 +1598,7 @@ const reviewOne = async (n, res, at) => {
     if (m.unnamed) return { result: 'could-not-run', why: m.why }
     try { return await run(mutatePrompt(n, inv, m, i + 1), { label: `mutate:${n}:${i + 1}`, phase: 'Mutate', schema: MUTATION }) } catch (e) { return null }
   }))
-  const rows = list.flatMap((m, i) => statedRows(m).map((x) => mutationRow(n, x, i + 1, got && got[i])))
+  const rows = list.flatMap((m, i) => statedRows(m).map((one) => mutationRow(n, one, i + 1, got && got[i])))
   const mut = { rows, cut, outside, cleared, holds: mutationHolds(rows, cutHeld) }
   res.mutations = rows
   res.notMutated = cut

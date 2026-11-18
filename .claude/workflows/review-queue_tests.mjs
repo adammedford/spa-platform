@@ -3035,11 +3035,16 @@ try {
       const gone = resultOf(1316, result)
       const absent = (gone.mutations || []).find((m) => m.test === NONE) || {}
       if (absent.result !== 'could-not-run' || gone.verdict !== 'hold') fail(`#1327 cause 1: ${NONE} absent from the run gives ${absent.result}, verdict ${gone.verdict}, expected could-not-run and hold`)
+      // Named absent as unittest prints it, under its class, it is absent all the same.
+      env = run({ prs: [1316] }, served([said(CELL)]), { mutate: { [CELL]: ran([RED_FILTER], { absent: [RED_NONE] }) } })
+      result = await execute(env)
+      const goneQ = ((resultOf(1316, result).mutations || []).find((m) => m.test === NONE) || {}).result
+      if (goneQ !== 'could-not-run') fail(`#1327 cause 1: ${NONE} reported absent as ${RED_NONE} gives ${goneQ}, expected could-not-run`)
 
       env = run({ prs: [1316] }, served([said(CELL)]), { mutate: { [CELL]: ran([]) } })
       result = await execute(env)
       const blind = (resultOf(1316, result).mutations || []).map((m) => m.result)
-      if (blind.some((x) => x === 'reproduced')) fail(`#1327 cause 1: a run reported reproduced naming no failing test gives ${JSON.stringify(blind)}; which name went red is unknown, so no row reproduces`)
+      if (JSON.stringify(blind) !== JSON.stringify(['could-not-run', 'could-not-run'])) fail(`#1327 cause 1: a run reported reproduced naming no failing test gives ${JSON.stringify(blind)}; which name went red is unknown, so no row reproduces`)
 
       // A bracket of one token keeps today's reading: one row, the cell its test.
       for (const cell of [`${PYF} (companion)`, `${PYF} (check: ${NONE})`, 'Nom (Assert.Null)', 'test_x (pkg.Class)']) {
@@ -3101,6 +3106,11 @@ try {
         if (want === 'could-not-run' && !(h.why || '').startsWith(`the break needs ${IMAGE} and ran in ${where || 'the host'}`)) fail(`#1327 cause 3: the row's why ${JSON.stringify(h.why)} does not say the break needs ${IMAGE}`)
         if (want === 'could-not-run' && r.verdict !== 'hold') fail(`#1327 cause 3: a held break run in ${where || 'the host'} gives verdict ${r.verdict}, expected hold`)
       }
+      // An environment that is no image name could not be read back from the cell: could-not-run.
+      env = run({ prs: [1316] }, served([said(NONE, { environment: '' })]), { mutate: { [NONE]: ran([RED_NONE], { environment: 'docker ubuntu:26.04' }) } })
+      result = await execute(env)
+      const odd = (resultOf(1316, result).mutations || [])[0] || {}
+      if (odd.result !== 'could-not-run' || !/no image name/.test(odd.why || '')) fail(`#1327 cause 3: an environment reported as "docker ubuntu:26.04" gives ${odd.result} (${odd.why}), expected could-not-run naming no image name`)
       // A cell with no suffix reads as the host, as before: no container in the prompt.
       const plain = { ...held, body: held.body.replace(` (run in ${IMAGE})`, '') }
       env = run({ prs: [1316] }, served([], { head: H2, commits: [H2], comments: [plain] }), { range, earlier, mutate: { [NONE]: ran([RED_NONE], { environment: '' }) } })
