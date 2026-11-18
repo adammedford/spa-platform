@@ -154,9 +154,14 @@ before `unwatch` has ended, and the `failed` line it printed is in the log too, 
 interval's start: run `unwatch`, run the watch line again with the log left where it is, and post
 the interval as missing coverage. The gateway's log lines go into the bundle uncounted (`tools/scripts/logs.sh` into `"$E/row2.log"`), because a navigation the shell gate
 challenges is a redirect and not a 401 (`GLOSSARY.md` → Shell gate), so the log could count what
-the browser never saw. The tunnel's hop is an old task, which the roll drains (#348 Q20): once
-`describe-tasks` lists a new task RUNNING, stop `tunnel.sh`, note the UTC time, start it again in
-the background (it picks a running task and prints `through task <id>`: keep that id, D4 needs it),
+the browser never saw. The tunnel's hop is the bastion's task (#1168), never a gateway task, and
+the cutover replaces only the gateway's task definition, so the roll drains no hop; no sitting has
+yet seen a session through the bastion outlast a roll of the gateway's service (#1167's decision,
+under "Not verified").
+The restart #348 Q20 set for a drained hop stays as it was: once `describe-tasks` lists a new task
+RUNNING, stop `tunnel.sh`, note the UTC time, start it again in the background (it prints `through
+task <id>`, the bastion task's id: keep it for the post; it names no gateway task, so it is not the
+id D4's `SPA_TUNNEL_TASK` asks for, which #1382 settles),
 run `verify-tunnel.sh /healthz`, and note the time it passed; the interval between the two times is
 the gap, posted as missing coverage, and any `tunnel-down` line outside it is named as further
 missing coverage. Then convergence:
@@ -247,11 +252,10 @@ the human's answer, and wiz holds it to no wait. On it:
 
 - **The tunnel.** If the restart has not run, or the task its id names is no longer RUNNING, and a
   new task is RUNNING, offer it now as above (rule 1), and keep the id; its times and id go into the
-  next step's post. With no new task it has nothing to go through yet: wiz says that D4 still has no
-  id from D2, and that D0's tunnel is up if the restart never stopped it and down if the hop it moved
-  to has gone. D0's id is not one for D4: a row 4 on D0's revision says nothing of the cutover.
-  `tunnel.sh` takes the first task it can reach, so mid-roll its id can name an old task that the roll
-  then drains: name that task's revision from `describe-tasks` when keeping the id.
+  next step's post. With no new task it is not offered: wiz says that D4 still has no id from D2,
+  and that D0's tunnel, through the bastion's task, stands as D0 left it. D0's id is not one for D4:
+  a row 4 on D0's revision says nothing of the cutover. The roll replaces no bastion task, so the
+  restart's id names the task D0's tunnel went through unless the bastion itself was replaced.
 - **Each later step, D1 and D3 to D9.** Run the `describe-services` read above first, and open the
   step's post with "D2 failed" and what that read showed. A read that has since settled makes no
   row 2 pass and is no convergence: only D2's own block is that.
@@ -350,9 +354,10 @@ mutation the summary does not name stops the sitting:
 - **D6 (row 6, F1; #348 Q29, #1203, #1216).** The class drives for up to 40 minutes while the operator
   deploys, and `tools/wiz_d6.sh` (#1204) is the lever: it waits for the driver's line starting
   `row6: launch deploy.sh now`, runs `deploy.sh` on the same commit as C1 runs it, and on
-  `deploy.sh`'s pass line stops `tunnel.sh` and starts it again through a new task, as D2 does by
-  hand. The launch waits for that line, written `ContinuityBounds.Row6LaunchAfterFirstSignIn` after
-  the first sign-in, because a session's refresh must fall inside the deployment interval, and on
+  `deploy.sh`'s pass line stops `tunnel.sh` and starts it again, as D2 does by hand, through the
+  bastion's task (#1168), which the deployment does not replace. The launch waits for that line,
+  written `ContinuityBounds.Row6LaunchAfterFirstSignIn` after the first sign-in, because a session's
+  refresh must fall inside the deployment interval, and on
   2026-11-14 a deployment launched straight after the test started ended before any session
   refreshed, twice. The driver writes the line to its standard output, which `dotnet test`'s
   testing platform keeps from the terminal and from any file, so this row alone runs through the
@@ -380,8 +385,9 @@ mutation the summary does not name stops the sitting:
   `deploy.sh`'s pass line it moves no tunnel and exits non-zero, even when `deploy.sh` exited 0
   (#1284). After the lever's exit 0, run `shown tools/scripts/verify-tunnel.sh /healthz` and
   note the time it passed; from the lever's `tunnel stopped at` time to that one is the gap, recorded
-  as missing coverage, and the id after `through task` is the new hop's. The old hop's task drains
-  during the roll, so requests through it fail before the stop. The class reads the old and new task
+  as missing coverage, and the id after `through task` is the bastion task's, never a gateway
+  task's: the roll drains no hop, so a request that fails before the stop is the roll's or the
+  session's, not a drained hop's. The class reads the old and new task
   ids and both image digests from ECS and posts nothing itself; `deploy.sh`'s wait names both new
   task ids, and those go into the post.
 - **D7 (row 7; #348 Q31).** The class onboards app 3 with #212's F-07 flow (the apps root's plan
