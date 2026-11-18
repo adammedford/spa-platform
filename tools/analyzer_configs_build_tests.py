@@ -28,6 +28,7 @@ Run: python3 -I tools/analyzer_configs_build_tests.py
 
 from __future__ import annotations
 
+import fnmatch
 import os
 import pathlib
 import re
@@ -44,15 +45,17 @@ CONFIGS = (".editorconfig", ".globalconfig")
 BUILD_FILES = ("Directory.Build.props", "Directory.Packages.props", "global.json", "nuget.config",
                *CONFIGS, *sorted(p.name for p in ROOT.glob("BannedSymbols.*.txt")))
 
-# A strict-tier project: not under tests/, fixtures/, tools/spactl/, tools/bench/floor/ or
-# src/Platform.Testing/, so the banned-symbol lists apply too, as they do to the shipped projects.
+# A strict-tier project (ADR-0035 decision 3; Directory.Build.props's SpaRelaxedTier says which folders
+# are not), so the banned-symbol lists apply too, as they do to the shipped projects.
 PROJECT = "src/Probe/Probe.csproj"
 PROJECT_TEXT = '<Project Sdk="Microsoft.NET.Sdk">\n</Project>\n'
 SOURCE = "src/Probe/Marker.cs"
 SOURCE_TEXT = "namespace Probe;\n\ninternal static class Marker\n{\n}\n"
 
 # An MSBuild error line: `<origin>: error <code>: <text> [<project>]`, the code optional. An Error
-# task's origin is the file and position of the task, so the target's errors start with the props.
+# task given no File logs the project file it runs in, which for a task in an imported file is that
+# file, at the task's line and column; the control and the removal cases measured it on #1369's
+# first run. https://learn.microsoft.com/visualstudio/msbuild/error-task
 ERROR = re.compile(r":\s*error\b")
 
 
@@ -72,8 +75,9 @@ class ABuildWithoutAnAnalyzerConfigStops(unittest.TestCase):
 
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
-        # Resolved: on macOS the temporary folder is a link, and the compiler reads each source at its
-        # real path, which an .editorconfig at the link's path does not cover.
+        # Resolved: on macOS the temporary folder is a link, and the compiler read each source at its
+        # real path, which an .editorconfig at the link's path did not cover; the control failed on
+        # IDE0160 with both configs present until the tree was resolved (#1369's first run).
         self.tree = pathlib.Path(self.tmp.name).resolve()
         for name in BUILD_FILES:
             shutil.copyfile(ROOT / name, self.tree / name)
@@ -106,6 +110,19 @@ class ABuildWithoutAnAnalyzerConfigStops(unittest.TestCase):
                     self.assertIn(f"{self.tree / 'Directory.Build.props'}(", line, output)
                     self.assertIn(str(self.tree / missing), line, output)
                     self.assertNotIn(present, line, output)
+
+
+class TheCheckoutInputsLineCoversWhatItCopies(unittest.TestCase):
+    """tools/check.sh runs this companion on a change to a file its Checkout inputs line names, so a
+    file BUILD_FILES copies and the line leaves out would change with this companion unrun."""
+
+    def test_every_copied_file_is_declared(self):
+        text = pathlib.Path(__file__).read_text(encoding="utf-8")
+        lines = [line for line in text.splitlines() if line.startswith("Checkout inputs:")]
+        self.assertEqual(1, len(lines), "the docstring has no single Checkout inputs line")
+        patterns = lines[0].removeprefix("Checkout inputs:").split()
+        self.assertEqual([], [name for name in BUILD_FILES
+                              if not any(fnmatch.fnmatchcase(name, p) for p in patterns)])
 
 
 if __name__ == "__main__":

@@ -42,8 +42,9 @@
 
   <!-- The check the comment above names (#1369; Q19 of Overnight 2026-11-01, #706). Without it,
        whether a build missing a config failed rested on the source of the day tripping a rule. It
-       runs before the compile, so the error it raises is the build's only one, and
-       tools/analyzer_configs_build_tests.py removes each config in turn and sees that error alone. -->
+       runs before the compile, and a failed target stops the build, so the error it raises is the
+       build's only one: tools/analyzer_configs_build_tests.py removes each config in turn and sees
+       that error alone. https://learn.microsoft.com/visualstudio/msbuild/target-build-order -->
   <Target Name="_SpaRequireAnalyzerConfigs" BeforeTargets="CoreCompile">
     <Error Condition="!Exists('$(MSBuildThisFileDirectory).editorconfig')"
            Text="$(MSBuildThisFileDirectory).editorconfig is missing. Directory.Build.props runs the analysis with every rule at error, and that file holds the code-style options and the relaxed tier's relaxations (ADR-0035)." />
