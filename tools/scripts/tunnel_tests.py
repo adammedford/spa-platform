@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """Test companion for tools/scripts/tunnel.sh and tools/scripts/verify-tunnel.sh. Owner: workstream 1.
 
-Task 1.6b (#57): a Session Manager port forward through the gateway task to the internal ALB, and a
-check that a health path answers over it with trusted TLS. The row's done-when, verify-tunnel.sh
+Task 1.6b (#57): a Session Manager port forward through the cell's hop to the internal ALB, and a
+check that a health path answers over it with trusted TLS. Since #1168 the hop is the bastion task,
+behind the platform root's off-by-default bastion input (#1167), and never a task of the gateway's
+service: the tunnel lists the service the outputs document names as ecsBastionService, and refuses,
+exit 2 and before any AWS call, when the document names none. The row's done-when, verify-tunnel.sh
 exiting 0 on a clean workstation, needs the applied cell and is the sitting's (B1 in
 .scratch/sitting/spec.md). What a lane can prove without AWS is everything the two scripts decide:
 which task and container they choose, the Session Manager call they make, the refusals before it,
@@ -38,7 +41,7 @@ them), so a tunnel that went back to asking AWS for its names turns a case red, 
 the document names the module's convention would never guess.
 
 **The world's names are read from the Terraform that makes them, never typed here.** The cluster,
-the service, the gateway container and the load balancer are the locals in
+the gateway's service, the bastion's service and its container and the load balancer are the locals in
 infra/modules/cell/ecs.tf and alb.tf, read out of those files (CODING_STANDARDS.md, "A guard reads
 the thing it guards"). The load balancer's scheme is alb.tf's too: tunnel.sh no longer asks AWS
 whether it is internal, so this companion holds the module to `internal = true`.
@@ -47,6 +50,12 @@ whether it is internal, so this companion holds the module to `internal = true`.
 no trust store holds, which must fail as untrusted, and one against a port nothing listens on. They
 show the script reaches the workstation's trust store and does not step round it, which a double
 cannot show.
+
+**--task and --keepalive (#1197).** A named task is the hop or a failure naming it, never a fall
+back to another. --keepalive's requests are the curl double's recorded calls, made while the aws
+double holds start-session open for the world's start_session_seconds; that none is left running
+once the session ends is read from the process table, by the case's directory, which every process
+the script's copy forks names.
 
 **A universal held on every run:** nothing either script prints names the account id. Task ARNs
 carry it, and the output of a sitting is posted to a public repository (#122's rule).
@@ -81,7 +90,8 @@ CELL = "poc"
 SECRETS = (ACCOUNT,)
 
 # The real tools the scripts read their answers with. Everything else is absent.
-TOOLS = ("awk", "sed", "tr", "cat", "mktemp", "rm", "dirname")
+# sleep is --keepalive's, between its requests.
+TOOLS = ("awk", "sed", "tr", "cat", "mktemp", "rm", "dirname", "sleep")
 
 
 def terraform_local(path: pathlib.Path, name: str, cell: str = CELL) -> str:
@@ -94,35 +104,59 @@ def terraform_local(path: pathlib.Path, name: str, cell: str = CELL) -> str:
 
 CLUSTER = terraform_local(ECS_TF, "cluster_name")
 SERVICE = terraform_local(ECS_TF, "service_name")
-CONTAINER = terraform_local(ECS_TF, "gateway_container_name")
+GATEWAY = terraform_local(ECS_TF, "gateway_container_name")
 SIDECAR = terraform_local(ECS_TF, "mock_api_container_name")
+# The hop (#1167): the bastion service's task and its one container.
+HOP_SERVICE = terraform_local(ECS_TF, "bastion_service_name")
+CONTAINER = terraform_local(ECS_TF, "bastion_container_name")
+COMMON = ROOT / "tools" / "scripts" / "cell-common.sh"
 LB_NAME = terraform_local(ALB_TF, "lb_name")
 ALB_DNS = f"internal-{LB_NAME}-1234567890.{REGION}.elb.amazonaws.com"
 
 
 def task(task_id: str, *, last_status: str = "RUNNING", exec_on: bool = True, agent: str | None = "RUNNING",
-         gateway: bool = True) -> dict:
-    """One task of the service, as describe-tasks returns it: the gateway and the mock API."""
-    containers = [{"name": SIDECAR, "runtimeId": f"{task_id}-1111111111",
-                   "managedAgents": [{"name": "ExecuteCommandAgent", "lastStatus": agent or "STOPPED"}]}]
-    if gateway:
-        gateway_container = {"name": CONTAINER, "runtimeId": f"{task_id}-2222222222"}
+         hop: bool = True) -> dict:
+    """One task of the bastion service, as describe-tasks returns it: the bastion container. With
+    hop=False the task has no bastion container but another whose Exec agent runs, which is never the
+    hop."""
+    containers = []
+    if hop:
+        hop_container = {"name": CONTAINER, "runtimeId": f"{task_id}-2222222222"}
         if agent is not None:
-            gateway_container["managedAgents"] = [{"name": "ExecuteCommandAgent", "lastStatus": agent}]
-        containers.append(gateway_container)
+            hop_container["managedAgents"] = [{"name": "ExecuteCommandAgent", "lastStatus": agent}]
+        containers.append(hop_container)
+    else:
+        containers.append({"name": SIDECAR, "runtimeId": f"{task_id}-1111111111",
+                           "managedAgents": [{"name": "ExecuteCommandAgent", "lastStatus": "RUNNING"}]})
     return {"taskArn": f"arn:aws:ecs:{REGION}:{ACCOUNT}:task/{CLUSTER}/{task_id}",
             "lastStatus": last_status, "desiredStatus": "RUNNING",
             "enableExecuteCommand": exec_on, "containers": containers}
 
 
+def gateway_task(task_id: str) -> dict:
+    """One task of the gateway's service: the gateway and the mock API, ECS Exec on and both agents
+    running, as on a cell last applied before #787 turned Exec off there: the case where it could
+    carry a session, which the tunnel must never take."""
+    agents = [{"name": "ExecuteCommandAgent", "lastStatus": "RUNNING"}]
+    return {"taskArn": f"arn:aws:ecs:{REGION}:{ACCOUNT}:task/{CLUSTER}/{task_id}",
+            "lastStatus": "RUNNING", "desiredStatus": "RUNNING", "enableExecuteCommand": True,
+            "containers": [{"name": GATEWAY, "runtimeId": f"{task_id}-2222222222", "managedAgents": agents},
+                           {"name": SIDECAR, "runtimeId": f"{task_id}-1111111111", "managedAgents": agents}]}
+
+
+GATEWAY_TASK = "9999000099990000999900009999000a"
+
+
 def default_world() -> dict:
-    """The cell as tasks 1.3 and 1.4 make it, on one running task, and the outputs document's names
-    for it as seed.sh writes them."""
+    """The cell as tasks 1.3 and 1.4 make it with bastion = true (#1167): the gateway's service on one
+    running task, the bastion's on one, and the outputs document's names for it as seed.sh writes
+    them."""
     return {
         "region": REGION,
         "outputs": {"region": REGION, "cell": CELL, "ecsCluster": CLUSTER, "ecsService": SERVICE,
-                    "albDnsName": ALB_DNS},
-        "clusters": {CLUSTER: {SERVICE: [task("0123456789abcdef0123456789abcdef")]}},
+                    "ecsBastionService": HOP_SERVICE, "albDnsName": ALB_DNS},
+        "clusters": {CLUSTER: {SERVICE: [gateway_task(GATEWAY_TASK)],
+                               HOP_SERVICE: [task("0123456789abcdef0123456789abcdef")]}},
         "start_session_status": 0,
     }
 
@@ -221,7 +255,7 @@ def text(value) -> str:
     return f"{value}\n"
 
 
-def gateway_of(entry: dict) -> dict | None:
+def hop_of(entry: dict) -> dict | None:
     return next((c for c in entry["containers"] if c["name"] == CONTAINER), None)
 
 
@@ -249,13 +283,13 @@ def answer(world: dict, service: str, command: str, options: dict):
             entry = known.get(arn)
             if entry is None:
                 continue
-            gateway = gateway_of(entry)
+            hop = hop_of(entry)
             agent = None
-            if gateway is not None:
-                agent = next((a["lastStatus"] for a in gateway.get("managedAgents", [])
+            if hop is not None:
+                agent = next((a["lastStatus"] for a in hop.get("managedAgents", [])
                               if a["name"] == "ExecuteCommandAgent"), None)
             rows.append([entry["taskArn"], entry["lastStatus"], entry["enableExecuteCommand"],
-                         gateway["runtimeId"] if gateway else None, agent])
+                         hop["runtimeId"] if hop else None, agent])
         return rows
     if command == "start-session":
         return None
@@ -283,6 +317,12 @@ def aws_double(argv: list[str], case: pathlib.Path) -> int:
             # A line on the session's stderr in no shape the CLI's errors take, for the one case that
             # holds tunnel.sh's filter to what it does with such a line.
             sys.stderr.write(world.get("start_session_stderr", ""))
+            # A session that lasts a while, as a real one does until Ctrl-C or the idle timeout, for
+            # the cases that hold --keepalive to what it does while a session lasts and after.
+            if "start_session_seconds" in world:
+                import time
+                sys.stdout.flush()
+                time.sleep(world["start_session_seconds"])
             if "ctrl_c_then_stderr" in world:
                 interrupted(world["ctrl_c_then_stderr"])
             status = world["start_session_status"]
@@ -487,7 +527,7 @@ class TunnelForwardsThroughTheTaskToTheAlb(CompanionTestCase):
     """docs/plan/05-infrastructure-and-cost.md, Workstation access: "tunnel.sh finds the running task
     and forwards local port 8443 to the ALB on 443", with the target and document its block shows."""
 
-    def test_it_starts_a_port_forward_to_the_alb_through_the_gateway_container(self):
+    def test_it_starts_a_port_forward_to_the_alb_through_the_bastion_container(self):
         case = Case(self)
         result = case.run(TUNNEL, "--local-port", str(free_port()))
         self.assertEqual(0, result.status, result.output)
@@ -515,11 +555,10 @@ class TunnelForwardsThroughTheTaskToTheAlb(CompanionTestCase):
 
 
     def test_with_two_running_tasks_the_first_reachable_is_the_hop_and_one_session_starts(self):
-        # The two-task cell (#347, P2-4): both tasks run, both reach the agent, and the tunnel's hop is
-        # a gateway task as before, the first one; a roll replaces it and the tunnel is restarted
-        # (#349 Q20). No claim here that a session survives its hop's drain.
+        # A roll of the bastion's service can run two tasks for a while: both reach the agent, and the
+        # tunnel's hop is the first. No claim here that a session survives its hop's drain.
         world = default_world()
-        world["clusters"][CLUSTER][SERVICE] = [
+        world["clusters"][CLUSTER][HOP_SERVICE] = [
             task("aaaa0000aaaa0000aaaa0000aaaa0000"),
             task("bbbb0000bbbb0000bbbb0000bbbb0000"),
         ]
@@ -534,7 +573,7 @@ class TunnelForwardsThroughTheTaskToTheAlb(CompanionTestCase):
 
     def test_it_takes_the_first_task_a_session_can_reach(self):
         world = default_world()
-        world["clusters"][CLUSTER][SERVICE] = [
+        world["clusters"][CLUSTER][HOP_SERVICE] = [
             task("aaaa0000aaaa0000aaaa0000aaaa0000", last_status="PENDING"),
             task("bbbb0000bbbb0000bbbb0000bbbb0000", exec_on=False),
             task("cccc0000cccc0000cccc0000cccc0000", agent="PENDING"),
@@ -547,10 +586,10 @@ class TunnelForwardsThroughTheTaskToTheAlb(CompanionTestCase):
                          case.start_sessions()[0]["options"]["target"])
         self.assertIn("dddd0000dddd0000dddd0000dddd0000", result.stdout)
 
-    def test_the_hop_is_the_gateway_container_never_the_mock_api(self):
+    def test_the_hop_is_the_bastion_container_never_another(self):
         world = default_world()
-        # A task whose gateway container is gone: the mock API's agent still runs, and is not used.
-        world["clusters"][CLUSTER][SERVICE] = [task("eeee0000eeee0000eeee0000eeee0000", gateway=False)]
+        # A task with no bastion container: another container's agent runs, and is not used.
+        world["clusters"][CLUSTER][HOP_SERVICE] = [task("eeee0000eeee0000eeee0000eeee0000", hop=False)]
         case = Case(self, world=world)
         result = case.run(TUNNEL, "--local-port", str(free_port()))
         self.assertEqual(1, result.status, result.output)
@@ -607,12 +646,12 @@ class TunnelForwardsThroughTheTaskToTheAlb(CompanionTestCase):
     def test_ctrl_c_leaves_the_filter_to_pass_the_session_s_last_line(self):
         # #505 (#186's S9). Ctrl-C reaches the whole foreground group, the filter among it. The
         # filter ignores it, so the line the plugin prints after it still reaches the terminal, and
-        # through the filter: a denial as its code, any other line with the account masked. Its
-        # trap '' INT states what bash already does for a process substitution in a script, which
-        # runs without job control: "asynchronous commands ignore SIGINT"
-        # (https://www.gnu.org/software/bash/manual/html_node/Signals.html). So this case holds the
-        # behaviour, not the trap line: it turns red if the filter is ever started in a way that
-        # takes the signal, or stops passing a line that arrives after it.
+        # through the filter: a denial as its code, any other line with the account masked. What
+        # makes awk ignore it differs between bash versions: 5.2 starts a process substitution with
+        # SIGINT at its default, and on 5.3 a bare trap '' INT leaves awk with it at its default, so
+        # session_errors resets the trap before ignoring the signal (tunnel.sh says why, #1315). So
+        # this case holds the behaviour, not the trap lines: it turns red if the filter is ever
+        # started in a way that takes the signal, or stops passing a line that arrives after it.
         world = default_world()
         world["ctrl_c_then_stderr"] = (
             f"plugin: closing the session on arn:aws:ecs:{REGION}:{ACCOUNT}:task/{CLUSTER}/0123456789abcdef0123456789abcdef\n"
@@ -639,6 +678,248 @@ class TunnelForwardsThroughTheTaskToTheAlb(CompanionTestCase):
         self.assertIn("after the shell's prompt", " ".join(result.stdout.split()))
 
 
+class TunnelForwardsThroughTheBastionNeverAGatewayTask(CompanionTestCase):
+    """#1168: the hop is a task of the service the outputs document names as ecsBastionService, and
+    the session's target is that task's bastion container. The gateway's service, ecsService, runs a
+    task that could carry a session on a cell last applied before #787 turned Exec off there, and the
+    tunnel never lists or takes it."""
+
+    def test_the_target_is_the_bastion_container_of_a_task_of_ecs_bastion_service(self):
+        case = Case(self)
+        result = case.run(TUNNEL, "--local-port", str(free_port()))
+        self.assertEqual(0, result.status, result.output)
+        self.assertNoUnexpectedCall(case)
+        self.assertEqual([HOP_SERVICE], [c["options"]["service-name"] for c in case.aws_calls()
+                                         if c.get("command") == "list-tasks"])
+        target = case.start_sessions()[0]["options"]["target"]
+        self.assertEqual(f"ecs:{CLUSTER}_0123456789abcdef0123456789abcdef_0123456789abcdef0123456789abcdef-2222222222",
+                         target)
+        self.assertNotIn(GATEWAY_TASK, target)
+        self.assertIn(f"container {CONTAINER}, of {HOP_SERVICE} in {CLUSTER}", result.stdout)
+
+    def test_with_no_running_bastion_task_it_takes_no_gateway_task(self):
+        world = default_world()
+        world["clusters"][CLUSTER][HOP_SERVICE] = []
+        case = Case(self, world=world)
+        result = case.run(TUNNEL, "--local-port", str(free_port()))
+        self.assertEqual(1, result.status, result.output)
+        self.assertNoUnexpectedCall(case)
+        self.assertEqual([], case.start_sessions(), "a session started through a gateway task")
+        self.assertNotIn(SERVICE, [c["options"]["service-name"] for c in case.aws_calls()
+                                   if c.get("command") == "list-tasks"])
+
+    def test_a_gateway_task_named_with_task_is_not_the_bastion_s(self):
+        case = Case(self)
+        result = case.run(TUNNEL, "--local-port", str(free_port()), "--task", GATEWAY_TASK)
+        self.assertEqual(1, result.status, result.output)
+        self.assertEqual([], case.start_sessions())
+        self.assertIn(f"task {GATEWAY_TASK} is not a running task of {HOP_SERVICE}", result.stderr)
+
+    def test_the_container_is_the_module_s_bastion_container(self):
+        # cell-common.sh's constant is the name ecs.tf gives the bastion's container, read from both.
+        constant = re.search(r'(?m)^BASTION_CONTAINER="([^"]+)"$', COMMON.read_text())
+        self.assertIsNotNone(constant, "cell-common.sh names no BASTION_CONTAINER")
+        self.assertEqual(CONTAINER, constant[1])
+
+
+class TunnelForwardsThroughANamedTask(CompanionTestCase):
+    """#1197: --task <task id> forwards through that task, and exits 1 naming it when it is not a
+    running task of the bastion service that a session can reach. Without the option the script
+    picks as before, which the cases above hold."""
+
+    TWO = ("aaaa0000aaaa0000aaaa0000aaaa0000", "bbbb0000bbbb0000bbbb0000bbbb0000")
+
+    def two_task_world(self, **second: object) -> dict:
+        world = default_world()
+        world["clusters"][CLUSTER][HOP_SERVICE] = [task(self.TWO[0]), task(self.TWO[1], **second)]
+        return world
+
+    def test_the_named_task_is_the_hop_even_when_another_comes_first(self):
+        # The default picks the first; naming the second is the case the default would get wrong.
+        case = Case(self, world=self.two_task_world())
+        result = case.run(TUNNEL, "--local-port", str(free_port()), "--task", self.TWO[1])
+        self.assertEqual(0, result.status, result.output)
+        self.assertNoUnexpectedCall(case)
+        sessions = case.start_sessions()
+        self.assertEqual(1, len(sessions), result.output)
+        self.assertEqual(f"ecs:{CLUSTER}_{self.TWO[1]}_{self.TWO[1]}-2222222222", sessions[0]["options"]["target"])
+        self.assertIn(f"through task {self.TWO[1]}", result.stdout)
+
+    def test_a_task_that_is_not_a_running_task_of_the_service_exits_1_naming_it(self):
+        other = "ffff0000ffff0000ffff0000ffff0000"
+        case = Case(self, world=self.two_task_world())
+        result = case.run(TUNNEL, "--local-port", str(free_port()), "--task", other)
+        self.assertEqual(1, result.status, result.output)
+        self.assertEqual([], case.start_sessions(), "a session started through another task")
+        self.assertNoUnexpectedCall(case)
+        self.assertIn(f"task {other} is not a running task of {HOP_SERVICE} in {CLUSTER}", result.stderr)
+
+    def test_a_named_task_a_session_cannot_reach_exits_1_and_takes_no_other(self):
+        for second, why in (({"exec_on": False}, "ECS Exec off"), ({"agent": "PENDING"}, "ExecuteCommandAgent is PENDING")):
+            with self.subTest(why=why):
+                case = Case(self, world=self.two_task_world(**second))
+                result = case.run(TUNNEL, "--local-port", str(free_port()), "--task", self.TWO[1])
+                self.assertEqual(1, result.status, result.output)
+                self.assertEqual([], case.start_sessions(), "it fell back to a task it was not given")
+                self.assertIn(f"task {self.TWO[1]} of {HOP_SERVICE} in {CLUSTER} cannot carry a session", result.stderr)
+                self.assertIn(why, result.stderr)
+                self.assertNotIn(self.TWO[0], result.stderr)
+
+    def test_a_service_with_no_running_task_names_the_task_asked_for(self):
+        world = default_world()
+        world["clusters"][CLUSTER][HOP_SERVICE] = []
+        case = Case(self, world=world)
+        result = case.run(TUNNEL, "--local-port", str(free_port()), "--task", self.TWO[0])
+        self.assertEqual(1, result.status, result.output)
+        self.assertEqual([], case.start_sessions())
+        self.assertIn(f"task {self.TWO[0]} is not a running task of {HOP_SERVICE}", result.stderr)
+
+    def test_a_value_that_is_not_a_task_id_is_refused_before_any_aws_call(self):
+        # The ARN carries the real account id, so run()'s universal fails if the refusal echoes it.
+        for value in ("", "abc/def", f"arn:aws:ecs:{REGION}:{ACCOUNT}:task/{CLUSTER}/{self.TWO[0]}", "AAAA 0000"):
+            with self.subTest(value=value):
+                case = Case(self)
+                result = case.run(TUNNEL, "--local-port", str(free_port()), "--task", value)
+                self.assertEqual(2, result.status, result.output)
+                self.assertIn("--task", result.stderr)
+                self.assertEqual([], case.aws_calls())
+
+    def test_the_option_needs_a_value(self):
+        case = Case(self)
+        result = case.run(TUNNEL, "--task")
+        self.assertEqual(2, result.status, result.output)
+        self.assertEqual([], case.aws_calls())
+
+
+class TunnelKeepsAnIdleSessionOpen(CompanionTestCase):
+    """#1197: --keepalive <seconds> sends a request to /healthz through the forwarded port at that
+    interval for as long as the session lasts, and stops when it ends. The session here is the aws
+    double holding start-session open for start_session_seconds."""
+
+    def lasting_case(self, seconds: float) -> Case:
+        world = default_world()
+        world["start_session_seconds"] = seconds
+        case = Case(self, world=world)
+        self.addCleanup(self.end_leftovers, case)
+        return case
+
+    @staticmethod
+    def leftovers(case: Case) -> list[str]:
+        """Every process whose command line names the case's directory: the script's copy, and so a
+        keepalive loop forked from it, runs from there."""
+        listing = subprocess.run(["/bin/ps", "-axo", "pid=,command="], capture_output=True, text=True,
+                                 check=True).stdout
+        return [line.strip() for line in listing.splitlines() if str(case.dir) in line]
+
+    def end_leftovers(self, case: Case):
+        # Only matters when a mutation leaves a loop running: it must not outlive the test run.
+        import signal
+        for line in self.leftovers(case):
+            try:
+                os.kill(int(line.split()[0]), signal.SIGKILL)
+            except (ProcessLookupError, ValueError):
+                pass
+
+    def test_it_requests_healthz_through_the_forwarded_port_at_the_interval(self):
+        case = self.lasting_case(3.6)
+        port = free_port()
+        result = case.run(TUNNEL, "--local-port", str(port), "--keepalive", "1")
+        self.assertEqual(0, result.status, result.output)
+        self.assertNoUnexpectedCall(case)
+        calls = case.curl_calls()
+        # One a second over a session of 3.6 seconds; at least two leaves the machine room to be slow.
+        self.assertGreaterEqual(len(calls), 2, result.output)
+        self.assertLessEqual(len(calls), 4, "more requests than the interval allows")
+        for call in calls:
+            argv = call["argv"]
+            self.assertEqual(f"https://app1.spa-poc.test:{port}/healthz", argv[-1])
+            # Through the forwarded port and nowhere else: the name is pinned to the loopback and no
+            # proxy from the environment carries it away.
+            self.assertEqual(f"app1.spa-poc.test:{port}:127.0.0.1", argv[argv.index("--resolve") + 1])
+            self.assertEqual("*", argv[argv.index("--noproxy") + 1])
+            for flag in ("-k", "--insecure"):
+                self.assertNotIn(flag, argv)
+
+    def test_a_longer_interval_makes_fewer_requests(self):
+        case = self.lasting_case(3.6)
+        result = case.run(TUNNEL, "--local-port", str(free_port()), "--keepalive", "2")
+        self.assertEqual(0, result.status, result.output)
+        self.assertEqual(1, len(case.curl_calls()), result.output)
+
+    def test_none_is_left_running_after_the_session_ends(self):
+        case = self.lasting_case(2.5)
+        result = case.run(TUNNEL, "--local-port", str(free_port()), "--keepalive", "1")
+        self.assertEqual(0, result.status, result.output)
+        made = len(case.curl_calls())
+        self.assertGreaterEqual(made, 1, result.output)
+        # The loop looks for the session once a second, so give it two and a half.
+        import time
+        time.sleep(2.5)
+        self.assertEqual([], self.leftovers(case), "a keepalive is still running after the session ended")
+        self.assertEqual(made, len(case.curl_calls()), "a request was made after the session ended")
+
+    def test_ctrl_c_leaves_none_running(self):
+        # Ctrl-C goes to the whole foreground group, the loop among it. Killed by it or ignoring it,
+        # the loop is gone once the session is.
+        case = self.lasting_case(1.5)
+        case.world["ctrl_c_then_stderr"] = "plugin: closing the session\n"
+        case.save()
+        result = case.run(TUNNEL, "--local-port", str(free_port()), "--keepalive", "1", own_group=True)
+        self.assertEqual(0, result.status, result.output)
+        import time
+        time.sleep(2.5)
+        self.assertEqual([], self.leftovers(case), "a keepalive is still running after Ctrl-C")
+
+    def test_the_session_s_exit_status_is_still_the_script_s(self):
+        case = self.lasting_case(1.5)
+        case.world["start_session_status"] = 255
+        case.save()
+        result = case.run(TUNNEL, "--local-port", str(free_port()), "--keepalive", "1")
+        self.assertEqual(255, result.status, result.output)
+
+    def test_without_the_option_no_request_is_made(self):
+        case = self.lasting_case(2.5)
+        result = case.run(TUNNEL, "--local-port", str(free_port()))
+        self.assertEqual(0, result.status, result.output)
+        self.assertEqual([], case.curl_calls())
+
+    def test_without_the_option_curl_is_not_needed(self):
+        case = Case(self)
+        case.remove("curl")
+        result = case.run(TUNNEL, "--local-port", str(free_port()))
+        self.assertEqual(0, result.status, result.output)
+
+    def test_with_the_option_curl_is_needed(self):
+        case = Case(self)
+        case.remove("curl")
+        result = case.run(TUNNEL, "--local-port", str(free_port()), "--keepalive", "60")
+        self.assertEqual(2, result.status, result.output)
+        self.assertIn("curl", result.stderr)
+        self.assertEqual([], case.aws_calls())
+
+    def test_an_interval_that_is_not_a_whole_number_of_seconds_is_refused(self):
+        for value in ("", "0", "01", "1.5", "-3", "x"):
+            with self.subTest(value=value):
+                case = Case(self)
+                result = case.run(TUNNEL, "--local-port", str(free_port()), "--keepalive", value)
+                self.assertEqual(2, result.status, result.output)
+                self.assertIn("--keepalive", result.stderr)
+                self.assertEqual([], case.aws_calls())
+
+    def test_the_header_says_an_idle_session_ends_where_that_is_set_and_how_to_hold_one(self):
+        case = Case(self)
+        result = case.run(TUNNEL, "--help")
+        self.assertEqual(0, result.status, result.output)
+        header = " ".join(result.stdout.split("\nOptions\n")[0].split())
+        self.assertIn("idle timeout", header)
+        self.assertIn("20 minutes", header)
+        # Where it is set: the account's Session Manager preferences.
+        self.assertIn("Session Manager preferences", header)
+        self.assertIn("Idle session timeout", header)
+        self.assertIn("--keepalive", header)
+        self.assertEqual([], case.aws_calls())
+
+
 class TunnelReadsItsNamesFromTheOutputsDocument(CompanionTestCase):
     """#198: the cluster, the service and the load balancer's DNS name come from
     infra/envs/poc/outputs.json (contracts/infra-outputs.schema.json: "The scripts and the deployed
@@ -647,11 +928,12 @@ class TunnelReadsItsNamesFromTheOutputsDocument(CompanionTestCase):
     def test_the_names_are_the_document_s_even_where_the_module_s_convention_would_guess_others(self):
         # Names no convention gives: spa-<cell> and gateway would find nothing here, so a tunnel that
         # went back to building or looking up its names fails this case.
-        cluster, service = "documented-cluster", "documented-service"
+        cluster, service = "documented-cluster", "documented-bastion"
         alb = f"internal-documented-lb-42.{REGION}.elb.amazonaws.com"
         world = default_world()
-        world["outputs"].update(ecsCluster=cluster, ecsService=service, albDnsName=alb)
-        world["clusters"] = {cluster: {service: [task("abab0000abab0000abab0000abab0000")]}}
+        world["outputs"].update(ecsCluster=cluster, ecsBastionService=service, albDnsName=alb)
+        world["clusters"] = {cluster: {SERVICE: [gateway_task(GATEWAY_TASK)],
+                                       service: [task("abab0000abab0000abab0000abab0000")]}}
         case = Case(self, world=world)
         result = case.run(TUNNEL, "--local-port", str(free_port()))
         self.assertEqual(0, result.status, result.output)
@@ -678,7 +960,7 @@ class TunnelReadsItsNamesFromTheOutputsDocument(CompanionTestCase):
         result = case.run(TUNNEL, "--help")
         self.assertEqual(0, result.status, result.output)
         self.assertIn(str(OUTPUTS), result.stdout)
-        for name in ("ecsCluster", "ecsService", "albDnsName"):
+        for name in ("ecsCluster", "ecsBastionService", "albDnsName"):
             self.assertIn(name, result.stdout)
         self.assertEqual([], case.aws_calls())
 
@@ -711,11 +993,22 @@ class TunnelRefusesWithoutTheOutputsDocument(CompanionTestCase):
         self.refused(Case(self, world=world), "not for AWS_REGION")
 
     def test_a_document_without_each_name(self):
-        for name in ("ecsCluster", "ecsService", "albDnsName"):
+        for name in ("ecsCluster", "albDnsName"):
             with self.subTest(field=name):
                 world = default_world()
                 world["outputs"][name] = None
                 self.refused(Case(self, world=world), f"gives no {name}")
+
+    def test_a_document_that_names_no_bastion_is_refused_before_any_aws_call(self):
+        # #1168: a cell applied with bastion = false has no hop, and its document no ecsBastionService
+        # (the platform root's null output is left out). The gateway's service still runs a task a
+        # session could reach, and the script never falls back to it.
+        world = default_world()
+        world["outputs"]["ecsBastionService"] = None
+        result = self.refused(Case(self, world=world), "names no ecsBastionService")
+        line = result.stderr.strip().splitlines()[-1]
+        for fragment in ("bastion = true", "apply", "tools/scripts/seed.sh", "deploy.sh", "rollback.sh"):
+            self.assertIn(fragment, line)
 
     def test_no_option_steps_round_the_document(self):
         for option in ("--cell", "--cluster", "--service", "--alb"):
@@ -737,17 +1030,17 @@ class TunnelRefusesBeforeASession(CompanionTestCase):
 
     def test_no_running_task(self):
         world = default_world()
-        world["clusters"][CLUSTER][SERVICE] = []
+        world["clusters"][CLUSTER][HOP_SERVICE] = []
         self.refused(Case(self, world=world), 1, "has no running task")
 
     def test_ecs_exec_off(self):
         world = default_world()
-        world["clusters"][CLUSTER][SERVICE] = [task("1111000011110000111100001111000a", exec_on=False)]
+        world["clusters"][CLUSTER][HOP_SERVICE] = [task("1111000011110000111100001111000a", exec_on=False)]
         self.refused(Case(self, world=world), 1, "ECS Exec off")
 
     def test_the_exec_agent_not_running(self):
         world = default_world()
-        world["clusters"][CLUSTER][SERVICE] = [task("1111000011110000111100001111000b", agent="STOPPED")]
+        world["clusters"][CLUSTER][HOP_SERVICE] = [task("1111000011110000111100001111000b", agent="STOPPED")]
         self.refused(Case(self, world=world), 1, "ExecuteCommandAgent is STOPPED")
 
     def test_an_access_denial_names_its_code_and_never_the_principal(self):
@@ -976,8 +1269,13 @@ class VerifyTunnelAgainstTheRealCurl(CompanionTestCase):
         listener.listen(4)
         listener.settimeout(20)
         self.addCleanup(listener.close)
-        handshakes = []
+        requests = []
 
+        # What the client sends once it has the certificate. curl before 8.18 with OpenSSL, and
+        # curl on macOS, refuses inside the handshake (an unknown-ca alert); curl 8.18 with OpenSSL
+        # 3.5 lets the handshake complete and checks the result after it, then closes without a
+        # request. Either way the refusal is that no request byte reaches the server, so that is
+        # what this holds, read before anything is answered.
         def serve():
             try:
                 connection, _ = listener.accept()
@@ -986,10 +1284,14 @@ class VerifyTunnelAgainstTheRealCurl(CompanionTestCase):
             with connection:
                 try:
                     with context.wrap_socket(connection, server_side=True) as tls:
-                        tls.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
-                        handshakes.append("completed")
+                        tls.settimeout(10)
+                        if tls.recv(4096):
+                            requests.append("a request")
+                            tls.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
+                            return
                 except (ssl.SSLError, OSError):
-                    handshakes.append("refused by the client")
+                    pass
+                requests.append("none")
 
         server = threading.Thread(target=serve, daemon=True)
         server.start()
@@ -997,7 +1299,7 @@ class VerifyTunnelAgainstTheRealCurl(CompanionTestCase):
         server.join(20)
         self.assertEqual(1, result.status, result.output)
         self.assertIn("does not trust", result.stderr)
-        self.assertEqual(["refused by the client"], handshakes)
+        self.assertEqual(["none"], requests)
 
 
 def main() -> int:

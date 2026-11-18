@@ -100,8 +100,8 @@ spikes/g0/real-handler/vendor/ref/
 # (#491).
 # A negation cannot reach inside an ignored directory, so the directory's contents are listed
 # rather than the directory itself, and the workflows folder is opened, closed and opened again
-# for the scripts, their companions, that command and the fixtures alone; anything else there, a
-# .bak or the old overnight_harness.mjs, stays ignored.
+# for the scripts, their companions, that command and the fixtures alone; anything else there, such
+# as a .bak, stays ignored.
 .claude/*
 !.claude/settings.json
 !.claude/workflows/

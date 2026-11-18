@@ -4,7 +4,7 @@ export const meta = {
   whenToUse: 'In a foreground session, launched by scriptPath, by the integrator before tagging a gate; it never tags, merges or pushes, and a second run on the same base reuses the first run\'s mutation results',
   phases: [
     { title: 'Scope', detail: 'one agent reads the gates table, the gate register, the ladder, the stage\'s rows, the tags, origin\'s main, CI, the count of merges since the previous tag, and the durable results for this base' },
-    { title: 'Reviews', detail: 'one agent per thirty merges since the previous tag, at most maxParallel in flight: each merge\'s pull request, merged head and review record' },
+    { title: 'Reviews', detail: 'one agent per thirty merges since the previous tag, at most maxParallel in flight: each merge\'s pull request, merged head and review record, the listing\'s length and the sha after its last line' },
     { title: 'Locate', detail: 'at most three agents, ids batched: every test citing each id, its project, owner, tier and whether CI runs it, both proofs, and what would run a clause this run does not' },
     { title: 'Prove', detail: 'at most maxParallel agents, items dealt round-robin across ids and cut at mutationCap, each in its own detached worktree at base: a baseline, then a mutation of what the test guards per item' },
     { title: 'Row audit', detail: 'one agent per four landed or part-landed rows: merges, Outstanding lines and the ownership check between each merge and its first parent; skipped when auditRows is false' },
@@ -23,7 +23,8 @@ export const meta = {
 // or the gate register defines the gate, and a register gate's ids, tiers and criteria, read from its
 // table lines (#403), the id list after only and skipIds, the Locate batches, the ranking, the round-robin dealing under the cap, which results are reused, each test's and each
 // id's verdict, each row's done, the lines of the merge listing each Reviews agent reads and whether
-// it returned them all (#1207), the verdict and its reasons, the report body and its dedupe. The
+// it returned them all (#1207), whether the listing they read has the Scope agent's count and reads
+// alike at each batch's boundary (#1210), the verdict and its reasons, the report body and its dedupe. The
 // agents read git and gh, run tests and mutations, and write the issue.
 // Test companion: gate-evidence_tests.mjs beside this file.
 //
@@ -147,7 +148,7 @@ const strs = { type: 'array', items: str }
 const TIERS = ['H', 'L', 'D']
 const TIER = { type: 'string', enum: TIERS }
 const SCOPE = S({
-  fetched: bool, reason: str, date: str, base: str, originMain: str,
+  fetched: bool, reason: str, date: str, runId: str, base: str, originMain: str,
   tagsReachable: strs, tagsAll: strs,
   ladder: { type: 'array', items: S({ stage: str, gate: str, tag: str }) },
   gate: S({
@@ -168,7 +169,7 @@ const SCOPE = S({
   mergeCount: int,
   durable: { type: 'array', items: { type: 'object' } },
 })
-const REVIEWS = S({ merges: { type: 'array', items: S({ sha: str, subject: str, pr: int, head: str, cleared: bool, record: str }) } })
+const REVIEWS = S({ listingLines: int, nextSha: str, merges: { type: 'array', items: S({ sha: str, subject: str, pr: int, head: str, cleared: bool, record: str }) } })
 const TEST = S({
   test: str, project: str, runner: { type: 'string', enum: [...RUNNERS, 'none'] }, owner: str,
   role: { type: 'string', enum: ['composed', 'owner', 'other'] }, tier: TIER, inCi: bool, notInCiWhy: str, guards: str,
@@ -663,7 +664,7 @@ GATE: ${JSON.stringify(wantGate)}
 BASE ARGUMENT: ${JSON.stringify(A.base || '')}
 DATE ARGUMENT: ${JSON.stringify(A.date || '')}
 
-1. \`git -C ${REPO} fetch origin --tags\`. If it fails, stop: fetched false, reason its error, every other field empty. originMain is \`git -C ${REPO} ls-remote origin refs/heads/main\`, its sha. base is the BASE ARGUMENT resolved with \`git -C ${REPO} rev-parse --verify <it>^{commit}\`, or originMain when it is "". date is the DATE ARGUMENT, or \`date +%F\` when it is "". Record the checkout as it is now, \`mkdir -p ${LOG}/<date>-<base's first 12>\` and \`git -C ${REPO} status --porcelain --untracked-files=all > ${LOG}/<date>-<base's first 12>/checkout-at-start.txt\`.
+1. \`git -C ${REPO} fetch origin --tags\`. If it fails, stop: fetched false, reason its error, every other field empty. originMain is \`git -C ${REPO} ls-remote origin refs/heads/main\`, its sha. base is the BASE ARGUMENT resolved with \`git -C ${REPO} rev-parse --verify <it>^{commit}\`, or originMain when it is "". date is the DATE ARGUMENT, or \`date +%F\` when it is "". runId is what \`date -u +%Y%m%dT%H%M%SZ\` prints, read once, now, whatever the DATE ARGUMENT: it names this run's report file. Record the checkout as it is now, \`mkdir -p ${LOG}/<date>-<base's first 12>\` and \`git -C ${REPO} status --porcelain --untracked-files=all > ${LOG}/<date>-<base's first 12>/checkout-at-start.txt\`.
 2. tagsReachable: \`git -C ${REPO} for-each-ref --merged <base> --format=%(refname:short) refs/tags\`. tagsAll: \`git -C ${REPO} for-each-ref --format=%(refname:short) refs/tags\` together with the names \`git -C ${REPO} ls-remote --tags origin\` prints.
 3. ladder: docs/roadmap.md at base, its ladder table, one {stage, gate, tag} per row in order, tag without backticks ("—" where it has none).
 4. gate: the GATE, or, when it is "first untagged", the first ladder row whose tag is not in tagsReachable. From docs/plan/01-plan.md at base, the gates table's row for it: defined true, and exitTest, the exit test cell verbatim; when that table has no row for it, defined false, exitTest "", ids [] and criteria [], since the script reads a gate defined after the export from gateRegister below and never from your reading. phase is a label only, 1 for a gate of that table and 2 for G6 to G8, which Phase 2 adds; it admits or refuses nothing. ids: the exit test split into test ids, each with the tiers the cell itself requires of it ("H" hermetic, "L" local, "D" deployed; "in both tiers" is H and D; a range "X to Y" names every id between; "the deployed subset" is every N- id whose row in docs/plan/04-tests.md or contracts/test-ids.md has a Tier cell that includes D, plus any it adds), and tiers [] for an id the cell gives no tier: never tier one yourself, since the script tiers it from idTables. idTables: two entries, one per document that lists test ids, each {document, lines}: document "docs/plan/04-tests.md" (the export) with lines every line \`git -C ${REPO} show <base>:docs/plan/04-tests.md | grep -E '^[|]'\` prints, and document "contracts/test-ids.md" (the test id register) with lines every line \`git -C ${REPO} show <base>:contracts/test-ids.md | grep -E '^[|]'\` prints, each in the order printed, verbatim. Copy the lines as printed and never drop, add, reorder or edit one: the script reads the tables, the ranges and the tiers from them. gateRegister: the gate register, ${GATES_DOC}, which defines the gates added after the export: exists, whether \`git -C ${REPO} cat-file -e <base>:${GATES_DOC}\` succeeds; lines, when it does, every line \`git -C ${REPO} show <base>:${GATES_DOC} | grep -E '^[|]'\` prints, in the order printed, verbatim, under the same rule as idTables, else []. The script reads each gate's row, its ids and tiers and its criteria from those lines, so copy them whatever gate you were asked for. criteria: for a gate whose exit test names the acceptance criteria, each criterion of docs/plan/01-plan.md's acceptance table with its proving ids, else []. previousTag: the tag of the nearest earlier ladder row that is in tagsReachable. rows: the ladder stage's **Plan rows.** in docs/roadmap.md, each with its owner and Done-when clause from docs/plan/03-workstreams-and-tasks.md and the test ids that clause names. A row written issue-N is a ticket, named by a stage cut after the export (#990): its owner is the **Owner:** line of \`cd ${REPO} && gh issue view N --json body\`, its doneWhen that body's "## Acceptance criteria" section verbatim, and its ids the ids of this step's ids list that section names, since a section can name an id of another gate (N-16) or a name that is no test id (F-T1).
@@ -689,11 +690,14 @@ WORKTREE: ${wt}
 LINES: ${JSON.stringify([b.from, b.to])}
 
 The base is ${ctx.base}.
-1. Your merges: \`git -C ${REPO} log --first-parent --merges --format=%H%x09%s ${range} | sed -n '${b.from},${b.to}p'\`, which prints ${b.to - b.from + 1} line${b.to === b.from ? '' : 's'}, each a merge's sha, a tab and its subject. The other lines of that listing are other agents': read none of them.
+${b.to < b.from
+    ? `1. Your merges: none. The Scope agent counted no merge since the previous tag, so you are dealt no line: return merges [], and skip steps 2 to 4.`
+    : `1. Your merges: \`git -C ${REPO} log --first-parent --merges --format=%H%x09%s ${range} | sed -n '${b.from},${b.to}p'\`, which prints ${b.to - b.from + 1} line${b.to === b.from ? '' : 's'}, each a merge's sha, a tab and its subject. The other lines of that listing are other agents': read none of their records.`}
+   listingLines: the whole listing's length, the number \`git -C ${REPO} log --first-parent --merges --format=%H ${range} | wc -l\` prints. nextSha: the sha on line ${b.to + 1}, which \`git -C ${REPO} log --first-parent --merges --format=%H ${range} | sed -n '${b.to + 1}p'\` prints, or "" when it prints nothing. Return both as printed: the script holds the length to the Scope agent's count and the sha to the first line the next agent reads (#1210).
 2. \`git -C ${REPO} worktree add --detach ${wt} ${ctx.base}\`.
 3. Per merge: sha and subject as printed; head, the merged head, the merge's second parent, \`git -C ${REPO} rev-parse <merge>^2\`; pr, the pull request it merged, the one whose head commit is that head, which \`cd ${REPO} && gh api repos/{owner}/{repo}/commits/<head>/pulls --jq '.[] | "\\(.number) \\(.head.sha)"'\` lists with each pull request's head (0 when none has that head). For each with a pull request: \`cd ${REPO} && gh api --paginate --slurp repos/{owner}/{repo}/issues/<pr>/comments > ${ctx.runLog}/pr-<pr>-comments.json\` and the same of \`repos/{owner}/{repo}/pulls/<pr>/reviews\`, then pipe \`{"comments": <comments>, "reviews": <reviews>}\` to \`python3 -I tools/review_record.py <head>\`, run from the WORKTREE: cleared is true when it exits 0, and record is the URL it prints, or its refusal line when it does not. For a merge with no pull request, cleared is false and record is "".
 4. Remove the WORKTREE.
-Return merges: one entry per line of step 1, in its order, and no other. A merge you could not read is still returned, cleared false, with why in record: the script reads a missing entry as a batch that was not read.`
+Return listingLines, nextSha and merges: one entry per line of step 1, in its order, and no other. A merge you could not read is still returned, cleared false, with why in record: the script reads a missing entry as a batch that was not read.`
 }
 
 const locatePrompt = (ctx, ids, k, phaseFile) => `Locate ${k}: find every test that cites each id below, and say what proves it (#80 -> "Phase Locate"). You read at base and run nothing.
@@ -774,6 +778,12 @@ if (!scope) return { halted: 'the Scope agent returned nothing: it failed or was
 if (!scope.fetched) return { halted: `the fetch of origin failed${scope.reason ? `: ${scope.reason}` : ''}; progress is unverified, and nothing was proved or reported`, agents: agentsRun }
 const date = A.date || scope.date
 if (!/^\d{4}-\d{2}-\d{2}$/.test(date || '')) return { halted: `the Scope agent returned date ${JSON.stringify(scope.date)}; nothing was proved or reported`, agents: agentsRun }
+// Two runs on one base and date share their run log, so the report file is named by the run: a run's
+// Report agent that posts before it writes then finds no file, never the earlier run's report (#1212).
+// The script has no clock, so the Scope agent reads one; a run id that is no clock reading would name
+// another path, so it stops the run as a bad date does.
+const runId = scope.runId
+if (!/^\d{8}T\d{6}Z$/.test(runId || '')) return { halted: `the Scope agent returned run id ${JSON.stringify(runId)}, which is no \`date -u +%Y%m%dT%H%M%SZ\` reading, so no report file can be named for this run; nothing was proved or reported`, agents: agentsRun }
 const base = scope.base
 const runLog = `${LOG}/${date}-${String(base).slice(0, 12)}`
 // The script chooses the gate; the Scope agent's reading of the gates table is used only when it read
@@ -814,7 +824,7 @@ const writeReport = async (s) => {
   phase('Report')
   const text = reportText(s)
   const target = reportTarget()
-  const outFile = `${runLog}/report.md`
+  const outFile = `${runLog}/report-${runId}.md`
   const rep = await run(reportPrompt(ctx, text, target, outFile), { label: 'report', phase: 'Report', schema: REPORTED })
   const ck = (rep && rep.checkout) || { trackedChanged: ['the Report agent returned nothing'], newUntracked: [] }
   const left = (rep && rep.worktreesLeft) || [] // empty-ok: a null Report is named in ck and in reason, so the checkout line reads dirty
@@ -847,15 +857,18 @@ if (refusals.length) {
 // The merges since the previous tag, read REVIEWS_PER_AGENT to an agent (#1207). The script deals the
 // listing's lines and holds each agent to the number of its own: a batch that comes back short or
 // long, with a sha that is no commit id, or not at all, is named among the reasons and never read as
-// merges with no open review (CODING_STANDARDS.md -> "A check fails closed"). It compares no sha
-// with the listing, which only an agent reads. base is a commit id here: refusalsOf refuses any
-// other, and a refused run has returned above.
+// merges with no open review (CODING_STANDARDS.md -> "A check fails closed"). The script reads no
+// git, so it holds the listing through the agents that read it (#1210): each returns the listing's
+// length, which must be the Scope agent's count, and the sha on the line after its last, which must
+// be the next agent's first and, after the last batch, none. A count of none still deals one agent,
+// which reads the length and no merge, since a miscount to none would otherwise start no agent to
+// see it. base is a commit id here: refusalsOf refuses any other, and a refused run has returned above.
 phase('Reviews')
 const reviewProblems = []
 let reviewBatches = []
 if (previousTag && !(scope.tagsReachable || []).includes(previousTag)) reviewProblems.push(`the Scope agent returned previous tag ${JSON.stringify(previousTag)}, which is no tag base reaches, so no review of a merge since it was read`)
 else if (!Number.isInteger(mergeCount) || mergeCount < 0) reviewProblems.push(`the Scope agent returned ${JSON.stringify(mergeCount)} as the count of merges since ${since}, so no review was read`)
-else reviewBatches = Array.from({ length: Math.ceil(mergeCount / REVIEWS_PER_AGENT) }, (_, i) => ({ from: i * REVIEWS_PER_AGENT + 1, to: Math.min(mergeCount, (i + 1) * REVIEWS_PER_AGENT) }))
+else reviewBatches = mergeCount ? Array.from({ length: Math.ceil(mergeCount / REVIEWS_PER_AGENT) }, (_, i) => ({ from: i * REVIEWS_PER_AGENT + 1, to: Math.min(mergeCount, (i + 1) * REVIEWS_PER_AGENT) })) : [{ from: 1, to: 0 }]
 const reviewed = await parallel(reviewBatches.map((b, i) => () => run(reviewsPrompt(ctx, previousTag ? `${previousTag}..${base}` : base, b, i + 1, `${runLog}/reviews-${i + 1}.json`), { label: `reviews-${i + 1}`, phase: 'Reviews', schema: REVIEWS })))
 const merges = []
 reviewBatches.forEach((b, i) => {
@@ -864,6 +877,34 @@ reviewBatches.forEach((b, i) => {
   const whole = Array.isArray(got) && got.length === want
   if (whole && got.every((m) => /^[0-9a-f]{40}$/.test(m.sha))) { merges.push(...got); return }
   reviewProblems.push(`reviews-${i + 1} returned ${whole ? 'a merge whose sha is no commit id' : Array.isArray(got) ? `${got.length} of its ${want} merges` : 'nothing'}: the reviews of the merges on lines ${b.from} to ${b.to} of the listing since ${since} were not read`)
+})
+// The listing's length each agent read, against the Scope agent's count, one reason per length read.
+// The map is keyed by the value itself, so a reply with no length is named, not thrown on.
+const lengths = new Map()
+reviewBatches.forEach((b, i) => {
+  const r = reviewed[i]
+  if (!r || r.listingLines === mergeCount) return
+  lengths.set(r.listingLines, [...(lengths.get(r.listingLines) || []), `reviews-${i + 1}`])
+})
+const andJoin = (xs) => (xs.length > 1 ? `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}` : xs[0])
+const mergesWord = `${mergeCount} merge${mergeCount === 1 ? '' : 's'}`
+for (const [n, who] of lengths) {
+  reviewProblems.push(!Number.isInteger(n) || n < 0
+    ? `the Scope agent counted ${mergesWord} since ${since}, and ${andJoin(who)} returned ${n === undefined ? 'no value' : JSON.stringify(n)} as the listing's length, so whether the listing has ${mergeCount} is unknown`
+    : `the Scope agent counted ${mergesWord} since ${since}, and the listing ${andJoin(who)} read has ${n}: ${n > mergeCount ? `the reviews of the merges on lines ${mergeCount + 1} to ${n} were not read` : `the batches were dealt lines ${n + 1} to ${mergeCount}, which the listing does not have`}`)
+}
+// The line after each batch, read by its agent, against the next agent's first line, and against
+// none after the last: two reads of each boundary that differ mean a batch's shas are not its lines.
+reviewBatches.forEach((b, i) => {
+  const r = reviewed[i]
+  if (!r) return
+  const next = reviewBatches[i + 1]
+  if (!next) {
+    if (r.nextSha !== '') reviewProblems.push(`reviews-${i + 1} read ${JSON.stringify(r.nextSha)} on line ${b.to + 1} of the listing since ${since}, past the ${mergesWord} the Scope agent counted, so the merges from line ${b.to + 1} were not read`)
+    return
+  }
+  const first = reviewed[i + 1] && Array.isArray(reviewed[i + 1].merges) ? reviewed[i + 1].merges[0] : undefined
+  if (first && r.nextSha !== first.sha) reviewProblems.push(`reviews-${i + 1} read ${JSON.stringify(r.nextSha)} on line ${next.from} of the listing since ${since}, and reviews-${i + 2} read ${String(first.sha).slice(0, 12)} there, so the merges on lines ${b.from} to ${next.to} may not be the lines they were dealt and were not read`)
 })
 if (new Set(merges.map((m) => m.sha)).size !== merges.length) reviewProblems.push(`two entries the Reviews agents returned name one merge, so a merge since ${since} was not read`)
 const openReviews = merges.filter((m) => !m.cleared)

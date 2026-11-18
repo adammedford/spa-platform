@@ -411,6 +411,63 @@ public sealed class NavigationHoldTests
     }
 
     [Fact]
+    public async Task A_timed_out_hold_writes_each_failed_request_and_each_console_error_however_many_came_before_the_one_that_refused_the_login()
+    {
+        await using LocalStack stack = await LocalStack.StartAsync();
+        await using Profile profile = await stack.OpenAsync();
+        HarnessApp app = stack.App("app1");
+        Uri callback = app.Url("/signin-oidc");
+
+        // A provider's page whose script meets many failures of each kind before the one that stops the
+        // login (#1292): its GETs, one after another so their order is the script's, each answered 405
+        // and each after an error it logs; then the POST whose preflight is refused, and a last error.
+        const int Before = 30;
+        Uri shown = new(ForeignSites.Elsewhere, "/login");
+        Uri endpoint = new(((IBrowserStack)stack).Sibling, "/submit");
+        stack.LoadBalancer.AnswerForeignScript(endpoint, callback);
+        string html = $$"""
+            <!doctype html><title>Signin</title>
+            <form><p>Sign in</p></form>
+            <script>
+              (async () => {
+                for (let n = 0; n < {{Before}}; n++) {
+                  console.error("before the refusal " + n);
+                  await fetch("{{endpoint}}?n=" + n).catch(() => {});
+                }
+                await fetch("{{endpoint}}", { method: "POST", headers: { "x-provider": "1" } }).catch(() => {});
+                console.error("after the refusal");
+              })();
+            </script>
+            """;
+
+        string directory = Directory.CreateTempSubdirectory("spa-e2e-hold-").FullName;
+        try
+        {
+            ContinuityRun run = await RunInAsync(directory);
+            await Assert.ThrowsAsync<HoldTimeoutException>(() => run.TwoTaskRowAsync("row5", new Step("control", ClientTrace.Fresh().TraceId, DateTimeOffset.UtcNow, 200), null,
+                async (n, _) =>
+                {
+                    await Redacted.PlaywrightAsync(() => NavigationHold.HoldAsync(profile.Page, callback.ToString(),
+                        () => profile.OpenForeignPageAsync(shown, html), TimeSpan.FromSeconds(5)));
+                    return new Attempt(n, []);
+                },
+                (_, _) => RowResult.Passed("never judged", []),
+                Ct));
+
+            PageShown page = JsonSerializer.Deserialize<RowEvidence>(await File.ReadAllTextAsync(Path.Combine(directory, "row5.json"), Ct))!.Page!;
+            Assert.Equal(Before, page.Requests!.Count(line => line == $"GET {endpoint} 405"));
+            Assert.Contains($"POST {endpoint} failed: net::ERR_FAILED", page.Requests!);
+            Assert.All(Enumerable.Range(0, Before), n => Assert.Contains($"before the refusal {n}", page.Errors!));
+            Assert.Contains(page.Errors!, line => line.Contains("x-provider", StringComparison.Ordinal) && line.Contains(endpoint.ToString(), StringComparison.Ordinal));
+            Assert.Contains("after the refusal", page.Errors!);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task A_page_whose_text_cannot_be_read_is_recorded_as_such_and_not_as_a_new_failure()
     {
         await using LocalStack stack = await LocalStack.StartAsync();

@@ -40,10 +40,17 @@ ADR-0020 records the decision and its reasons. What it adds to `docs/agents/issu
   #N) describes another ticket's wait and is not read. It also prints as a note, failing nothing, a
   `##` heading outside the ticket's set (`Parent`, `What to build`, `Acceptance criteria`, `Blocked
   by`) and an `**Owner:**` line beside a Touches line that names a path, since rule 5 derives the
-  owner. `.github/workflows/ticket-shape.yml` runs it when an issue carrying `ready-for-agent` is
-  opened, edited or labelled, and on a failure swaps that label for `needs-triage` and comments the
-  failing rule. The words are a list, and a list misfires. The escape is to reword the box, or to
-  make it a ready-for-human ticket blocked by the ticket that builds what it runs; then relabel.
+  owner. It holds none of rule 2's last three sentences, the ones on observation boxes
+  (`GLOSSARY.md` → "Observation box"): no word marks such a box, no field says whether a ticket's
+  open boxes are all of that kind, and which separate ticket's work an observation needs landed
+  first is a judgement, not a word. The session that applies `ready-for-agent` routes each
+  observation box to its own ready-for-human ticket, relabels in place a ticket whose open boxes are
+  all observation boxes, and adds the blocked-by edges that observation ticket needs; a passing
+  check says nothing of any of the three. `.github/workflows/ticket-shape.yml` runs it when an issue
+  carrying `ready-for-agent` is opened, edited or labelled, and on a failure swaps that label for
+  `needs-triage` and comments the failing rule. The words are a list, and a list misfires. The
+  escape is to reword the box, or to make it a ready-for-human ticket blocked by the ticket that
+  builds what it runs; then relabel.
 - **A ticket is filed after a search for what was filed since its subject was last searched.**
   Another session on the same account can file the same ticket while one drafts: #558 duplicated
   #547, filed two and a half hours earlier. Just before `gh issue create`, run
@@ -129,6 +136,29 @@ ADR-0020 records the decision and its reasons. What it adds to `docs/agents/issu
   the ticket as `Authority: #<n>` (`docs/agents/landing-work.md`), and an approval covers the body
   as it stood when given. A proposal that a confirmed answer will commit, under
   `## Proposed steering changes` or in a grill's proposals, is quoted the same way.
+- **Steering change template.** Use the template below to file an ordinary ticket that needs
+  approval of exact steering text. Use the Change requests rules when those rules require a
+  change request.
+
+  ```markdown
+  **Owner:** integrator
+  **Touches:** <steering paths>
+
+  ## What to build
+
+  <Why the change is needed and the exact destination in each file.>
+
+  ## Proposed steering changes
+
+  <For each edit, label the path and section and quote the complete text as it will read.
+  For an insertion or removal, quote the neighboring paragraphs. Quote a table row with its
+  header, a non-prose edit with the smallest enclosing object, or a new file in full.>
+
+  ## Acceptance criteria
+
+  - [ ] The applied text matches the approved quotation, including adjacent context where required.
+  - [ ] The change cites the applicable approval and records its verification in the Answer.
+  ```
 
 ## Lifecycle: not labels
 

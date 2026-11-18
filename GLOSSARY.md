@@ -101,6 +101,24 @@ across every app, so a second app's login can complete with no password prompt, 
 one app ends the provider's session for all of them. The gateway's own logout stays per app: the
 other app's session still answers and still refreshes (ADR-0017, evidence C-2.6, C-2.14, C-2.15).
 
+**Shell** — the app at a host that composes fragments. It owns the document, the baseline content security policy, the session and the composition. An app with no fragments is just an app. Distinct from the app's `index.html`, which every app has, which the contracts also call "the shell", and which `shell_unavailable`, the request line's `shell` and the shell gate are named for; where both could be meant, write "the shell app" for this and "the app's `index.html`" for the document. _Avoid_: "host app", "container".
+
+**Fragment** — one owner's unit, mounted into exactly one shell, with its own OAuth client, release, APIs and content security policy additions. It exists only inside its shell's registry entry and has no host or session of its own. It is not an app. _Avoid_: "micro-frontend", "remote", "module". The `#` part of a URL is a "URL fragment".
+
+**fragmentId** — a fragment's identifier, 3 to 40 lowercase letters, digits or hyphens, unique within its shell. It names the fragment's scheme, S3 prefix, path namespace and log field.
+
+## The modes of using the repository
+
+**Development** — a contributor's work on a workstation with no AWS. Its loop is the tests, plus the hermetic cell run by hand, which is never evidence. _Avoid_: "local development": Local (L) is a test tier.
+
+**Proof cell** — this project's own cell and the fixtures deployed into it. It exists to prove the gateway, and an adopter takes nothing from it. A directory named `poc` holds only the proof cell's own.
+
+**Adoption** — the gateway deployed into another team's estate. An adopter takes the unit of adoption as it stands and may copy the references.
+
+**Unit of adoption** — the artefacts an adopter takes as they stand, built from one ref: the gateway image, its contracts and `spactl`. See ADR-0039.
+
+**Reference** — a part an adopter may copy and change, with no promise that it stays as it is: the cell module, the operator scripts, the runbooks and the browser client. A reference names no part of the proof cell. _Avoid_: "configuration reference" for a contract, which is a promise.
+
 ## The registry
 
 **Registry** — one JSON document at `registry/registry.json`, holding every app's routing, OAuth and
@@ -130,9 +148,9 @@ So each app is described once.
 **Platform configuration** — settings from the task environment (`Policy:*`, `Issuers:*`,
 `Registry:*`) that bound what any registry entry may say. A registry writer cannot widen them.
 
-**Release** — an S3 prefix, `apps/{appId}/releases/{release}/`, in which each key is written once. A
+**Release** — an S3 prefix, `apps/{appId}/releases/{release}/`, or a fragment's `apps/{appId}/fragments/{fragmentId}/releases/{release}/`, in which each key is written once. A
 release can gain a key, but outside teardown it never changes or loses one. The registry names the
-live release, so activation and rollback are registry changes. See ADR-0009.
+live release, so activation and rollback are registry changes. Within an app's or a fragment's namespace, an `assets/` URL identifies the same bytes in every release. See ADR-0009.
 _Avoid_: "immutable prefix". The prefix can grow; only its keys are fixed.
 
 **Release key** — the key of one object under a release. It is the unit the platform bucket keeps
@@ -141,6 +159,10 @@ _Avoid_: "release" on its own when one object is meant.
 
 **Platform bucket** — a cell's one private bucket, holding the registry and every release. It is not the state bucket, which holds Terraform state and no platform data.
 _Avoid_: "the bucket" where the state bucket could be meant; "assets bucket".
+
+**Fragment activation** — making a fragment release the live one, by one registry change; it applies to requests that follow it, not to documents already loaded. _Avoid_: "swap".
+
+**Entry module** — a fragment's one ES module at the root of its release, at a name constant across releases, which the shell loads by its URL. _Avoid_: "remote entry", "bundle".
 
 ## The request path
 
@@ -169,14 +191,18 @@ ADR-0005.
 **IdP profile** — `IIdpProfile`, the seam holding provider differences (notably Cognito's
 non-standard logout). Chosen per issuer in platform configuration, never per app. See ADR-0011.
 
-**Upstream** — an origin behind the gateway that an app's `/api/{name}/*` calls reach, named in the
-registry and bounded by `Policy:AllowedUpstreams`. Not "backend" and not "service".
+**Upstream** — an origin behind the gateway that an app's `/api/{name}/*` calls reach, or a
+fragment's `/fragments/{fragmentId}/api/{name}/*` calls, named in the registry and bounded by
+`Policy:AllowedUpstreams`. One upstream may be named by a shell and by its fragments. Not
+"backend" and not "service".
 
-**API name** — the `{name}` segment in `/api/{name}/*`, 1 to 32 lowercase letters, digits or hyphens,
-unique within an app.
+**API name** — the `{name}` segment in `/api/{name}/*` or `/fragments/{fragmentId}/api/{name}/*`,
+1 to 32 lowercase letters, digits or hyphens, unique within its app or within one of its fragments,
+each a separate namespace, so one name may appear in several.
 
 **Resource binding** — passing `resource` so the provider sets the access token's `aud` to the API's
-identifier. One audience per app in Phase 1.
+identifier. One audience per token set: in Phase 1 that is one per app, and a fragment's token set
+binds its own, which may be its shell's.
 
 **Client credential style** — how the gateway, as the confidential client, authenticates to the
 provider's backchannel endpoints: a form-body secret, a Basic header, or a client assertion. One per
@@ -245,6 +271,8 @@ names. It carries no value forwarded headers settle, which is what lets the firs
 **Session record** — the serialized ticket and saved tokens held server-side behind `ITicketStore`,
 bound to app and client. The browser cookie carries a session id and nothing else. See ADR-0004.
 
+**Token set** — the tokens one client holds for one session: access token, refresh token, expiry and, for the shell's, the ID token. A shell's session holds one per client, its own and each fragment's.
+
 **Session key** — the identifier in the cookie's session-id claim. Every sign-in creates a new one,
 because the session cookie is not read on the callback path.
 
@@ -252,12 +280,12 @@ because the session cookie is not read on the callback path.
 correlates a session's requests without being usable as a credential. Log this, never the session
 key.
 
-**Session gate** — the in-process, per-session-key serialisation of refreshes: one holder reads,
+**Session gate** — the in-process, per-token-set serialisation of refreshes: one holder reads,
 decides, refreshes and writes, and the callers queued behind it take its outcome. In process only;
 two tasks share no gate. See ADR-0017 and ADR-0024.
 _Avoid_: "lock", and "lease" for this.
 
-**Refresh lease** — the cross-task claim on one session's refresh, held by one task for a bounded
+**Refresh lease** — the cross-task claim on one token set's refresh, held by one task for a bounded
 time and given back when its refresh is written. The **holder** is the task that took it; a
 **loser** is a task that could not, and re-reads the record instead. See ADR-0024.
 _Avoid_: "lease" alone where the session gate could be meant, and "distributed lock".
@@ -459,8 +487,10 @@ done.
 
 **Gate** — a named checkpoint with an exit test: G1a skeleton frozen, G0 mechanism confirmed, G1b
 identity contracts frozen, G2 local vertical slice, G3 deployed slice, G4 negative suite green, G5
-Phase 1 accepted. Phase 2 adds G6 to G8, each defined in the gate register once its exit test is
+Phase 1 accepted. Phase 2 adds G6 to G8, and the fragments ladder stage adds G9, each defined in the gate register once its exit test is
 decided; a gate with no exit test cannot be closed.
+
+**Ladder stage** — one rung of `docs/roadmap.md`, S1 onward, ending at a gate. _Avoid_: bare "stage", which is a pipeline entry point.
 
 **Exit test** — what must pass before a gate closes: for the first gates a build, a run's items or
 a tag, and from G2 on the test ids the gate names, each with the tiers it must pass in, and, where
@@ -527,8 +557,10 @@ and the snapshot; in a test host its stand-in does the same by the host's own ru
 the host. _Avoid_: host stub, resolver.
 
 **Hermetic (H)** — the test tier that runs in process on every change, against the test identity
-provider, an in-memory object store, the real mock API and an echo upstream. _Avoid_: analysis
-tier, which is a set of source files the analyzers hold to one profile.
+provider, an in-memory object store, the real mock API and an echo upstream. The hermetic cell is
+the in-process stand-in for a cell that this tier runs. _Avoid_: analysis
+tier, which is a set of source files the analyzers hold to one profile; "local stack" and "local
+cell" for the hermetic cell.
 
 **Deployed (D)** — the test tier that runs through the tunnel at G3 and after, against the ALB, the
 task, S3, Parameter Store and Cognito, with a real browser plus a raw HTTP client. _Avoid_:

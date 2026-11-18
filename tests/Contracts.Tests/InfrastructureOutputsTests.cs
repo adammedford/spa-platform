@@ -23,9 +23,25 @@ public sealed class InfrastructureOutputsTests
     [InlineData("clients")]
     [InlineData("testUsers")]
     [InlineData("logGroup")]
-    public void Every_output_the_contract_lists_is_required(string key)
+    public void Every_output_but_the_bastion_service_is_required(string key)
     {
         Schemas.RejectsInfraOutputs(Documents.InfraOutputs(o => o.Remove(key)), $"outputs with no {key}");
+    }
+
+    [Fact]
+    public void The_bastion_service_is_optional()
+    {
+        // Present only when the cell declares a bastion (#1167), so a document with or without it is valid.
+        Schemas.AcceptsInfraOutputs(Documents.InfraOutputs(o => o["ecsBastionService"] = "spa-poc-bastion"), "outputs naming a bastion service");
+        Schemas.AcceptsInfraOutputs(Documents.InfraOutputs(o => o.Remove("ecsBastionService")), "outputs with no bastion service");
+    }
+
+    [Fact]
+    public void The_bastion_service_is_an_aws_name()
+    {
+        Schemas.RejectsInfraOutputs(Documents.InfraOutputs(o => o["ecsBastionService"] = ""), "an empty bastion service name");
+        Schemas.RejectsInfraOutputs(Documents.InfraOutputs(o => o["ecsBastionService"] = "-bastion"), "a bastion service name starting with a hyphen");
+        Schemas.RejectsInfraOutputs(Documents.InfraOutputs(o => o["ecsBastionService"] = "spa poc bastion"), "a bastion service name with spaces");
     }
 
     [Fact]

@@ -821,17 +821,26 @@ try {
       if (env.mutations.some((x) => x.test !== 'Nom')) fail(`${label}: a mutation agent ran for a nomination that names no test`)
     }
     // A Python unittest cell is read as its whole dotted name: red on its own class it reads
-    // reproduced, red only on another class's same-named method it is did-not-fail.
-    for (const [red, want] of [['test_x (pkg.C.test_x)', 'reproduced'], ['test_x (pkg.Other.test_x)', 'did-not-fail']]) {
-      const PY = { 208: [{ test: 'test_x (pkg.C.test_x)', project: 'tests/py', why: 'asserts a constant' }] }
-      env = run({ prs: [208] }, NOM, { nominations: PY, mutate: { 'pkg.C.test_x': { ...row('reproduced', 1, 10), failingNames: [red] } } })
-      result = await execute(env)
-      const m = (resultOf(208, result).mutations || []).find((x) => x.kind === 'nominated') || {}
-      if (m.test !== 'pkg.C.test_x' || m.result !== want) fail(`PR 208 with the nomination "test_x (pkg.C.test_x)" red on ${red}: row ${JSON.stringify({ test: m.test, result: m.result })}, expected pkg.C.test_x ${want}`)
+    // reproduced, red only on another class's same-named method it is did-not-fail. Text after the
+    // closing parenthesis leaves that reading as it is (#809): the cell is read by the unittest form
+    // at its start, and the trailing text stays in why.
+    for (const cell of ['test_x (pkg.C.test_x)', 'test_x (pkg.C.test_x) red on Assert']) {
+      for (const [red, want] of [['test_x (pkg.C.test_x)', 'reproduced'], ['test_x (pkg.Other.test_x)', 'did-not-fail']]) {
+        const PY = { 208: [{ test: cell, project: 'tests/py', why: 'asserts a constant' }] }
+        env = run({ prs: [208] }, NOM, { nominations: PY, mutate: { 'pkg.C.test_x': { ...row('reproduced', 1, 10), failingNames: [red] } } })
+        result = await execute(env)
+        const m = (resultOf(208, result).mutations || []).find((x) => x.kind === 'nominated') || {}
+        if (m.test !== 'pkg.C.test_x' || m.result !== want) fail(`PR 208 with the nomination "${cell}" red on ${red}: row ${JSON.stringify({ test: m.test, result: m.result })}, expected pkg.C.test_x ${want}`)
+        const prompt = (env.mutations.find((x) => x.test === 'pkg.C.test_x') || {}).prompt || ''
+        if (!prompt.includes(`asserts a constant (nominated as ${cell})`)) fail(`PR 208 with the nomination "${cell}": its why did not reach the mutation prompt with the cell's text`)
+      }
     }
-    // Only the parenthesis that ends in the bare name names the whole test, spaces before it or not: a
-    // dotted qualifier such as '(Assert.Null)', and the pre-3.11 'test_x (pkg.C)', read as the bare name.
-    for (const [cell, want] of [['Nom (Assert.Null)', 'Nom'], ['test_x (pkg.C)', 'test_x'], ['test_x  (pkg.C.test_x)', 'pkg.C.test_x']]) {
+    // Only unittest's printed module.Class.method shape names the whole test, spaces before it or
+    // not: three or more dotted parts ending in the bare name (#809). A dotted qualifier such as
+    // '(Assert.Null)', or one ending in the bare name such as '(Assert.Nom)', and the pre-3.11
+    // 'test_x (pkg.C)', read as the bare name; text after the parenthesis changes none of it. The
+    // form is read only at the cell's start: 'Nom see Nom (a.b.Nom)', the first word a candidate, is Nom.
+    for (const [cell, want] of [['Nom (Assert.Null)', 'Nom'], ['Nom (Assert.Nom)', 'Nom'], ['test_x (pkg.C)', 'test_x'], ['test_x  (pkg.C.test_x)', 'pkg.C.test_x'], ['test_x (pkg.C.test_x) red on Assert', 'pkg.C.test_x'], ['Nom see Nom (a.b.Nom)', 'Nom']]) {
       env = run({ prs: [208] }, NOM, { nominations: { 208: [{ test: cell, project: 'tests/py', why: 'asserts a constant' }] }, mutate: { [want]: row('reproduced', 1, 10) } })
       result = await execute(env)
       const m = (resultOf(208, result).mutations || []).find((x) => x.kind === 'nominated') || {}
@@ -841,7 +850,8 @@ try {
     // failing name unittest printed, in either form, the row is the nomination only when that name's
     // class is pkg.C, so another class's test_x red alone is did-not-fail, as it was before the bare
     // reading. A failing name in no unittest form, as xUnit prints 'Ns.Class.Nom', is matched by the
-    // bare name, so 'Nom (Assert.Null)' red on its own test still reproduces (#764).
+    // bare name, so 'Nom (Assert.Null)' red on its own test still reproduces (#764), as 'Nom
+    // (Assert.Nom)' does now that it reads as Nom (#809). Text after the parenthesis keeps its class.
     for (const [cell, red, want] of [
       ['test_x (pkg.C)', 'test_x (pkg.C)', 'reproduced'],
       ['test_x (pkg.C)', 'test_x (pkg.C.test_x)', 'reproduced'],
@@ -851,6 +861,9 @@ try {
       ['test_x (pkg.C)', 'test_x (other.pkg.Cx)', 'did-not-fail'],
       ['Nom (Assert.Null)', 'Platform.Registry.Tests.NomTests.Nom', 'reproduced'],
       ['Nom (Assert.Null)', 'Platform.Registry.Tests.NomTests.Nom(kind: "a.b")', 'reproduced'],
+      ['Nom (Assert.Nom)', 'Platform.Registry.Tests.NomTests.Nom', 'reproduced'],
+      ['test_x (pkg.C) red on Assert', 'test_x (pkg.C.test_x)', 'reproduced'],
+      ['test_x (pkg.C) red on Assert', 'test_x (pkg.Other.test_x)', 'did-not-fail'],
     ]) {
       const bare = cell.split(' ')[0]
       env = run({ prs: [208] }, NOM, { nominations: { 208: [{ test: cell, project: 'tests/py', why: 'asserts a constant' }] }, mutate: { [bare]: { ...row('reproduced', 1, 10), failingNames: [red] } } })
@@ -940,6 +953,89 @@ try {
       const c = await verdictOf([cand], { [cand.test]: { ...row('reproduced', red.length, 18), failingNames: red } })
       const m = (c.mutations || []).find((x) => x.test === cand.test) || {}
       if (m.result !== 'did-not-fail' || c.verdict !== 'hold') fail(`PR 210 with the candidate ${JSON.stringify(cand.test)} (project ${cand.project}, file ${cand.file}) red only on another test: row ${m.result}, verdict ${c.verdict}, expected did-not-fail and hold`)
+    }
+  }
+
+  // A stated or nominated row that names a whole companion with no same-text candidate has no file
+  // (#804): after #794 such a row, red on its own test, read as caught elsewhere and held with no
+  // acceptance route. It is its whole file when its own project is its cell and that cell is a
+  // repository path to a .py file, since such a run is that file alone; and a basename cell takes its
+  // file and project from the one whole-file candidate whose file ends in it. Red on its own test,
+  // each reproduces with no caught cell and merges. Each exclusion holds: a directory project red on
+  // a sibling file's test, a Terraform test file that is its own project, a bare basename as its own
+  // project, a basename with no whole-file candidate or with two, and a candidate with no file, which
+  // the inventory left unnamed (#805). A held row naming no candidate has no project, so it stays a
+  // caught row, held until the verdict accepts it.
+  checks++
+  {
+    const F = 'tools/overnight_answers_tests.py'
+    const B = 'overnight_answers_tests.py'
+    const F2 = 'tools/other/overnight_answers_tests.py'
+    const RED = ['test_a_confirm_from_another_account_or_not_opening_confirm_does_not_count (__main__.ConfirmTests)']
+    const SIBLING = ['test_every_collected_ticket_is_read (overnight_collect_tests.CollectTests)']
+    const TF = 'infra/modules/cell/tests/module.tftest.hcl'
+    const comp = (test, project = F, file = F) => ({ test, project, file, guards: 'every rule of the reader', breaks: 'tools/overnight_answers.py' })
+    const nom = (test, project) => ({ 214: [{ test, project, why: 'the companion may not read the author check' }] })
+    const verdictOf = async (shape, test, red, extra = {}) => {
+      env = run({ prs: [214] }, { 214: pr(214, [F, 'tools/overnight_answers.py'], shape) }, { ...extra, mutate: { [test]: { ...row('reproduced', red.length, 18), failingNames: red } } })
+      result = await execute(env)
+      const c = resultOf(214, result)
+      return { c, m: (c.mutations || []).find((x) => x.test === test && x.kind !== 'candidate') || (c.mutations || []).find((x) => x.test === test) || {} }
+    }
+    for (const [label, shape, test, extra] of [
+      ['stated by its path, its own project', { statedMutations: [stated(F, 1, -1, F)] }, F, {}],
+      ['nominated by its path, its own project', {}, F, { nominations: nom(F, F) }],
+      ['stated by its basename on project tools, one whole-file candidate', { statedMutations: [stated(B, 1, -1, 'tools')], candidates: [comp(F)] }, B, {}],
+      ['nominated by its basename on project tools, one whole-file candidate', { candidates: [comp(F)] }, B, { nominations: nom(B, 'tools') }],
+    ]) {
+      const { c, m } = await verdictOf(shape, test, RED, extra)
+      if (m.result !== 'reproduced' || (m.caughtBy || []).length || c.verdict !== 'merge') fail(`PR 214 with the ${label} ${JSON.stringify(test)}, red on its own test: row ${JSON.stringify({ result: m.result, caughtBy: m.caughtBy })}, verdict ${c.verdict}, expected reproduced with no caught cell and merge`)
+    }
+    // The borrowed row is run as the candidate's file: the mutation agent is told that project.
+    {
+      await verdictOf({ statedMutations: [stated(B, 1, -1, 'tools')], candidates: [comp(F)] }, B, RED)
+      const prompt = (env.mutations.find((x) => x.test === B) || { prompt: '' }).prompt
+      if (!prompt.includes(`The test: ${B}, run by ${F}.`)) fail(`PR 214 with the stated basename ${B} borrowing the candidate ${F}: its mutation prompt does not name ${F} as the project that runs it`)
+    }
+    // Only a bare basename borrows, and only from a file it is the last path segment of: a path cell
+    // whose text another candidate's path ends in, and a basename that another file's name only ends
+    // in, keep their own project. Neither guard changes the verdict, since such a row stays a catch
+    // either way; it changes which file the mutation agent is told to run (review of #804).
+    for (const [label, cell, other] of [
+      ['stated path cell on project tools beside the candidate', F, `x/${F}`],
+      ['stated basename on project tools beside the candidate', B, `tools/my_${B}`],
+    ]) {
+      await verdictOf({ statedMutations: [stated(cell, 1, -1, 'tools')], candidates: [comp(other, other, other)] }, cell, RED)
+      const prompt = (env.mutations.find((x) => x.test === cell) || { prompt: '' }).prompt
+      if (!prompt.includes(`The test: ${cell}, run by tools.`)) fail(`PR 214 with the ${label} ${other}: its mutation prompt does not keep tools as the project that runs ${cell}, so it borrowed a file it does not name`)
+    }
+    for (const [label, shape, test, red, extra] of [
+      ['stated by its path on the directory project tools, red on a sibling file\'s test', { statedMutations: [stated(F, 1, -1, 'tools')] }, F, SIBLING, {}],
+      ['nominated by its path on the directory project tools, red on a sibling file\'s test', {}, F, SIBLING, { nominations: nom(F, 'tools') }],
+      ['stated Terraform test file as its own project, red on a sibling file\'s run', { statedMutations: [stated(TF, 1, -1, TF)] }, TF, ['tests/network.tftest.hcl'], {}],
+      ['stated bare basename as its own project, no candidate', { statedMutations: [stated(B, 1, -1, B)] }, B, RED, {}],
+      ['stated basename on project tools, no candidate', { statedMutations: [stated(B, 1, -1, 'tools')] }, B, RED, {}],
+      ['stated basename on project tools, two whole-file candidates', { statedMutations: [stated(B, 1, -1, 'tools')], candidates: [comp(F), comp(F2, F2, F2)] }, B, RED, {}],
+      ['candidate by its path, its own project, no file', { candidates: [comp(F, F, '')] }, F, RED, {}],
+    ]) {
+      const { c, m } = await verdictOf(shape, test, red, extra)
+      if (m.result !== 'did-not-fail' || c.verdict !== 'hold') fail(`PR 214 with the ${label} ${JSON.stringify(test)}: row ${JSON.stringify({ kind: m.kind, result: m.result })}, verdict ${c.verdict}, expected did-not-fail and hold`)
+    }
+    // A held row whose cell names no candidate: a caught row, which holds unless the verdict accepts it.
+    {
+      const H1 = sha('1'); const H2 = sha('2')
+      const BREAK = 'tools/overnight_answers.py covered_questions: dropped the author check'
+      const held = { author_association: 'OWNER', created_at: '2026-11-03T08:00:00Z', html_url: 'https://github.com/o/r/pull/214#issuecomment-1',
+        body: `## Review\n\nHead ${H1}.\n\n## Mutations\n\n| Test | What was broken | Failed of total | Result | Log file |\n| --- | --- | --- | --- | --- |\n| ${F} | ${BREAK} | 1 of 18 | did-not-fail: the project went red on another test | /log/mutation.txt |\n\n## Outstanding\n\n- Nothing.\n\nReviewed ${H1} against ${FORK}: hold` }
+      const range = { 214: { from: H1, ancestor: true, commits: [H2], merges: [], changedFiles: ['tools/overnight_answers.py'], error: '' } }
+      for (const [accept, want, verdict] of [[true, 'reproduced', 'merge'], [false, 'did-not-fail', 'hold']]) {
+        env = run({ prs: [214] }, { 214: pr(214, [F, 'tools/overnight_answers.py'], { head: H2, commits: [H2], comments: [held], candidates: [] }) },
+          { range, earlier: { 214: [{ finding: 'the companion did not fail with the author check dropped', held: true, answered: true, how: 'its own run went red' }] }, mutate: { [F]: { ...row('reproduced', 1, 18), failingNames: RED } }, caught: accept ? { 214: [F] } : {} })
+        result = await execute(env)
+        const c = resultOf(214, result)
+        const m = (c.mutations || []).find((x) => x.kind === 'held') || {}
+        if (m.test !== F || m.result !== want || c.verdict !== verdict) fail(`PR 214 with the held cell ${JSON.stringify(F)} naming no candidate, red on its own test, ${accept ? 'accepted' : 'not accepted'}: held row ${JSON.stringify({ test: m.test, result: m.result })}, verdict ${c.verdict}, expected ${want} and ${verdict}`)
+      }
     }
   }
 
@@ -1730,20 +1826,48 @@ try {
   //     inventory, two axes, two mutations, one verdict and one post: 7, so 21, 22 with the launch
   //     agent (#687) and 23 with the queue too. The return reports exactly the agents that ran, and no
   //     more than the slot count are ever in flight at once. One pull request's mutations start while
-  //     another is still under review.
+  //     another is still under review: with three or more slots the order is forced by holds, not by
+  //     timers, since a loaded machine can fire the stub's timers out of their millisecond order (#1192).
   checks++
   {
     const four = (n) => pr(n, ['tests/q.cs'], { candidates: [cand(`Q${n}a`), cand(`Q${n}b`), cand(`Q${n}c`), cand(`Q${n}d`)] })
     const WIDE3 = { 301: four(301), 302: four(302), 303: four(303) }
-    // 301 reviews fast, 302 slowly, 303 in between; every other agent takes a few milliseconds.
+    // 301 reviews fast, 302 slowly, 303 in between; every other agent takes a few milliseconds. The
+    // delays make the pipelines overlap for the slot bound; no assertion rests on their order.
     const delay = (label) => {
       const [kind, n] = label.split(':')
       if (kind === 'standards' || kind === 'spec') return { 301: 2, 302: 40, 303: 15 }[n] || 1
       return kind === 'mutate' ? 5 + Number(label.split(':')[2]) : 3
     }
+    // The overlap's order by cause (#1192): 301's Standards axis ends only once 302's has started, so
+    // 301's mutations, which wait for both its axes, start after it; and 302's Standards axis ends only
+    // once 301's first mutation has started. The stub calls hold after it logs `start <label>`, so a
+    // hold called for a label is that agent's start. A wait gives up after GIVE_UP ms, so a script that
+    // cannot overlap the two fails the assertion below, naming the wait, and does not hang the run.
+    // Only with three or more slots: with fewer, a held axis can sit on the slot its release needs.
+    const GIVE_UP = 5000
+    const AFTER = { 'standards:301': 'standards:302', 'standards:302': 'mutate:301:1' }
+    const ordered = () => {
+      const started = new Set()
+      const waits = new Map()   // label -> the releases waiting for it to start
+      const gaveUp = []
+      const hold = (label) => {
+        started.add(label)
+        for (const release of waits.get(label) || []) release()
+        waits.delete(label)
+        const on = AFTER[label]
+        if (!on || started.has(on)) return undefined
+        return new Promise((resolve) => {
+          const timer = setTimeout(() => { gaveUp.push(`${label} waited ${GIVE_UP} ms for ${on} to start`); resolve() }, GIVE_UP)
+          waits.set(on, [...(waits.get(on) || []), () => { clearTimeout(timer); resolve() }])
+        })
+      }
+      return { hold, gaveUp }
+    }
     for (const [slots, queued, want] of [[2, false, 22], [1, false, 22], [3, true, 23], [5, false, 22]]) {
+      const order = slots >= 3 ? ordered() : { hold: undefined, gaveUp: [] }
       env = run({ prs: queued ? undefined : [301, 302, 303], maxParallel: slots, maxMutationsPerPr: 2 }, WIDE3,
-        { delay, queue: { baseTip: sha('c'), prs: [301, 302, 303].map((n) => ({ number: n, head: WIDE3[n].head, baseRef: 'main' })), error: '' } })
+        { delay, hold: order.hold, queue: { baseTip: sha('c'), prs: [301, 302, 303].map((n) => ({ number: n, head: WIDE3[n].head, baseRef: 'main' })), error: '' } })
       result = await execute(env)
       const what = `three pull requests, ${slots} slot(s)${queued ? ', from the queue' : ''}`
       if (result.agents !== env.calls.length) fail(`${what}: the return reports ${result.agents} agents, ${env.calls.length} ran`)
@@ -1753,7 +1877,7 @@ try {
       if (slots >= 3) {
         // Overlap: 301's first mutation starts while 302's Standards axis is still running.
         const at = (e) => env.events.indexOf(e)
-        if (!(at('start mutate:301:1') >= 0 && at('start standards:302') >= 0 && at('start standards:302') < at('start mutate:301:1') && at('start mutate:301:1') < at('end standards:302'))) fail(`${what}: PR 301's mutations did not start while PR 302 was under review: ${env.events.join(', ')}`)
+        if (!(at('start mutate:301:1') >= 0 && at('start standards:302') >= 0 && at('start standards:302') < at('start mutate:301:1') && at('start mutate:301:1') < at('end standards:302'))) fail(`${what}: PR 301's mutations did not start while PR 302 was under review${order.gaveUp.length ? ` (${order.gaveUp.join('; ')})` : ''}: ${env.events.join(', ')}`)
       }
     }
   }
@@ -1900,7 +2024,15 @@ try {
     // table and no followUp of the result, and it is not lost, since its axis's section names it.
     const vp = env.prompts['verdict:287'] || ''
     if (!/failsOn is the input or state on which the finding gives the wrong result, in one sentence/.test(vp)) fail('PR 287: the verdict prompt does not ask for each followUp\'s failsOn, the input or state on which it gives the wrong result, in one sentence (#966)')
-    if (!/cannot name one is not a follow-up: write it in findings under the axis that found it, as a note, and leave it out of followUps; it files nothing/.test(vp)) fail('PR 287: the verdict prompt does not state the note rule for a carried finding with no input it fails on (#966)')
+    if (!/cannot name one, or whose failsOn shows none of the three, is not a follow-up: write it in findings under the axis that found it, as a note, and leave it out of followUps; it files nothing/.test(vp)) fail('PR 287: the verdict prompt does not state the note rule for a carried finding with no input it fails on, or one that shows none of the three cases (#966, #1307)')
+    // The three cases (#1307): a carried finding is a row only when its Fails on shows the gateway, or
+    // a proof of it, wrong. The prompt names each case, and the notes the rule makes of the rest.
+    for (const [name, words] of [
+      ['a gateway behaviour that is wrong', '(1) a gateway behaviour that is wrong'],
+      ['a proof that would pass while the gateway is wrong', '(2) a test, suite, script or sitting step that would pass, or lose its evidence, while the gateway is wrong'],
+      ['process tooling that would land or pass work it should refuse', '(3) process tooling that would land or pass work it should refuse'],
+      ['the notes the rule makes', 'the wording of a document, and a defect in tooling that puts no proof at risk, are notes'],
+    ]) if (!vp.includes(words)) fail(`PR 287: the verdict prompt's follow-up rule does not name ${name}: ${JSON.stringify(words)} (#1307)`)
     if (!vp.includes('"## Follow-ups" table (five columns: Finding, Axis, Where, First carried by, Fails on)')) fail('PR 287: the verdict prompt does not name the five-column follow-ups table (#966)')
     const NOTE = { axis: 'Standards', title: 'The helper reads as a second copy of the parser', where: 'tools/x.py:9', failsOn: ' ', ticket: '', firstCarried: '' }
     env = run({ prs: [287] }, served(EARLIER), { followUps: { 287: [CARRIED[1], NOTE, { ...CARRIED[2], failsOn: '' }] } })
@@ -2625,6 +2757,27 @@ try {
     if (skipped.outcome !== 'skipped' || env.batches.length) fail(`#1175's shape, its head recorded: outcome ${skipped.outcome} with ${env.batches.length} message agent(s), expected skipped with none`)
   }
 
+  // A batch the messages fill to exactly the sum is full, not over it (#1191): the first batch's
+  // last message is padded so the batch holds exactly M1175 characters, and it stays in that batch.
+  // A limit taken as "at or over" moves it into the next, which batchFaults names as a message that
+  // fitted in the batch before.
+  checks++
+  {
+    let sum = 0
+    let last = 0
+    while (sum + lengthOf(MESSAGES1175[last]) <= M1175) sum += lengthOf(MESSAGES1175[last++])
+    last--
+    const pad = M1175 - sum
+    const EXACT = MESSAGES1175.map((c, i) => (i === last ? { ...c, message: c.message.replace('\n\nCo-Authored-By: t', `\n\n${'x'.repeat(pad - 2)}\n\nCo-Authored-By: t`) } : c))
+    env = run({ prs: [1175] }, served1175(EXACT))
+    const r = resultOf(1175, await execute(env))
+    const first = env.batches[0] ? env.batches[0].asked : []
+    const held = first.reduce((s, c) => s + c.length, 0)
+    if (r.outcome !== 'recorded') fail(`a batch filled to the sum: outcome ${r.outcome} at ${JSON.stringify(r.stage)}, expected recorded`)
+    if (first.length !== last + 1 || held !== M1175) fail(`a batch filled to the sum: the first batch holds ${first.length} message(s) of ${held} characters, expected ${last + 1} of exactly ${M1175}`)
+    for (const f of batchFaults(env, EXACT)) fail(`a batch filled to the sum: ${f}`)
+  }
+
   // Messages the inventory can return in one piece cost no agent, and one it returns other than
   // whole is read again by a message agent rather than searched as it stands: a small pull request
   // whose inventory returns no text, and one whose last message came back a character short. An
@@ -2652,6 +2805,15 @@ try {
       env = run({ prs: [1175] }, servedSmall(), { inventoryMessages: (list) => list.map((c, i) => (i === 1 ? drop(c) : c)) })
       r = resultOf(1175, await execute(env))
       if (r.outcome !== 'failed' || !String(r.stage).startsWith('inventory: ') || !String(r.stage).includes(C1175[77]) || env.batches.length || env.posted.length) fail(`a commit message with ${what}: outcome ${r.outcome} at ${JSON.stringify(r.stage)} with ${env.batches.length} message agent(s), expected failed at the inventory naming ${C1175[77]} with none`)
+    }
+    // An entry with no full sha cannot be asked for by a message agent or named in a finding, so it
+    // fails the review at the inventory too, though its message came back whole (#1190): an entry
+    // with no sha, one with the abbreviated sha git prints by default, and an entry that is null.
+    const NO_SHA = 'inventory: a commit message came back with no sha to read it by'
+    for (const [what, unnamed] of Object.entries({ 'no sha': (c) => { const { sha: _, ...rest } = c; return rest }, 'an abbreviated sha': (c) => ({ ...c, sha: c.sha.slice(0, 7) }), 'a null entry': () => null })) {
+      env = run({ prs: [1175] }, servedSmall(), { inventoryMessages: (list) => list.map((c, i) => (i === 1 ? unnamed(c) : c)) })
+      r = resultOf(1175, await execute(env))
+      if (r.outcome !== 'failed' || r.stage !== NO_SHA || env.batches.length || env.posted.length) fail(`a commit message with ${what}: outcome ${r.outcome} at ${JSON.stringify(r.stage)} with ${env.batches.length} message agent(s) and ${env.posted.length} comment(s) posted, expected failed at ${JSON.stringify(NO_SHA)} with none`)
     }
   }
 

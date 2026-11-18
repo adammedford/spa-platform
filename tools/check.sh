@@ -584,7 +584,7 @@ if touches build; then
     fi
     tools/smoke.sh Debug "$port" || fail "the smoke test failed."
     elapsed "the smoke test"
-    tools/image-check.sh || fail "the gateway image failed to build or to start as its runtime user."
+    tools/image-check.sh || fail "the image check failed; see image-check's diagnostic above."
     elapsed "the gateway image"
     ran="$ran, $tests_ran, the smoke test, the gateway image"
   fi

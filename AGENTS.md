@@ -24,6 +24,13 @@ The plan is in `docs/plan/`. Read the part for your task before you write anythi
 
 ## Rules for every task
 
+- **The gateway is the product; everything else exists to prove something about it.** Before you add
+  or grow a component (a fixture, a suite, a script, a Terraform root, a tool), answer in the ticket
+  or pull request: what does this prove about the gateway, and would an adopter, a team running the
+  gateway in its own estate, reuse the result? Process tooling, which lands and checks the work
+  (`tools/land.sh`, `.claude/workflows/`, the wiz scripts), answers a different question: which proof
+  does this make cheaper or safer? `docs/roadmap.md` names the capability each stage of the gateway's
+  ladder proves, and the plan rows that prove it.
 - **Write only inside your owner's paths.** Reading anywhere is fine. `OWNERSHIP.md` lists the paths,
   and `.githooks/pre-push` checks them. How a task lands: `docs/agents/landing-work.md`.
 - **The integrator's paths are off limits**, even for a one-line fix. Need one changed (a contract, a package, a version, a project)? File a change request and stop: `docs/agents/tracker-policy.md` → "Change requests". `SpaPlatform.slnx` and `Directory.Packages.props` are the integrator's.
@@ -91,6 +98,7 @@ tools/check.sh --full --port 5180               # and the tests, the smoke test,
 - **The gateway never references `fixtures/TestIdp`** (A-01), and the mock API references no `Platform.*` project (A-02).
 - **A workstream project references `Platform.Abstractions` and no other workstream's project** (A-03). Only `Gateway` references them all.
 - **Only `Platform.Identity` references the token-management package** (A-04).
+- **Never publish a PingFederate result.** The repository and its tracker are public. Ping's terms for the evaluation licence forbid publishing test results or opinions about the product without its written consent (#1269). A result is anything that records the real product's behaviour: its output, log lines, error text, timings, a suite's pass or fail against it, or a finding against it. It goes to the local store `~/Projects/spa-platform-private/`, never into a commit, a branch, an issue, a comment or a CI log, and no public workflow runs PingFederate. These are not results: Ping's documentation, the gateway's `pingfederate` profile, and runs against `fixtures/TestIdp` or Cognito.
 
 ## Where the work stands
 

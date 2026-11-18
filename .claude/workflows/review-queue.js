@@ -125,8 +125,11 @@ export const meta = {
 // request its window reaches, open, merged since its checkpoint or recorded since it, and files
 // (#514, #1082); a row still unfiled at the merge is named by tools/land.sh (#573). Each row names,
 // in its Fails on cell, the input or state on which the finding gives the wrong result (#966); one
-// the verdict gives none for is no row but a note under its axis, and files nothing. The review
-// still writes nothing outside its log and its one comment, but for the change requests below.
+// the verdict gives none for is no row but a note under its axis, and files nothing. The prompt asks
+// for a row only when that input shows the gateway wrong, a proof of it that would pass or lose its
+// evidence while the gateway is wrong, or process tooling that would land or pass work it should
+// refuse (#1307); any other carried finding it asks for as a note. The review still writes nothing
+// outside its log and its one comment, but for the change requests below.
 //
 // Change requests (#434, from #411 Q5 and #421 Q12). The Spec axis reads the change-request issues
 // each cited ticket is or was blocked by, with their decision comments, as spec sources. It judges
@@ -778,7 +781,7 @@ ${mut.rows.length ? mut.rows.map((r) => `- ${r.test} (${r.kind}): ${r.result}, $
 ${mut.holds.length ? `The rows already hold the verdict: ${mut.holds.join('; ')}. Say so in summary.` : ''}
 ${d ? deltaBrief(d) + (d.verdict === 'hold' ? ' Put each of the held record\'s findings in earlierFindings: held true when that record held on it, false when it carried it as a follow-up that did not hold; answered true when the range answers it, false when it does not; finding is the held record\'s title for it, as that record wrote it, and how states only what changed since the held record, in one sentence; never restate its finding or its evidence, which the record links. An unanswered finding the record held on holds, and so does an empty list; an unanswered follow-up does not, and goes in followUps.' : ' earlierFindings is [].') : 'earlierFindings is [].'}
 verdict is hold when a verified finding shows the change does not do what it says, or a test that proves it cannot fail: a did-not-fail row, or a stated or held mutation that did not reproduce. A could-not-run on a stated, held or nominated mutation holds too; one on a candidate nobody suspected is reported and does not. A removed row is a held break whose target the range deleted, so it holds nothing by itself, but it answers the held test only if the deletion is sound: read the commit its why names, and it answers when the removed code could never run (say why) or the same check is still enforced elsewhere (say where), each as a verified finding; otherwise, or if you cannot show either, the held test is unanswered and the verdict is hold. A caught row is a held or candidate break the project caught through other tests while the named test stayed green (#684, #689). It answers the named test only when you verify, as a verified finding, that a test it names guards the break: for a held row, the break the held record named. For a candidate, you must also verify, as a verified finding, why the named test could not go red on that break: either the break lies outside what the named test guards, or the case the break reaches skips where the review runs. Then put the named test in caughtAccepted. A candidate that guards the break and stayed green proves nothing: leave it out. A caught row of any kind on a Node companion, a row whose project is an .mjs file or whose file or test cell's leading path is one, whatever project the inventory gives it (#938), is read another way, since such a companion prints no test names, only its checks' fail() messages (#905): read the named checks' source at the head, and when every message the row went red on is one of those checks' own fail() messages, say so as a verified finding and put the named test in caughtAccepted; the check for a candidate's green named test does not apply. On a Node companion, a stated or nominated row that went red on any message of another check is not answered by it: leave it out of caughtAccepted, and the verdict is hold. A held or candidate row there keeps its catch (#684, #689): one that went red on another check's message is answered only when you verify that the check whose fail() printed it guards the break (for a held row, the break the held record named) and, for a candidate, unlike a row red only on its own checks' messages, that its named check went red on its own fail() messages as well or why it could not go red on that break; then put the named test in caughtAccepted. In every other case leave the named test out of caughtAccepted, and the named test is unanswered and the verdict is hold. Otherwise merge. outstanding lists what stays for the merge body's Outstanding: line.
-followUps: every finding this review carries rather than holds on, whatever the verdict: a finding left standing for after the merge, and each outstanding entry that is a defect still to fix. Each: axis, title (one line; when an earlier record's "## Follow-ups" table (five columns: Finding, Axis, Where, First carried by, Fails on) lists the finding, its Finding cell verbatim), where, failsOn, ticket and firstCarried. failsOn is the input or state on which the finding gives the wrong result, in one sentence (#966): what a reader would run or set up to see it go wrong. A carried finding for which you cannot name one is not a follow-up: write it in findings under the axis that found it, as a note, and leave it out of followUps; it files nothing, and the script writes any followUp with an empty failsOn as such a note. ticket is the open issue that owns the fix, as "#<n>", checked with \`cd ${REPO} && gh issue view <n> --json state,title\` (it must be OPEN and its title or body must be about this fix; an issue the finding merely mentions does not own it), or "" when there is no open ticket for it, which you search for with \`cd ${REPO} && gh issue list --state open --search "<key words> in:title,body" --json number,title\`. firstCarried is the earliest of the records on this pull request that carried the same finding, by its URL: ${(() => { const urls = recordsIn(inv).map((r) => r.url).filter(Boolean); return urls.length ? `read ${urls.join(', ')} (oldest first)` : 'there is none, so it is ""' })()}; "" when none did. The script keeps those with ticket "" as the comment's follow-ups, which the follow-ups pass files, from this pull request while it is open and on the first pass after it merges; one still unfiled when it merges is named by tools/land.sh and may be filed by hand sooner (#514, #573, #1082).
+followUps: every finding this review carries rather than holds on, whatever the verdict: a finding left standing for after the merge, and each outstanding entry that is a defect still to fix. Each: axis, title (one line; when an earlier record's "## Follow-ups" table (five columns: Finding, Axis, Where, First carried by, Fails on) lists the finding, its Finding cell verbatim), where, failsOn, ticket and firstCarried. failsOn is the input or state on which the finding gives the wrong result, in one sentence (#966): what a reader would run or set up to see it go wrong. A carried finding is a follow-up only when it leaves the gateway, or a proof of it, wrong (#1307): its failsOn shows one of three things, (1) a gateway behaviour that is wrong, (2) a test, suite, script or sitting step that would pass, or lose its evidence, while the gateway is wrong, or (3) process tooling that would land or pass work it should refuse. A carried finding for which you cannot name one, or whose failsOn shows none of the three, is not a follow-up: write it in findings under the axis that found it, as a note, and leave it out of followUps; it files nothing; the wording of a document, and a defect in tooling that puts no proof at risk, are notes. The script writes any followUp with an empty failsOn as such a note. ticket is the open issue that owns the fix, as "#<n>", checked with \`cd ${REPO} && gh issue view <n> --json state,title\` (it must be OPEN and its title or body must be about this fix; an issue the finding merely mentions does not own it), or "" when there is no open ticket for it, which you search for with \`cd ${REPO} && gh issue list --state open --search "<key words> in:title,body" --json number,title\`. firstCarried is the earliest of the records on this pull request that carried the same finding, by its URL: ${(() => { const urls = recordsIn(inv).map((r) => r.url).filter(Boolean); return urls.length ? `read ${urls.join(', ')} (oldest first)` : 'there is none, so it is ""' })()}; "" when none did. The script keeps those with ticket "" as the comment's follow-ups, which the follow-ups pass files, from this pull request while it is open and on the first pass after it merges; one still unfiled when it merges is named by tools/land.sh and may be filed by hand sooner (#514, #573, #1082).
 ${heldChangeRoute(n, inv)}
 Return the result. Write no file for it: the script hands what you return to the post agent, which writes verdict.json (#1092).`
 
@@ -852,6 +855,8 @@ const sinceHeadsOf = (records, inv) => {
 // dotted name in the parenthesis after a bare method is the whole name (#695). withClass false
 // reads only the first form: in a cell someone wrote, 'Nom (Assert.Null)' has the second form's
 // shape and names no class, so there the parenthesis names the whole test only when it ends in it.
+// It reads a whole name, as a runner prints it, which never carries free text after its groups;
+// nominated() reads a cell's start and narrows the first form to three parts (#809).
 // A unittest subtest prints its message in brackets, its parameters in a parenthesis or both after
 // the class one, 'test_x (pkg.Class) [msg] (k='v')', and is read without them (#793): on #792 the
 // greedy parenthesis took both groups, the name read as the bare test_x, and a candidate Class.test_x
@@ -870,6 +875,12 @@ const dotted = (f, withClass = true) => {
 // 'test_x (pkg.Class.test_x)' is read as its whole dotted name, by dotted() as mutationRow reads a
 // failing name, so another class's test_x is not this one; 'test_x (pkg.Class)' is read as test_x,
 // since a qualifier such as '(Assert.Null)' has its shape, and keeps pkg.Class as its cls (#808).
+// In a cell the parenthesis names the whole test only in unittest's printed module.Class.method
+// shape, three or more dotted parts ending in the bare name (#809): 'Nom (Assert.Nom)', a qualifier
+// ending in the name, reads as Nom, where it read as the test Assert.Nom. The cell is read by the
+// unittest form at its start, whatever follows the closing parenthesis, so 'test_x (pkg.C.test_x)
+// red on Assert' reads as pkg.C.test_x, its trailing text kept in why by the '(nominated as <cell>)'
+// suffix; dotted() alone misses the whole cell there, and it read as the bare test_x.
 // mutationRow holds a failing name unittest printed to that class, since only a Python run prints
 // one: on #764 the bare reading took another class's red test_x for the nomination. A failing name
 // xUnit printed, 'Ns.Class.Nom', is matched by the bare name, so 'Nom (Assert.Null)' still reads
@@ -886,15 +897,17 @@ const dotted = (f, withClass = true) => {
 // unless the whole cell is itself a candidate's test. A backtick leaves every cell before any of
 // this is read, since a Broken cell cannot hold one and its row would read as none, forgetting a
 // hold on it, and '`Nom`' is the test Nom. A cell of backticks and spaces alone names no test.
+const NOMINATED_UNITTEST = /^([A-Za-z_]\w*)\s*\(([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+)\)/
 const nominated = (s, byTest, i = 0) => {
   const cell = (s.test || '').replace(/`/g, '').trim()
   if (!cell) return { ...s, test: `(nomination ${i + 1} names no test)`, why: `the Standards axis nomination names no test: ${s.why}`, kind: 'nominated', cls: '', unnamed: true }
   const bare = (/^[^\s(]*/.exec(cell) || [''])[0]
-  const whole = dotted(cell, false)
+  const lead = (NOMINATED_UNITTEST.exec(cell) || [cell])[0]
+  const whole = dotted(lead, false)
   const prose = /\s/.test(cell.split('(')[0].trim()) && (byTest.has(cell) || !byTest.has(bare))
   const test = prose ? cell
-    : whole !== bare && whole.endsWith(`.${bare}`) ? whole : bare || cell
-  const classed = dotted(cell)
+    : whole !== bare && whole.endsWith(`.${bare}`) && whole.split('.').length >= 3 ? whole : bare || cell
+  const classed = dotted(lead)
   const cls = test === bare && classed !== bare ? classed.slice(0, -bare.length - 1) : ''
   const why = test === s.test ? s.why : `${s.why} (nominated as ${s.test})`
   return { ...(byTest.get(test) || byTest.get(bare)), ...s, test, why, kind: 'nominated', cls }
@@ -926,9 +939,21 @@ const mutationList = (inv, standards, d, prior = { held: null, clearers: [] }) =
   // names, as before. A later record's reproduced cell in that spelling answers the same candidate
   // (#901): on #802 the later cell 'x_tests.py (companion)' did not name the candidate
   // 'tools/x_tests.py', so the answered row was mutated again.
+  const wholeCandidates = candidates.filter((c) => c.file && (c.project === c.file || /\.mjs$/.test(c.file)) && [c.file, c.file.split('/').pop()].includes(c.test))
   const wholeFor = (cell) => {
     const [, f] = /^(\S+) \(companion\)$/.exec((cell || '').trim()) || []
-    return f ? candidates.filter((c) => c.file && (c.project === c.file || /\.mjs$/.test(c.file)) && [c.file, c.file.split('/').pop()].includes(c.test) && [c.file, c.file.split('/').pop()].includes(f)) : []
+    return f ? wholeCandidates.filter((c) => [c.file, c.file.split('/').pop()].includes(f)) : []
+  }
+  // A stated or nominated cell that is a bare basename, with no candidate of its text, takes its file
+  // and project from the one whole-file candidate whose file ends in it, as wholeFor reads a held
+  // cell (#804): the same-text lookup misses a basename cell beside a path candidate. None, or two
+  // files, and it keeps what it had, a row with no file. The row keeps its own test, the author's or
+  // the Standards axis's cell, so the candidate keeps its own row too.
+  const borrowed = (m) => {
+    if (m.file || !m.test || m.test.includes('/')) return m
+    const hits = wholeCandidates.filter((c) => c.file.endsWith(`/${m.test}`))
+    if (new Set(hits.map((c) => c.file)).size !== 1) return m
+    return { ...hits[0], ...m, file: hits[0].file, project: hits[0].project }
   }
   const held = prior.held ? [...prior.held.rows].reverse().flatMap((h) => {
     const base = { mutation: h.broken, quote: h.broken, failed: -1, total: -1, kind: 'held', heldBy: h.url, cell: h.test }
@@ -943,8 +968,8 @@ const mutationList = (inv, standards, d, prior = { held: null, clearers: [] }) =
   const touched = (c) => [c.file, c.breaks].some((f) => f && reviewed.has(f))
   const all = [
     ...held,
-    ...(inv.statedMutations || []).map((s) => ({ ...byTest.get(s.test), ...s, kind: 'stated' })),
-    ...((standards && standards.nominations) || []).map((s, i) => nominated(s, byTest, i)), // empty-ok: a null Standards axis fails the pull request before mutationList runs, so standards is never null here
+    ...(inv.statedMutations || []).map((s) => borrowed({ ...byTest.get(s.test), ...s, kind: 'stated' })),
+    ...((standards && standards.nominations) || []).map((s, i) => borrowed(nominated(s, byTest, i))), // empty-ok: a null Standards axis fails the pull request before mutationList runs, so standards is never null here
     ...candidates.filter(touched).map((c) => ({ ...c, kind: 'candidate' })),
     ...candidates.filter((c) => !touched(c)).map((c) => ({ ...c, kind: 'candidate' })),
   ]
@@ -1000,6 +1025,18 @@ const mutationRow = (n, m, i, got) => {
   // Anything else stays a catch, failing closed to the verdict (#794): a test that adds to the name,
   // 'x_tests.py (check: ...)' scoping one check of it or 'x_tests.py (companion)', and a Terraform
   // test file, whose run is its whole directory, so a sibling file's red run would read as its own.
+  // A row with no file names its file another way, or stays a catch (#804). On #794 a stated or held
+  // row naming a whole companion with no same-text candidate read caught elsewhere when its own run
+  // went red, and a stated or nominated one was did-not-fail, with no acceptance route. A stated or
+  // nominated row with no file is its whole file when its own project is its cell and that cell is a
+  // repository path to a .py file (ownPy below): the agent is told to run that file alone, so no
+  // sibling file can go red in it. A directory project, a bare basename and a Terraform test file,
+  // whose run is its directory, stay a catch. A basename cell takes its file and project from the one
+  // whole-file candidate whose file ends in it (borrowed() in mutationList), and is read by the rule
+  // above. A candidate with no file is the inventory's omission and stays a catch (#805). A held row
+  // whose cell names no candidate is out of scope: its project is empty, and the mutation agent does
+  // not report the project it ran, so nothing says its run was that file. It stays a caught row,
+  // which the verdict answers by accepting it.
   const cell = (m.test || '').trim()
   // A Node companion is run as `node <file>`, so its run is its file whatever project the inventory's
   // cell names (#938): on #796 a stated row on overnight_tests.mjs took the directory as its project.
@@ -1007,7 +1044,8 @@ const mutationRow = (n, m, i, got) => {
   // known by the .mjs file its cell names; that makes it only a caught row, which the verdict still
   // has to answer (#1069), since only a candidate's file, not the author's cell, shows the run was it.
   const nodeFile = /\.mjs$/.test(m.file || '') || /\.mjs$/.test((/^[^\s(]*/.exec(cell) || [''])[0])
-  const wholeFile = !!m.file && (m.project === m.file || nodeFile) && (cell === m.file || cell === m.file.split('/').pop())
+  const ownPy = !m.file && (m.kind === 'stated' || m.kind === 'nominated') && m.project === cell && /^\S+\/\S+\.py$/.test(cell)
+  const wholeFile = ownPy || (!!m.file && (m.project === m.file || nodeFile) && (cell === m.file || cell === m.file.split('/').pop()))
   // A nomination's cls, from a cell 'test_x (pkg.Class)', is that class when unittest printed the
   // failing name, and nothing when xUnit did (#808); see nominated().
   const nameIn = (f) => (m.cls && UNITTEST_PRINTED.test(f) ? `${m.cls}.${m.test}` : m.test)

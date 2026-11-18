@@ -86,6 +86,7 @@ def plan(**changes) -> dict:
     entry = {
         "hidden_polls": 1,                       # list-tasks calls before the new task is listed
         "decoy": True,                           # a task of no deployment of ours, listed first
+        "decoy_stays": False,                    # True: the decoy still runs once the rollout settles (#975)
         "health": [None, ["initial", "Elb.RegistrationInProgress"], ["initial", "Elb.InitialHealthChecking"],
                    ["healthy", None]],
         "stop_at_sample": None,                  # a stop for health after this many samples
@@ -96,6 +97,7 @@ def plan(**changes) -> dict:
         "pull_started": 5000, "pull_stopped": 20000, "container_started": 21500, "started": 22000,
         "log": [[f"Now listening on: http://[::]:8080 {FOREIGN_FORMS}", 900], ["Registry revision 42 (\"etag\") is live with 1 app(s).", 1500],
                 ["health", 503, 2000], ["health", 200, 3000], ["health", 200, 3100]],
+        "stream": True,                          # False: the task's log stream does not exist (#921 Q209)
         "redirect_ms": 640.5,
         "bad_created_at": False,                 # the new task's createdAt is no instant the script reads
         "created_at": None,                      # the new task's createdAt as given, in place of the worked one
@@ -106,16 +108,23 @@ def plan(**changes) -> dict:
     return entry
 
 
-def world(plans=None, **changes) -> dict:
+def world(plans=None, second_task=None, **changes) -> dict:
+    """second_task seeds a second running task of the settled deployment, on the digest unless its
+    dict says otherwise (#975): {"hidden_until": 2} keeps it out of preflight's list-tasks, the first,
+    so that it appears between preflight and restart 1."""
     plans = plans if plans is not None else [plan() for _ in range(10)]
     first = 1
+    tasks = {str(first): {"n": first, "startedBy": "ecs-svc/1000000000000000001", "desired": "RUNNING",
+                          "last": "RUNNING", "created_ms": 0, "plan": None, "digest": DIGEST}}
+    if second_task is not None:
+        tasks["2"] = dict(tasks[str(first)], n=2, **second_task)
     document = {
         "credentials": True,
         "td_image": IMAGE,
+        "desired_count": 1,                      # describe-services' desiredCount; None leaves it out
         "deployments": [{"id": "ecs-svc/1000000000000000001", "status": "PRIMARY", "rolloutState": "COMPLETED",
                          "taskDefinition": TD_ARN}],
-        "tasks": {str(first): {"n": first, "startedBy": "ecs-svc/1000000000000000001", "desired": "RUNNING",
-                               "last": "RUNNING", "created_ms": 0, "plan": None, "digest": DIGEST}},
+        "tasks": tasks,
         "plans": plans,
         "restart": 0,
         "current": str(first),
@@ -231,6 +240,9 @@ def log_events(case: pathlib.Path, document: dict, task: dict) -> list:
         if item[0] == "raw":
             # A line as given (#976): a "ts" it names stands, and "_event_timestamp" is CloudWatch's.
             lines.append((dict(item[1]), item[2]))
+        elif item[0] == "text":
+            # A message sent as given, no ts added: what is not the gateway's JSON line (#921 Q209).
+            lines.append((item[1], item[2]))
         elif item[0] == "health":
             lines.append(({"ts": None, "level": "info", "msg": "Request", "route": "health", "status": item[1],
                            "duration_ms": 1.2}, item[2]))
@@ -245,6 +257,9 @@ def log_events(case: pathlib.Path, document: dict, task: dict) -> list:
     events = []
     for line, at in sorted(lines, key=lambda pair: pair[1]):
         stamp = zero + at * 1_000_000
+        if isinstance(line, str):
+            events.append({"timestamp": stamp // 1_000_000 + 200, "message": line, "ingestionTime": stamp // 1_000_000 + 900})
+            continue
         if line.get("ts") is None:
             line["ts"] = iso(stamp, 7)
         timestamp = line.pop("_event_timestamp", stamp // 1_000_000 + 200)
@@ -279,6 +294,8 @@ def answer_aws(case: pathlib.Path, argv: list) -> int:
         out = {"services": [{"serviceName": SERVICE, "taskDefinition": TD_ARN, "platformVersion": "LATEST",
                              "loadBalancers": [{"targetGroupArn": TG_ARN, "containerName": GATEWAY, "containerPort": 8080}],
                              "deployments": document["deployments"]}]}
+        if document["desired_count"] is not None:
+            out["services"][0]["desiredCount"] = document["desired_count"]
     elif shape == "ecs describe-task-definition" and options.get("task-definition") == TD_ARN:
         out = {"taskDefinition": {"taskDefinitionArn": TD_ARN, "containerDefinitions": [
             {"name": GATEWAY, "image": document["td_image"],
@@ -300,7 +317,7 @@ def answer_aws(case: pathlib.Path, argv: list) -> int:
         document["current"] = document["new"]
         document["deployments"] = [dict(document["deployments"][0], rolloutState="COMPLETED")]
         for task in document["tasks"].values():
-            if task.get("decoy"):
+            if task.get("decoy") and not entry["decoy_stays"]:
                 task["desired"], task["last"] = "STOPPED", "STOPPED"
         save(case, document)
         return 0
@@ -381,7 +398,7 @@ def answer_aws(case: pathlib.Path, argv: list) -> int:
         stream = options.get("log-stream-name", "")
         match = re.fullmatch(rf"{re.escape(GATEWAY)}/{re.escape(GATEWAY)}/([0-9a-f]{{32}})", stream)
         task = document["tasks"].get(str(int(match[1], 16))) if match else None
-        if task is None:
+        if task is None or (task.get("plan") is not None and not document["plans"][task["plan"]]["stream"]):
             return fail("ResourceNotFoundException")
         if options.get("next-token") == "f/end":
             out = {"events": [], "nextForwardToken": "f/end", "nextBackwardToken": "b/0"}

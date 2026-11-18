@@ -42,6 +42,10 @@
     },
     "ecsCluster": { "$ref": "#/$defs/awsName" },
     "ecsService": { "$ref": "#/$defs/awsName" },
+    "ecsBastionService": {
+      "$ref": "#/$defs/awsName",
+      "description": "The bastion service's name. Present only when the cell declares a bastion. The tunnel lists its tasks for its hop."
+    },
     "ecrGateway": {
       "$ref": "#/$defs/repositoryUri",
       "description": "The gateway image repository, with immutable tags."

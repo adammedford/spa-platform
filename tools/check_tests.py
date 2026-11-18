@@ -739,8 +739,8 @@ class FullModeTests(CheckTestCase):
             "the smoke test": ({"smoke": "Debug"}, "src/App/App.cs", "check: fail: the smoke test failed.",
                                FULL_PYTHON_CHECKS + BUILD + TESTS + SMOKE),
             "the gateway image": ({"image": "*"}, "src/App/App.cs",
-                                  "check: fail: the gateway image failed to build or to start as its "
-                                  "runtime user.", FULL_PYTHON_CHECKS + BUILD + TESTS + SMOKE + IMAGE),
+                                  "check: fail: the image check failed; see image-check's diagnostic "
+                                  "above.", FULL_PYTHON_CHECKS + BUILD + TESTS + SMOKE + IMAGE),
             "terraform test": ({"terraform": "test"}, "infra/roots/a/main.tf",
                                "check: fail: terraform test failed in infra/modules/m.",
                                FULL_PYTHON_CHECKS + terraform_checks() + TERRAFORM_TESTS[:1]),

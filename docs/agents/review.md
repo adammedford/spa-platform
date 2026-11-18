@@ -50,6 +50,11 @@ claims you verified and how. When it closes a change request whose decision comm
 
 A commit that changes a steering document carries an `Authority:` trailer, which `.github/steering.py` has already held to an issue or a comment that exists. Whether what it cites decides the change is the Spec axis's question (ADR-0023 decision 3): read the cited ticket's acceptance criteria, or the cited comment, and report a steering change that neither decides.
 
+**Review checklist for steering text.** Compare the applied text to the whole quoted replacement
+and its applicable approval. For an insertion or removal, compare the neighboring paragraphs as
+well. Use current main to check that the quoted context still fits. Record a missing or stale
+quotation as a Spec finding and request the complete current quotation and approval.
+
 ## CI has already run
 
 Every open pull request here carries a green `Documents`, and a green `Build and test` and
@@ -100,10 +105,15 @@ claims, and the diff stayed in its owner's paths. Record the rest as an `Outstan
 merge body, which `docs/agents/landing-work.md` requires anyway, and end the review comment's
 findings with each carried finding that names no open ticket, in the `## Follow-ups` table the
 review-queue workflow writes, whose `Fails on` cell names the input or state on which the finding
-gives the wrong result; a finding with no such input is a note under its axis, not a row, and files
-nothing. The follow-ups pass (`docs/agents/landing-work.md` -> "The morning's launches") files each
-row as an issue of its own, from the latest record on each pull request into `main` that is open,
-merged since its checkpoint or recorded since it (#292, #514, #1082); a row still unfiled when
+gives the wrong result. A row is for a finding that leaves the gateway, or a proof of it, wrong
+(`AGENTS.md` → "Rules for every task"): its `Fails on` shows a gateway behaviour that is wrong, a
+test, suite, script or sitting step that would pass or lose its evidence while the gateway is wrong,
+or process tooling that would land or pass work it should refuse. A finding with no such input, or
+whose input shows none of the three, is a note under its axis, not a row, and files nothing; the
+wording of a document, and a defect in tooling that puts no proof at risk, are notes. The follow-ups
+pass (`docs/agents/landing-work.md` -> "The morning's launches") files each row as an issue of its
+own, from the latest record on each pull request into `main` that is open, merged since its
+checkpoint or recorded since it (#292, #514, #1082); a row still unfiled when
 `tools/land.sh` merges is named by its `land:` warning (#573), and the next follow-ups pass files
 it, or it is filed by hand first with the finding as the title and the body
 `node .claude/workflows/follow_up_body.mjs <pr> <record-url> <record.md> <row>` prints, whose
