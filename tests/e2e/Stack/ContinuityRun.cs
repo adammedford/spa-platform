@@ -72,6 +72,7 @@ public sealed class ContinuityRun(ContinuityEvidence evidence, ContinuityLog log
             }
 
             await WriteBesideAsync(stopped, () => evidence.WriteAsync(row, result, attempts, wall.Elapsed, CancellationToken.None, ShownBy(stopped)));
+            FailUnlessPassedOn(stopped, result);
             throw;
         }
 
@@ -106,6 +107,7 @@ public sealed class ContinuityRun(ContinuityEvidence evidence, ContinuityLog log
             }
 
             await WriteBesideAsync(stopped, () => evidence.WriteAsync(row, result, recorded is null ? [] : [recorded], wall.Elapsed, CancellationToken.None, ShownBy(stopped)));
+            FailUnlessPassedOn(stopped, result);
             throw;
         }
 
@@ -125,12 +127,27 @@ public sealed class ContinuityRun(ContinuityEvidence evidence, ContinuityLog log
     };
 
     /// <summary>
-    /// A stopped row's reason: the failure's kind, and for a hold whose handler failed, the kind of what
-    /// the handler met (#1029), which the hold's own kind would otherwise hide.
+    /// A stopped row's reason: the failure's kind and its message (#1194), the message through
+    /// <see cref="Redacted.Text"/> so no URL's query and no JWT reaches the evidence file or the output.
+    /// A hold whose handler failed names the kind of what the handler met in its own message (#1029).
     /// </summary>
-    private static string StoppedWith(Exception stopped) => stopped is HoldFailedException failed
-        ? $"the driver stopped with {nameof(HoldFailedException)}: the hold's handler met {failed.Failure}"
-        : $"the driver stopped with {stopped.GetType().Name}";
+    private static string StoppedWith(Exception stopped) =>
+        $"the driver stopped with {stopped.GetType().Name}: {Redacted.Text(stopped.Message, [])}";
+
+    /// <summary>
+    /// After the evidence is written, a row whose driver stopped fails as a judged not-proved row does,
+    /// through <see cref="RowResult.Assert"/>, so the test's message is the verdict line the file holds
+    /// (<c>not proved: the driver stopped with …</c>, Q138, #1194) and carries no inner exception,
+    /// whose message xUnit would print unredacted. A cancellation and a precondition refusal
+    /// (<see cref="RowRefusedException"/>) are passed on as they came, the refusal keeping its own line.
+    /// </summary>
+    private static void FailUnlessPassedOn(Exception stopped, RowResult result)
+    {
+        if (stopped is not (OperationCanceledException or RowRefusedException))
+        {
+            result.Assert();
+        }
+    }
 
     /// <summary>
     /// The evidence write after the row has already failed: a write that fails too is reported beside the
@@ -155,6 +172,14 @@ public sealed class ContinuityRun(ContinuityEvidence evidence, ContinuityLog log
         return await log.ReadAsync(control.At - ClockMargin, last + ContinuityBounds.LogDelivery, ct);
     }
 }
+
+/// <summary>
+/// A row's precondition refusal, which spends no attempt and stops nothing: row 4's lever when the
+/// tunnel's task is not one of the two RUNNING tasks (Q145). <see cref="ContinuityRun"/> writes its
+/// evidence as not proved and rethrows it as it came, so the test's output keeps the refusal's own line,
+/// the one wiz's D4 posts (#1194); any other failure of the driver is reported <c>not proved:</c>.
+/// </summary>
+public sealed class RowRefusedException(string message) : InvalidOperationException(message);
 
 /// <summary>
 /// The raw client's requests as a continuity row sends them (Q137): each with a fresh sampled
@@ -298,7 +323,7 @@ public sealed class ContinuityEcs(Cell cell, ICommandRunner runner)
         string[] running = [.. (await ListedAsync(ct)).Where(task => task.LastStatus == "RUNNING").Select(task => task.Id)];
         if (string.IsNullOrEmpty(tunnelTask) || running.Length != 2 || running.Count(id => id == tunnelTask) != 1)
         {
-            throw new InvalidOperationException(
+            throw new RowRefusedException(
                 $"row 4 stops nothing: {TunnelTaskVariable} must name exactly one of the service's two RUNNING tasks, and it is '{tunnelTask}' with {running.Length} running ({string.Join(", ", running)}).");
         }
 
