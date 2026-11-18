@@ -21,6 +21,9 @@ locals {
   gateway_container_name  = "gateway"
   mock_api_container_name = "mock-api"
 
+  # The task volume the gateway mounts at /tmp (#787), named once for the volume and its mount point.
+  gateway_tmp_volume_name = "gateway-tmp"
+
   # The bastion (#1167). The service is named inside the cluster, so "bastion" is this cell's alone;
   # the contract's ecsBastionService carries it. The family and the role (iam.tf) are account-wide,
   # so each carries an underscore, which the cell's own rule (variables.tf) never admits: no other
@@ -179,11 +182,12 @@ locals {
     image     = var.gateway_image
     essential = true
 
-    # Writable, because that is the third condition the Session Manager route comes with, beside
-    # Exec on the service and the four ssmmessages permissions on the task role: "Its root
-    # filesystem must be writable" (docs/plan/05-infrastructure-and-cost.md -> Workstation access).
-    # Explicit rather than left to the default, because task 1.6b's tunnel depends on it.
-    readonlyRootFilesystem = false
+    # Read-only (#787, P2-9). The writable root was ECS Exec's condition while this task was the
+    # tunnel's hop; the hop is the bastion's task now (#1167), Exec is off on this service and no
+    # session agent writes here. The one writable path is /tmp, the task volume below (#780, answer
+    # 3: "the safe contract and not a measured one"). Explicit rather than left to the default,
+    # which is writable.
+    readonlyRootFilesystem = true
 
     # hostPort is the value ECS fills in under awsvpc, where it must equal containerPort, spelled out
     # with the three empty lists below so the definition is the one ECS reads back (#1006). ECS's
@@ -197,9 +201,21 @@ locals {
       protocol      = "tcp"
     }]
 
-    # ECS's values when none is given (#1006): the task has no volumes, no other container's volumes
-    # and no namespaced kernel parameters.
-    mountPoints    = []
+    # The task's one volume at /tmp, writable (#787; the task definition's volume block below). readOnly
+    # is spelled out as the false ECS reads back, as #1006 spells out the other values ECS fills in;
+    # the provider's comparison does not fill it in. The gateway's user, $APP_UID, owns nothing in it:
+    # ECS gives a task volume "0755 and the owner as root" unless the image says otherwise
+    # (https://docs.aws.amazon.com/AmazonECS/latest/developerguide/bind-mounts.html), and
+    # src/Gateway/Dockerfile does not. That the process can write there is not shown by any test
+    # here; it is seen only on a running task (#787, "Not shown by this ticket").
+    mountPoints = [{
+      sourceVolume  = local.gateway_tmp_volume_name
+      containerPath = "/tmp"
+      readOnly      = false
+    }]
+
+    # ECS's values when none is given (#1006): no other container's volumes and no namespaced kernel
+    # parameters.
     systemControls = []
     volumesFrom    = []
 
@@ -210,8 +226,9 @@ locals {
     # 8080 by default, above 1024, so it needs no NET_BIND_SERVICE either. initProcessEnabled runs
     # "an init process inside the container that forwards signals and reaps processes" (--init), so
     # dotnet is no longer PID 1: a zombie is reaped, and SIGTERM still reaches the process (see
-    # stopTimeout below). ECS Exec, on while task 1.6b's tunnel needs it, also recommends the init
-    # process, to clean up the SSM agent's orphaned and zombie child processes.
+    # stopTimeout below). ECS Exec also recommends the init process, to clean up the SSM agent's
+    # orphaned and zombie child processes; Exec is off here since #787, and the bastion, where it is
+    # on, shares this value.
     # https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task_definition_parameters.html
     # https://docs.aws.amazon.com/AmazonECS/latest/developerguide/ecs-exec.html
     linuxParameters = local.container_linux_parameters
@@ -265,15 +282,18 @@ locals {
     image     = var.mock_api_image
     essential = true
 
-    # The same reason as the gateway's: one task, one Session Manager agent, one writable root.
-    readonlyRootFilesystem = false
+    # Read-only, as the gateway's is (#787), and with no writable path at all: #780's third answer
+    # names none for the mock API, and tools/image-check.sh starts its image on a read-only root with
+    # no tmpfs (#1169).
+    readonlyRootFilesystem = true
 
     # The gateway's hardening (#786), for the same reasons: a non-root user (USER $APP_UID in
     # fixtures/MockApi/Dockerfile), listeners on 5080 and 5081, above 1024, and an exec-form
     # ENTRYPOINT, so the init forwards SIGTERM to dotnet.
     linuxParameters = local.container_linux_parameters
 
-    # ECS's values when none is given, spelled out as on the gateway (#1006).
+    # ECS's values when none is given, spelled out as on the gateway (#1006). No mount point: the
+    # gateway's /tmp volume is the gateway's alone.
     mountPoints    = []
     systemControls = []
     volumesFrom    = []
@@ -334,6 +354,14 @@ resource "aws_ecs_task_definition" "gateway" {
 
   container_definitions = jsonencode(local.containers)
 
+  # The gateway's /tmp (#787, #780 answer 3). A volume with a name and no other setting is a bind
+  # mount on the task's own ephemeral storage, which Fargate provides and removes with the task: no
+  # host path, no Docker volume, no EFS or FSx share, and nothing outlives the task.
+  # https://docs.aws.amazon.com/AmazonECS/latest/developerguide/bind-mounts.html
+  volume {
+    name = local.gateway_tmp_volume_name
+  }
+
   tags = { Name = local.name_prefix }
 
   lifecycle {
@@ -367,11 +395,12 @@ resource "aws_ecs_service" "gateway" {
   launch_type      = "FARGATE"
   platform_version = "LATEST"
 
-  # On until #787. The tunnel's hop is the bastion's task (#1167; aws_ecs_service.bastion below), and
-  # tools/scripts/tunnel.sh forwards through no task of this service. Exec stays on here, with the
-  # task role's four ssmmessages permissions and the writable root, only until #787 turns all three
-  # off with the bastion's route already in place.
-  enable_execute_command = true
+  # Off (#787). The tunnel's hop is the bastion's task (#1167; aws_ecs_service.bastion below), and
+  # tools/scripts/tunnel.sh forwards through no task of this service. With Exec off, the task role
+  # holds no ssmmessages permission (iam.tf) and both roots are read-only: nothing in the shipping
+  # task is reachable for an incident, which uses the logs, /readyz and the bastion's network path
+  # (#780, answer 2).
+  enable_execute_command = false
 
   # Continuity (#347). One task always serves during a roll: the replacement is started, and healthy
   # in the target group, before a task is deregistered and drained. These are ECS's defaults for a
@@ -452,7 +481,7 @@ locals {
   # Writable root: ECS Exec does not support a read-only one, "making the root file system read-only
   # using the readonlyRootFilesystem task definition parameter, or any other method, isn't supported"
   # (https://docs.aws.amazon.com/AmazonECS/latest/developerguide/ecs-exec.html). P2-9's read-only
-  # root is the shipping task definition's, not the bastion's (#1167).
+  # root is the shipping task definition's, set there by #787, not the bastion's (#1167).
   #
   # No portMappings: nothing connects to the container, which only carries the session; the image's
   # own listener on 8080 is in no target group. No logConfiguration, and so no execution role: the
