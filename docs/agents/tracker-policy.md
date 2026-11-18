@@ -141,17 +141,16 @@ ADR-0020 records the decision and its reasons. What it adds to `docs/agents/issu
   change request.
 
   ```markdown
-  **Owner:** integrator
   **Touches:** <steering paths>
 
   ## What to build
 
   <Why the change is needed and the exact destination in each file.>
 
-  ## Proposed steering changes
+  ### Proposed steering changes
 
   <For each edit, label the path and section and quote the complete text as it will read.
-  For an insertion or removal, quote the neighboring paragraphs. Quote a table row with its
+  For an insertion or removal, quote the neighbouring paragraphs. Quote a table row with its
   header, a non-prose edit with the smallest enclosing object, or a new file in full.>
 
   ## Acceptance criteria
