@@ -50,6 +50,14 @@ class ClassifierTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertEqual(1, self.classify("build", [path]))
 
+    def test_the_analyzer_config_build_companion_triggers_the_build(self):
+        # The companion runs dotnet build, which only the build job can do, so a change to it alone
+        # must still run that job (#1369); a near name must not.
+        self.assertEqual(0, self.classify("build", ["tools/analyzer_configs_build_tests.py"]))
+        self.assertEqual(1, self.classify("terraform", ["tools/analyzer_configs_build_tests.py"]))
+        self.assertEqual(1, self.classify("build", ["tools/analyzer_configs_build_tests.py.orig"]))
+        self.assertEqual(1, self.classify("build", ["docs/tools/analyzer_configs_build_tests.py"]))
+
     def test_what_the_gateway_image_is_built_from_triggers_the_build(self):
         # The build half builds the gateway's image too, and .dockerignore decides its context (#210).
         self.assertEqual(0, self.classify("build", [".dockerignore"]))
