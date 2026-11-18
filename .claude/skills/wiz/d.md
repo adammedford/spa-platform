@@ -326,7 +326,8 @@ shown dotnet test --project tests/e2e -- --filter-method "Gateway.E2ETests.Deplo
 ```
 
 The selector is the class summary's, read from the tree before D0; a summary that names another
-form wins over the line above. The report flag and its exit 5 are as in C2. Each row test is the
+form wins over the line above. The report flag and its exit 5 are as in C2, except in D6, whose
+row runs through the suite's console runner as its bullet says. Each row test is the
 driver and the observer together (#358): it sends the requests, matches each to its task by the
 client trace id in the request line's stream, pulls the row's own lever, and writes one JSON
 evidence file under `SPA_E2E_EVIDENCE`, holding no cookie, token or key; a rerun of a row reads
@@ -346,29 +347,36 @@ mutation the summary does not name stops the sitting:
   task is RUNNING, and use the id it prints; with none, say so when asking: the row then refuses and
   stops nothing. Its evidence file then records not proved and names only the exception, so post it as
   not proved with the refusal's line from the test's output. A refusal spends no attempt.
-- **D6 (row 6, F1; #348 Q29, #1203).** The class drives for up to 40 minutes while the operator
+- **D6 (row 6, F1; #348 Q29, #1203, #1216).** The class drives for up to 40 minutes while the operator
   deploys, and `tools/wiz_d6.sh` (#1204) is the lever: it waits for the driver's line starting
   `row6: launch deploy.sh now`, runs `deploy.sh` on the same commit as C1 runs it, and on
   `deploy.sh`'s pass line stops `tunnel.sh` and starts it again through a new task, as D2 does by
   hand. The launch waits for that line, written `ContinuityBounds.Row6LaunchAfterFirstSignIn` after
   the first sign-in, because a session's refresh must fall inside the deployment interval, and on
   2026-11-14 a deployment launched straight after the test started ended before any session
-  refreshed, twice. Ask for `deploy.sh`'s confirm on launch, C1's shape (the one replacement is the
-  task definition), before the one call that starts both, in the background, with no tunnel started
-  by hand while it runs:
+  refreshed, twice. The driver writes the line to its standard output, which `dotnet test`'s
+  testing platform keeps from the terminal and from any file, so this row alone runs through the
+  suite's console runner, the `ConsoleRunner.Run` branch of `tests/e2e/Program.cs`, which passes
+  it through. Ask for `deploy.sh`'s confirm on launch, C1's shape (the one replacement is the
+  task definition), before the one call that starts both, in the background, with no tunnel
+  started by hand while it runs:
 
   ```bash
-  shown dotnet test --project tests/e2e -- --filter-method "Gateway.E2ETests.Deployed.ContinuityTests.Row6_*" \
-    --report-xunit-junit --results-directory "$E/results-row6" > "$E/row6-test.out" &
+  mkdir -p "$E/results-row6"
+  shown dotnet run --project tests/e2e -- -method "Gateway.E2ETests.Deployed.ContinuityTests.Row6_*" \
+    -result-junit "$E/results-row6/row6.junit.xml" > "$E/row6-test.out" &
   tools/wiz_d6.sh --test-pid $! --test-output "$E/row6-test.out" --record "$R"; echo "wiz_d6 exit=$?"; wait
   ```
 
   The lever runs bare, not under `shown`: it writes `deploy.sh`'s command and output and its own
-  `wiz_d6:` lines to the record itself, and prints `deploy.sh`'s output redacted. Under `dotnet test`
-  the driver's line never reaches `"$E/row6-test.out"`, since the testing platform keeps a test's
-  standard output from it, so until #1216 decides how the row runs the lever waits out its 600 s
-  and exits 1 having launched nothing: the row then runs on with no deployment, and is posted as
-  what it reports. The lever exits 0 only once the restarted tunnel has named its task; without
+  `wiz_d6:` lines to the record itself, and prints `deploy.sh`'s output redacted. The console
+  runner's switches are its own: `-method` takes the selector with its trailing `*`, and
+  `-result-junit` names the report, the one `*.junit.xml` under `results-row6/` that
+  `tools/wiz_row_post.py` reads. Its exit codes are not the testing platform's, so C2's exit 5
+  does not apply, and the post takes the row's verdict from the test's verdict line and the junit,
+  never from `exit=`. When the lever exits 1 having launched nothing (the test ended, or the line
+  did not come within its 600 s), the row runs on with no deployment and is posted as what it
+  reports. The lever exits 0 only once the restarted tunnel has named its task; without
   `deploy.sh`'s pass line it moves no tunnel and exits non-zero, even when `deploy.sh` exited 0
   (#1284). After the lever's exit 0, run `shown tools/scripts/verify-tunnel.sh /healthz` and
   note the time it passed; from the lever's `tunnel stopped at` time to that one is the gap, recorded
