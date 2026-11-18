@@ -27,6 +27,10 @@ class ClassifierTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertEqual(0, self.classify("build", [path]))
 
+    def test_the_reference_client_triggers_the_build(self):
+        # The browser client's tests are in fixtures/Fixtures.Tests, which the build half runs (#1338).
+        self.assertEqual(0, self.classify("build", ["client/bff-client.js"]))
+
     def test_the_analyzer_configs_trigger_the_build(self):
         # The build enforces every analyzer severity, so a change to the files that set them is proved
         # by building: a ramp batch's promotion deletes pending lines from .globalconfig alone (#606).
