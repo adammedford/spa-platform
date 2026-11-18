@@ -11,8 +11,8 @@ name carries `var.cell`.
 | `network.tf` | 1.2 | The VPC, two public subnets in two zones, the internet gateway, one route table, the two security groups, and the VPC's default security group, adopted with no rule |
 | `storage.tf` | 1.5, #784 | The platform bucket and its policy, and the two image repositories, each scanning on push at the basic level with a lifecycle policy that keeps the five most recent tagged images, so `rollback.sh`'s previous digest survives |
 | `alb.tf` | 1.3 | The internal load balancer, its one HTTPS listener, its one target group, and the lookup of the imported wildcard certificate |
-| `ecs.tf` | 1.4a | The ECS cluster, the log group, the task environment, the two container definitions, the task definition and the service |
-| `iam.tf` | 1.4a | The two roles: the ECS agent's execution role and the gateway process's task role |
+| `ecs.tf` | 1.4a, #1168 | The ECS cluster, the log group, the task environment, the two container definitions, the task definition and the service; behind `bastion`, the bastion's task definition and service |
+| `iam.tf` | 1.4a, #1168 | The two roles: the ECS agent's execution role and the gateway process's task role; behind `bastion`, the bastion task's role |
 | `sessions.tf` | #338, #417 | The DynamoDB session table, planned only under `session_store = "dynamodb"` |
 
 `tests/module.tftest.hcl` and `tests/network.tftest.hcl` check it against a mock
@@ -244,6 +244,23 @@ whatever its own policy or a resource policy allows it. The bucket policy is the
 one resource policy, and a test holds it to its four refusals, so an `Allow` there, to
 the task role or to anyone, fails as well. Together these runs are P-03.
 
+## The bastion, the tunnel's hop
+
+Behind `bastion`, off by default (#1167, #1168): a second service in the cluster,
+`bastion`, running one task of `bastion_image`, the sample image by digest, with ECS
+Exec on, a writable root and the gateway's capability settings, in the gateway's
+subnets and the task security group, and in no target group. Its task role, separate
+from the gateway's, holds the four `ssmmessages` permissions and nothing else, and
+trusts ECS tasks in this account through the cell's shared trust document; the task
+names no execution role, since it pulls a public image and writes no log.
+`tools/scripts/tunnel.sh` lists the service's running tasks and forwards through the
+bastion container. Four declarations make it, each with exactly
+`count = var.bastion ? 1 : 0`, and no new type or rule: P-01 holds the default inputs
+at one ECS service. The task definition's family and the role carry an underscore,
+which no cell name holds, so neither can be another cell's. On and applied, the task
+runs, and is billed, until an apply turns it off. ECS Exec stays on for the gateway's
+service, with its three conditions, until #787.
+
 ## Plan policy
 
 Plan row 1.9's checks read the configuration against a mock provider, because CI holds
@@ -256,12 +273,15 @@ account.
   numbers, and fails on a NAT gateway, an EC2 instance or a database whatever the
   allowlist says, save the gated session table and the two-task cell's gated NAT
   gateway (#583), which it holds at no instance on the default inputs, the table at
-  one under `dynamodb` and the gateway at one under `multi_task`. This module's own
-  type allowlist, in `tests/module.tftest.hcl`, fails on an instance, a bastion or any
-  database type but the session table, and names the session table and the two-task
-  cell's three egress types, so it cannot tell their gated forms from ungated ones:
-  P-01 is what holds them to their gates.
-- **P-03, the task role policy,** is the task role's runs above.
+  one under `dynamodb` and the gateway at one under `multi_task`. It admits the
+  bastion's service in the same gated form, at no instance on the default inputs and
+  one under `bastion` (#1167). This module's own type allowlist, in
+  `tests/module.tftest.hcl`, fails on an instance or any database type but the
+  session table, and names the session table and the two-task cell's three egress
+  types, so it cannot tell their gated forms from ungated ones: P-01 is what holds
+  them to their gates. The bastion adds no type to it.
+- **P-03, the task role policy,** is the task role's runs above. The bastion's role
+  has runs of its own (#1167).
 - **The two security groups** are `tests/network.tftest.hcl`: exactly four rules, each
   admitting one port between the two groups, and only the task's 443 out naming an
   address range.

@@ -76,6 +76,11 @@ output "ecs_service" {
   value       = aws_ecs_service.gateway.name
 }
 
+output "ecs_bastion_service" {
+  description = "The bastion service, as the contract's optional `ecsBastionService`: null when bastion is false, which leaves the field out of the outputs document. tunnel.sh lists its tasks for the tunnel's hop (#1167)."
+  value       = one(aws_ecs_service.bastion[*].name)
+}
+
 output "log_group" {
   description = "The task's log group, as the contract's `logGroup`. The deployed tests read a run's gateway log from it."
   value       = aws_cloudwatch_log_group.gateway.name

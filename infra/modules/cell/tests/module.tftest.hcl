@@ -206,6 +206,15 @@ override_resource {
   values          = { arn = "arn:aws:iam::111122223333:role/spa-platform-poc-task-execution" }
 }
 
+# The bastion's role (#1167), a third ARN, so the bastion's task definition can be checked to carry
+# its own role and never the gateway's. On the default inputs the instance does not exist, and an
+# override of an instance the plan does not hold changes nothing.
+override_resource {
+  target          = aws_iam_role.bastion_task[0]
+  override_during = plan
+  values          = { arn = "arn:aws:iam::111122223333:role/spa-platform-poc-bastion_task" }
+}
+
 variables {
   cell                    = "poc"
   vpc_cidr                = "10.20.0.0/16"
@@ -238,12 +247,14 @@ variables {
 # made to say what the new type is for. The platform root's tests hold the rest of P-01 (plan row
 # 1.9): how many of each type the plan holds, and that this module is the root's whole plan.
 #
-# It holds one part of plan row 1.2's "no NAT, bastion or database" and test P-01's "No NAT
-# gateway, database or EC2 instance" statically rather than only against a deployed account: no
-# instance, bastion or database type can be declared. The two gated exceptions, the session table
-# and the two-task cell's NAT gateway, are named below with the input that creates each, so this set
-# cannot tell a gated one from an ungated one; the platform root's tripwire holds both to their
-# gates, at no instance on the default inputs.
+# It holds one part of test P-01's "No NAT gateway, database or EC2 instance" statically rather than
+# only against a deployed account: no instance or database type can be declared. The two gated
+# exceptions, the session table and the two-task cell's NAT gateway, are named below with the input
+# that creates each, so this set cannot tell a gated one from an ungated one; the platform root's
+# tripwire holds both to their gates, at no instance on the default inputs. The bastion (#1167) adds
+# no type: it is a second ECS service, task definition, role and role policy behind the bastion
+# input, which P-01 admits in one gated form and holds at no instance on the default inputs, where
+# plan row 1.2's "no NAT, bastion or database" holds (#1167, the decision's reading of row 1.2).
 run "the_module_declares_only_the_cell_s_intended_resource_types" {
   command = plan
 
@@ -299,7 +310,7 @@ run "the_module_declares_only_the_cell_s_intended_resource_types" {
       "aws_nat_gateway",
       "aws_vpc_endpoint",
     ])
-    error_message = "The cell module declares a resource type this allowlist does not name, or no longer declares one it does. Plan row 1.2 forbids a bastion, and a NAT gateway and a database but the two gated ones (#583, issue-338); the platform root's tests count the rest (P-01)."
+    error_message = "The cell module declares a resource type this allowlist does not name, or no longer declares one it does. A new type is a new kind of thing in the cell: no instance, and no NAT gateway or database but the two gated ones (#583, issue-338). The bastion is types already here, gated (#1167), and the platform root's tests count every type (P-01)."
   }
 
   # The source read above, and in tests/network.tftest.hcl, is the whole module only while it has no
@@ -1348,8 +1359,8 @@ run "the_task_role_holds_no_unrecognised_statement" {
         "(?m)^resource \"aws_iam_role_policy\" \"([^\"]+)\"",
         join("\n", [for f in fileset(path.module, "*.tf") : file("${path.module}/${f}")])
       ) : m[0]
-    ]) == toset(["task", "task_execution"])
-    error_message = "Each role carries exactly one inline policy, and they are the two documents this file reads. A third aws_iam_role_policy widens a role without changing either document, so every assertion above would still pass."
+    ]) == toset(["task", "task_execution", "bastion_task"])
+    error_message = "Each role carries exactly one inline policy, and they are the documents this file reads: the task role's and the execution role's above, and the bastion role's, which its own run reads (#1167). A fourth aws_iam_role_policy widens a role without changing any of them, so every assertion here would still pass."
   }
 
   assert {
@@ -2708,5 +2719,369 @@ run "the_multi_task_refusal_names_both_inputs" {
       strcontains(m[0], "multi_task") && strcontains(m[0], "session_store")
     ])
     error_message = "The refusal of multi_task = true without the durable store names both multi_task and session_store (#347 Q12)."
+  }
+}
+
+# --- The bastion, the tunnel's hop (#1167, #1168) ---------------------------------------------------
+#
+# Four declarations behind the bastion input, off by default: aws_ecs_service.bastion,
+# aws_ecs_task_definition.bastion, aws_iam_role.bastion_task and aws_iam_role_policy.bastion_task.
+# The platform root's P-01 runs count them; these hold what each is. The image below is the sample
+# image's form, a digest reference; the digest is a placeholder.
+
+run "on_the_default_inputs_the_module_declares_no_bastion" {
+  command = plan
+
+  assert {
+    condition = (
+      length(aws_ecs_service.bastion) == 0
+      && length(aws_ecs_task_definition.bastion) == 0
+      && length(aws_iam_role.bastion_task) == 0
+      && length(aws_iam_role_policy.bastion_task) == 0
+    )
+    error_message = "With bastion at its default, false, the module plans none of the bastion's four resources: Phase 1's cell has no bastion (#1167)."
+  }
+
+  assert {
+    condition     = output.ecs_bastion_service == null
+    error_message = "With no bastion the ecs_bastion_service output is null, which Terraform leaves out of terraform output -json, so the outputs document has no ecsBastionService (#1167)."
+  }
+}
+
+# P-03's form for the bastion's role (#1167, the decision's reading of P-03): its whole grant is the
+# four ssmmessages actions. The policy is written out in the resource (iam.tf), so this reads the
+# JSON the role is given, whole: a fifth action, a second statement, a resource narrower or wider
+# than "*", a Deny, a NotAction or a condition each changes the document and fails here. Mutations
+# that turn this run red: ssm:GetParameter added to the actions; a second statement granting
+# s3:GetObject; the policy attached to the gateway's task role.
+run "the_bastion_task_role_holds_the_four_ssmmessages_permissions_and_nothing_else" {
+  command = plan
+
+  variables {
+    bastion       = true
+    bastion_image = "public.ecr.aws/nginx/nginx-unprivileged@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+  }
+
+  assert {
+    condition = jsondecode(aws_iam_role_policy.bastion_task[0].policy) == {
+      Version = "2012-10-17"
+      Statement = [{
+        Sid    = "SessionManagerMessages"
+        Effect = "Allow"
+        Action = [
+          "ssmmessages:CreateControlChannel",
+          "ssmmessages:CreateDataChannel",
+          "ssmmessages:OpenControlChannel",
+          "ssmmessages:OpenDataChannel",
+        ]
+        Resource = "*"
+      }]
+    }
+    error_message = "The bastion task role's one policy holds one statement, an Allow of the four ssmmessages actions on \"*\", and nothing else (#1167): the four an ECS Exec session needs of a task's role."
+  }
+
+  # The four are the gateway task role's own four, read from its statement rather than typed twice:
+  # until #787 both roles hold them, and the tunnel uses the bastion's.
+  assert {
+    condition = (
+      toset(jsondecode(aws_iam_role_policy.bastion_task[0].policy).Statement[0].Action)
+      == one([for s in data.aws_iam_policy_document.task.statement : s if s.sid == "SessionManagerMessages"]).actions
+    )
+    error_message = "The bastion role's actions are the four the gateway task role's SessionManagerMessages statement holds (#1167)."
+  }
+
+  assert {
+    condition     = aws_iam_role_policy.bastion_task[0].role == aws_iam_role.bastion_task[0].id
+    error_message = "The bastion's policy is on the bastion's role: on the gateway's task role it would widen P-03's role and leave the bastion's with no grant."
+  }
+}
+
+# The bastion's task never runs as the gateway's task role, which reads the registry and the client
+# secrets, and needs no execution role: the image is public and the container writes no log. Mutation
+# that turns this run red: task_role_arn = aws_iam_role.task.arn; execution_role_arn set to the
+# execution role.
+run "the_bastion_task_names_its_own_role_never_the_gateway_s" {
+  command = plan
+
+  variables {
+    bastion       = true
+    bastion_image = "public.ecr.aws/nginx/nginx-unprivileged@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+  }
+
+  assert {
+    condition = (
+      aws_ecs_task_definition.bastion[0].task_role_arn == aws_iam_role.bastion_task[0].arn
+      && aws_ecs_task_definition.bastion[0].task_role_arn != aws_iam_role.task.arn
+    )
+    error_message = "The bastion's task definition carries the bastion's own task role and never the gateway's, which reads this cell's bucket prefixes and client secrets (#1167)."
+  }
+
+  assert {
+    condition     = aws_ecs_task_definition.bastion[0].execution_role_arn == null
+    error_message = "The bastion's task definition names no execution role: it pulls a public image and writes no log, so the agent needs no grant (#1168). If it ever needs one, it names the cell's existing execution role."
+  }
+}
+
+# The bastion's role trusts what the cell's two roles trust: the shared document, which the run
+# both_roles_are_assumable_only_by_ecs_tasks_in_this_account holds to ECS tasks in this account and
+# Region. The document's JSON is a sentinel (override_data above), so a role given any other trust
+# fails here. Mutations that turn this run red: a trust document of its own naming ec2.amazonaws.com;
+# one naming ECS tasks with no account condition.
+run "the_bastion_role_is_assumable_only_by_ecs_tasks_in_this_account" {
+  command = plan
+
+  variables {
+    bastion       = true
+    bastion_image = "public.ecr.aws/nginx/nginx-unprivileged@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+  }
+
+  assert {
+    condition     = aws_iam_role.bastion_task[0].assume_role_policy == data.aws_iam_policy_document.ecs_tasks_trust.json
+    error_message = "The bastion's role trusts ECS tasks in this account through the trust document the cell's two roles share, and nothing else (#1167)."
+  }
+}
+
+# The service: one task, Exec on, in the gateway's cluster and network, in no target group.
+# Mutations that turn this run red, one each: a load_balancer block on the target group;
+# enable_execute_command false; desired_count 2, or var.multi_task ? 2 : 1 under the next run; the
+# security group made the ALB's; the subnets made the public ones under multi_task.
+run "the_bastion_service_runs_one_exec_task_in_the_task_group_and_no_load_balancer" {
+  command = plan
+
+  # The bastion task definition's ARN, known at plan, so the service can be checked to run it.
+  override_resource {
+    target          = aws_ecs_task_definition.bastion[0]
+    override_during = plan
+    values          = { arn = "arn:aws:ecs:us-east-1:111122223333:task-definition/spa-platform-poc_bastion:1" }
+  }
+
+  variables {
+    bastion       = true
+    bastion_image = "public.ecr.aws/nginx/nginx-unprivileged@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+  }
+
+  assert {
+    condition     = length(aws_ecs_service.bastion[0].load_balancer) == 0
+    error_message = "The bastion's service has no load balancer block: the bastion is in no target group, and the load balancer sends nothing to it (#1167)."
+  }
+
+  assert {
+    condition     = aws_ecs_service.bastion[0].enable_execute_command
+    error_message = "ECS Exec is on for the bastion's service: tunnel.sh's port forward is an ECS Exec session on its task (#1167)."
+  }
+
+  assert {
+    condition     = aws_ecs_service.bastion[0].desired_count == 1
+    error_message = "The bastion's service runs exactly one task: the input on and applied is one running bastion task, and nothing starts or stops it but an apply (#1167, sub-question 2.2)."
+  }
+
+  assert {
+    condition     = aws_ecs_service.bastion[0].network_configuration[0].security_groups == toset([aws_security_group.task.id])
+    error_message = "The bastion's task is in the task security group alone: no rule changes, and the load balancer's group admits 443 from that group, which is the bastion's path to it (#1167, sub-question 3.2)."
+  }
+
+  assert {
+    condition = (
+      aws_ecs_service.bastion[0].network_configuration[0].subnets == aws_ecs_service.gateway.network_configuration[0].subnets
+      && aws_ecs_service.bastion[0].network_configuration[0].assign_public_ip == aws_ecs_service.gateway.network_configuration[0].assign_public_ip
+      && aws_ecs_service.bastion[0].network_configuration[0].subnets == toset([for s in aws_subnet.public : s.id])
+      && aws_ecs_service.bastion[0].network_configuration[0].assign_public_ip
+    )
+    error_message = "On Phase 1's shape the bastion's task sits where the gateway's does, in the public subnets with a public address, its only route out to Session Manager (#1167)."
+  }
+
+  assert {
+    condition = (
+      aws_ecs_service.bastion[0].cluster == aws_ecs_cluster.cell.id
+      && aws_ecs_service.bastion[0].task_definition == aws_ecs_task_definition.bastion[0].arn
+      && aws_ecs_service.bastion[0].launch_type == "FARGATE"
+    )
+    error_message = "The bastion's service runs the bastion's task definition on Fargate in the gateway's cluster, the cluster the outputs document names (#1167)."
+  }
+
+  assert {
+    condition     = output.ecs_bastion_service == aws_ecs_service.bastion[0].name && can(regex(jsondecode(file("../../../contracts/infra-outputs.schema.json"))["$defs"].awsName.pattern, output.ecs_bastion_service))
+    error_message = "ecs_bastion_service is the bastion service's name, in the contract's awsName form, for the outputs document's ecsBastionService (#1167)."
+  }
+}
+
+run "under_multi_task_the_bastion_runs_where_the_gateway_s_tasks_run" {
+  command = plan
+
+  variables {
+    bastion                          = true
+    bastion_image                    = "public.ecr.aws/nginx/nginx-unprivileged@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    multi_task                       = true
+    session_store                    = "dynamodb"
+    data_protection_parameter_prefix = "/spa-platform/poc/data-protection/"
+  }
+
+  assert {
+    condition = (
+      aws_ecs_service.bastion[0].network_configuration[0].subnets == toset([for s in aws_subnet.private : s.id])
+      && !aws_ecs_service.bastion[0].network_configuration[0].assign_public_ip
+      && aws_ecs_service.bastion[0].network_configuration[0].security_groups == toset([aws_security_group.task.id])
+      && aws_ecs_service.bastion[0].desired_count == 1
+    )
+    error_message = "Under multi_task the bastion's one task sits where the gateway's two do, in the private subnets with no public address and in the task security group, and goes out through the NAT gateway (#1167)."
+  }
+}
+
+# The task and its one container. Mutations that turn this run red, one each:
+# readonlyRootFilesystem true; the image a constant rather than var.bastion_image; a second
+# container; linuxParameters left out; capabilities.add left out; mountPoints left out.
+run "the_bastion_container_runs_the_image_given_with_a_writable_root_and_the_gateway_s_hardening" {
+  command = plan
+
+  variables {
+    bastion       = true
+    bastion_image = "public.ecr.aws/nginx/nginx-unprivileged@sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+  }
+
+  assert {
+    condition     = [for c in jsondecode(aws_ecs_task_definition.bastion[0].container_definitions) : c.name] == ["bastion"]
+    error_message = "The bastion's task has one container, bastion, the name tools/scripts/cell-common.sh's BASTION_CONTAINER gives tunnel.sh (#1167)."
+  }
+
+  assert {
+    condition     = one(jsondecode(aws_ecs_task_definition.bastion[0].container_definitions)).image == var.bastion_image
+    error_message = "The bastion's container runs bastion_image as given, by digest, so a routine apply never moves it."
+  }
+
+  # ECS Exec does not support a read-only root: "making the root file system read-only using the
+  # readonlyRootFilesystem task definition parameter, or any other method, isn't supported"
+  # (https://docs.aws.amazon.com/AmazonECS/latest/developerguide/ecs-exec.html). try() so an absent
+  # value fails rather than errors.
+  assert {
+    condition     = try(one(jsondecode(aws_ecs_task_definition.bastion[0].container_definitions)).readonlyRootFilesystem == false, false)
+    error_message = "The bastion's root filesystem is writable, explicitly: ECS Exec does not support a read-only one, and the session is the bastion's whole purpose (#1167)."
+  }
+
+  # The gateway's own linuxParameters (#786) and ECS's filled-in values (#1006), so the definition
+  # ECS reads back is the configured one and a re-plan never replaces it under a live tunnel.
+  assert {
+    condition = try(
+      one(jsondecode(aws_ecs_task_definition.bastion[0].container_definitions)).linuxParameters
+      == one([for c in jsondecode(aws_ecs_task_definition.gateway.container_definitions) : c if c.name == "gateway"]).linuxParameters,
+      false
+    )
+    error_message = "The bastion's container drops every capability, adds none back and runs an init process, the gateway's one value (#786), with capabilities.add spelled out (#1006)."
+  }
+
+  assert {
+    condition = try(
+      one(jsondecode(aws_ecs_task_definition.bastion[0].container_definitions)).mountPoints == []
+      && one(jsondecode(aws_ecs_task_definition.bastion[0].container_definitions)).systemControls == []
+      && one(jsondecode(aws_ecs_task_definition.bastion[0].container_definitions)).volumesFrom == [],
+      false
+    )
+    error_message = "The bastion's container spells out mountPoints, systemControls and volumesFrom as the empty lists ECS reads back (#1006)."
+  }
+
+  assert {
+    condition = (
+      aws_ecs_task_definition.bastion[0].runtime_platform[0].cpu_architecture == "ARM64"
+      && aws_ecs_task_definition.bastion[0].requires_compatibilities == toset(["FARGATE"])
+      && aws_ecs_task_definition.bastion[0].network_mode == "awsvpc"
+      && aws_ecs_task_definition.bastion[0].family != aws_ecs_task_definition.gateway.family
+    )
+    error_message = "The bastion's task is ARM64 Fargate in awsvpc, as the gateway's is, in a family of its own, which teardown.sh deletes by its exact name (#1168)."
+  }
+}
+
+# bastion_image is held to gateway_image's rule. A bastion with no image is refused at plan, before
+# the role and its policy would be created by an apply that ECS then refuses.
+run "a_bastion_with_no_image_is_refused" {
+  command = plan
+
+  variables {
+    bastion = true
+  }
+
+  expect_failures = [var.bastion_image]
+}
+
+run "a_bastion_image_named_by_tag_is_refused" {
+  command = plan
+
+  variables {
+    bastion       = true
+    bastion_image = "public.ecr.aws/nginx/nginx-unprivileged:stable-alpine"
+  }
+
+  expect_failures = [var.bastion_image]
+}
+
+run "a_bastion_image_with_a_short_digest_is_refused" {
+  command = plan
+
+  variables {
+    bastion       = true
+    bastion_image = "public.ecr.aws/nginx/nginx-unprivileged@sha256:0123abcd"
+  }
+
+  expect_failures = [var.bastion_image]
+}
+
+# The bastion's names, at the cell name's longest. The family and the role carry an underscore, which
+# no cell name holds, so no other cell's names can equal them (ecs.tf); the role still begins
+# spa-platform-{cell}-, the prefix the CI plan role may read (infra/bootstrap/ci-role.tf). Mutation
+# that turns this run red: the family named "${local.name_prefix}-bastion".
+run "the_bastion_s_names_are_legal_and_no_other_cell_s" {
+  command = plan
+
+  variables {
+    cell          = "abcdefghijklmnopqrstuv"
+    bastion       = true
+    bastion_image = "public.ecr.aws/nginx/nginx-unprivileged@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+  }
+
+  assert {
+    condition = (
+      length(aws_iam_role.bastion_task[0].name) <= 64
+      && startswith(aws_iam_role.bastion_task[0].name, "spa-platform-${var.cell}-")
+      && length(aws_ecs_task_definition.bastion[0].family) <= 255
+      && can(regex("^[A-Za-z0-9_-]+$", aws_ecs_task_definition.bastion[0].family))
+    )
+    error_message = "The bastion's role name fits IAM's 64 characters and begins spa-platform-{cell}-; its family fits ECS's rule."
+  }
+
+  # A name no cell can produce: every name the cell's rule admits is lowercase letters, digits and
+  # hyphens, so each bastion name holds a character outside that, read from the rule itself.
+  assert {
+    condition = alltrue([
+      for name in [aws_ecs_task_definition.bastion[0].family, aws_iam_role.bastion_task[0].name] :
+      strcontains(name, "_") && !can(regex("^spa-platform-[a-z0-9][a-z0-9-]{1,20}[a-z0-9]$", name))
+    ])
+    error_message = "The bastion's family and role hold an underscore, which no cell name does, so neither is any other cell's family or role (#1168)."
+  }
+
+  assert {
+    condition = alltrue([
+      aws_ecs_task_definition.bastion[0].tags["Name"] == aws_ecs_task_definition.bastion[0].family,
+      aws_ecs_service.bastion[0].tags["Name"] == "spa-platform-${var.cell}-${aws_ecs_service.bastion[0].name}",
+      aws_iam_role.bastion_task[0].tags["Name"] == aws_iam_role.bastion_task[0].name,
+    ])
+    error_message = "Each bastion resource names itself in a Name tag, which merges with the three tags the root applies (contracts/resource-tags.md)."
+  }
+}
+
+# Each of the four carries exactly count = var.bastion ? 1 : 0 (#1167, item 2), read from the source:
+# the platform root's run under the switch counts the service, its task definition and the policy at
+# their planned instances, but the role only at one or none (its comment says why), so a role made
+# ? 2 : 0 is caught here. Mutations that turn this run red: any of the four with ? 2 : 0, or with
+# local.bastion; one of them with no count line.
+run "the_bastion_s_four_declarations_each_carry_exactly_the_bastion_switch" {
+  command = plan
+
+  assert {
+    condition = alltrue([
+      for address in ["aws_ecs_service.bastion", "aws_ecs_task_definition.bastion", "aws_iam_role.bastion_task", "aws_iam_role_policy.bastion_task"] :
+      length([
+        for m in regexall("(?ms)^resource\\s+\"([^\"]+)\"\\s+\"([^\"]+)\"\\s*\\{(.*?)^\\}", join("\n", [for f in fileset(path.module, "*.tf") : file("${path.module}/${f}")])) :
+        m if "${m[0]}.${m[1]}" == address && length(regexall("(?m)^  count\\s*=\\s*var\\.bastion \\? 1 : 0$", m[2])) == 1
+      ]) == 1
+    ])
+    error_message = "Each of the bastion's four declarations carries exactly count = var.bastion ? 1 : 0: one instance under the switch and none without it (#1167)."
   }
 }

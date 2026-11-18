@@ -42,8 +42,9 @@ BOOTSTRAP_VALUE = re.search(r"\| `Platform` \| `([^`]+)` \|\n", _TAGS)[1]
 # The roles the cell declares, read out of infra/modules/cell/iam.tf (CODING_STANDARDS.md, "A guard
 # reads the thing it guards"): every aws_iam_role's name, with the cell put in.
 _IAM = (cell.MODULE / "iam.tf").read_text()
+# A role behind an input carries its count line first, then a blank line (the bastion's, #1167).
 CELL_ROLES = sorted(name.replace("${local.name_prefix}", cell.FAMILY) for name in re.findall(
-    r'resource "aws_iam_role" "[a-z_]+" \{\n\s*name\s*=\s*"([^"]+)"', _IAM))
+    r'resource "aws_iam_role" "[a-z_]+" \{\n(?:\s*count\s*=[^\n]*\n\s*\n)?\s*name\s*=\s*"([^"]+)"', _IAM))
 assert CELL_ROLES, "iam.tf declares no aws_iam_role with a name"
 
 ECS = f"arn:aws:ecs:{REGION}:{ACCOUNT}"
@@ -148,7 +149,7 @@ class ATornDownCellPasses(Verify):
     def test_the_names_checked_are_the_roles_iam_tf_declares(self):
         case, _ = self.verify(torn_down_world())
         self.assertEqual(CELL_ROLES, sorted(call["options"]["role-name"] for call in case.aws("iam get-role")))
-        self.assertEqual(2, len(CELL_ROLES))
+        self.assertEqual(3, len(CELL_ROLES))
 
     def test_the_cell_option_names_another_cell_s_roles(self):
         case, _ = self.verify(torn_down_world(), "--cell", "b")
