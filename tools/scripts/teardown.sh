@@ -23,9 +23,9 @@
 #      deploy.sh wrote, goes with the platform root, so the next first deployment starts on the
 #      sample image again.
 #   3. The certificate certs.sh imported, found by its Platform and Cell tags, retried while ACM
-#      still counts it in use after the listener went; the cell's inactive task definitions,
-#      which keep their tags until deleted; and the key ring the gateway wrote under
-#      /spa-platform/<cell>/data-protection/, which no root's state holds (P2-2 decision 17).
+#      still counts it in use after the listener went; the cell's inactive task definitions, the
+#      gateway's family and the bastion's (#1168), which keep their tags until deleted; and the key
+#      ring the gateway wrote under /spa-platform/<cell>/data-protection/, which no root's state holds (P2-2 decision 17).
 #   4. tools/scripts/verify-teardown.sh, and its exit status is this script's (#308). Its readers
 #      look for Platform = spa-platform exactly (contracts/resource-tags.md): IAM roles and customer
 #      managed policies by their tags, which the tagging API cannot list (#118); the cell's roles by
@@ -42,7 +42,8 @@
 # ARN with the account replaced.
 #
 # Exit status: 0 when verify-teardown.sh passes; 1 when a step failed or it found something still
-# standing; 2 when it, or verify-teardown.sh, did not start.
+# standing; 2 when it, or verify-teardown.sh, did not start, among them a cell other than the one
+# the roots' state holds (#1304).
 #
 # Written for the bash 3.2 that ships with macOS, like tools/scripts/certs.sh.
 # Owner: workstream 1, AWS and IaC.
@@ -76,7 +77,8 @@ usage() {
 Options
   --yes         Required: tear the cell down.
   --cell NAME   The cell: its teardown role, its certificate's Cell tag, its task definition
-                family and its key ring prefix. Default: \$SPA_CELL, else poc.
+                family and its key ring prefix. Default: \$SPA_CELL, else poc. It must be
+                the cell the roots' state holds, when any root has state (#1304).
   -h, --help    This text.
 
 Environment
@@ -120,6 +122,17 @@ trap 'exit 130' INT TERM
 
 need_terraform
 cell_start
+
+# The roots are infra/envs/poc/*, whichever cell they were applied for, and the cell given names the
+# teardown role, the certificate, the task definitions and the key ring. Before anything is deleted
+# the two are compared (#1304): the platform root's cell output, or the identity root's when the
+# platform root has no state, as after a teardown that stopped past its destroy. The apps root has
+# no cell output. When no root has state there is nothing to compare, and the run goes on.
+STATE_CELL="$(tf_output "$PLATFORM_ROOT" cell)"
+[ -n "$STATE_CELL" ] || STATE_CELL="$(tf_output "$IDP_ROOT" cell)"
+if [ -n "$STATE_CELL" ] && [ "$STATE_CELL" != "$CELL" ]; then
+  refuse "the roots under infra/envs/poc hold the cell '${STATE_CELL}', and this run was given '${CELL}' (--cell or SPA_CELL). Nothing was deleted. Run it again with --cell ${STATE_CELL}, or initialise the roots against ${CELL}'s state first."
+fi
 
 # --- 1. the bucket ---------------------------------------------------------------------------------
 
@@ -266,9 +279,13 @@ done
 # A replaced or destroyed revision is deregistered, INACTIVE, and keeps its tags until it is deleted.
 # Exact family: the prefix spa-platform-poc would also match spa-platform-poc2's. Ten per call, the
 # API's limit. https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_DeleteTaskDefinitions.html
+#
+# Two families, each by its exact name: the gateway's, spa-platform-<cell>, and the bastion's (#1167,
+# #1168), spa-platform-<cell>_bastion, infra/modules/cell/ecs.tf's bastion_family. The bastion's is
+# there only for a cell that ever applied bastion = true; for any other its listing is empty, which
+# is not an error. Its underscore is in no cell's name, so no other cell's family is it.
 FAMILY="spa-platform-${CELL}"
-aws_read "the inactive task definitions of ${FAMILY}" ecs list-task-definitions --family-prefix "$FAMILY" \
-  --status INACTIVE --query taskDefinitionArns
+BASTION_FAMILY="spa-platform-${CELL}_bastion"
 batch=""
 count=0
 removed=0
@@ -281,17 +298,25 @@ flush() {
   batch=""
   count=0
 }
-for arn in $(tr '\t' ' ' < "$OUT"); do
-  case "${arn##*/}" in
-    "${FAMILY}":[0-9]*) ;;
-    *) continue ;;
-  esac
-  batch="${batch} ${arn}"
-  count=$((count + 1))
-  [ "$count" -lt 10 ] || flush
-done
-flush
-note "deleted ${removed} inactive task definitions of ${FAMILY}"
+delete_inactive_definitions() {
+  local family="$1" arn
+  aws_read "the inactive task definitions of ${family}" ecs list-task-definitions --family-prefix "$family" \
+    --status INACTIVE --query taskDefinitionArns
+  removed=0
+  for arn in $(tr '\t' ' ' < "$OUT"); do
+    case "${arn##*/}" in
+      "${family}":[0-9]*) ;;
+      *) continue ;;
+    esac
+    batch="${batch} ${arn}"
+    count=$((count + 1))
+    [ "$count" -lt 10 ] || flush
+  done
+  flush
+  note "deleted ${removed} inactive task definitions of ${family}"
+}
+delete_inactive_definitions "$FAMILY"
+delete_inactive_definitions "$BASTION_FAMILY"
 
 # The cell's data-protection key ring (P2-2 decision 17). The gateway writes it at run time under
 # /spa-platform/{cell}/data-protection/, the one prefix infra/modules/cell's

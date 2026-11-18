@@ -11,8 +11,8 @@ name carries `var.cell`.
 | `network.tf` | 1.2 | The VPC, two public subnets in two zones, the internet gateway, one route table, the two security groups, and the VPC's default security group, adopted with no rule |
 | `storage.tf` | 1.5, #784 | The platform bucket and its policy, and the two image repositories, each scanning on push at the basic level with a lifecycle policy that keeps the five most recent tagged images, so `rollback.sh`'s previous digest survives |
 | `alb.tf` | 1.3 | The internal load balancer, its one HTTPS listener, its one target group, and the lookup of the imported wildcard certificate |
-| `ecs.tf` | 1.4a | The ECS cluster, the log group, the task environment, the two container definitions, the task definition and the service |
-| `iam.tf` | 1.4a | The two roles: the ECS agent's execution role and the gateway process's task role |
+| `ecs.tf` | 1.4a, #1168 | The ECS cluster, the log group, the task environment, the two container definitions, the task definition and the service; behind `bastion`, the bastion's task definition and service |
+| `iam.tf` | 1.4a, #1168 | The two roles: the ECS agent's execution role and the gateway process's task role; behind `bastion`, the bastion task's role |
 | `sessions.tf` | #338, #417 | The DynamoDB session table, planned only under `session_store = "dynamodb"` |
 
 `tests/module.tftest.hcl` and `tests/network.tftest.hcl` check it against a mock
@@ -162,15 +162,22 @@ needs credentials, a state bucket and the first-deployment order in
 
 - **The task.** ARM64, 0.25 vCPU, 1 GB, Fargate only, in this cell's two public
   subnets with a public address, because the no-NAT design leaves that as the task's
-  only route out; under `multi_task`, two of them in the private subnets with none. ECS Exec is on and the root filesystem stays writable: those are two
-  of the three conditions the Session Manager tunnel comes with, and the third is the
-  four `ssmmessages` permissions below. Both containers drop every Linux capability
+  only route out; under `multi_task`, two of them in the private subnets with none. ECS
+  Exec is off and both containers' root filesystems are read-only (#787): the tunnel's
+  hop is the bastion's task, below, so nothing in the shipping task is reachable for an
+  incident, which uses the logs, `/readyz` and the bastion's network path (#780,
+  answer 2). The task's one writable path is the gateway's `/tmp`, a volume of the
+  task's own ephemeral storage (#780, answer 3); the mock API has none. That the
+  gateway's user can write there is not shown by a test here: ECS gives a task volume
+  `0755` and the owner `root` unless the image says otherwise, and a write by
+  `$APP_UID` is seen only on a running task. Both containers drop every Linux capability
   (`capabilities.drop = ["ALL"]`) and run an init process (`initProcessEnabled`), which
   forwards SIGTERM to `dotnet` and reaps zombies (#786); neither process needs a
   capability, since each runs as its image's non-root user on a port above 1024.
   Both containers also spell out the values ECS fills in when they are left out
-  (`capabilities.add = []`, the gateway's `hostPort`, and empty `mountPoints`,
-  `systemControls` and `volumesFrom`), so the definition ECS reads back after an apply
+  (`capabilities.add = []`, the gateway's `hostPort` and its `/tmp` mount point's
+  `readOnly = false`, the mock API's empty `mountPoints`, and empty `systemControls` and
+  `volumesFrom`), so the definition ECS reads back after an apply
   is the configured one and a re-plan replaces nothing (#1006).
 - **The deployment.** One service, desired count 1 (2 under `multi_task`), circuit breaker on with rollback,
   minimum healthy 100% and maximum 200%, so a roll starts the replacement before it
@@ -204,21 +211,24 @@ needs credentials, a state bucket and the first-deployment order in
 
 It is the one object in the cell where a careless grant is easy to write and hard to
 notice, which is why it was written and reviewed before the AWS sitting rather than
-during it. It holds exactly three grants, each asserted on its own:
+during it. It holds exactly two grants, each asserted on its own:
 
 | Grant | Scope |
 | --- | --- |
 | `ReadRegistryAndReleases` | `s3:GetObject` on this bucket's `registry/*` and `apps/*`, the two prefixes `contracts/s3-layout.md` lays out. No write, no delete, no listing, and not the bucket's own ARN |
 | `ReadClientSecrets` | `ssm:GetParameter` and `ssm:GetParameters` on `/spa-platform/{cell}/apps/*`. Another cell's secret is outside it |
-| `SessionManagerMessages` | The four `ssmmessages` actions the tunnel needs. They take no resource-level condition, so this is the one grant on `*` — and the test asserts it is the only one |
 
-A fourth statement fails a test. So does a wildcard in an action, a `Deny`, a
-`NotAction` or `NotResource`, and a second grant on `*`: the suite names the statements
+Plan row 1.4 names a third, the four `ssmmessages` permissions the tunnel needed while
+this task was its hop. They went with ECS Exec on the gateway's service (#787), and are
+the bastion role's whole grant; a test fails on any `ssmmessages` action in the task
+role, under whatever statement it sits. A third statement fails a test. So does a
+wildcard in an action, a `Deny`, a `NotAction` or `NotResource`, and any grant on `*`:
+the suite names the statements
 it recognises and fails on one it does not, so a widened grant cannot pass by being
 unmentioned. The execution role is separate and holds image pull and log writes only;
 neither role can do the other's job.
 
-Those three are the whole role on the default inputs. Two Phase 2 inputs add more, and
+Those two are the whole role on the default inputs. Two Phase 2 inputs add more, and
 only when set (#338):
 
 | Grant | Behind | Scope |
@@ -242,7 +252,28 @@ statements to Phase 1's digests, byte for byte.
 A grant can also arrive through a resource policy: in its own account a role may do
 whatever its own policy or a resource policy allows it. The bucket policy is the cell's
 one resource policy, and a test holds it to its four refusals, so an `Allow` there, to
-the task role or to anyone, fails as well. Together these runs are P-03.
+the task role or to anyone, fails as well. Together these runs are P-03, read as the
+decision on #1167 reads it: the four `ssmmessages` permissions are the bastion role's,
+and the gateway's role holds the two reads alone
+(https://github.com/adammedford/spa-platform/issues/1167#issuecomment-6775499665).
+
+## The bastion, the tunnel's hop
+
+Behind `bastion`, off by default (#1167, #1168): a second service in the cluster,
+`bastion`, running one task of `bastion_image`, the sample image by digest, with ECS
+Exec on, a writable root and the gateway's capability settings, in the gateway's
+subnets and the task security group, and in no target group. Its task role, separate
+from the gateway's, holds the four `ssmmessages` permissions and nothing else, and
+trusts ECS tasks in this account through the cell's shared trust document; the task
+names no execution role, since it pulls a public image and writes no log.
+`tools/scripts/tunnel.sh` lists the service's running tasks and forwards through the
+bastion container. Four declarations make it, each with exactly
+`count = var.bastion ? 1 : 0`, and no new type or rule: P-01 holds the default inputs
+at one ECS service. The task definition's family and the role carry an underscore,
+which no cell name holds, so neither can be another cell's. On and applied, the task
+runs, and is billed, until an apply turns it off. Since #787 it is the cell's only
+task with ECS Exec on: the gateway's service has it off, its task role holds no
+`ssmmessages` permission and its containers' roots are read-only.
 
 ## Plan policy
 
@@ -256,12 +287,15 @@ account.
   numbers, and fails on a NAT gateway, an EC2 instance or a database whatever the
   allowlist says, save the gated session table and the two-task cell's gated NAT
   gateway (#583), which it holds at no instance on the default inputs, the table at
-  one under `dynamodb` and the gateway at one under `multi_task`. This module's own
-  type allowlist, in `tests/module.tftest.hcl`, fails on an instance, a bastion or any
-  database type but the session table, and names the session table and the two-task
-  cell's three egress types, so it cannot tell their gated forms from ungated ones:
-  P-01 is what holds them to their gates.
-- **P-03, the task role policy,** is the task role's runs above.
+  one under `dynamodb` and the gateway at one under `multi_task`. It admits the
+  bastion's service in the same gated form, at no instance on the default inputs and
+  one under `bastion` (#1167). This module's own type allowlist, in
+  `tests/module.tftest.hcl`, fails on an instance or any database type but the
+  session table, and names the session table and the two-task cell's three egress
+  types, so it cannot tell their gated forms from ungated ones: P-01 is what holds
+  them to their gates. The bastion adds no type to it.
+- **P-03, the task role policy,** is the task role's runs above. The bastion's role
+  has runs of its own (#1167).
 - **The two security groups** are `tests/network.tftest.hcl`: exactly four rules, each
   admitting one port between the two groups, and only the task's 443 out naming an
   address range.

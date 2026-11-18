@@ -193,3 +193,28 @@ variable "data_protection_kms_key_id" {
   type        = string
   default     = ""
 }
+
+# --- #1167: the bastion, the tunnel's hop, passed through ---------------------------------------
+#
+# Off by default, which is Phase 1's plan: no bastion, and so no hop for tools/scripts/tunnel.sh.
+# The module holds bastion_image to gateway_image's rule and refuses bastion = true without it.
+
+variable "bastion" {
+  description = <<-EOT
+    The tunnel's hop (#1167): true declares the cell's bastion service, one task with ECS Exec on
+    that tools/scripts/tunnel.sh forwards through. False, the default, declares none, and the tunnel
+    refuses. The module's rule: true needs bastion_image.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "bastion_image" {
+  description = <<-EOT
+    The bastion's image by digest: the sample image,
+    public.ecr.aws/nginx/nginx-unprivileged@sha256:<digest>. Empty, the default, while bastion is
+    false. The module's rule: a digest reference, never a tag.
+  EOT
+  type        = string
+  default     = ""
+}

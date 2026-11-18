@@ -147,24 +147,31 @@ internal static class ContractParser
     }
 
     /// <summary>
-    /// The <c>Cache-Control</c> value every 404 of the asset row carries, from the Endpoints sentence that
-    /// begins "Every 404 the asset row answers carries": its first backquote, which holds
-    /// <c>Cache-Control: value</c>. Read across the page's line wrapping. No such sentence, or a first
-    /// backquote that is not the header with a value, throws.
+    /// The <c>Cache-Control</c> value every 404 of the asset rows carries, from the Endpoints sentence that
+    /// begins "Every 404 the two asset rows answer carries" (#982, which adds the fragment asset row
+    /// beside the shell's): its first backquote, which holds <c>Cache-Control: value</c>. A contract
+    /// without #982's fragment row states the same rule for its one asset row as "Every 404 the asset
+    /// row answers carries", and that sentence is read when the first is absent. Read across the page's
+    /// line wrapping. Neither sentence, or a first backquote that is not the header with a value, throws.
     /// </summary>
     internal static string AssetNotFoundCacheControl(string browserContract)
     {
-        const string Sentence = "Every 404 the asset row answers carries ";
+        const string Sentence = "Every 404 the two asset rows answer carries ";
+        const string OneRowSentence = "Every 404 the asset row answers carries ";
         const string Header = "Cache-Control: ";
         ContractSection endpoints = ContractSection.Of(BrowserContract, browserContract, "## Endpoints");
         string prose = endpoints.Text.Replace('\n', ' ');
-        int at = prose.IndexOf(Sentence, StringComparison.Ordinal);
-        string first = at < 0
-            ? throw endpoints.Broken($"no sentence begins '{Sentence}`{Header}...`'")
-            : ContractSection.Backquoted(prose[(at + Sentence.Length)..]).FirstOrDefault() ?? string.Empty;
+        string matched = prose.Contains(Sentence, StringComparison.Ordinal) ? Sentence : OneRowSentence;
+        int end = SentenceEnd(prose, matched);
+        string first = end < 0
+            ? throw endpoints.Broken($"no sentence begins '{Sentence}`{Header}...`' or '{OneRowSentence}`{Header}...`'")
+            : ContractSection.Backquoted(prose[end..]).FirstOrDefault() ?? string.Empty;
         return first.StartsWith(Header, StringComparison.Ordinal) && first[Header.Length..].Trim().Length > 0
             ? first[Header.Length..]
-            : throw endpoints.Broken($"the sentence '{Sentence}...' backquotes '{first}', not `{Header}value`");
+            : throw endpoints.Broken($"the sentence '{matched}...' backquotes '{first}', not `{Header}value`");
+
+        static int SentenceEnd(string prose, string sentence) =>
+            prose.IndexOf(sentence, StringComparison.Ordinal) is var at and >= 0 ? at + sentence.Length : -1;
     }
 
     /// <summary>

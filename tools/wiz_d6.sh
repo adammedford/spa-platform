@@ -23,7 +23,8 @@
 #      record, as the prelude's `shown` writes it, and through tools/wiz_redact.py --stream to the
 #      terminal. The human's confirm on launch is the skill's, given before this command runs.
 #   3. Without deploy.sh's pass line (`deploy: pass: ...`), it stops and starts no tunnel and exits
-#      with deploy.sh's own status, 0 included.
+#      with deploy.sh's own status, or 1 when that was 0 (its --help, say): the skill's D6 reads
+#      this script's exit 0 as the tunnel having moved, so no run that moved none gives it (#1284).
 #   4. On the pass line it stops every running tunnel.sh on --local-port (8443 by default): a
 #      tunnel.sh execs into `aws ssm start-session`, so it is the process whose arguments name
 #      AWS-StartPortForwardingSessionToRemoteHost with that localPortNumber. The CLI runs the
@@ -54,9 +55,9 @@
 # plugin's SessionId lines stay in --tunnel-log, which it never prints; read that file through
 # wiz_redact.py. Its own lines name a pid, a port, a file and a task id.
 #
-# Exit status: 0 when the tunnel was started through a task after deploy.sh's pass line; deploy.sh's
-# when it printed no pass line; 1 when it launched nothing (step 1) or the tunnel named no task; 2 on
-# a usage error.
+# Exit status: 0 only when the tunnel was started through a task after deploy.sh's pass line;
+# deploy.sh's when it printed no pass line and exited non-zero; 1 when it exited 0 with no pass line,
+# when it launched nothing (step 1) or when the tunnel named no task; 2 on a usage error.
 #
 # Run its companion: python3 -I tools/wiz_d6_tests.py. Written for the bash 3.2 that ships with macOS.
 
@@ -137,9 +138,11 @@ echo "\$ tools/scripts/deploy.sh $*" >> "$RECORD"
 DEPLOYED=${PIPESTATUS[0]}
 echo "exit=$DEPLOYED" >> "$RECORD"
 
-# 3. No pass line, no tunnel.
+# 3. No pass line, no tunnel. Never exit 0 here: D6 reads the lever's 0 as the tunnel moved (#1284).
 if ! grep -q '^deploy: pass:' "$WORK/deploy.out"; then
-  CODE=$DEPLOYED fail "deploy.sh exited $DEPLOYED without its pass line; no tunnel was stopped or started"
+  CODE=$DEPLOYED
+  [ "$CODE" -ne 0 ] || CODE=1
+  fail "deploy.sh exited $DEPLOYED without its pass line; no tunnel was stopped or started"
 fi
 
 # 4. Stop the tunnel on this port: tunnel.sh has exec'd into the CLI, and the CLI's plugin child holds

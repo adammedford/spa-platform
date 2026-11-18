@@ -178,12 +178,13 @@ public sealed record PageShown(string Url, string Text, IReadOnlyList<string>? R
 /// console error and uncaught exception. On the cell a login that stayed at the provider's form showed
 /// no error on the page (#348), and what the form's script met was in neither the page's URL nor its
 /// text. Only <see cref="NavigationHold.ShownAsync"/> reads it, through <see cref="Redacted.Text"/>.
+///
+/// <para>Every line is kept, however many come (#1292): a cap kept the first lines alone, and the
+/// request that refused a login after more failures than the cap went unrecorded. A hold lasts its
+/// wait at most, and nothing but the row's evidence file reads the lines.</para>
 /// </summary>
 internal sealed class HoldRecord : IDisposable
 {
-    /// <summary>How many lines of each kind are kept: the first ones, where a failed login's cause is.</summary>
-    public const int MaxLines = 20;
-
     private readonly IPage page;
     private readonly List<string> requests = [];
     private readonly List<string> errors = [];
@@ -233,10 +234,7 @@ internal sealed class HoldRecord : IDisposable
     {
         lock (requests)
         {
-            if (lines.Count < MaxLines)
-            {
-                lines.Add(line);
-            }
+            lines.Add(line);
         }
     }
 

@@ -45,9 +45,11 @@ IMAGES_TFVARS="${PLATFORM_ROOT}/images.auto.tfvars"
 # check follows the image (docs/plan/05-infrastructure-and-cost.md, First deployment, step 3).
 READY_PATH="/readyz"
 
-# The container names in infra/modules/cell/ecs.tf.
+# The container names in infra/modules/cell/ecs.tf. The bastion's is the tunnel's hop (#1167): the
+# one container of the bastion service's task.
 GATEWAY_CONTAINER="gateway"
 MOCK_API_CONTAINER="mock-api"
+BASTION_CONTAINER="bastion"
 
 note() { printf '%s: %s\n' "$PROGRAM" "$*"; }
 
@@ -291,6 +293,19 @@ outputs_field() {
   documents field "$OUTPUTS_FILE" "$1" "$REGION" ||
     refuse "$(root_name "$OUTPUTS_FILE") gives no $1 for ${REGION}. Run tools/scripts/seed.sh again to rewrite it from the three roots."
 }
+
+# The outputs document's ecsBastionService, the bastion service the tunnel lists for its hop, or
+# nothing when the document names none (#1167): the platform root publishes it only while its
+# bastion input is true, and cell_documents.py copies it only when published. After outputs_field
+# has read the document, so that a missing document, or one for another Region, is refused there,
+# naming seed.sh, and an empty answer here means only that the field is absent.
+outputs_bastion() {
+  documents field "$OUTPUTS_FILE" ecsBastionService "$REGION" 2> /dev/null || true
+}
+
+# What the scripts say when the document names no bastion: how to turn it on, and which scripts
+# rewrite the document after the apply.
+NO_BASTION="$(root_name "$OUTPUTS_FILE") names no ecsBastionService, so the cell has no bastion for a tunnel's hop (#1167). Set bastion = true and bastion_image in $(root_name "$PLATFORM_ROOT")/terraform.tfvars, apply that root, and rewrite the document with tools/scripts/seed.sh; deploy.sh and rollback.sh rewrite it after their own applies."
 
 # infra/envs/poc/outputs.json, from the three roots' outputs. After every apply.
 write_outputs() {
@@ -565,10 +580,11 @@ wait_and_assert() {
 # deploy.sh is its first caller. The ALB is internal, so from a workstation /readyz is read through
 # a Session Manager port forward, and the wait opens a tunnel of its own: tools/scripts/tunnel.sh,
 # started in the background on a free local port the system picks from its ephemeral range, which
-# 8443 lies below, and never one a socket holds, so an operator's tunnel is left alone. It runs after
-# wait_and_assert, when every running task is the applied deployment's, so its hop is a task of that
-# deployment. The origin is https://app1.$SPA_CERT_DOMAIN:<that port>, the first app's host on the
-# loopback address by the hosts-file line certs.sh names, and the gateway answers /readyz on any host
+# 8443 lies below, and never one a socket holds, so an operator's tunnel is left alone. Its hop is
+# the cell's bastion task (#1167), never a task of the deployment it waits on. The wait runs after
+# the apply, whose outputs apply_images wrote to the document, so a document that then names no
+# bastion fails the wait before any tunnel opens, naming bastion = true and --url. The origin is
+# https://app1.$SPA_CERT_DOMAIN:<that port>, the first app's host on the loopback address by the hosts-file line certs.sh names, and the gateway answers /readyz on any host
 # (contracts/pipeline.md, UsePlatformHealth). The wait closes it when the wait ends, pass or fail,
 # and cell_cleanup closes it on an exit or an interrupt before then. Until #1008 the wait read through
 # an operator's tunnel, which had to be started by hand, through a task of the new deployment,
@@ -586,6 +602,7 @@ wait_for_revision() {
   done
   [ -n "$ids" ] || fail "${SERVICE} has no running task to wait for."
   if [ -z "$origin" ]; then
+    [ -n "$(outputs_bastion)" ] || fail "${NO_BASTION} Or pass --url with an origin this workstation already reaches, and the wait opens no tunnel."
     open_wait_tunnel
     origin="https://app1.${SPA_CERT_DOMAIN:-spa-poc.test}:${WAIT_TUNNEL_PORT}"
   fi
