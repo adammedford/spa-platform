@@ -72,9 +72,9 @@ const FILES = A.files || CORPUS
 // corpus, and sixty claims to a verify agent so its greps share sites.
 const SHARD_WORDS = 8000
 const BATCH_CLAIMS = 60
-// Where candidate rules are proposed. #81 names #65, which is closed (#81's audit comment of
-// 2026-10-21); where this should point is raised on #81 and not decided here (#267).
-const RULE_ISSUE = 65
+// Where candidate rules are proposed: #1370, the standing issue Adam named for them on 2026-11-18
+// (#81's comment of that day), read for its **Rule:** lines and commented on (#1371).
+const RULE_ISSUE = 1370
 const LOG = `${REPO}/.scratch/truth-audit/log` // git-ignored (.gitignore: .scratch/*/log/)
 const TYPES = ['identifier-exists', 'writes-or-reads', 'proves', 'path-exists', 'count', 'freeze-or-ownership-cell', 'universal', 'vendor']
 const VERDICTS = ['true', 'false', 'stale', 'unverifiable']
