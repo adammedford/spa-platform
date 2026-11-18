@@ -32,10 +32,13 @@ public sealed class FragmentsObserverTests
 
     private static IReadOnlyList<Redirect> Redirects(int count) => [.. Enumerable.Range(0, count).Select(i => new Redirect(302, $"/hop/{i}"))];
 
-    /// <summary>A run per N as TestIdp's 4 + 3N would give it, split at no page; N = 6 (22) stops short of returnUrl.</summary>
+    /// <summary>
+    /// A run per N as TestIdp's 4 + 3N would give it, split at no page; at N = 6 (22) the browser follows
+    /// 20 and stops short of returnUrl.
+    /// </summary>
     internal static RedirectRecord GoodRedirects() => new([.. FragmentsObserver.Engines.Select(engine => new EngineRedirects(engine, "131.0", [.. Enumerable.Range(0, FragmentsObserver.MaxN + 1).Select(n => new RedirectRun(
         n,
-        [Redirects(4 + (3 * n))],
+        [Redirects(Math.Min(4 + (3 * n), FragmentsObserver.FetchRedirectLimit))],
         [Redirects(2), Redirects(2 + (3 * n))],
         [.. Enumerable.Range(0, n).Select(_ => (IReadOnlyList<IReadOnlyList<Redirect>>)[Redirects(3)])],
         4 + (3 * n) <= FragmentsObserver.FetchRedirectLimit))], new BoundaryProbe(20, 21)))]);
@@ -54,14 +57,25 @@ public sealed class FragmentsObserverTests
         Assert.Contains("margin 0, a policy choice", string.Join('\n', result.Observations), StringComparison.Ordinal);
     }
 
-    [Fact]
-    public void O1_a_completed_redirect_chain_longer_than_20_fails()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void O1_a_redirect_chain_longer_than_20_fails(bool reached)
     {
         // Mutation: deleting the FetchRedirectLimit check in FragmentsObserver.Redirects makes this pass the row.
-        RowResult result = FragmentsObserver.Redirects(WithRun(GoodRedirects(), "firefox", 6, run => run with { ReachedReturnUrl = true }));
+        RowResult result = FragmentsObserver.Redirects(WithRun(GoodRedirects(), "firefox", 6, run => run with { Uninterrupted = [Redirects(22)], ReachedReturnUrl = reached }));
 
         Assert.Equal(Verdict.Failed, result.Verdict);
-        AssertNotPassed(result, "past the Fetch standard's 20");
+        AssertNotPassed(result, "redirect run of 22, past the Fetch standard's 20");
+    }
+
+    [Fact]
+    public void O1_with_no_N_completing_in_every_engine_sets_no_cap()
+    {
+        // Mutation: removing the `completing.Length == 0` return from FragmentsObserver.Redirects throws on Max of nothing.
+        RedirectRecord none = new([.. GoodRedirects().Engines.Select(e => e.Engine != "webkit" ? e : e with { Runs = [.. e.Runs.Select(run => run with { ReachedReturnUrl = false })] })]);
+
+        AssertNotPassed(FragmentsObserver.Redirects(none), "no N from 0 to 6 completed in every engine");
     }
 
     [Theory]
@@ -126,8 +140,8 @@ public sealed class FragmentsObserverTests
     [InlineData("no overlapping callbacks")]
     public void O2_a_missing_topology_counts_sample_or_cross_task_write_is_not_proved(string reason)
     {
-        // Mutation: removing the `wrote.Distinct(...).Count() < 2` return passes the "wrote on 1 task(s)" case; each
-        // other case has its own return in FragmentsObserver.Contention, removing which passes it.
+        // Mutation: weakening the `wrote.Distinct(...).Count() < 2` return passes the "wrote on 1 task(s)" case, and
+        // weakening the topology, per-write or sample return passes its case (M6, M51 to M53 of the Task commit).
         RefreshContention good = GoodContention();
         RefreshContention broken = reason switch
         {
@@ -394,6 +408,16 @@ public sealed class FragmentsObserverTests
         AssertNotPassed(FragmentsObserver.EntryImports(new EntryImportRecord([GoodImports().Cases[0]])), "another entry name");
     }
 
+    [Fact]
+    public void O12_an_entry_that_does_not_load_fails()
+    {
+        // Mutation: removing the `!import.Loaded.Value` return from FragmentsObserver.EntryImports passes this row.
+        RowResult result = FragmentsObserver.EntryImports(new([GoodImports().Cases[0] with { Loaded = false }, GoodImports().Cases[1]]));
+
+        Assert.Equal(Verdict.Failed, result.Verdict);
+        AssertNotPassed(result, "import('/fragments/orders/entry.js') did not load");
+    }
+
     [Theory]
     [InlineData("/fragments/orders/chunk-1a2b.js")]
     [InlineData("/fragments/billing/assets/chunk.js")]
@@ -434,6 +458,14 @@ public sealed class FragmentsObserverTests
         Assert.Equal(Verdict.NotProved, result.Verdict);
         AssertNotPassed(result, "has no Fetch Metadata recorded");
         Assert.Equal(Verdict.Failed, FragmentsObserver.Chain(new([GoodChain().Runs[0] with { Completed = false }, GoodChain().Runs[1]]), AtTwo).Verdict);
+    }
+
+    [Fact]
+    public void O13_an_agent_with_no_chain_or_a_short_one_is_not_proved()
+    {
+        // Mutation: removing the `run.Steps.Count != context.N` return from FragmentsObserver.Chain passes the short chain.
+        AssertNotPassed(FragmentsObserver.Chain(new([GoodChain().Runs[0]]), AtTwo), "no chain was observed in firefox 133");
+        AssertNotPassed(FragmentsObserver.Chain(new([GoodChain().Runs[0], GoodChain().Runs[1] with { Steps = [GoodChain().Runs[1].Steps[0]] }]), AtTwo), "recorded 1 /bff/chain steps of 2");
     }
 
     internal static ChainRefusalRecord GoodRefusals() =>
@@ -501,6 +533,7 @@ public sealed class FragmentsObserverTests
         AssertNotPassed(FragmentsObserver.PublishRaces(new([different with { ServedSha256 = Other }, same])), "the URL served bytes other than the winner's");
         AssertNotPassed(FragmentsObserver.PublishRaces(new([different, same with { Runs = [same.Runs[0], new PublishRun(false, 412, Winner)] }])), "same-bytes publish did not complete");
         AssertNotPassed(FragmentsObserver.PublishRaces(new([different])), "both the different-bytes and the same-bytes variant");
+        AssertNotPassed(FragmentsObserver.PublishRaces(new([different with { Runs = [different.Runs[0] with { Completed = false, RefusedWith = 409 }, different.Runs[1]] }, same])), "neither racing publish completed");
     }
 
     // ---- the gateway's lines, as CloudWatch answers them (F-31 and N-38) ----
@@ -555,7 +588,7 @@ public sealed class FragmentsObserverTests
 
     internal static JsonObject[] RollingLines(bool preApplied = false) =>
     [
-        Line(TaskA, SignedIn, new JsonObject { ["msg"] = "Registry document \"etag-2\" has an error: /schemaVersion: value should be 1" }),
+        Line(TaskA, SignedIn, new JsonObject { ["msg"] = "Registry document \"etag-2\" has an error: /schemaVersion: Expected \"1\" [schema]" }),
         Line(TaskA, SignedIn, new JsonObject { ["msg"] = "Registry document \"etag-2\" is rejected with 1 error(s). Revision 41 stays live." }),
         Line(TaskB, SignedIn, new JsonObject { ["msg"] = "Registry revision 42 (\"etag-2\") is live with 2 app(s)." }),
         .. preApplied ? [Line(TaskA, SignedIn.AddSeconds(30), new JsonObject { ["msg"] = "Registry revision 42 (\"etag-2\") is live with 2 app(s)." })] : Array.Empty<JsonObject>(),
@@ -582,6 +615,44 @@ public sealed class FragmentsObserverTests
 
         Assert.Equal(Verdict.Failed, result.Verdict);
         AssertNotPassed(result, $"the pre-fragments task {TaskA} applied the schemaVersion 2 document");
+    }
+
+    [Fact]
+    public async Task Row10_the_registrys_wording_the_matcher_reads_is_the_registrys_own()
+    {
+        // Mutation: changing FragmentsObserver.StaysLive to "stays alive." fails this test, as a change to RegistrySource.cs's line would.
+        string source = await File.ReadAllTextAsync(Path.Combine(FixtureFiles.RepositoryRoot, "src", "Platform.Registry", "RegistrySource.cs"), Ct);
+        string issue = await File.ReadAllTextAsync(Path.Combine(FixtureFiles.RepositoryRoot, "src", "Platform.Registry", "RegistryIssue.cs"), Ct);
+
+        Assert.Contains("\"Registry document {ETag} " + FragmentsObserver.HasAnError + "{Issue}\"", source, StringComparison.Ordinal);
+        Assert.Contains("is rejected with {Count} error(s). Revision {Revision} " + FragmentsObserver.StaysLive + "\"", source, StringComparison.Ordinal);
+        Assert.StartsWith(FragmentsObserver.IsRejected, "is rejected with {Count}", StringComparison.Ordinal);
+        Assert.Contains("\"Registry revision {Revision} ({ETag}) is live with {Count} app(s).\"", source, StringComparison.Ordinal);
+        Assert.Equal("Registry revision 42 (", FragmentsObserver.LivePrefix(42));
+        Assert.Contains("ToString() => $\"{(Path.Length == 0 ? \"/\" : Path)}: {Message} [{Rule}]\"", issue, StringComparison.Ordinal);
+        Assert.EndsWith(": ", FragmentsObserver.SchemaVersionIssue, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("revision")]
+    [InlineData("one image")]
+    [InlineData("stays")]
+    [InlineData("fragments task")]
+    public async Task Row10_a_missing_revision_a_one_image_deploy_a_refusal_with_no_live_snapshot_or_an_unapplied_fragments_task_does_not_pass(string broken)
+    {
+        // Mutation: removing the `!byVersion || !stays` clause's `!stays`, or the fragments task's apply check, from
+        // FragmentsObserver.RollingRefusal passes the "stays" or the "fragments task" case.
+        RollingRefusalRecord good = await GoodRollingAsync();
+        JsonObject[] lines = RollingLines();
+        (RollingRefusalRecord record, JsonObject[] read, string reason) = broken switch
+        {
+            "revision" => (good with { Revision = null }, lines, "revision is missing"),
+            "one image" => (good with { Tasks = [good.Tasks[1]] }, lines, "0 pre-fragments and 1 fragments task(s)"),
+            "stays" => (good, [lines[0], lines[2]], "no refusal by schemaVersion with its snapshot staying live"),
+            _ => (good, lines[..2], $"the fragments task {TaskB} did not apply revision 42"),
+        };
+
+        AssertNotPassed(FragmentsObserver.RollingRefusal(record, await CaptureAsync(read)), reason);
     }
 
     [Theory]
@@ -649,6 +720,16 @@ public sealed class FragmentsObserverTests
         RowResult result = FragmentsObserver.Successor(steps, record, await CaptureAsync([.. lines, late]));
         Assert.Equal(Verdict.Failed, result.Verdict);
         AssertNotPassed(result, $"the successor refreshed on {TaskB} after the logout on {TaskA}");
+    }
+
+    [Fact]
+    public async Task O3_a_successor_obtained_before_the_logout_is_not_one_obtained_during_it()
+    {
+        // Mutation: taking the first Refreshed line whatever its time (dropping `>= logout.At`) in FragmentsObserver.Successor passes this row.
+        (IReadOnlyList<Step> steps, SuccessorRecord record, JsonObject[] lines) = GoodSuccessor();
+        JsonObject early = Line(TaskB, steps[0].At.AddSeconds(-30), new JsonObject { ["msg"] = "Refreshed the access token", ["session_ref"] = SessionRef, ["fragment_id"] = "orders", ["ts"] = steps[0].At.AddSeconds(-30).ToString("O") });
+
+        AssertNotPassed(FragmentsObserver.Successor(steps, record, await CaptureAsync([lines[0], lines[1], early, lines[3]])), $"no successor was obtained on {TaskB} while the logout ran");
     }
 
     [Fact]

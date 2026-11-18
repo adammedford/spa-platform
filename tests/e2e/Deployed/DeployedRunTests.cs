@@ -201,6 +201,20 @@ public sealed class DeployedRunTests
     }
 
     [Fact]
+    public void A_row_naming_facts_of_two_deployed_classes_is_refused_naming_the_row()
+    {
+        // Mutation: replacing the TryAdd assertion in DeployedSubsetTests.DeployedClassRowTests with an indexer write credits one.
+        string register = FragmentsRegister.Replace(
+            "`tests/e2e/Deployed/FragmentsTests.cs`: `FragmentsTests.G9_O3_a_successor_obtained_during_logout_is_refused`",
+            "`tests/e2e/Deployed/FragmentsTests.cs`: `FragmentsTests.G9_O3_a_successor_obtained_during_logout_is_refused`; `tests/e2e/Deployed/ContinuityTests.cs`: `ContinuityTests.Row9_a_session_ended_on_one_task_is_refused_by_the_other`",
+            StringComparison.Ordinal);
+        Assert.NotEqual(FragmentsRegister, register);
+
+        Xunit.Sdk.XunitException failure = Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => DeployedSubsetTests.DeployedClassRowTests(register));
+        Assert.Contains("N-38 names a Fact of more than one deployed class", failure.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void A_fragments_row_naming_two_facts_fails_the_reader_naming_the_row_as_a_fragments_one()
     {
         // Mutation: removing the `named.Length == 1` assertion from DeployedSubsetTests.ContinuityRowTests credits the first.

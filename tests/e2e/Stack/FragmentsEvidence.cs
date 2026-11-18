@@ -168,7 +168,8 @@ public sealed partial class FragmentsEvidence(string directory, ICommandRunner r
     /// cookie, ticket and continuation the gateway issues is (its base64url form starts <c>CfDJ8</c>,
     /// the magic header 0x09F0C9F0 of
     /// https://learn.microsoft.com/aspnet/core/security/data-protection/implementation/authenticated-encryption-details),
-    /// a query parameter that carries a code, state, continuation or token, or a <c>__Host-</c> cookie
+    /// a query parameter that carries a code, state, continuation or token (its <c>&amp;</c> as System.Text.Json
+    /// escapes it, <c>\u0026</c>, too), or a <c>__Host-</c> cookie
     /// with a value. Printed and written text alike passes through this (N-16's canaries).
     /// </summary>
     public static string? Unsafe(string text) =>
@@ -178,7 +179,7 @@ public sealed partial class FragmentsEvidence(string directory, ICommandRunner r
         : HostCookie().IsMatch(text) ? "a __Host- cookie with its value"
         : null;
 
-    [GeneratedRegex(@"[?&#](code|state|session_state|continuation|c|token|access_token|refresh_token|id_token)=", RegexOptions.IgnoreCase, RegexTimeout.Milliseconds)]
+    [GeneratedRegex(@"(?:[?&#]|\\u0026)(code|state|session_state|continuation|c|token|access_token|refresh_token|id_token)=", RegexOptions.IgnoreCase, RegexTimeout.Milliseconds)]
     private static partial Regex SecretParameter();
 
     [GeneratedRegex(@"__Host-[A-Za-z0-9_-]+=[^;\s""]", RegexOptions.None, RegexTimeout.Milliseconds)]

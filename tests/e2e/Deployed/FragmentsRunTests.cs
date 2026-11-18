@@ -145,6 +145,29 @@ public sealed class FragmentsRunTests : IDisposable
     }
 
     [Fact]
+    public async Task A_run_stops_attempting_once_the_wall_time_left_is_spent()
+    {
+        // Mutation: dropping `wall.Elapsed < budget.Wall` from FragmentsRun.RowAsync's loop makes the 9 attempts left here.
+        Step control = Control();
+        RowBound bound = FragmentsBounds.Of(FragmentsBounds.O3);
+        FragmentsRowEvidence earlier = new(FragmentsBounds.O3, 1, (bound.Wall - TimeSpan.FromSeconds(1)).TotalSeconds, Verdict.NotProved, "earlier", [], 2, [], [], []);
+        await File.WriteAllTextAsync(Path.Combine(directory, FragmentsBounds.O3 + ".json"), JsonSerializer.Serialize(earlier), Ct);
+        int made = 0;
+
+        await Run(Runner(true, control)).RowAsync(FragmentsBounds.O3, control,
+            async (_, ct) =>
+            {
+                made++;
+                await Task.Delay(TimeSpan.FromSeconds(1.2), ct);
+                return new Driven<SuccessorRecord>(Context(), [], new SuccessorRecord("", "", null, null));
+            },
+            (d, c) => FragmentsObserver.Successor(d.Steps, d.Record, c),
+            Ct);
+
+        Assert.Equal(1, made);
+    }
+
+    [Fact]
     public void O8s_bound_allows_for_the_managed_login_hour_and_every_row_has_one()
     {
         // Mutation: setting O8's wall bound to 60 minutes (the hour alone) in FragmentsBounds.ByRow fails this test.
@@ -222,10 +245,11 @@ public sealed class FragmentsRunTests : IDisposable
     [InlineData("CfDJ8AAAA", "a data-protection payload")]
     [InlineData("/signin-oidc?code=x", "a query parameter")]
     [InlineData("/bff/chain?c=x", "a query parameter")]
+    [InlineData("/signin-oidc?x=1\\u0026state=x", "a query parameter")]
     [InlineData("__Host-spa-csrf=abc", "a __Host- cookie")]
     public void The_guard_names_each_credential_shape_and_passes_a_clean_record(string text, string kind)
     {
-        // Mutation: removing any one arm of FragmentsEvidence.Unsafe passes its case.
+        // Mutation: removing any one arm of FragmentsEvidence.Unsafe passes its case (M44 and M54 to M57 of the Task commit).
         Assert.StartsWith(kind, FragmentsEvidence.Unsafe("{\"path\":\"" + text + "\"}"), StringComparison.Ordinal);
         Assert.Null(FragmentsEvidence.Unsafe(JsonSerializer.Serialize(FragmentsObserverTests.GoodRedirects())));
     }

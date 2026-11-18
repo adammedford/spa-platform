@@ -11,7 +11,7 @@ namespace Gateway.E2ETests.Stack;
 public sealed record Redirect(int Status, string Path);
 
 /// <summary>
-/// One value of N in one engine (#1005 O1): the uninterrupted sign-in with Cognito's managed-login
+/// One value of N in one engine (#1005 O1), each run being the redirects the browser followed: the uninterrupted sign-in with Cognito's managed-login
 /// session live, the interactive sign-in, each chain hop, each as runs of redirects split wherever a
 /// page interrupted them, and whether the navigation ended on <c>returnUrl</c>.
 /// </summary>
@@ -222,11 +222,11 @@ public static partial class FragmentsObserver
                 }
 
                 int longest = new[] { Longest(run.Uninterrupted), Longest(run.Interactive) }.Concat(run.Hops.Select(Longest)).Max();
-                // A run past the limit is what sets the cap when its navigation stopped; one whose
-                // navigation completed is a record no browser could have made.
-                if (longest > FetchRedirectLimit && run.ReachedReturnUrl.Value)
+                // A run is the redirects the browser followed; it stops with a network error past the
+                // limit, so a longer run is a record no browser made.
+                if (longest > FetchRedirectLimit)
                 {
-                    return RowResult.Failed($"{engine} at N={n} recorded a redirect run of {longest} ending on returnUrl, past the Fetch standard's {FetchRedirectLimit}, at which a browser stops with a network error", seen);
+                    return RowResult.Failed($"{engine} at N={n} recorded a redirect run of {longest}, past the Fetch standard's {FetchRedirectLimit}, at which a browser stops with a network error", seen);
                 }
 
                 seen.Add($"{engine} {found.Version} N={n}: uninterrupted {Longest(run.Uninterrupted)}, interactive {Longest(run.Interactive)}, hops [{string.Join(", ", run.Hops.Select(Longest))}], returnUrl {(run.ReachedReturnUrl.Value ? "reached" : "not reached")}");
@@ -720,7 +720,7 @@ public static partial class FragmentsObserver
             return RowResult.NotProved($"the rolling deploy showed {before.Length} pre-fragments and {after.Length} fragments task(s); it needs both", seen);
         }
 
-        string live = $"Registry revision {revision.ToString(CultureInfo.InvariantCulture)} (";
+        string live = LivePrefix(revision);
         foreach (TaskImage task in before)
         {
             GatewayEvent[] lines = [.. capture.Events.Where(line => line.TaskId == task.TaskId)];
@@ -729,8 +729,8 @@ public static partial class FragmentsObserver
                 return RowResult.Failed($"the pre-fragments task {task.TaskId} applied the schemaVersion 2 document", seen);
             }
 
-            bool byVersion = lines.Any(line => line.Field("msg") is { } msg && msg.Contains("has an error", StringComparison.Ordinal) && msg.Contains("schemaVersion", StringComparison.Ordinal));
-            bool stays = lines.Any(line => line.Field("msg") is { } msg && msg.Contains("is rejected", StringComparison.Ordinal) && msg.Contains("stays live", StringComparison.Ordinal));
+            bool byVersion = lines.Any(line => line.Field("msg") is { } msg && msg.Contains(HasAnError, StringComparison.Ordinal) && msg.Contains(SchemaVersionIssue, StringComparison.Ordinal));
+            bool stays = lines.Any(line => line.Field("msg") is { } msg && msg.Contains(IsRejected, StringComparison.Ordinal) && msg.Contains(StaysLive, StringComparison.Ordinal));
             if (!byVersion || !stays)
             {
                 return RowResult.NotProved($"the pre-fragments task {task.TaskId} shows no refusal by schemaVersion with its snapshot staying live", seen);
@@ -815,6 +815,22 @@ public static partial class FragmentsObserver
         seen.Add($"successor refused at the provider with {probe}");
         return RowResult.Passed("the successor obtained during the logout was refused at the provider", seen);
     }
+
+    /// <summary>
+    /// The registry's own wording, from src/Platform.Registry/RegistrySource.cs's error, rejection and
+    /// swap lines and RegistryIssue's <c>{path}: {message}</c>; FragmentsObserverTests reads each from
+    /// those files and fails when one no longer holds it (#872's shape).
+    /// </summary>
+    public const string HasAnError = "has an error: ";
+
+    public const string SchemaVersionIssue = "/schemaVersion: ";
+
+    public const string IsRejected = "is rejected with ";
+
+    public const string StaysLive = "stays live.";
+
+    /// <summary>The head of the swap line, <c>Registry revision {Revision} ({ETag}) is live …</c>, for one revision.</summary>
+    public static string LivePrefix(long revision) => $"Registry revision {revision.ToString(CultureInfo.InvariantCulture)} (";
 
     private static bool FragmentOf(GatewayEvent line, string fragmentId) => line.Field("fragment_id") is not { } id || id == fragmentId;
 
