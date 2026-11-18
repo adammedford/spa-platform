@@ -2311,7 +2311,7 @@ run "under_dynamodb_the_task_role_holds_exactly_the_table_and_ring_grants" {
       toset([for s in data.aws_iam_policy_document.task.statement : s.sid])
       == toset(["ReadRegistryAndReleases", "ReadClientSecrets", "ReadWriteSessions", "ReadWriteKeyRing", "TagKeyRingOnCreate"])
     )
-    error_message = "Under dynamodb the task role holds Phase 1's three grants and three more: the session table, the key ring, and the ring's tags on create (#338)."
+    error_message = "Under dynamodb the task role holds Phase 1's two grants (#787 removed the third) and three more: the session table, the key ring, and the ring's tags on create (#338)."
   }
 
   # The five the store sends (change request P2-1, item 5's operations table and Decision 7), and
