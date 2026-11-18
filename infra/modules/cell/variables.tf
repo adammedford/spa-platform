@@ -459,3 +459,46 @@ variable "multi_task" {
     error_message = "multi_task = true carves four /24 subnets out of vpc_cidr, two public and two private, so the range is /22 or larger."
   }
 }
+
+# --- #1167, #1168: the bastion, the tunnel's hop --------------------------------------------------
+
+variable "bastion" {
+  description = <<-EOT
+    The tunnel's hop (#1167): a second ECS service in the cell's cluster, "bastion", running one
+    task of bastion_image with ECS Exec on, under a task role whose whole grant is the four
+    ssmmessages permissions. tools/scripts/tunnel.sh forwards through it, and refuses without it.
+    False, the default and Phase 1's, declares none of it: the cell has no hop, so nothing on a
+    workstation reaches the internal load balancer. True and applied means one running bastion
+    task until an apply turns it off.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "bastion_image" {
+  description = <<-EOT
+    The bastion container's image: the sample image, public.ecr.aws/nginx/nginx-unprivileged, by
+    digest (#1167, sub-question 3.1), which tools/scripts/platform-tfvars.sh already resolves for
+    gateway_image. Held to gateway_image's rule, a digest reference and never a tag, so an apply
+    never moves the running bastion. Empty, the default, is allowed only while bastion is false.
+  EOT
+  type        = string
+  default     = ""
+
+  # gateway_image's rule, read from the same contract pattern, with empty admitted for a cell that
+  # declares no bastion.
+  validation {
+    condition = var.bastion_image == "" || (
+      can(regex(jsondecode(file("${path.module}/../../../contracts/infra-outputs.schema.json")).properties.gatewayImage.pattern, var.bastion_image))
+      && can(regex("@sha256:[0-9a-f]{64}$", var.bastion_image))
+    )
+    error_message = "bastion_image is a digest reference, <repository>@sha256:<64 lowercase hex>, such as public.ecr.aws/nginx/nginx-unprivileged@sha256:<digest>. A tag, an empty digest or a short one is refused."
+  }
+
+  # Refused at plan rather than left to ECS, which would refuse a container with no image at apply,
+  # after the role and its policy were created.
+  validation {
+    condition     = !var.bastion || var.bastion_image != ""
+    error_message = "bastion = true needs bastion_image: the sample image by digest, public.ecr.aws/nginx/nginx-unprivileged@sha256:<digest>."
+  }
+}

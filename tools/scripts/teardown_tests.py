@@ -192,6 +192,33 @@ class TeardownEmptiesDestroysAndProvesNothingIsTagged(cell.CompanionTestCase):
         self.assertEqual(sorted(f"{cell.FAMILY}:{n}" for n in (1, 2, 3)), sorted(deleted))
         self.assertEqual("INACTIVE", case.load()["task_definitions"]["spa-platform-poc2:1"]["status"])
 
+    def test_the_bastion_family_s_inactive_task_definitions_are_deleted_and_no_other_cell_s(self):
+        # #1168: a cell that ran the bastion leaves its family's revisions INACTIVE after the destroy.
+        # The family is deleted by its exact name, infra/modules/cell/ecs.tf's bastion_family; a
+        # family the prefix also matches is another's and is left.
+        world = deployed_world()
+        world["task_definitions"].update({
+            f"{cell.BASTION_FAMILY}:1": {"status": "INACTIVE", "containers": {}},
+            f"{cell.BASTION_FAMILY}:2": {"status": "ACTIVE", "containers": {}},
+            f"{cell.BASTION_FAMILY}2:1": {"status": "INACTIVE", "containers": {}},
+            "spa-platform-poc2_bastion:1": {"status": "INACTIVE", "containers": {}},
+        })
+        case, result = self.torn_down(world)
+        deleted = [name for call in case.aws("ecs delete-task-definitions")
+                   for name in (ref.split("/")[-1] for ref in call["options"]["task-definitions"])]
+        self.assertEqual(sorted([f"{cell.FAMILY}:{n}" for n in (1, 2, 3)] + [f"{cell.BASTION_FAMILY}:1", f"{cell.BASTION_FAMILY}:2"]),
+                         sorted(deleted))
+        left = case.load()["task_definitions"]
+        self.assertEqual("INACTIVE", left[f"{cell.BASTION_FAMILY}2:1"]["status"])
+        self.assertEqual("INACTIVE", left["spa-platform-poc2_bastion:1"]["status"])
+        self.assertIn(f"deleted 2 inactive task definitions of {cell.BASTION_FAMILY}", result.stdout)
+
+    def test_a_cell_that_never_ran_the_bastion_deletes_none_of_its_family(self):
+        case, result = self.torn_down()
+        listings = [c["options"]["family-prefix"] for c in case.aws("ecs list-task-definitions")]
+        self.assertEqual([cell.FAMILY, cell.BASTION_FAMILY], listings)
+        self.assertIn(f"deleted 0 inactive task definitions of {cell.BASTION_FAMILY}", result.stdout)
+
     def test_more_than_ten_inactive_task_definitions_go_ten_at_a_time(self):
         world = deployed_world()
         for n in range(4, 26):
@@ -260,7 +287,8 @@ class TeardownEmptiesDestroysAndProvesNothingIsTagged(cell.CompanionTestCase):
         for reader in ("IAM roles by tag", "IAM customer managed policies by tag", "the cell's roles by name",
                        f"the tag query in {REGION}"):
             self.assertTrue(any(line.startswith(f"verify-teardown: {reader}: ") for line in lines), reader)
-        self.assertEqual(sorted(f"{cell.FAMILY}-{suffix}" for suffix in ("task", "task-execution")),
+        # The bastion task's role is checked by name too, on a cell that never ran one (#1167).
+        self.assertEqual(sorted(f"{cell.FAMILY}-{suffix}" for suffix in ("task", "task-execution", "bastion_task")),
                          sorted(c["options"]["role-name"] for c in case.aws("iam get-role")
                                 if c["options"]["role-name"] != cell.TEARDOWN_ROLE))
 

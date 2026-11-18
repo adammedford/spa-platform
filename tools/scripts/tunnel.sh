@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 #
-# tunnel.sh -- a Session Manager port forward from this workstation, through the cell's gateway
+# tunnel.sh -- a Session Manager port forward from this workstation, through the cell's bastion
 # task, to the internal load balancer on 443.
 #
-# Task 1.6b (#57). The ALB is internal and no bastion exists, so the gateway task is the hop
-# (docs/plan/05-infrastructure-and-cost.md, Workstation access). The tunnel carries TCP: the
-# browser's TLS handshake reaches the ALB unchanged, and the wildcard certificate certs.sh imported
-# is the one presented.
+# Task 1.6b (#57), and #1168. The ALB is internal, so a workstation reaches it through a hop in the
+# cell: the bastion, a service of one task that the platform root declares only with bastion = true
+# in its terraform.tfvars, off by default (#1167; infra/modules/cell/ecs.tf). No gateway task is the
+# hop. Without a bastion the cell has no hop, and the script refuses before it asks AWS anything.
+# The tunnel carries TCP: the browser's TLS handshake reaches the ALB unchanged, and the wildcard
+# certificate certs.sh imported is the one presented.
 #
 #   tools/scripts/tunnel.sh                      # forward local port 8443 to the ALB on 443
 #   tools/scripts/tunnel.sh --local-port 9443    # another local port
@@ -27,20 +29,22 @@
 # whether or not the request succeeds, and it stops when the session ends. Give it an interval
 # shorter than the idle timeout.
 #
-# Without --task it forwards through the first running task of the service that a session can
-# reach. A deployment can run two for a while, and either reaches the same load balancer, but a
-# sitting that stops one task needs the tunnel on the other: --task names it, by the id that ends
-# its ARN, and a task that is not a running task of the service a session can reach is a failure
-# that names it, never a fall back to another.
+# Without --task it forwards through the first running task of the bastion service that a session
+# can reach. The service runs one, but a roll of it can run two for a while, and either reaches the
+# same load balancer: --task names one, by the id that ends its ARN, and a task that is not a running
+# task of the bastion service a session can reach is a failure that names it, never a fall back to
+# another.
 #
 # Its names come from the outputs document, infra/envs/poc/outputs.json, and from nowhere else: the
-# ECS cluster is its ecsCluster, the service its ecsService and the load balancer its albDnsName
-# (contracts/infra-outputs.schema.json: "The scripts and the deployed tests read it"). seed.sh,
-# deploy.sh and rollback.sh write it after every apply, so it names the last apply's cell. Nothing
-# is looked up in AWS by name and nothing is read from Terraform state (#198); without the
-# document, or with one for another Region, it refuses. AWS is asked only for the service's running
-# tasks, and the hop is a task's gateway container (infra/modules/cell/ecs.tf). The load balancer is
-# the cell module's, which is internal (alb.tf).
+# ECS cluster is its ecsCluster, the service its ecsBastionService and the load balancer its
+# albDnsName (contracts/infra-outputs.schema.json: "The scripts and the deployed tests read it").
+# seed.sh, deploy.sh and rollback.sh write it after every apply, so it names the last apply's cell,
+# and it has an ecsBastionService only when that apply declared the bastion. Nothing is looked up in
+# AWS by name and nothing is read from Terraform state (#198); without the document, with one for
+# another Region, or with one that names no bastion, it refuses. AWS is asked only for the bastion
+# service's running tasks, and the hop is a task's bastion container (infra/modules/cell/ecs.tf),
+# never a task of the gateway's service, ecsService. The load balancer is the cell module's, which
+# is internal (alb.tf).
 #
 # Run it as the operator's own session: the spa-platform profile, with tools/aws-project.env
 # sourced, after seed.sh. It needs the AWS CLI v2, the Session Manager plugin and python3, and
@@ -55,7 +59,8 @@
 # Exit status: the AWS CLI's once the session is handed to it, 254 when StartSession itself is
 # refused (`aws help return-codes`); 1 when the cell has no task a session can reach, or the task
 # --task names is not one; 2 when it did not start (a usage error, a missing tool, no Region, the
-# local port already held, or no outputs document with the three names for this Region).
+# local port already held, no outputs document with the three names for this Region, or one that
+# names no bastion).
 #
 # Written for the bash 3.2 that ships with macOS, like tools/scripts/certs.sh.
 # Owner: workstream 1, AWS and IaC.
@@ -78,9 +83,8 @@ KEEPALIVE_GIVEN=0
 # the request, so it needs no hosts-file line.
 KEEPALIVE_HOST="app1.${SPA_CERT_DOMAIN:-spa-poc.test}"
 
-# The hop. The task has two containers and ECS Exec reaches both, but the plan names the gateway
-# task as the hop and the gateway container is the one the ALB's target group sends to.
-CONTAINER="$GATEWAY_CONTAINER"
+# The hop: the bastion task's one container (#1167).
+CONTAINER="$BASTION_CONTAINER"
 
 usage() {
   # The header above, up to the Owner line, is this script's manual.
@@ -91,7 +95,7 @@ Options
   --local-port N   The workstation port the Session Manager plugin listens on. Default:
                    \$SPA_TUNNEL_PORT, else 8443, the port in every app's registry host and
                    callback URL (docs/plan/05-infrastructure-and-cost.md, step 5).
-  --task ID        Forward through this task of the service, by its id (the part of its ARN
+  --task ID        Forward through this task of the bastion service, by its id (the part of its ARN
                    after the last /). Exit 1 when it is not a running task a session can reach.
                    Default: the first running task a session can reach.
   --keepalive S    While the session lasts, request /healthz through the forwarded port every
@@ -153,11 +157,15 @@ need_tool python3 "xcode-select --install"
 REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-}}"
 [ -n "$REGION" ] || refuse "no Region in AWS_REGION or AWS_DEFAULT_REGION. set -a; . tools/aws-project.env; set +a"
 
-# The three names, before any AWS call. Each refuses, exit 2, when the document is absent, is for
-# another Region or lacks the name, and says to run seed.sh (cell-common.sh, outputs_field).
+# The three names, before any AWS call. The cluster and the load balancer each refuse, exit 2, when
+# the document is absent, is for another Region or lacks the name, and say to run seed.sh
+# (cell-common.sh, outputs_field). Then the service, the bastion's: a document that names none is a
+# cell with no hop, refused, exit 2, with what turns the bastion on (#1167). The gateway's service,
+# ecsService, is never read: no task of it is the hop.
 CLUSTER="$(outputs_field ecsCluster)"
-SERVICE="$(outputs_field ecsService)"
 ALB="$(outputs_field albDnsName)"
+SERVICE="$(outputs_bastion)"
+[ -n "$SERVICE" ] || refuse "$NO_BASTION"
 
 # Something already answering on the port would take the browser's connections, or the plugin
 # would fail to bind it after the session had started. bash's /dev/tcp connects, so a refusal means
@@ -200,10 +208,10 @@ if [ -n "$TASK" ]; then
 fi
 [ "$#" -gt 0 ] || fail "${SERVICE} in ${CLUSTER} has no running task, so there is nothing to forward through. Is the service steady?"
 
-# One row per task: its ARN, its status, whether ECS Exec is on, and the gateway container's
-# runtime id and Exec agent status. The three conditions the plan names are a service with Exec
-# on, the task role's ssmmessages permissions and a writable root filesystem; the first two show
-# here as the agent running, and the third is in the task definition (ecs.tf).
+# One row per task: its ARN, its status, whether ECS Exec is on, and the bastion container's
+# runtime id and Exec agent status. The three conditions an ECS Exec session needs are a service
+# with Exec on, the task role's ssmmessages permissions and a writable root filesystem; the first
+# two show here as the agent running, and the third is in the task definition (ecs.tf).
 # https://docs.aws.amazon.com/AmazonECS/latest/developerguide/ecs-exec.html
 aws_read "the tasks of ${SERVICE}" \
   ecs describe-tasks --cluster "$CLUSTER" --tasks "$@" \

@@ -54,6 +54,14 @@ output "gateway_image" {
   value       = module.cell.gateway_image
 }
 
+# #1167. Null when the cell declares no bastion, and Terraform leaves a null output out of
+# `terraform output -json`, so the outputs document then has no ecsBastionService, which is how
+# tunnel.sh knows the cell has no hop before it asks AWS anything.
+output "ecs_bastion_service" {
+  description = "The contract's optional `ecsBastionService`: the bastion service tunnel.sh lists for its hop, or null with bastion = false."
+  value       = module.cell.ecs_bastion_service
+}
+
 # Nothing else. contracts/infra-outputs.schema.json is additionalProperties: false,
 # so an output this root publishes that the contract has no field for is a trap for
 # whatever assembles outputs.json in task 1.7. The network and the security groups

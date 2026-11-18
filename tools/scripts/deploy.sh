@@ -56,11 +56,19 @@
 #      the revision step 1 read or later (cell-common.sh's wait_for_revision; change request P2-5,
 #      decision 6, #309): one answer through the load balancer speaks for one task only, and a task
 #      the load balancer never picks fails the wait. The load balancer is internal, so the wait opens a
-#      tunnel of its own, tools/scripts/tunnel.sh through a running task of this deployment, on a free
+#      tunnel of its own, tools/scripts/tunnel.sh through the cell's bastion task (#1167), on a free
 #      ephemeral port the system picks (8443 lies below that range), and reads through
 #      https://app1.$SPA_CERT_DOMAIN:<that port>; it closes it when the wait ends, pass, fail or
 #      Ctrl-C (#1008). An operator's tunnel on 8443 is left alone, and none need be running. --url
 #      names an origin to wait through instead, and then no tunnel is opened.
+#
+# Without --url it needs the bastion, which the platform root declares only with bastion = true in
+# its terraform.tfvars, and it never turns that on or off. It refuses, exit 2, before anything is
+# built or pushed, when the outputs document names no bastion, with a line that names bastion = true
+# and --url: the document names the last apply's cell, and this deployment's own apply does not
+# change the input. Should the apply leave no bastion all the same, because terraform.tfvars set it
+# false after the document was last written, the wait fails, exit 1, with the same line, before it
+# opens a tunnel (#1168).
 #
 # The cell's names come from infra/envs/poc/outputs.json, which seed.sh wrote, and never from
 # Terraform state (contracts/infra-outputs.schema.json).
@@ -151,6 +159,12 @@ ECR_GATEWAY="$(outputs_field ecrGateway)"
 ECR_MOCK_API="$(outputs_field ecrMockApi)"
 CLUSTER="$(outputs_field ecsCluster)"
 SERVICE="$(outputs_field ecsService)"
+# Before anything is built: without --url the wait's tunnel needs the bastion, and a document that
+# names none is a cell with no hop (#1167). Read from the document, which names the last apply's
+# cell; this deployment's apply passes the images and leaves the bastion input as it is.
+if [ -z "$ORIGIN" ] && [ -z "$(outputs_bastion)" ]; then
+  refuse "${NO_BASTION} Or pass --url with an origin this workstation already reaches, and the wait opens no tunnel."
+fi
 # After the reads above, so that a missing or foreign outputs document is refused by them, naming
 # the field. Before anything prints: Terraform's plan names both apps' client ids (#251).
 redact_clients

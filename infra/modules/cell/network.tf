@@ -3,11 +3,14 @@
 # own default group is adopted with no rule, so it is not a third way in.
 #
 # What is deliberately absent is as much of the design as what is here. There is no
-# NAT gateway, no bastion and no database: the task sends 443 out from a public
-# address. P-01 in the platform root's tests fails on any of the three whatever
-# the module declares, and tests/network.tftest.hcl fails on any ingress rule
-# beyond the two below. The resource-type allowlist in tests/module.tftest.hcl
-# fails on an instance, but it names the NAT gateway's type and the session
+# NAT gateway, no database and no network of the tunnel's own: the task sends 443
+# out from a public address. P-01 in the platform root's tests fails on a NAT
+# gateway, an instance or a database whatever the module declares, and
+# tests/network.tftest.hcl fails on any ingress rule beyond the two below. The
+# bastion, the tunnel's hop behind the bastion input (#1167, ecs.tf), adds nothing
+# here: its task sits in the task subnets and the task security group, so the
+# load balancer's group still admits 443 from that group alone. The resource-type
+# allowlist in tests/module.tftest.hcl fails on an instance, but it names the NAT gateway's type and the session
 # table's, so it cannot tell a gated one from an ungated one: P-01 alone holds
 # them to their gates. There are two exceptions, each in one gated form P-01
 # admits: the session table, planned only under session_store = dynamodb, and

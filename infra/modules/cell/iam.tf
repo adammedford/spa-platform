@@ -1,4 +1,5 @@
-# Task 1.4a. The cell's two roles.
+# Task 1.4a. The cell's two roles, and under the bastion input a third, the bastion task's (#1167),
+# at the end of this file.
 #
 # Two, never one. The execution role is the ECS agent's: it pulls the image and opens the log
 # stream. The task role is the workload's, and it is the security object of record for the whole
@@ -322,4 +323,49 @@ resource "aws_iam_role_policy" "task" {
   name   = "${local.name_prefix}-task"
   role   = aws_iam_role.task.id
   policy = data.aws_iam_policy_document.task.json
+}
+
+# --- The bastion's task role: the tunnel's four permissions and nothing else (#1167) ------------
+#
+# Behind the bastion input, as the bastion's service and task definition are (ecs.tf). The trust is
+# the document the cell's two roles share, ECS tasks in this account and Region and nothing else.
+# The grant is the four ssmmessages actions the task role's SessionManagerMessages statement holds,
+# the whole of what an ECS Exec session needs of a task's role
+# (https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html, "ECS Exec
+# permissions"): no bucket, no parameter and no other service. Until #787 the gateway's task role
+# holds the same four, and the tunnel uses these.
+#
+# The document is written out in the policy itself rather than as a policy document data source, so
+# the bastion adds no declaration but its four (#1167, item 2), and so tests/module.tftest.hcl reads
+# the very JSON the role is given: the mock provider renders no data source's document.
+
+resource "aws_iam_role" "bastion_task" {
+  count = var.bastion ? 1 : 0
+
+  name               = "${local.name_prefix}-bastion_task"
+  description        = "The bastion task's role for cell ${var.cell}: the four ssmmessages permissions an ECS Exec session needs, and nothing else."
+  assume_role_policy = data.aws_iam_policy_document.ecs_tasks_trust.json
+
+  tags = { Name = "${local.name_prefix}-bastion_task" }
+}
+
+resource "aws_iam_role_policy" "bastion_task" {
+  count = var.bastion ? 1 : 0
+
+  name = "${local.name_prefix}-bastion_task"
+  role = aws_iam_role.bastion_task[0].id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid    = "SessionManagerMessages"
+      Effect = "Allow"
+      Action = [
+        "ssmmessages:CreateControlChannel",
+        "ssmmessages:CreateDataChannel",
+        "ssmmessages:OpenControlChannel",
+        "ssmmessages:OpenDataChannel",
+      ]
+      Resource = "*"
+    }]
+  })
 }

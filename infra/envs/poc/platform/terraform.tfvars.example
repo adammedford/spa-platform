@@ -48,3 +48,15 @@ additional_teardown_principal_arns = []
 # session_store                    = "dynamodb"
 # data_protection_parameter_prefix = "/spa-platform/poc/data-protection/"
 # data_protection_kms_key_id       = ""
+
+# The tunnel's hop (#1167). Unset, the cell has no bastion, so nothing on a
+# workstation reaches the internal load balancer: tools/scripts/tunnel.sh
+# refuses, and deploy.sh refuses unless --url names an origin it already
+# reaches. Set to true and applied, the cell runs one bastion task, ECS Exec on,
+# under a role holding only the four ssmmessages permissions, and tunnel.sh
+# forwards through it; it runs, and is billed, until an apply sets it back.
+# Its image is the sample image pinned by digest, as gateway_image is above. The
+# outputs document names the bastion once seed.sh, deploy.sh or rollback.sh
+# rewrites it after the apply.
+# bastion       = true
+# bastion_image = "public.ecr.aws/nginx/nginx-unprivileged@sha256:<digest>"
