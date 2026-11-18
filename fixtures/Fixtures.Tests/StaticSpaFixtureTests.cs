@@ -61,15 +61,15 @@ public sealed partial class StaticSpaFixtureTests
     [MemberData(nameof(EveryApp))]
     public void Each_release_has_an_index_and_nothing_under_a_reserved_path(string appId)
     {
-        // "An SPA cannot serve content under ..." in the browser contract: the gateway answers those
-        // paths itself, so a file there would be unreachable at best.
+        // The browser contract's reserved paths: the gateway answers those paths itself, so a file
+        // there would be unreachable at best. Each fixture is a shell's release, so both kinds apply.
         SpaRelease release = SpaRelease.Of(appId);
+        IReadOnlyList<string> reserved = ReservedPaths();
 
         Assert.Contains("index.html", release.Files);
         foreach (string file in release.Files)
         {
-            string top = "/" + file.Split('/')[0];
-            Assert.DoesNotContain(top, ReservedPrefixes());
+            Assert.False(IsReserved("/" + file, reserved), $"{appId} has {file} under a reserved path.");
         }
     }
 
@@ -198,7 +198,36 @@ public sealed partial class StaticSpaFixtureTests
     {
         // The release check above runs only against releases that already pass it, so this feeds the
         // same comparison a file it must refuse (CODING_STANDARDS.md, "An assertion must be able to fail").
-        Assert.Contains("/" + file.Split('/')[0], ReservedPrefixes());
+        Assert.True(IsReserved("/" + file, ReservedPaths()), $"{file} is not under a reserved path.");
+    }
+
+    [Fact]
+    public void A_shell_release_refuses_a_file_under_fragments_exactly_when_the_contract_reserves_two_kinds()
+    {
+        // #982's second kind, "A path reserved from the shell's release", reserves /fragments/ from
+        // every fixture, since each is a shell's release. Until landing B merges the trunk's contract
+        // has one kind and does not reserve it, so the expectation follows the paragraph (#1329).
+        bool twoKinds = File.ReadAllText(FixtureFiles.Path("contracts", "http-contract.md"))
+            .Contains("Two kinds of path are reserved.", StringComparison.Ordinal);
+
+        Assert.Equal(twoKinds, IsReserved("/fragments/f1/entry.js", ReservedPaths()));
+    }
+
+    [Theory]
+    [InlineData("/fragments/f1/api/x.json", "/fragments/{fragmentId}/api/", true)]
+    [InlineData("/fragments/f1/entry.js", "/fragments/{fragmentId}/api/", false)]
+    [InlineData("/signin-oidc/f1", "/signin-oidc/{fragmentId}", true)]
+    [InlineData("/fragments/f1/entry.js", "/fragments/", true)]
+    [InlineData("/bff/session", "/bff/", true)]
+    [InlineData("/healthz", "/healthz", true)]
+    [InlineData("/healthzz", "/healthz", false)]
+    [InlineData("/assets/healthz", "/healthz", false)]
+    public void A_reserved_path_covers_everything_under_it_and_a_braced_segment_stands_for_any_one(
+        string file, string reserved, bool expected)
+    {
+        // #982 reserves paths with a template segment, /fragments/{fragmentId}/api/ and
+        // /signin-oidc/{fragmentId}, which no first-segment comparison can ever match.
+        Assert.Equal(expected, IsReserved(file, [reserved]));
     }
 
     // The checker has to be able to refuse, or every "fits" above is a label (CODING_STANDARDS.md,
@@ -273,26 +302,69 @@ public sealed partial class StaticSpaFixtureTests
         return row.Groups[1].Value;
     }
 
-    private static IEnumerable<string> ReservedPrefixes()
+    /// <summary>
+    /// Every path the browser contract keeps out of a shell's release, as the contract writes it
+    /// (<c>/bff/</c>, <c>/fragments/{fragmentId}/api/</c>, <c>/healthz</c>).
+    /// </summary>
+    private static IReadOnlyList<string> ReservedPaths()
     {
         string contract = File.ReadAllText(FixtureFiles.Path("contracts", "http-contract.md"));
-        Match sentence = Regex.Match(contract, "An SPA cannot serve content under (.*?)\\.\\s*\\n\\s*\\n", RegexOptions.Singleline, RegexTimeout.Value);
-        Assert.True(sentence.Success, "contracts/http-contract.md lists no reserved paths.");
-        List<string> prefixes = [.. Regex.Matches(sentence.Groups[1].Value, "`(/[^`]+?)/?`", RegexOptions.None, RegexTimeout.Value).Select(m => m.Groups[1].Value)];
-        Assert.NotEmpty(prefixes);
-        return prefixes;
+
+        // #982's paragraph, "Two kinds of path are reserved.", has one sentence per kind, each listing
+        // its paths between a colon and its own full stop: "A path reserved outright is ...: ..." and
+        // "A path reserved from the shell's release is ...: `/fragments/`, on every host." Each list
+        // stops at its sentence's full stop, so neither picks up the 404 rules that follow it.
+        Match outright = Regex.Match(contract, "A path reserved outright is [^:]*:(?<list>[^.]*)\\.", RegexOptions.None, RegexTimeout.Value);
+        IEnumerable<string> lists;
+        if (outright.Success)
+        {
+            Match shell = Regex.Match(contract, "A path reserved from the shell's release is [^:]*:(?<list>[^.]*)\\.", RegexOptions.None, RegexTimeout.Value);
+            Assert.True(shell.Success, "contracts/http-contract.md reserves paths outright but none from the shell's release.");
+            lists = [outright.Groups["list"].Value, shell.Groups["list"].Value];
+        }
+        else
+        {
+            // The sentence #982 replaces, which the trunk carries until landing B merges (#1329):
+            // remove this branch once contracts/http-contract.md no longer has it.
+            Match sentence = Regex.Match(contract, "An SPA cannot serve content under (?<list>.*?)\\.\\s*\\n\\s*\\n", RegexOptions.Singleline, RegexTimeout.Value);
+            Assert.True(sentence.Success, "contracts/http-contract.md lists no reserved paths.");
+            lists = [sentence.Groups["list"].Value];
+        }
+
+        List<string> paths = [.. lists.SelectMany(list => Regex.Matches(list, "`(/[^`]+)`", RegexOptions.None, RegexTimeout.Value).Select(m => m.Groups[1].Value))];
+        Assert.NotEmpty(paths);
+        return paths;
     }
 
     /// <summary>
-    /// The method and path of the one <c>/bff</c> row in the contract's endpoint table made the given
-    /// way ("Fetch", "Navigation" or "Form navigation"), with any query string dropped.
+    /// Whether <paramref name="path"/> is one of <paramref name="reserved"/> or under one, segment by
+    /// segment, where a braced segment such as <c>{fragmentId}</c> stands for any one segment.
+    /// </summary>
+    private static bool IsReserved(string path, IEnumerable<string> reserved) =>
+        reserved.Any(template => Regex.IsMatch(
+            path,
+            "^" + string.Join('/', template.TrimEnd('/').Split('/').Select(segment =>
+                segment.StartsWith('{') && segment.EndsWith('}') ? "[^/]+" : Regex.Escape(segment))) + "(?:/|$)",
+            RegexOptions.None,
+            RegexTimeout.Value));
+
+    /// <summary>
+    /// The method and path of the shell's one <c>/bff</c> row in the contract's endpoint table made the
+    /// given way ("Fetch", "Navigation" or "Form navigation"), with any query string dropped.
     /// </summary>
     private static (string Method, string Path) ContractEndpoint(string madeAs)
     {
+        // The rule: a row whose request names a fragment, in its path (GET /bff/fragments) or its
+        // query (GET /bff/login?fragment=...), belongs to the fragment surface, and the contract's
+        // Fragments section says "An app with no fragments behaves as the rest of this contract
+        // describes". Every fixture is an app with no fragments, so it calls the one row of each kind
+        // whose request names no fragment. The filter reads the request cell only: the shell's own
+        // rows cite "Fragments ->" in their Behaviour cell too.
         string contract = File.ReadAllText(FixtureFiles.Path("contracts", "http-contract.md"));
         Match row = Assert.Single(
-            Regex.Matches(contract, "^\\| `(?<method>[A-Z]+) (?<path>/bff/[^`?]*)[^`]*` \\| (?<as>[^|]+?) \\|", RegexOptions.Multiline, RegexTimeout.Value),
-            match => match.Groups["as"].Value == madeAs);
+            Regex.Matches(contract, "^\\| `(?<request>(?<method>[A-Z]+) (?<path>/bff/[^`?]*)[^`]*)` \\| (?<as>[^|]+?) \\|", RegexOptions.Multiline, RegexTimeout.Value),
+            match => match.Groups["as"].Value == madeAs
+                && !match.Groups["request"].Value.Contains("fragment", StringComparison.Ordinal));
         return (row.Groups["method"].Value, row.Groups["path"].Value);
     }
 
