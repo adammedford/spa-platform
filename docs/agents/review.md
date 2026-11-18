@@ -71,8 +71,8 @@ whether the diff matches the row.
 - **Mutate, do not infer.** The claim "this test cannot fail" is cheap to settle: break the thing it
   guards in a throwaway worktree and see whether it goes red. What the author's stated mutation is
   worth: `CODING_STANDARDS.md` → "An assertion must be able to fail".
-- **Say which findings you checked**, marking each as verified or suspected, as that rule's last
-  paragraph asks.
+- **Say which findings you checked**, marking each as verified or suspected, as the last paragraph
+  of "A reviewer verifies before reporting" asks.
 - **Grep the noun, then check the scope.** A false claim in prose is rarely in one place. Search for
   the noun it cannot paraphrase away — an identifier, a status code, a field name — and at each site
   ask whether the claim's scope is the thing that actually has the property. One false sentence sat
