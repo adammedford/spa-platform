@@ -205,8 +205,8 @@ public sealed partial class StaticSpaFixtureTests
     public void A_shell_release_refuses_a_file_under_fragments_exactly_when_the_contract_reserves_two_kinds()
     {
         // #982's second kind, "A path reserved from the shell's release", reserves /fragments/ from
-        // every fixture, since each is a shell's release. Until landing B merges the trunk's contract
-        // has one kind and does not reserve it, so the expectation follows the paragraph (#1329).
+        // every fixture, since each is a shell's release. A contract without #982's paragraph has one
+        // kind and does not reserve it, so the expectation follows the paragraph (#1329).
         bool twoKinds = File.ReadAllText(FixtureFiles.Path("contracts", "http-contract.md"))
             .Contains("Two kinds of path are reserved.", StringComparison.Ordinal);
 
@@ -313,19 +313,21 @@ public sealed partial class StaticSpaFixtureTests
         // #982's paragraph, "Two kinds of path are reserved.", has one sentence per kind, each listing
         // its paths between a colon and its own full stop: "A path reserved outright is ...: ..." and
         // "A path reserved from the shell's release is ...: `/fragments/`, on every host." Each list
-        // stops at its sentence's full stop, so neither picks up the 404 rules that follow it.
-        Match outright = Regex.Match(contract, "A path reserved outright is [^:]*:(?<list>[^.]*)\\.", RegexOptions.None, RegexTimeout.Value);
+        // stops at its sentence's full stop, so neither picks up the 404 rules that follow it. A full
+        // stop inside a code span is part of a path, not the sentence's end, so a dotted path cannot
+        // cut the list short and drop every path after it.
+        Match outright = Regex.Match(contract, "A path reserved outright is [^:]*:(?<list>(?:`[^`]*`|[^.`])*)\\.", RegexOptions.None, RegexTimeout.Value);
         IEnumerable<string> lists;
         if (outright.Success)
         {
-            Match shell = Regex.Match(contract, "A path reserved from the shell's release is [^:]*:(?<list>[^.]*)\\.", RegexOptions.None, RegexTimeout.Value);
+            Match shell = Regex.Match(contract, "A path reserved from the shell's release is [^:]*:(?<list>(?:`[^`]*`|[^.`])*)\\.", RegexOptions.None, RegexTimeout.Value);
             Assert.True(shell.Success, "contracts/http-contract.md reserves paths outright but none from the shell's release.");
             lists = [outright.Groups["list"].Value, shell.Groups["list"].Value];
         }
         else
         {
-            // The sentence #982 replaces, which the trunk carries until landing B merges (#1329):
-            // remove this branch once contracts/http-contract.md no longer has it.
+            // The one-kind sentence #982 replaces. A contract without #982's paragraph still carries
+            // it, and this file must hold on either form of the contract (#1329).
             Match sentence = Regex.Match(contract, "An SPA cannot serve content under (?<list>.*?)\\.\\s*\\n\\s*\\n", RegexOptions.Singleline, RegexTimeout.Value);
             Assert.True(sentence.Success, "contracts/http-contract.md lists no reserved paths.");
             lists = [sentence.Groups["list"].Value];
