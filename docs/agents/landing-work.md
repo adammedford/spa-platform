@@ -331,9 +331,8 @@ stops here.
 
 ## Review
 
-Every pull request into `main` is reviewed before it merges. Who may review, what each axis is
-held to, when a finding holds a merge and the review record a review leaves:
-`docs/agents/review.md`.
+Who may review a pull request into `main`, what each axis is held to, when a finding holds a merge
+and the review record a review leaves: `docs/agents/review.md`.
 
 `tools/land.sh` refuses a head no record clears ("Land it" above). The check sits in the merge
 script rather than in branch protection because this repository has one GitHub account, which can
