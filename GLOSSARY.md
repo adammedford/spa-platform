@@ -107,6 +107,18 @@ other app's session still answers and still refreshes (ADR-0017, evidence C-2.6,
 
 **fragmentId** — a fragment's identifier, 3 to 40 lowercase letters, digits or hyphens, unique within its shell. It names the fragment's scheme, S3 prefix, path namespace and log field.
 
+## The modes of using the repository
+
+**Development** — a contributor's work on a workstation with no AWS. Its loop is the tests, plus the hermetic cell run by hand, which is never evidence. _Avoid_: "local development": Local (L) is a test tier.
+
+**Proof cell** — this project's own cell and the fixtures deployed into it. It exists to prove the gateway, and an adopter takes nothing from it. A directory named `poc` holds only the proof cell's own.
+
+**Adoption** — the gateway deployed into another team's estate. An adopter takes the unit of adoption as it stands and may copy the references.
+
+**Unit of adoption** — the artefacts an adopter takes as they stand, built from one ref: the gateway image, its contracts and `spactl`. See ADR-0039.
+
+**Reference** — a part an adopter may copy and change, with no promise that it stays as it is: the cell module, the operator scripts, the runbooks and the browser client. A reference names no part of the proof cell. _Avoid_: "configuration reference" for a contract, which is a promise.
+
 ## The registry
 
 **Registry** — one JSON document at `registry/registry.json`, holding every app's routing, OAuth and
@@ -545,8 +557,10 @@ and the snapshot; in a test host its stand-in does the same by the host's own ru
 the host. _Avoid_: host stub, resolver.
 
 **Hermetic (H)** — the test tier that runs in process on every change, against the test identity
-provider, an in-memory object store, the real mock API and an echo upstream. _Avoid_: analysis
-tier, which is a set of source files the analyzers hold to one profile.
+provider, an in-memory object store, the real mock API and an echo upstream. The hermetic cell is
+the in-process stand-in for a cell that this tier runs. _Avoid_: analysis
+tier, which is a set of source files the analyzers hold to one profile; "local stack" and "local
+cell" for the hermetic cell.
 
 **Deployed (D)** — the test tier that runs through the tunnel at G3 and after, against the ALB, the
 task, S3, Parameter Store and Cognito, with a real browser plus a raw HTTP client. _Avoid_:
