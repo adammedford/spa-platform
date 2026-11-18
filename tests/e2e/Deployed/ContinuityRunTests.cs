@@ -311,6 +311,10 @@ public sealed class ContinuityRunTests : IDisposable
         Assert.Equal(0, made);
         Assert.Equal(0, written.Attempts);
         Assert.Equal(Verdict.NotProved, written.Verdict);
+
+        // The run starts as not proved ("no attempt was made"), so the verdict alone cannot tell
+        // whether the refusal's reason was written: the reason can.
+        Assert.Equal($"the driver stopped with {nameof(RowRefusedException)}: {refused.Message}", written.Reason);
         Assert.DoesNotContain(ecs.Calls, call => call.Arguments is ["ecs", "stop-task", ..]);
     }
 
