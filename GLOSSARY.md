@@ -179,14 +179,18 @@ ADR-0005.
 **IdP profile** — `IIdpProfile`, the seam holding provider differences (notably Cognito's
 non-standard logout). Chosen per issuer in platform configuration, never per app. See ADR-0011.
 
-**Upstream** — an origin behind the gateway that an app's `/api/{name}/*` calls reach, named in the
-registry and bounded by `Policy:AllowedUpstreams`. Not "backend" and not "service".
+**Upstream** — an origin behind the gateway that an app's `/api/{name}/*` calls reach, or a
+fragment's `/fragments/{fragmentId}/api/{name}/*` calls, named in the registry and bounded by
+`Policy:AllowedUpstreams`. One upstream may be named by a shell and by its fragments. Not
+"backend" and not "service".
 
-**API name** — the `{name}` segment in `/api/{name}/*`, 1 to 32 lowercase letters, digits or hyphens,
-unique within an app.
+**API name** — the `{name}` segment in `/api/{name}/*` or `/fragments/{fragmentId}/api/{name}/*`,
+1 to 32 lowercase letters, digits or hyphens, unique within its app or within one of its fragments,
+each a separate namespace, so one name may appear in several.
 
 **Resource binding** — passing `resource` so the provider sets the access token's `aud` to the API's
-identifier. One audience per app in Phase 1.
+identifier. One audience per token set: in Phase 1 that is one per app, and a fragment's token set
+binds its own, which may be its shell's.
 
 **Client credential style** — how the gateway, as the confidential client, authenticates to the
 provider's backchannel endpoints: a form-body secret, a Basic header, or a client assertion. One per
