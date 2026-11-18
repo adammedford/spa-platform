@@ -284,14 +284,29 @@ class TheOutputsDocument(unittest.TestCase):
         self.assertEqual(result.returncode, 0,
                          f"git does not ignore {OUTPUTS_DOCUMENT}; one `git add .` commits it")
 
+    @staticmethod
+    def assigned_values(text):
+        """The values a cell.env assigns, comments and lines with no assignment left out."""
+        return [line.partition("=")[2].strip().strip('"') for line in text.splitlines()
+                if "=" in line and not line.lstrip().startswith("#")]
+
+    def test_the_cell_env_branch_reads_the_assigned_path(self):
+        # infra/envs/poc/cell.env is not on the tree until #1348, so the branch below that reads it
+        # has never run. This runs its reading on a stand-in: it finds the outputs path where a
+        # variable assigns it, and finds nothing where only a comment or another path names it.
+        assigns = f'OUTPUTS_FILE="{OUTPUTS_DOCUMENT}"\n'
+        self.assertIn(OUTPUTS_DOCUMENT, self.assigned_values(assigns))
+        for text in (f'# OUTPUTS_FILE="{OUTPUTS_DOCUMENT}"\n', 'OUTPUTS_FILE="infra/envs/poc/outputs-moved.json"\n', ""):
+            with self.subTest(text=text):
+                self.assertNotIn(OUTPUTS_DOCUMENT, self.assigned_values(text))
+
     def test_the_scripts_still_write_it_there(self):
         # A guard reads the thing it guards: the ignore line is only right while the scripts write
         # where it points. They take the path from the proof cell's entry file once it exists
         # (#1335), and from cell-common.sh's literal before then.
         entry = ROOT / CELL_ENV
         if entry.exists():
-            values = [line.partition("=")[2].strip().strip('"') for line in entry.read_text().splitlines()
-                      if "=" in line and not line.lstrip().startswith("#")]
+            values = self.assigned_values(entry.read_text())
             self.assertIn(OUTPUTS_DOCUMENT, values, f"{CELL_ENV} assigns {OUTPUTS_DOCUMENT} to no variable")
         else:
             common = (ROOT / CELL_COMMON).read_text()

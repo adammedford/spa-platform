@@ -1073,6 +1073,9 @@ const mutationRow = (n, m, i, got) => {
     // An unnamed nomination ran no agent, so it has no log to name (#811).
     countsMatched: null, logFile: m.unnamed ? '-' : mutationLog(n, i),
     environment: ok ? String(got.environment || '').trim() : '',
+    // The image the break needs, which the Broken cell records: where a run happened to be is no
+    // requirement, and the next review reads the cell back as one (#1396).
+    needs: m.environment || '',
   }
   // A judged row (reproduced or did-not-fail) the script cannot take as judged becomes could-not-run,
   // which holds a stated or held row; removed is proven from git history, wherever the agent ran.
@@ -1217,7 +1220,7 @@ const boxLines = (boxes) => (boxes.length
 const mutationLines = (mut) => [
   ...(mut.rows.length
     ? [MUTATION_HEAD, '| --- | --- | --- | --- |',
-      ...mut.rows.map((r) => `| ${[`\`${r.test}\`${r.caughtBy.length ? `${CAUGHT_BY}${r.caughtBy.join(', ')})` : ''}: ${r.broken || '-'}${r.environment ? ` (run in ${r.environment})` : ''}`,
+      ...mut.rows.map((r) => `| ${[`\`${r.test}\`${r.caughtBy.length ? `${CAUGHT_BY}${r.caughtBy.join(', ')})` : ''}: ${r.broken || '-'}${r.needs || r.environment ? ` (run in ${r.needs || r.environment})` : ''}`,
         `${r.failed} of ${r.total}${r.countsMatched === true ? ', as stated' : r.countsMatched === false ? ', not as stated' : ''}`,
         RESULT_WORDS[r.result], r.logFile].map(cell).join(' | ')} |`),
       // The why of a row that did not reproduce, which is what a reader of a hold needs (#967); a

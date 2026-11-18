@@ -3105,6 +3105,9 @@ try {
         if (h.result !== want) fail(`#1327 cause 3: the held break run in ${where || 'the host'} gives ${h.result}, expected ${want}`)
         if (want === 'could-not-run' && !(h.why || '').startsWith(`the break needs ${IMAGE} and ran in ${where || 'the host'}`)) fail(`#1327 cause 3: the row's why ${JSON.stringify(h.why)} does not say the break needs ${IMAGE}`)
         if (want === 'could-not-run' && r.verdict !== 'hold') fail(`#1327 cause 3: a held break run in ${where || 'the host'} gives verdict ${r.verdict}, expected hold`)
+        // The cell records the image the break needs, never where a mismatched run happened (#1396).
+        const heldCell = commentOf(env, 1316).split('\n').find((l) => l.includes(`${BREAK.replace(/\|/g, '\\|')} (run in`)) || ''
+        if (!heldCell.includes(`${BREAK.replace(/\|/g, '\\|')} (run in ${IMAGE}) |`)) fail(`#1327 cause 3: the Broken cell ${JSON.stringify(heldCell)} of a held break run in ${where || 'the host'} does not end (run in ${IMAGE})`)
       }
       // An environment that is no image name could not be read back from the cell: could-not-run.
       env = run({ prs: [1316] }, served([said(NONE, { environment: '' })]), { mutate: { [NONE]: ran([RED_NONE], { environment: 'docker ubuntu:26.04' }) } })

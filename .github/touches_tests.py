@@ -28,7 +28,8 @@ class ClassifierTests(unittest.TestCase):
                 self.assertEqual(0, self.classify("build", [path]))
 
     def test_the_reference_client_triggers_the_build(self):
-        # The browser client's tests are in fixtures/Fixtures.Tests, which the build half runs (#1338).
+        # The browser client's tests will be in fixtures/Fixtures.Tests, which the build half runs
+        # (#1338). client/ is not on the tree until #1353, so this proves the pattern, not a live read.
         self.assertEqual(0, self.classify("build", ["client/bff-client.js"]))
 
     def test_the_analyzer_configs_trigger_the_build(self):
