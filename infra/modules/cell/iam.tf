@@ -4,8 +4,9 @@
 # Two, never one. The execution role is the ECS agent's: it pulls the image and opens the log
 # stream. The task role is the workload's, and it is the security object of record for the whole
 # cell — the one object here where a careless grant is easy to write and hard to notice. It holds
-# exactly what plan row 1.4 enumerates: this cell's bucket prefixes, this cell's client-secret
-# parameter path, and the four ssmmessages permissions the tunnel needs. Nothing else.
+# this cell's bucket prefixes and this cell's client-secret parameter path, from what plan row 1.4
+# enumerates. Nothing else: the row's third grant, the four ssmmessages permissions the tunnel needs,
+# went with ECS Exec on the gateway's service (#787) and is the bastion's role's whole grant (#1167).
 #
 # Every statement below is asserted at plan time in tests/module.tftest.hcl, including one
 # assertion that fails on a statement the test does not recognise, so a widened grant breaks a test
@@ -207,30 +208,13 @@ data "aws_iam_policy_document" "task" {
     resources = [local.client_secret_parameter_arn]
   }
 
-  # The four the tunnel needs, and no fifth: "Its role needs the four ssmmessages permissions"
-  # (docs/plan/05-infrastructure-and-cost.md -> Workstation access). They take no resource-level
-  # condition, which is why this is the one statement here on "*" — and why the test asserts it is
-  # the only one, so a later grant cannot hide behind the same shape.
-  # https://docs.aws.amazon.com/AmazonECS/latest/developerguide/ecs-exec.html
-  #
-  # Exec logging is not configured, so none of the s3: or logs: permissions that option adds are
-  # granted. All of this ends in Phase 2, where access comes over the corporate network.
-  statement {
-    sid    = "SessionManagerMessages"
-    effect = "Allow"
-
-    actions = [
-      "ssmmessages:CreateControlChannel",
-      "ssmmessages:CreateDataChannel",
-      "ssmmessages:OpenControlChannel",
-      "ssmmessages:OpenDataChannel",
-    ]
-
-    resources = ["*"]
-  }
+  # No ssmmessages statement (#787). The four an ECS Exec session needs were here while this task was
+  # the tunnel's hop; Exec is off on the gateway's service now, and the four are the bastion role's
+  # whole grant, below (#1167). They were the one statement on "*", and the tests now hold that no
+  # statement is, and that no statement under any sid names an ssmmessages action.
 
   # Continuity (#338). The three statements below exist only behind their inputs, so a Phase 1 cell
-  # holds the three grants above and nothing else.
+  # holds the two grants above and nothing else.
   #
   # The DynamoDB store's five operations (change request P2-1, item 5 and Decision 7): GetItem, a
   # consistent read; PutItem, create, replace and the lease's acquire, each conditional; DeleteItem,
@@ -329,11 +313,10 @@ resource "aws_iam_role_policy" "task" {
 #
 # Behind the bastion input, as the bastion's service and task definition are (ecs.tf). The trust is
 # the document the cell's two roles share, ECS tasks in this account and Region and nothing else.
-# The grant is the four ssmmessages actions the task role's SessionManagerMessages statement holds,
-# the whole of what an ECS Exec session needs of a task's role
-# (https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html, "ECS Exec
-# permissions"): no bucket, no parameter and no other service. Until #787 the gateway's task role
-# holds the same four, and the tunnel uses these.
+# The grant is the four ssmmessages actions, the whole of what an ECS Exec session needs of a task's
+# role (https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html, "ECS Exec
+# permissions"): no bucket, no parameter and no other service. Since #787 this is the only role in
+# the cell that holds them: the gateway's task role gave them up with ECS Exec on its service.
 #
 # The document is written out in the policy itself rather than as a policy document data source, so
 # the bastion adds no declaration but its four (#1167, item 2), and so tests/module.tftest.hcl reads
