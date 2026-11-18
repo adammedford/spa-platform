@@ -42,7 +42,8 @@
 # ARN with the account replaced.
 #
 # Exit status: 0 when verify-teardown.sh passes; 1 when a step failed or it found something still
-# standing; 2 when it, or verify-teardown.sh, did not start.
+# standing; 2 when it, or verify-teardown.sh, did not start, among them a cell other than the one
+# the roots' state holds (#1304).
 #
 # Written for the bash 3.2 that ships with macOS, like tools/scripts/certs.sh.
 # Owner: workstream 1, AWS and IaC.
@@ -76,7 +77,8 @@ usage() {
 Options
   --yes         Required: tear the cell down.
   --cell NAME   The cell: its teardown role, its certificate's Cell tag, its task definition
-                family and its key ring prefix. Default: \$SPA_CELL, else poc.
+                family and its key ring prefix. Default: \$SPA_CELL, else poc. It must be
+                the cell the roots' state holds, when any root has state (#1304).
   -h, --help    This text.
 
 Environment
@@ -120,6 +122,17 @@ trap 'exit 130' INT TERM
 
 need_terraform
 cell_start
+
+# The roots are infra/envs/poc/*, whichever cell they were applied for, and the cell given names the
+# teardown role, the certificate, the task definitions and the key ring. Before anything is deleted
+# the two are compared (#1304): the platform root's cell output, or the identity root's when the
+# platform root has no state, as after a teardown that stopped past its destroy. The apps root has
+# no cell output. When no root has state there is nothing to compare, and the run goes on.
+STATE_CELL="$(tf_output "$PLATFORM_ROOT" cell)"
+[ -n "$STATE_CELL" ] || STATE_CELL="$(tf_output "$IDP_ROOT" cell)"
+if [ -n "$STATE_CELL" ] && [ "$STATE_CELL" != "$CELL" ]; then
+  refuse "the roots under infra/envs/poc hold the cell '${STATE_CELL}', and this run was given '${CELL}' (--cell or SPA_CELL). Nothing was deleted. Run it again with --cell ${STATE_CELL}, or initialise the roots against ${CELL}'s state first."
+fi
 
 # --- 1. the bucket ---------------------------------------------------------------------------------
 
