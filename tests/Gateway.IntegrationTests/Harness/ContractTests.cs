@@ -277,6 +277,20 @@ public sealed class ContractTests
         Assert.Equal("private, no-store", ContractParser.AssetNotFoundCacheControl(planted));
     }
 
+    [Fact]
+    public void The_one_row_sentence_with_another_header_throws_naming_that_sentence()
+    {
+        // A trunk contract's failure names the sentence the trunk has, so its reader is not sent looking
+        // for #982's. Mutation that turns it red: naming the two-row sentence whichever one matched.
+        string planted = Endpoints
+            .Replace("Every 404 the two asset rows answer", "Every 404 the asset row answers", StringComparison.Ordinal)
+            .Replace("`Cache-Control: private, no-store`", "`Pragma: no-cache`", StringComparison.Ordinal);
+
+        InvalidOperationException thrown = Assert.Throws<InvalidOperationException>(() => ContractParser.AssetNotFoundCacheControl(planted));
+
+        Assert.Contains("'Every 404 the asset row answers carries ...' backquotes 'Pragma: no-cache'", thrown.Message, StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData("Every 404 the two asset rows answer", "Every 404 the two asset rows have")]
     [InlineData("Every 404 the two asset rows answer", "Every 404 the asset row has")]

@@ -161,14 +161,14 @@ internal static class ContractParser
         const string Header = "Cache-Control: ";
         ContractSection endpoints = ContractSection.Of(BrowserContract, browserContract, "## Endpoints");
         string prose = endpoints.Text.Replace('\n', ' ');
-        int end = SentenceEnd(prose, Sentence);
-        end = end >= 0 ? end : SentenceEnd(prose, OneRowSentence);
+        string matched = prose.Contains(Sentence, StringComparison.Ordinal) ? Sentence : OneRowSentence;
+        int end = SentenceEnd(prose, matched);
         string first = end < 0
-            ? throw endpoints.Broken($"no sentence begins '{Sentence}`{Header}...`'")
+            ? throw endpoints.Broken($"no sentence begins '{Sentence}`{Header}...`' or '{OneRowSentence}`{Header}...`'")
             : ContractSection.Backquoted(prose[end..]).FirstOrDefault() ?? string.Empty;
         return first.StartsWith(Header, StringComparison.Ordinal) && first[Header.Length..].Trim().Length > 0
             ? first[Header.Length..]
-            : throw endpoints.Broken($"the sentence '{Sentence}...' backquotes '{first}', not `{Header}value`");
+            : throw endpoints.Broken($"the sentence '{matched}...' backquotes '{first}', not `{Header}value`");
 
         static int SentenceEnd(string prose, string sentence) =>
             prose.IndexOf(sentence, StringComparison.Ordinal) is var at and >= 0 ? at + sentence.Length : -1;
