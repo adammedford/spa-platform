@@ -368,7 +368,9 @@ mutation the summary does not name stops the sitting:
   the driver's line never reaches `"$E/row6-test.out"`, since the testing platform keeps a test's
   standard output from it, so until #1216 decides how the row runs the lever waits out its 600 s
   and exits 1 having launched nothing: the row then runs on with no deployment, and is posted as
-  what it reports. After the lever's exit 0, run `shown tools/scripts/verify-tunnel.sh /healthz` and
+  what it reports. The lever exits 0 only once the restarted tunnel has named its task; without
+  `deploy.sh`'s pass line it moves no tunnel and exits non-zero, even when `deploy.sh` exited 0
+  (#1284). After the lever's exit 0, run `shown tools/scripts/verify-tunnel.sh /healthz` and
   note the time it passed; from the lever's `tunnel stopped at` time to that one is the gap, recorded
   as missing coverage, and the id after `through task` is the new hop's. The old hop's task drains
   during the roll, so requests through it fail before the stop. The class reads the old and new task

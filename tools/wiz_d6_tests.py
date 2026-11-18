@@ -316,14 +316,18 @@ class WithoutThePassLine(Case):
         self.assertIsNone(old.poll(), "the tunnel was stopped though deploy.sh did not pass")
         self.assertIn("deploy.sh exited 3 without its pass line; no tunnel was stopped or started", done.stderr)
 
-    def test_a_deploy_that_exits_0_with_no_pass_line_starts_no_tunnel_and_exits_0(self) -> None:
-        test = self.alive_test()
+    def test_a_deploy_that_exits_0_with_no_pass_line_starts_no_tunnel_and_exits_1(self) -> None:
+        # #1284: d.md's D6 reads the lever's exit 0 as the tunnel having moved, so a deploy.sh that
+        # exits 0 without its pass line (its --help, say) must not give the lever's exit 0.
+        test, old = self.alive_test(), self.old_tunnel()
         self.mode("deploy", "silent")
         self.said("now")
         done = self.run_d6(test.pid, "--wait", "10")
-        self.assertEqual(done.returncode, 0)
+        self.assertEqual(done.returncode, 1)
         self.assertEqual(self.calls(), ["deploy.sh "])
+        self.assertIsNone(old.poll(), "the tunnel was stopped though deploy.sh did not pass")
         self.assertIn("deploy.sh exited 0 without its pass line; no tunnel was stopped or started", done.stderr)
+        self.assertNotIn("wiz_d6: through task", self.record_text())
 
 
 class Header(unittest.TestCase):
