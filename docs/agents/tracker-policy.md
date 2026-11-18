@@ -68,7 +68,11 @@ ADR-0020 records the decision and its reasons. What it adds to `docs/agents/issu
   is read from its author"). `.github/steering.py` refuses an `Authority: <URL>` whose comment
   another account wrote, and `tools/overnight_collect.py` lists a ticket whose `ready-for-agent`
   another account last applied as `needs-triage`; both read the account from this line, and the
-  repository's owner while it is absent.
+  repository's owner while it is absent. Every agent session posts through this account too, so
+  the author check stops an outsider and cannot tell a session from the human. That no session
+  writes a `Confirm`, a decision comment or an approval except on Adam's words, as the rules below
+  allow, is a convention the shared account cannot enforce: the sessions' prompts and the reviewer
+  guard it (#418; ADR-0022 → "This reopens").
 - **A decision Adam gives in a session is posted on the issue it decides, by the session he gave it
   in.** When a foreground session puts an open question that no grill numbered to Adam and he
   answers it there, the session posts his answer, before the work that rests on it is pushed, as a
@@ -82,9 +86,8 @@ ADR-0020 records the decision and its reasons. What it adds to `docs/agents/issu
   acceptance criteria do not ask for, which stays a change request (ADR-0032 decision 3). A
   question a grill numbered is answered by his `Confirm` on the run's `Overnight <date>` issue,
   which a session posts only as the `Confirm` rule under "A body is rewritten only to carry
-  confirmed decisions" allows. Every session posts as `@adammedford`, so this is a convention the
-  shared account cannot enforce: the prompts and the reviewer guard it, as they guard the `Confirm`
-  rule. #435's Rows-prefix decision of 2026-10-29 is the precedent, posted under the Deciding rule
+  confirmed decisions" allows. Nothing mechanical holds this: "The human's account", above, states
+  the limit. #435's Rows-prefix decision of 2026-10-29 is the precedent, posted under the Deciding rule
   before this one was written.
 - **A body is rewritten only to carry confirmed decisions.** An answer is confirmed when the human
   wrote it, or confirmed a pre-accepted one on the run's `Overnight <date>` issue; a pre-accepted
@@ -101,15 +104,21 @@ ADR-0020 records the decision and its reasons. What it adds to `docs/agents/issu
   is its state, labels, assignee, sub-issue and blocked-by relationships, corrected in place, and
   its body under the rule above; "Lifecycle: not labels" below says
   which field holds which state. A comment, a merge body and an archived ticket file are records:
-  true on the day they were written, and never rewritten. A later truth is a new comment. So a body
+  true on the day they were written, and never rewritten. A merge body becomes a record once it is
+  reachable from `main`; before that, a task merge on an unlanded run branch is a draft, which a
+  foreground session may rebuild (`docs/agents/landing-work.md` → "A task merge's message is changed
+  by rebuilding the run branch"). A later truth is a new comment or a new commit. So a body
   states no status in prose ("remains future work"); where it must say what has landed, it cites the
   merge. Archived overnight ticket 66 carried such a sentence past the merge of its own work,
   because no check reads one.
 - **An issue is held open by its own scope.** It closes when what its body asks for has landed,
-  been answered or been declined, and its `## Answer` comment says where each part went, naming
-  anything declined. A ticket whose work lands is closed by the `Closes #n` line in the landing
-  pull request's description when that pull request merges (`docs/agents/landing-work.md`, "Land
-  it"), never by hand before its work is on `main`. A spec's required work is its sub-issues, and
+  been answered or been declined, and its Answer comment, the comment headed `## Answer`, says
+  where each part went, naming anything declined. A ticket whose work lands is closed by the
+  `Closes #n` line in the landing pull request's description when that pull request merges
+  (`docs/agents/landing-work.md`, "Land it"), never by hand before its work is on `main`; the
+  implementing session posts the Answer comment before the landing, and no merge closes a ticket
+  that has none. A ticket that ends with no merge, answered, declined or withdrawn, gets its Answer
+  comment and is then closed by hand. A spec's required work is its sub-issues, and
   the spec closes when they are closed. A follow-up, raised by another issue's work, review or
   out-of-scope list, names where it came from on a `**Raised by:** #NNN` line at the top of its
   body and is filed as neither a sub-issue nor a blocker of that issue, so it holds its origin open
@@ -118,9 +127,9 @@ ADR-0020 records the decision and its reasons. What it adds to `docs/agents/issu
 - **Cite an issue or a pull request as `#NNN`.** A merge body, an ADR, a contract or a code comment
   cites that way; the two share one number sequence. `.github/steering.py` fails a push over a
   `#NNN` that names neither.
-- **Decisions outlive issues.** A decision a later session builds on goes into a contract, an ADR or
-  `GLOSSARY.md`, and the merge body cites the issue it came from. Nothing that must survive the
-  feature lives only in an issue.
+- **Decisions outlive issues.** Where a decision a later session builds on is written, so that
+  nothing that must survive the feature lives only in an issue: `docs/adr/README.md` → "Where a
+  decision lives".
 - **The overnight run reports as an issue** titled `Overnight <date>`: the report, then the
   questions as numbered items. Answers are comments on it.
 - **A ticket that edits a steering document quotes each paragraph it changes whole, as it will read
@@ -163,7 +172,8 @@ ADR-0020 records the decision and its reasons. What it adds to `docs/agents/issu
 ## Lifecycle: not labels
 
 The labels in `docs/agents/triage-labels.md` say what an issue needs. Where it stands is held by GitHub's own fields, never by
-a label or a line in the body (ADR-0020):
+a label or a line in the body (ADR-0020). This overrides the `Part of #<parent>` and `Blocked by:`
+body-line fallbacks that the template text of `docs/agents/issue-tracker.md` offers:
 
 | State | Held by | Read from |
 | --- | --- | --- |
@@ -173,10 +183,15 @@ a label or a line in the body (ADR-0020):
 
 - **Declined** is resolved too: closed as not planned (`gh issue close <n> --reason "not planned"`),
   labelled `wontfix`, with a comment saying why.
-- **Partial** is not a state. Work done in part leaves the issue open, and its `## Answer` carries
-  an `Outstanding:` line naming what is left. The assignee stays until that part lands and is then
-  removed, so the rest can be claimed: **Frontier query** in `docs/agents/issue-tracker.md` passes
-  over an assigned issue.
+- **Part-landed** is not a state. Work done in part leaves the issue open, and its Answer comment
+  carries an `Outstanding:` line naming what is left. The assignee stays until that part lands and
+  is then removed, so the rest can be claimed: **Frontier query** in `docs/agents/issue-tracker.md`
+  passes over an assigned issue.
+- **An issue's claim is its assignee.** A session claims an issue by assigning itself, never by
+  cutting a branch alone. The branch is the claim only for a plan row no issue carries
+  (`docs/agents/landing-work.md` → "Take a task"). `tools/overnight_collect.py` also passes over a
+  ticket while a `task/issue-<n>-` branch whose work has not landed exists, so a part-landed
+  ticket's branch is pruned or renamed before the rest is taken.
 - **A follow-up is not a state of its origin.** It is an issue of its own, and holds the issue it
   came from open neither way ("An issue is held open by its own scope", above).
 
@@ -236,9 +251,8 @@ A scripted session never posts a comment whose first line begins `Decision:`. It
 `## Draft decision`, and its first two lines read `Proposed decision: …` and `Proposed ADR: yes|no`.
 A foreground session may post a decision comment only on Adam's words given in that session, under
 "A decision Adam gives in a session" (above): its first line is the `Decision:` form, not that
-rule's heading, and its last line is that rule's. Every session posts as `@adammedford`, so this is
-a convention the shared account cannot enforce, as the `Confirm` rule is (above): the prompts
-and the reviewer guard it.
+rule's heading, and its last line is that rule's. Nothing mechanical holds this: "The human's
+account", above, states the limit.
 
 The same holds for an approval of a ticket that is no change request, filed `ready-for-human`
 because its scope awaits Adam's approval: it is posted under "A decision Adam gives in a session"
