@@ -166,25 +166,30 @@ public sealed class ArchitectureTests
     {
         // The live assertion above passes over a tree with no literal whether or not the scan read a
         // file, the hazard A04_is_read_from_package_references_that_were_actually_parsed answers. So the
-        // same rule runs here over the one project that must hold the literals: the thirteen declarations
-        // in RuleIds (auth.store since #343's item 2), the fourteen code declarations in Problems (#158;
+        // same rule runs here over the one project that must hold the literals: the fourteen declarations
+        // in RuleIds (auth.store since #343's item 2, auth.chain since the fragments spec, #961, typed
+        // by #988 with the Rule ids row of #983), the fifteen code declarations in Problems (#158;
         // shell_unavailable since #427, session_store_unavailable since #343's item 2, the thirteenth,
-        // and store_unavailable since #543, the fourteenth by landing, declared after idp_unavailable),
-        // and the one quoted id in IRequestTelemetryFeature's doc comment, which proves the scan reads
-        // comments too. No doc comment in Platform.Abstractions quotes a code: Problems names each in
-        // its declaration only. The count moves with its subject: a quoted id or code added to or
-        // removed from Platform.Abstractions moves it.
-        // Mutation (#739): remove only the StoreUnavailable entry from Problems.Rows, keeping the
-        // constant, and store_unavailable leaves the ids the scan looks for: the count reads 27 and
-        // Problems.cs 13.
+        // store_unavailable since #543, the fourteenth by landing, declared after idp_unavailable, and
+        // fragment_login_required since #961, typed by #988 with the Errors row of #982, the fifteenth
+        // by landing, declared after session_ended), and the one quoted id in
+        // IRequestTelemetryFeature's doc comment, which proves the scan reads comments too. No doc
+        // comment in Platform.Abstractions quotes a code: Problems names each in its declaration only.
+        // The count moves with its subject: a quoted id or code added to or removed from
+        // Platform.Abstractions moves it.
+        // Mutation (#1002): remove only the AuthChain entry from RuleIds.All and the
+        // FragmentLoginRequired entry from Problems.Rows, keeping the constants, and auth.chain and
+        // fragment_login_required leave the ids the scan looks for: the count reads 28, RuleIds.cs 13
+        // and Problems.cs 14. Rejection names RuleIds.AuthChain, so dropping the constant does not
+        // compile.
         string[] hits = [.. RuleIdLiterals.Violations([DirectoryOf(ReferenceRules.Abstractions)], RuleIdLiterals.Ids)];
 
-        Assert.Equal(28, hits.Length);
+        Assert.Equal(30, hits.Length);
         Assert.Equal(
             [
                 ("Platform.Abstractions/IRequestTelemetryFeature.cs", 1),
-                ("Platform.Abstractions/Problems.cs", 14),
-                ("Platform.Abstractions/RuleIds.cs", 13),
+                ("Platform.Abstractions/Problems.cs", 15),
+                ("Platform.Abstractions/RuleIds.cs", 14),
             ],
             hits
                 .GroupBy(hit => hit[..hit.IndexOf(':', StringComparison.Ordinal)], StringComparer.Ordinal)

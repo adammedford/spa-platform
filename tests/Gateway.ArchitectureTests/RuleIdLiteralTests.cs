@@ -49,7 +49,7 @@ public sealed class RuleIdLiteralTests : IDisposable
     }
 
     [Fact]
-    public void The_ids_are_the_thirteen_rule_ids_and_the_fourteen_problem_codes()
+    public void The_ids_are_the_fourteen_rule_ids_and_the_fifteen_problem_codes()
     {
         // Counted from the two contract tables, contracts/request-gate.md -> Rule ids and
         // contracts/http-contract.md -> Errors, not from the types the rule reads: RuleIdsTests and
@@ -57,10 +57,15 @@ public sealed class RuleIdLiteralTests : IDisposable
         // The codes are numbered by landing. The twelfth code is shell_unavailable (#427); the
         // thirteenth code is session_store_unavailable and the thirteenth rule id auth.store, both
         // #343's item 2; the fourteenth code is store_unavailable (#543), which the Errors table and
-        // Problems.Rows place after idp_unavailable, not last. Mutation (#739): remove only the
-        // StoreUnavailable entry from Problems.Rows, keeping the constant, and the count reads 26 and
-        // store_unavailable is not in the set.
-        Assert.Equal(27, RuleIdLiterals.Ids.Distinct(StringComparer.Ordinal).Count());
+        // Problems.Rows place after idp_unavailable, not last. The fourteenth rule id is auth.chain
+        // and the fifteenth code fragment_login_required, both the fragments spec's (#961), typed by
+        // #988, with the Errors row of #982 and the Rule ids row of #983; the Errors table and
+        // Problems.Rows place fragment_login_required after session_ended, not last. Mutation (#1002):
+        // remove only the AuthChain entry from RuleIds.All and the FragmentLoginRequired entry from
+        // Problems.Rows, keeping the constants, and the count reads 27 and neither auth.chain nor
+        // fragment_login_required is in the set. Rejection names RuleIds.AuthChain, so dropping the
+        // constant does not compile.
+        Assert.Equal(29, RuleIdLiterals.Ids.Distinct(StringComparer.Ordinal).Count());
         Assert.Contains("host.unknown", RuleIdLiterals.Ids);
         Assert.Contains("api.unknown", RuleIdLiterals.Ids);
         Assert.Contains("invalid_request", RuleIdLiterals.Ids);
@@ -69,6 +74,8 @@ public sealed class RuleIdLiteralTests : IDisposable
         Assert.Contains("session_store_unavailable", RuleIdLiterals.Ids);
         Assert.Contains("store_unavailable", RuleIdLiterals.Ids);
         Assert.Contains("auth.store", RuleIdLiterals.Ids);
+        Assert.Contains("auth.chain", RuleIdLiterals.Ids);
+        Assert.Contains("fragment_login_required", RuleIdLiterals.Ids);
     }
 
     [Fact]
