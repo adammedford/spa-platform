@@ -182,13 +182,14 @@ a label or a line in the body (ADR-0020):
 
 **The derived labels say what an issue is, never where it stands.** Beside the triage labels an
 issue carries three groups, `kind:`, `area:` and `vendor:`, and no session chooses them or adds or
-removes one by hand. A workflow derives them: `tools/issue_labels.py` works them out from the issue
-alone, its title, its sub-issues and its `**Touches:**` and `**Vendor:**` lines, against
-`tools/issue_labels.json`, and `.github/workflows/issue-labels.yml` writes them on every issue event
-and in a daily run over every open issue. A ticket's `**Vendor:**` line is where its filer records
-what its paths cannot show: `none`, or the vendors it ties the work to, by the names
-`tools/issue_labels.json` defines. A wrong label is fixed in the title, the Touches or Vendor line or
-the table, never on the label.
+removes one by hand (ADR-0041). A workflow derives them: `tools/issue_labels.py` works them out from
+the issue alone, its title, its sub-issues and its `**Touches:**` and `**Vendor:**` lines, against
+`tools/issue_labels.json`, and `.github/workflows/issue-labels.yml` writes them when an issue is
+opened, edited, reopened, labelled or unlabelled, and reconciles every open issue in a daily run.
+Adding a sub-issue fires no event on its parent, so a parent's `kind:parent` can wait for that run.
+A ticket's `**Vendor:**` line is where its filer records what its paths cannot show: `none`, or the
+vendors it ties the work to, by the names `tools/issue_labels.json` defines. A wrong label is fixed
+in the title, the Touches or Vendor line or the table, never on the label.
 
 The archive's `**Status:**` lines (`claimed`, `blocked`, `resolved`, `closed`, `partial`, `moved to #NNN`)
 are dated records of the tickets filed before ADR-0020. Read them as history; never write one, and
