@@ -116,8 +116,8 @@ ADR-0020 records the decision and its reasons. What it adds to `docs/agents/issu
   where each part went, naming anything declined. A ticket whose work lands is closed by the
   `Closes #n` line in the landing pull request's description when that pull request merges
   (`docs/agents/landing-work.md`, "Land it"), never by hand before its work is on `main`; the
-  implementing session posts the Answer comment before the landing, and no merge closes a ticket
-  that has none. A ticket that ends with no merge, answered, declined or withdrawn, gets its Answer
+  implementing session posts the Answer comment before the landing, so that no merge closes a
+  ticket that has none. A ticket that ends with no merge, answered, declined or withdrawn, gets its Answer
   comment and is then closed by hand. A spec's required work is its sub-issues, and
   the spec closes when they are closed. A follow-up, raised by another issue's work, review or
   out-of-scope list, names where it came from on a `**Raised by:** #NNN` line at the top of its
@@ -188,10 +188,10 @@ body-line fallbacks that the template text of `docs/agents/issue-tracker.md` off
   is then removed, so the rest can be claimed: **Frontier query** in `docs/agents/issue-tracker.md`
   passes over an assigned issue.
 - **An issue's claim is its assignee.** A session claims an issue by assigning itself, never by
-  cutting a branch alone. The branch is the claim only for a plan row no issue carries
-  (`docs/agents/landing-work.md` → "Take a task"). `tools/overnight_collect.py` also passes over a
-  ticket while a `task/issue-<n>-` branch whose work has not landed exists, so a part-landed
-  ticket's branch is pruned or renamed before the rest is taken.
+  cutting a branch alone. What claims a plan row no issue carries: `docs/agents/landing-work.md` →
+  "Take a task". `tools/overnight_collect.py` also passes over a
+  ticket while a branch named for it, `task/issue-<n>-` or `task/<its plan row>-`, exists with its
+  work not landed, so a part-landed ticket's branch is pruned or renamed before the rest is taken.
 - **A follow-up is not a state of its origin.** It is an issue of its own, and holds the issue it
   came from open neither way ("An issue is held open by its own scope", above).
 
