@@ -1,11 +1,13 @@
 # ADR-0033: Time a gateway cold start by seven startup clocks against a startup floor, and budget each clock at 2 × the worst max of its basis
 
-- **Status:** Accepted, with the deployed column empty. Three routes change it later:
-  1. #178's deployed values arrive as a dated status-line amendment, as ADR-0005 and ADR-0017 were
-     amended. They reach this ADR through a follow-up integrator ticket blocked by #177 and #178
-     (#286 Q147).
-  2. A new local basis (new runs on a stated machine, the same rule applied) is also a status-line
-     amendment.
+- **Status:** Accepted, with the deployed column empty. Three routes change it later, each in a
+  form `docs/adr/README.md` → "Where a decision lives" allows:
+  1. #178's deployed values reach this ADR through a follow-up integrator ticket blocked by #177 and
+     #178 (#286 Q147). Values set by this ADR's rule add a Status-line pointer naming the commit
+     that records them, restating no value. A value that needs a stated decision changed (the rule,
+     or the 60 s grace the grace relation is checked against) takes a new ADR that amends this one.
+  2. A new local basis (new runs on a stated machine, the same rule applied) changes the 4 / 6 / 7 s
+     and the basis this ADR states, so it takes a new ADR that amends "The budgets".
   3. Changing the 2× multiplier is a rule change, so it takes a new ADR that supersedes this one's
      rule section.
   Status-line pointer, 2026-11-13 (#1145): what a request gets when the discovery document
