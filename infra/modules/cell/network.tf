@@ -9,8 +9,8 @@
 # tests/network.tftest.hcl fails on any ingress rule beyond the two below. The
 # bastion, the tunnel's hop behind the bastion input (#1167, ecs.tf), adds nothing
 # here: its task sits in the task subnets and the task security group, so the
-# load balancer's group still admits 443 from that group alone. The resource-type allowlist in tests/module.tftest.hcl
-# fails on an instance, but it names the NAT gateway's type and the session
+# load balancer's group still admits 443 from that group alone. The resource-type
+# allowlist in tests/module.tftest.hcl fails on an instance, but it names the NAT gateway's type and the session
 # table's, so it cannot tell a gated one from an ungated one: P-01 alone holds
 # them to their gates. There are two exceptions, each in one gated form P-01
 # admits: the session table, planned only under session_store = dynamodb, and

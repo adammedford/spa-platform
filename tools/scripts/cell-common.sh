@@ -583,8 +583,8 @@ wait_and_assert() {
 # 8443 lies below, and never one a socket holds, so an operator's tunnel is left alone. Its hop is
 # the cell's bastion task (#1167), never a task of the deployment it waits on. The wait runs after
 # the apply, whose outputs apply_images wrote to the document, so a document that then names no
-# bastion fails the wait before any tunnel opens, naming bastion = true and --url. The origin is https://app1.$SPA_CERT_DOMAIN:<that port>, the first app's host on the
-# loopback address by the hosts-file line certs.sh names, and the gateway answers /readyz on any host
+# bastion fails the wait before any tunnel opens, naming bastion = true and --url. The origin is
+# https://app1.$SPA_CERT_DOMAIN:<that port>, the first app's host on the loopback address by the hosts-file line certs.sh names, and the gateway answers /readyz on any host
 # (contracts/pipeline.md, UsePlatformHealth). The wait closes it when the wait ends, pass or fail,
 # and cell_cleanup closes it on an exit or an interrupt before then. Until #1008 the wait read through
 # an operator's tunnel, which had to be started by hand, through a task of the new deployment,

@@ -1177,8 +1177,9 @@ run "under_multi_task_the_platform_plan_holds_d6_s_egress_and_every_other_count_
 # definition, its task role and that role's policy, one of each, and every other type at its Phase 1
 # count. With every other input at its default, so the one change from the Phase 1 map is the
 # switch's own. Mutations that turn this run red: the service's count made ? 2 : 0; a second role
-# policy on the bastion role; the four left out of the lookup map, which counts each as one
-# instance on every input.
+# policy on the bastion role. The four left out of this run's lookup map leave it green, since the
+# map's default of one is each one's count under the switch; left out of the three maps above,
+# they turn those runs red, where each plans none.
 #
 # The role is counted through its first instance's name, as the session table is above: the
 # provider marks aws_iam_role's deprecated inline_policy and managed_policy_arns, and when an

@@ -457,7 +457,10 @@ locals {
   # No portMappings: nothing connects to the container, which only carries the session; the image's
   # own listener on 8080 is in no target group. No logConfiguration, and so no execution role: the
   # image is pulled from a public registry with no credentials, and nothing here writes a log
-  # stream. The capabilities and the init process are the gateway's one value (#786), with ECS's
+  # stream. AWS lists a Fargate task's uses for one as an ECR private pull, the awslogs driver,
+  # private registry credentials, Runtime Monitoring and secrets, and a public image is none of them
+  # (https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task_execution_IAM_role.html,
+  # read on 2026-11-18). The capabilities and the init process are the gateway's one value (#786), with ECS's
   # filled-in values spelled out as the gateway's are (#1006), so a re-plan after an apply replaces
   # nothing and never rolls the bastion under a live tunnel.
   bastion_container = {

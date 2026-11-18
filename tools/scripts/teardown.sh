@@ -24,8 +24,8 @@
 #      sample image again.
 #   3. The certificate certs.sh imported, found by its Platform and Cell tags, retried while ACM
 #      still counts it in use after the listener went; the cell's inactive task definitions, the
-#      gateway's family and the bastion's (#1168), which keep their tags until deleted; and the key ring the gateway wrote under
-#      /spa-platform/<cell>/data-protection/, which no root's state holds (P2-2 decision 17).
+#      gateway's family and the bastion's (#1168), which keep their tags until deleted; and the key
+#      ring the gateway wrote under /spa-platform/<cell>/data-protection/, which no root's state holds (P2-2 decision 17).
 #   4. tools/scripts/verify-teardown.sh, and its exit status is this script's (#308). Its readers
 #      look for Platform = spa-platform exactly (contracts/resource-tags.md): IAM roles and customer
 #      managed policies by their tags, which the tagging API cannot list (#118); the cell's roles by
