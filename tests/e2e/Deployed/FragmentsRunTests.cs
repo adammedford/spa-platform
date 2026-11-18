@@ -73,7 +73,7 @@ public sealed class FragmentsRunTests : IDisposable
             FragmentsBounds.O2 => await Run(runner).RowAsync(row, control, (_, _) => Task.FromResult(Drive(FragmentsObserverTests.GoodContention())), (d, _) => FragmentsObserver.Contention(d.Record), Ct),
             FragmentsBounds.O3 => await Run(runner).RowAsync(row, control, (_, _) => Task.FromResult(new Driven<SuccessorRecord>(Context(), o3Steps, o3)), (d, c) => FragmentsObserver.Successor(d.Steps, d.Record, c), Ct),
             FragmentsBounds.O4 => await Run(runner).RowAsync(row, control, (_, _) => Task.FromResult(Drive(new RecordSize(new ItemSize(369, 300),
-                new CapacitySample("sign-ins", Now.AddMinutes(-3), Now.AddMinutes(-1), 2, [new CapacityPeriod(Minute(Now.AddMinutes(-3)), 1), new CapacityPeriod(Minute(Now.AddMinutes(-2)), 1), new CapacityPeriod(Minute(Now.AddMinutes(-1)), 1)], [], [])))),
+                new CapacitySample("sign-ins", Now.AddMinutes(-3), Now.AddMinutes(-1), 2, [new CapacityPeriod(Minute(Now.AddMinutes(-4)), 0), new CapacityPeriod(Minute(Now.AddMinutes(-3)), 1), new CapacityPeriod(Minute(Now.AddMinutes(-2)), 1), new CapacityPeriod(Minute(Now.AddMinutes(-1)), 1), new CapacityPeriod(Minute(Now), 0)], [], [])))),
                 (d, _) => FragmentsObserver.Size(d.Record), Ct),
             FragmentsBounds.O5 => await Run(runner).RowAsync(row, control, (_, _) => Task.FromResult(Drive(FragmentsObserverTests.GoodMaps())), (d, _) => FragmentsObserver.ImportMap(d.Record, d.Context.UserAgents), Ct),
             FragmentsBounds.O8 => await Run(runner).RowAsync(row, control, (_, _) => Task.FromResult(Drive(FragmentsObserverTests.GoodFallback())), (d, _) => FragmentsObserver.Fallback(d.Record), Ct),
@@ -97,6 +97,29 @@ public sealed class FragmentsRunTests : IDisposable
     }
 
     private static DateTimeOffset Minute(DateTimeOffset at) => new(at.Year, at.Month, at.Day, at.Hour, at.Minute, 0, TimeSpan.Zero);
+
+    [Fact]
+    public async Task F31s_read_keeps_the_lines_its_rolling_deploy_wrote_long_after_the_control()
+    {
+        // Mutation: dropping `driven.Until` from FragmentsRun.WaitAndReadAsync's cut (the cut before the review) reads only
+        // to the control's delivery, loses every refusal and apply line, and fails this test.
+        Step control = Control();
+        DateTimeOffset deploy = Now.AddMinutes(10);
+        JsonObject[] lines =
+        [
+            FragmentsObserverTests.Line(FragmentsObserverTests.TaskA, deploy, new JsonObject { ["msg"] = "Registry document \"etag-2\" has an error: /schemaVersion: Expected \"1\" [schema]" }),
+            FragmentsObserverTests.Line(FragmentsObserverTests.TaskA, deploy, new JsonObject { ["msg"] = "Registry document \"etag-2\" is rejected with 1 error(s). Revision 41 stays live." }),
+            FragmentsObserverTests.Line(FragmentsObserverTests.TaskB, deploy, new JsonObject { ["msg"] = "Registry revision 42 (\"etag-2\") is live with 2 app(s)." }),
+        ];
+        RollingRefusalRecord rolling = await FragmentsObserverTests.GoodRollingAsync();
+
+        RowResult result = await Run(Runner(true, control, lines)).RowAsync(FragmentsBounds.Row10, control,
+            (_, _) => Task.FromResult(new Driven<RollingRefusalRecord>(Context() with { TaskIds = [.. rolling.Tasks.Select(task => task.TaskId)] }, [], rolling) { Until = deploy.AddMinutes(1) }),
+            (d, c) => FragmentsObserver.RollingRefusal(d.Record, c),
+            Ct);
+
+        Assert.True(result.Verdict == Verdict.Passed, result.Message);
+    }
 
     [Fact]
     public async Task A_rerun_reads_the_earlier_evidence_and_spends_only_the_attempts_left()
@@ -247,9 +270,11 @@ public sealed class FragmentsRunTests : IDisposable
     [InlineData("/bff/chain?c=x", "a query parameter")]
     [InlineData("/signin-oidc?x=1\\u0026state=x", "a query parameter")]
     [InlineData("__Host-spa-csrf=abc", "a __Host- cookie")]
+    [InlineData("__Host-spa-corr.Xk3vQ9=N", "a __Host- cookie")]
     public void The_guard_names_each_credential_shape_and_passes_a_clean_record(string text, string kind)
     {
-        // Mutation: removing any one arm of FragmentsEvidence.Unsafe passes its case (M44 and M54 to M57 of the Task commit).
+        // Mutation: removing any one arm of FragmentsEvidence.Unsafe passes its case (M44 and M54 to M57 of the Task commit);
+        // taking the dot out of HostCookie's name class passes the correlation cookie's case.
         Assert.StartsWith(kind, FragmentsEvidence.Unsafe("{\"path\":\"" + text + "\"}"), StringComparison.Ordinal);
         Assert.Null(FragmentsEvidence.Unsafe(JsonSerializer.Serialize(FragmentsObserverTests.GoodRedirects())));
     }
@@ -325,5 +350,20 @@ public sealed class FragmentsRunTests : IDisposable
         string[] records = [.. names.Except(RegisteredNames)];
         Assert.Equal(["G9_O1_", "G9_O2_", "G9_O4_", "G9_O9_"], records.Select(name => name[..6]).Order(StringComparer.Ordinal));
         Assert.All(RowFacts(), method => Assert.True(method.ReturnType == typeof(Task) && method.GetParameters().Length == 0, $"{method.Name} is not a plain Task Fact"));
+    }
+
+    [Fact]
+    public async Task Every_FragmentsTests_method_the_register_names_is_a_row_fact_of_the_class()
+    {
+        // Mutation: renaming G9_O5_the_hashed_import_map_cases_in_each_browser in FragmentsTests fails this test on a tree
+        // whose contracts/test-ids.md holds the fragments rows (landing B's, #989); this branch's base holds none, so
+        // there the copy in RegisteredNames is what the test above guards.
+        string register = await File.ReadAllTextAsync(Path.Combine(Gateway.TestHarness.FixtureFiles.RepositoryRoot, "contracts", "test-ids.md"), Ct);
+        string[] named = [.. System.Text.RegularExpressions.Regex.Matches(register, @"`FragmentsTests\.(?<method>[A-Za-z_][A-Za-z0-9_]*)`", System.Text.RegularExpressions.RegexOptions.None, Gateway.TestHarness.RegexTimeout.Span)
+            .Select(match => match.Groups["method"].Value).Distinct(StringComparer.Ordinal)];
+        string[] facts = [.. RowFacts().Select(method => method.Name)];
+
+        Assert.All(named, name => Assert.Contains(name, facts));
+        Assert.All(named, name => Assert.Contains(name, RegisteredNames));
     }
 }

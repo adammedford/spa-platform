@@ -101,7 +101,9 @@ public sealed class FragmentsDriver : IAsyncDisposable
             new ImageProvenance(null, environment(FragmentsImageDigestVariable)),
             revision,
             [.. seen.Values.OrderBy(task => task.TaskId, StringComparer.Ordinal)]);
-        return new Driven<RollingRefusalRecord>(await ContextAsync([], [.. seen.Keys], ct), [], record);
+        // The refusal and apply lines are written while the deploy runs, long after the control, so the read
+        // runs to the end of the polling rather than to the control's delivery.
+        return new Driven<RollingRefusalRecord>(await ContextAsync([], [.. seen.Keys], ct), [], record) { Until = DateTimeOffset.UtcNow };
     }
 
     /// <summary>O4's size half from the isolated table; the capacity half needs the named workload, which this driver does not run.</summary>

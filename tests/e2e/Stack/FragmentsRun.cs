@@ -10,6 +10,13 @@ namespace Gateway.E2ETests.Stack;
 public sealed record Driven<T>(FragmentsContext Context, IReadOnlyList<Step> Steps, T Record)
 {
     public string? Missing { get; init; }
+
+    /// <summary>
+    /// When the drive stopped watching the cell, for a row whose lines come from something other than its
+    /// own requests (F-31's rolling deploy): the read keeps lines delivered up to
+    /// <see cref="ContinuityBounds.LogDelivery"/> after the later of this and the last request.
+    /// </summary>
+    public DateTimeOffset? Until { get; init; }
 }
 
 /// <summary>
@@ -57,7 +64,7 @@ public sealed class FragmentsRun(FragmentsEvidence evidence, ContinuityLog log)
                     break;
                 }
 
-                GatewayCapture capture = await WaitAndReadAsync(control, driven.Steps, ct);
+                GatewayCapture capture = await WaitAndReadAsync(control, driven.Steps, driven.Until, ct);
                 attempts.Add(Recorded(attempts.Count + 1, driven, control, capture));
                 result = ContinuityObserver.Control(control, capture) ?? Printable(judge(driven, capture));
                 if (result.Verdict != Verdict.NotProved)
@@ -133,10 +140,10 @@ public sealed class FragmentsRun(FragmentsEvidence evidence, ContinuityLog log)
         }
     }
 
-    private async Task<GatewayCapture> WaitAndReadAsync(Step control, IEnumerable<Step> steps, CancellationToken ct)
+    private async Task<GatewayCapture> WaitAndReadAsync(Step control, IEnumerable<Step> steps, DateTimeOffset? until, CancellationToken ct)
     {
         await Task.Delay(Delivery, ct);
-        DateTimeOffset last = steps.Select(step => step.At).Append(control.At).Max();
+        DateTimeOffset last = steps.Select(step => step.At).Append(control.At).Append(until ?? control.At).Max();
         return await log.ReadAsync(control.At - ClockMargin, last + ContinuityBounds.LogDelivery, ct);
     }
 }

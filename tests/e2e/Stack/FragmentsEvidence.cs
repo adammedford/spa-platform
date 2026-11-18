@@ -182,7 +182,9 @@ public sealed partial class FragmentsEvidence(string directory, ICommandRunner r
     [GeneratedRegex(@"(?:[?&#]|\\u0026)(code|state|session_state|continuation|c|token|access_token|refresh_token|id_token)=", RegexOptions.IgnoreCase, RegexTimeout.Milliseconds)]
     private static partial Regex SecretParameter();
 
-    [GeneratedRegex(@"__Host-[A-Za-z0-9_-]+=[^;\s""]", RegexOptions.None, RegexTimeout.Milliseconds)]
+    // A name may hold a dot: the correlation and nonce cookies are __Host-spa-corr.{id} and __Host-spa-nonce.{id}
+    // (src/Platform.Identity/OidcOptionsSetup.cs).
+    [GeneratedRegex(@"__Host-[A-Za-z0-9_.-]+=[^;\s""]", RegexOptions.None, RegexTimeout.Milliseconds)]
     private static partial Regex HostCookie();
 
     private async Task RefuseUnlessIgnoredAsync(string row, CancellationToken ct)

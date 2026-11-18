@@ -95,8 +95,15 @@ public sealed record ChainRun(string UserAgent, IReadOnlyList<ChainStep> Steps, 
 
 public sealed record ChainRecord(IReadOnlyList<ChainRun> Runs);
 
-/// <summary>One N-46 case: where it landed and the session record's version before and after.</summary>
-public sealed record ChainRefusal(string UserAgent, string Case, string? LandedOn, long? VersionBefore, long? VersionAfter);
+/// <summary>
+/// One N-46 case: where it landed and the session record's version before and after, and, for the
+/// <c>expired</c> case, how long after its continuation was minted the step was sent (#1005 O13: "one
+/// past <c>ChainLifetime</c>"), null when the driver did not record it.
+/// </summary>
+public sealed record ChainRefusal(string UserAgent, string Case, string? LandedOn, long? VersionBefore, long? VersionAfter)
+{
+    public TimeSpan? SinceMint { get; init; }
+}
 
 public sealed record ChainRefusalRecord(IReadOnlyList<ChainRefusal> Cases);
 
@@ -380,12 +387,20 @@ public static partial class FragmentsObserver
             sums.Add(period.Sum);
         }
 
-        // A minute with no write may publish no datapoint, so a control with none is quiet; one with any is not.
+        // A table with no traffic still publishes its datapoints, with Sum 0 ("Even tables with zero traffic will
+        // have the SampleCount emitted regularly, but the sample values will always be zero",
+        // https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/metrics-dimensions.html#ConsumedWriteCapacityUnits),
+        // so a control with no datapoint is missing period data and withholds the verdict (#1005 O4).
         foreach (DateTimeOffset control in new[] { first.AddMinutes(-1), last.AddMinutes(1) })
         {
-            if (capacity.Periods.FirstOrDefault(each => each.Start == control) is { Sum: > 0 } busy)
+            if (capacity.Periods.FirstOrDefault(each => each.Start == control) is not { } quiet)
             {
-                return RowResult.NotProved($"O4's control period at {control:u} consumed {busy.Sum} WCU, so the table was not idle", seen);
+                return RowResult.NotProved($"O4 has no ConsumedWriteCapacityUnits period at {control:u}, a control period", seen);
+            }
+
+            if (quiet.Sum > 0)
+            {
+                return RowResult.NotProved($"O4's control period at {control:u} consumed {quiet.Sum} WCU, so the table was not idle", seen);
             }
         }
 
@@ -600,9 +615,15 @@ public static partial class FragmentsObserver
         {
             foreach (string name in RefusalCases)
             {
-                if (record.Cases.FirstOrDefault(each => each.UserAgent == agent && each.Case == name) is not { LandedOn: { } landed, VersionBefore: { } before, VersionAfter: { } after })
+                if (record.Cases.FirstOrDefault(each => each.UserAgent == agent && each.Case == name) is not { LandedOn: { } landed, VersionBefore: { } before, VersionAfter: { } after } found)
                 {
                     return RowResult.NotProved($"the {name} step in {agent} was not observed with the record's version before and after", seen);
+                }
+
+                // An "expired" step sent inside ChainLifetime is a replay, not the expiry #1005 O13 names.
+                if (name == "expired" && (found.SinceMint is not { } age || age < FragmentsBounds.ChainLifetime))
+                {
+                    return RowResult.NotProved($"the expired step in {agent} was not sent past ChainLifetime ({FragmentsBounds.ChainLifetime.TotalMinutes} minutes) after its continuation was minted", seen);
                 }
 
                 if (after != before)
@@ -776,7 +797,7 @@ public static partial class FragmentsObserver
             return RowResult.NotProved("the logout and the refresh were not each placed on one of two different tasks", seen);
         }
 
-        GatewayEvent[] successors = [.. capture.Refreshed(record.SessionRef).Where(line => line.TaskId == other.TaskId && FragmentOf(line, record.FragmentId))];
+        GatewayEvent[] successors = [.. capture.Refreshed(record.SessionRef).Where(line => line.TaskId == other.TaskId && FragmentOf(capture, line, record.FragmentId))];
         GatewayEvent? revocation = capture.Events.FirstOrDefault(line =>
             line.TaskId == on.TaskId && line.Field("session_ref") == record.SessionRef && line.Field("fragment_id") == record.FragmentId && line.Field("outcome") is not null);
         if (revocation is null)
@@ -796,7 +817,7 @@ public static partial class FragmentsObserver
             return RowResult.Failed($"the logout on {on.TaskId} left fragment {record.FragmentId}'s set with outcome {revocation.Field("outcome")}, so the successor obtained on {other.TaskId} lives on", seen);
         }
 
-        if (capture.Refreshed(record.SessionRef).FirstOrDefault(line => FragmentOf(line, record.FragmentId) && (line.Ts ?? line.Timestamp) > revokedAt && line != successor) is { } late)
+        if (capture.Refreshed(record.SessionRef).FirstOrDefault(line => FragmentOf(capture, line, record.FragmentId) && (line.Ts ?? line.Timestamp) > revokedAt && line != successor) is { } late)
         {
             return RowResult.Failed($"the successor refreshed on {late.TaskId} after the logout on {on.TaskId} revoked the set (refresh on {other.TaskId})", seen);
         }
@@ -832,7 +853,16 @@ public static partial class FragmentsObserver
     /// <summary>The head of the swap line, <c>Registry revision {Revision} ({ETag}) is live …</c>, for one revision.</summary>
     public static string LivePrefix(long revision) => $"Registry revision {revision.ToString(CultureInfo.InvariantCulture)} (";
 
-    private static bool FragmentOf(GatewayEvent line, string fragmentId) => line.Field("fragment_id") is not { } id || id == fragmentId;
+    /// <summary>
+    /// Whether a Refreshed line is the fragment's set's: its own <c>fragment_id</c> when it carries one, else the
+    /// <c>fragment_id</c> of the request line its <c>trace_id</c> belongs to. contracts/telemetry.md (#986) writes
+    /// <c>fragment_id</c> on the request line only, so a refresh line with neither is another set's, the
+    /// shell's among them, and is never read as the fragment's successor.
+    /// </summary>
+    private static bool FragmentOf(GatewayCapture capture, GatewayEvent line, string fragmentId) =>
+        line.Field("fragment_id") is { } id
+            ? id == fragmentId
+            : line.Field("trace_id") is { } trace && capture.Events.Any(request => request.IsRequest && request.Field("trace_id") == trace && request.Field("fragment_id") == fragmentId);
 
     [GeneratedRegex("^[0-9a-f]{40}$", RegexOptions.None, RegexTimeout.Milliseconds)]
     private static partial Regex Commit();

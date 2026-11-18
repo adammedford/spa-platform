@@ -237,7 +237,7 @@ public sealed class FragmentsObserverTests
     {
         // Mutation: counting a binary value by its base64 length in FragmentsReaders.ValueBytes (400 for 300 bytes) reads
         // 469 and 400, and fails this test.
-        RecordSize record = await RecordedSizeAsync(Aws(Scan(), Datapoints((9, 0), (10, 2), (11, 3), (12, 2))));
+        RecordSize record = await RecordedSizeAsync(Aws(Scan(), Datapoints((9, 0), (10, 2), (11, 3), (12, 2), (13, 0))));
 
         Assert.Equal(new ItemSize(369, 300), record.Size);
         RowResult result = FragmentsObserver.Size(record);
@@ -249,15 +249,18 @@ public sealed class FragmentsObserverTests
     [InlineData("no ConsumedWriteCapacityUnits period at 2026-11-18 02:11:00Z")]
     [InlineData("control period at 2026-11-18 02:13:00Z consumed 1 WCU")]
     [InlineData("fewer than one each")]
+    [InlineData("no ConsumedWriteCapacityUnits period at 2026-11-18 02:13:00Z, a control period")]
     public async Task O4_missing_period_data_a_busy_control_or_an_undercount_withholds_the_verdict(string reason)
     {
         // Mutation: skipping the per-minute lookup (or the control check, or the WCU sum check) in FragmentsObserver.Size
-        // passes the matching case.
+        // passes the matching case; reading a control with no datapoint as quiet (dropping its `is not { } quiet`
+        // return, the review's reversal of the implementer's decision 5) passes the last.
         string points = reason switch
         {
-            "no ConsumedWriteCapacityUnits period at 2026-11-18 02:11:00Z" => Datapoints((10, 2), (12, 4)),
-            "control period at 2026-11-18 02:13:00Z consumed 1 WCU" => Datapoints((10, 2), (11, 3), (12, 2), (13, 1)),
-            _ => Datapoints((10, 1), (11, 1), (12, 1)),
+            "no ConsumedWriteCapacityUnits period at 2026-11-18 02:11:00Z" => Datapoints((9, 0), (10, 2), (12, 4), (13, 0)),
+            "control period at 2026-11-18 02:13:00Z consumed 1 WCU" => Datapoints((9, 0), (10, 2), (11, 3), (12, 2), (13, 1)),
+            "fewer than one each" => Datapoints((9, 0), (10, 1), (11, 1), (12, 1), (13, 0)),
+            _ => Datapoints((9, 0), (10, 2), (11, 3), (12, 2)),
         };
 
         RowResult result = FragmentsObserver.Size(await RecordedSizeAsync(Aws(Scan(), points)));
@@ -469,7 +472,10 @@ public sealed class FragmentsObserverTests
     }
 
     internal static ChainRefusalRecord GoodRefusals() =>
-        new([.. Agents.SelectMany(agent => FragmentsObserver.RefusalCases.Select(name => new ChainRefusal(agent, name, "/", 7, 7)))]);
+        new([.. Agents.SelectMany(agent => FragmentsObserver.RefusalCases.Select(name => new ChainRefusal(agent, name, "/", 7, 7)
+        {
+            SinceMint = name == "expired" ? FragmentsBounds.ChainLifetime + TimeSpan.FromSeconds(30) : null,
+        }))]);
 
     [Fact]
     public void O13_a_replayed_step_that_changes_the_record_fails()
@@ -489,6 +495,19 @@ public sealed class FragmentsObserverTests
         // Mutation: removing the `landed != "/"` return from FragmentsObserver.ChainRefusals passes the first case.
         AssertNotPassed(FragmentsObserver.ChainRefusals(new([.. GoodRefusals().Cases.Select(each => each.Case == "foreign" ? each with { LandedOn = "/app" } : each)]), Agents), "landed on /app");
         AssertNotPassed(FragmentsObserver.ChainRefusals(new([.. GoodRefusals().Cases.Where(each => each.Case != "expired")]), Agents), "the expired step");
+    }
+
+    [Theory]
+    [InlineData(4)]
+    [InlineData(null)]
+    public void O13_an_expired_step_sent_inside_ChainLifetime_or_at_no_recorded_age_does_not_pass(int? minutes)
+    {
+        // Mutation: removing the `name == "expired"` ChainLifetime return from FragmentsObserver.ChainRefusals passes both cases.
+        ChainRefusalRecord early = new([.. GoodRefusals().Cases.Select(each => each.Case == "expired" && each.UserAgent == "firefox 133"
+            ? each with { SinceMint = minutes is { } m ? TimeSpan.FromMinutes(m) : null }
+            : each)]);
+
+        AssertNotPassed(FragmentsObserver.ChainRefusals(early, Agents), "the expired step in firefox 133 was not sent past ChainLifetime");
     }
 
     // ---- F-T5, the asset invariant on the cell's bucket (F-37) ----
@@ -746,5 +765,25 @@ public sealed class FragmentsObserverTests
         RowResult left = FragmentsObserver.Successor(unrevokedSteps, record, await CaptureAsync(unrevoked));
         Assert.Equal(Verdict.Failed, left.Verdict);
         AssertNotPassed(left, "outcome gate_timeout");
+    }
+
+    [Fact]
+    public async Task O3_a_refresh_line_is_the_fragments_by_its_request_lines_fragment_id_and_another_sets_is_no_successor()
+    {
+        // Mutation: reading a Refreshed line with no fragment_id as the fragment's (FragmentsObserver.FragmentOf's
+        // `is not { } id ||` form, before the review) passes the shell's refresh as the successor.
+        (IReadOnlyList<Step> steps, SuccessorRecord record, JsonObject[] lines) = GoodSuccessor();
+        Step refresh = steps[1];
+        DateTimeOffset refreshedAt = refresh.At.AddSeconds(1);
+        // As contracts/telemetry.md (#986) writes them: fragment_id on the request line only, trace_id on both.
+        JsonObject refreshed = Line(TaskB, refreshedAt, new JsonObject { ["msg"] = "Refreshed the access token", ["session_ref"] = SessionRef, ["trace_id"] = refresh.TraceId, ["ts"] = refreshedAt.ToString("O") });
+        JsonObject fragmentRequest = RequestLine(refresh, "api", SessionRef);
+        fragmentRequest["fragment_id"] = "orders";
+
+        RowResult fragments = FragmentsObserver.Successor(steps, record, await CaptureAsync(lines[0], Line(TaskB, refresh.At, fragmentRequest), refreshed, lines[3]));
+        Assert.True(fragments.Verdict == Verdict.Passed, fragments.Message);
+
+        RowResult shell = FragmentsObserver.Successor(steps, record, await CaptureAsync(lines[0], lines[1], refreshed, lines[3]));
+        AssertNotPassed(shell, $"no successor was obtained on {TaskB} while the logout ran");
     }
 }
