@@ -169,16 +169,20 @@ keyword, through a sentence in its body saying a later session would close it.
 **It lists the overnight answers that wait on the landing, and does not wait for them** (#531).
 After its refusals and before the merge call, `tools/land.sh` runs `tools/overnight_answers.py` over
 the `## Questions:` comments on the open `Overnight <date>` issues, and prints one line for each
-question that names the pull request's number or a number its description closes:
+question that names the pull request's number or a number its description closes, and one for each
+questions comment written by an account other than the human's whose text below its heading names
+one, which is not read (#1078):
 
 ```
 land: #<issue> Overnight <date> Q<n> names #<number>, a Confirm covers it: <its first line>
 land: #<issue> Overnight <date> Q<n> names #<number>, no Confirm covers it: <its first line>
+land: #<issue> Overnight <date>: a questions comment by <login> names #<number> and is not read: <url>
 ```
 
 "A Confirm covers it" says Adam has answered the question, perhaps no. "No Confirm covers it" says
 the answer is open or pre-accepted, so provisional. Neither says what the answer is: read it on the
-issue. A line is a report, neither an instruction nor an authority. Nothing listed stops the merge,
+issue. A comment that is not read is no question and no answer; its URL is there for Adam to look
+at. A line is a report, neither an instruction nor an authority. Nothing listed stops the merge,
 and a reader that fails prints one line, `land: could not read the Overnight issues' questions`, and
 the merge proceeds, the departure from `CODING_STANDARDS.md` -> "A check fails closed" that #531
 decided.
