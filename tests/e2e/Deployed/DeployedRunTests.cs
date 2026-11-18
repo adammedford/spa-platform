@@ -92,9 +92,10 @@ public sealed class DeployedRunTests
     public async Task A_d_row_runs_on_the_deployed_stack_over_the_tunnels_local_port(string test)
     {
         MethodInfo method = RowTests()[test];
-        // A continuity Fact skips itself off the two-task cell, so a case of one here would pass by
-        // skipping: fail it, since only StandInExclusions keeps it out of this theory (#657).
-        Assert.False(method.DeclaringType == typeof(ContinuityTests), $"{test} needs the two-task continuity driver; the single-host stand-in cannot run it.");
+        // A Fact of a deployed class (the continuity class, the fragments class) skips itself off the cell, so
+        // a case of one here would pass by skipping: fail it, since only StandInExclusions keeps it out of
+        // this theory (#657, #1005).
+        Assert.False(DeployedSubsetTests.DeployedClasses.Contains(method.DeclaringType), $"{test} needs its deployed class's driver on the cell; the single-host stand-in cannot run it.");
         object?[][] cases = CasesOf(method);
         foreach (object?[] arguments in cases)
         {
@@ -153,6 +154,63 @@ public sealed class DeployedRunTests
         Xunit.Sdk.XunitException subset = Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => DeployedSubsetTests.AssertEveryDRowHasATest(ExportPageWithNoDRow, register, []));
         Assert.Contains("N-32", run.Message, StringComparison.Ordinal);
         Assert.Contains("N-32", subset.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>N-38 and N-46 as contracts/test-ids.md registers them (#989's decision, d71e3d3), naming the fragments class's Facts.</summary>
+    private const string FragmentsRegister = """
+        ## Negative security (N)
+
+        | ID | Attempt | Expect | Tier | Recorded by |
+        | --- | --- | --- | --- | --- |
+        | N-38 | Revoke a fragment's set at logout while a concurrent refresh on another task obtains its successor, O3 (#961): `tests/e2e/Deployed/FragmentsTests.cs`: `FragmentsTests.G9_O3_a_successor_obtained_during_logout_is_refused` | The successor is refused at the provider after the logout | D | change request #989 (fragments rows); #961 |
+        | N-46 | Replay a step after the chain, send another session's continuation, and one past `ChainLifetime`, on a real provider, O13 (#961): `tests/e2e/Deployed/FragmentsTests.cs`: `FragmentsTests.G9_O13_a_replayed_foreign_or_expired_step_lands_on_root` | In each sitting browser, each lands on `/` with the record unchanged | D | change request #989 (fragments rows); #961 |
+        """;
+
+    [Fact]
+    public void The_registered_fragments_facts_satisfy_both_readers_and_are_excluded_from_the_single_host_stand_in()
+    {
+        // Mutation: dropping typeof(FragmentsTests) from DeployedSubsetTests.DeployedClasses leaves N-38 and N-46 untested
+        // in both readers and fails this test.
+        string[] names = ["FragmentsTests.G9_O13_a_replayed_foreign_or_expired_step_lands_on_root", "FragmentsTests.G9_O3_a_successor_obtained_during_logout_is_refused"];
+        Dictionary<string, MethodInfo> tests = RowTests(ExportPageWithNoDRow, FragmentsRegister);
+
+        Assert.Equal(names, tests.Keys.Order(StringComparer.Ordinal));
+        Assert.Equal(["N-38", "N-46"], DeployedSubsetTests.DeployedClassRowTests(FragmentsRegister).Keys.Order(StringComparer.Ordinal));
+        AssertEveryDRowHasATest(ExportPageWithNoDRow, FragmentsRegister, tests.Keys);
+        DeployedSubsetTests.AssertEveryDRowHasATest(ExportPageWithNoDRow, FragmentsRegister, []);
+        Assert.All(names, name => Assert.Contains("fragments driver", StandInExclusions(FragmentsRegister)[name], StringComparison.Ordinal));
+        Assert.Empty(StandInRowTests(ExportPageWithNoDRow, FragmentsRegister));
+    }
+
+    [Theory]
+    [InlineData("G9_O3_a_successor_obtained_during_logout_is_refused", "G9_O3_missing")]
+    [InlineData("tests/e2e/Deployed/FragmentsTests.cs`: `FragmentsTests.G9_O3", "tests/e2e/Deployed/OtherTests.cs`: `FragmentsTests.G9_O3")]
+    public void A_missing_registered_fragments_fact_fails_both_readers_naming_the_id(string before, string after)
+    {
+        // Mutation: crediting a row by its method name alone (dropping the file test in DeployedSubsetTests.ContinuityRowTests)
+        // passes the second case.
+        string register = FragmentsRegister.Replace(before, after, StringComparison.Ordinal);
+        Assert.NotEqual(FragmentsRegister, register);
+        Dictionary<string, MethodInfo> tests = RowTests(ExportPageWithNoDRow, register);
+
+        Xunit.Sdk.XunitException run = Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => AssertEveryDRowHasATest(ExportPageWithNoDRow, register, tests.Keys));
+        Xunit.Sdk.XunitException subset = Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => DeployedSubsetTests.AssertEveryDRowHasATest(ExportPageWithNoDRow, register, []));
+        Assert.Contains("N-38", run.Message, StringComparison.Ordinal);
+        Assert.Contains("N-38", subset.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("N-46", subset.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_fragments_row_naming_two_facts_fails_the_reader_naming_the_row_as_a_fragments_one()
+    {
+        // Mutation: removing the `named.Length == 1` assertion from DeployedSubsetTests.ContinuityRowTests credits the first.
+        string register = FragmentsRegister.Replace(
+            "`FragmentsTests.G9_O3_a_successor_obtained_during_logout_is_refused`",
+            "`FragmentsTests.G9_O3_a_successor_obtained_during_logout_is_refused`, `FragmentsTests.G9_O5_the_hashed_import_map_cases_in_each_browser`",
+            StringComparison.Ordinal);
+
+        Xunit.Sdk.XunitException failure = Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => DeployedSubsetTests.DeployedClassRowTests(register));
+        Assert.Contains("N-38 names more than one fragments Fact", failure.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -320,7 +378,7 @@ public sealed class DeployedRunTests
     internal static void AssertEveryDRowHasATest(string page, string register, IEnumerable<string> tests)
     {
         HashSet<string> names = new(tests, StringComparer.Ordinal);
-        Dictionary<string, MethodInfo> continuity = DeployedSubsetTests.ContinuityRowTests(register);
+        Dictionary<string, MethodInfo> continuity = DeployedSubsetTests.DeployedClassRowTests(register);
         string[] untested = [.. DeployedSubsetTests.DeployedRowIds(page, register)
             .Where(row => !(continuity.TryGetValue(row, out MethodInfo? method) && names.Contains($"{method.DeclaringType!.Name}.{method.Name}")) &&
                 !names.Any(test => test.Contains($".N{row[2..]}_", StringComparison.Ordinal)))];
@@ -343,7 +401,7 @@ public sealed class DeployedRunTests
             .SelectMany(type => type.GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly))
             .Where(method => method.GetCustomAttribute<FactAttribute>() is not null && rows.Any(row => method.Name.StartsWith($"N{row[2..]}_", StringComparison.Ordinal)))
             .ToDictionary(method => $"{method.DeclaringType!.Name}.{method.Name}", StringComparer.Ordinal);
-        foreach (MethodInfo method in DeployedSubsetTests.ContinuityRowTests(register).Values)
+        foreach (MethodInfo method in DeployedSubsetTests.DeployedClassRowTests(register).Values)
         {
             tests.TryAdd($"{method.DeclaringType!.Name}.{method.Name}", method);
         }
@@ -354,10 +412,11 @@ public sealed class DeployedRunTests
     internal static Dictionary<string, string> StandInExclusions(string register)
     {
         Dictionary<string, string> exclusions = new(OutsideStandIn, StringComparer.Ordinal);
-        foreach (MethodInfo method in DeployedSubsetTests.ContinuityRowTests(register).Values)
+        foreach (MethodInfo method in DeployedSubsetTests.DeployedClassRowTests(register).Values)
         {
-            exclusions.Add($"{method.DeclaringType!.Name}.{method.Name}",
-                "requires the real two-task continuity driver and task-correlated evidence; the stand-in has one host (#657)");
+            exclusions.Add($"{method.DeclaringType!.Name}.{method.Name}", method.DeclaringType == typeof(FragmentsTests)
+                ? "requires the fragments driver on the deployed cell: Cognito, real browsers and the cell's tasks and bucket; the stand-in has one host and no fragments (#1005)"
+                : "requires the real two-task continuity driver and task-correlated evidence; the stand-in has one host (#657)");
         }
 
         return exclusions;
