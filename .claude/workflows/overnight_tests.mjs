@@ -1993,8 +1993,8 @@ const forkOf = (prompt) => (/Otherwise fork from [^:]+: forkSha = (\S+?)\. Take 
 //     re-decided where to fork as a gap decision because their bodies named landing B's branch, and #1002 ended red for
 //     the reason its body expected. STEP 0's line after the fork says the fork at forkSha still wins, the change is
 //     proven on a throwaway tree of that base, and a change red on forkSha by design takes the "Cannot get green" route
-//     with a Status note opening "Red alone by design". The route's name is read from STEP 2 of the same prompt, so a
-//     route renamed there alone fails here.
+//     with a Status note opening "Red alone by design". The route's name is read from STEP 2 of the same prompt, the
+//     bullet a red change takes ("(or it needs AWS ..."), so a route renamed there alone fails here.
 {
   const impls = allPrompts.filter((x) => x.label.startsWith('implement:'))
   if (!impls.length) fail('#1386: no implement prompt was rendered, so the body-named base check read nothing')
@@ -2003,7 +2003,8 @@ const forkOf = (prompt) => (/Otherwise fork from [^:]+: forkSha = (\S+?)\. Take 
     const at = lines.findIndex((l) => l.startsWith('- Otherwise fork from '))
     const next = at < 0 ? '' : lines[at + 1] || ''
     if (!next.startsWith('- If the ticket\'s body names another base to build on')) { fail(`#1386: the ${c.label} prompt's STEP 0 does not follow the fork with what to do when the ticket's body names another base`); continue }
-    const route = (/^- (Cannot get green) \(/m.exec(c.prompt) || [])[1]
+    const from = c.prompt.indexOf('STEP 2 — outcomes')
+    const route = from < 0 ? undefined : (/^- ([^(\n]+?) \(or it needs AWS/m.exec(c.prompt.slice(from)) || [])[1]
     if (!route) { fail(`#1386: the ${c.label} prompt's STEP 2 has no "Cannot get green" route for the body-named base line to send a red change to`); continue }
     for (const [said, why] of [
       ['the fork above still wins', 'that the fork at forkSha wins over the body\'s base'],
