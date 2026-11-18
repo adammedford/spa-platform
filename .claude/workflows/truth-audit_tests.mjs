@@ -657,7 +657,9 @@ try {
 
   // 18. The candidate-rule target (#1371): RULE_ISSUE is #1370, the standing issue Adam named on
   //     #81, and the rule-reading prompt and the pending-write prompt carry that number and no
-  //     other, so an edit that splits the constant from the prompts fails here.
+  //     other, so an edit that splits the constant from the prompts fails here. The literal 1370
+  //     pins the decision itself, whose source is a tracker comment the tests cannot read; the
+  //     prompts are held to the constant read from the script.
   checks++
   {
     const m = /^const RULE_ISSUE = (\d+)$/m.exec(fs.readFileSync(scriptPath, 'utf8'))
@@ -667,11 +669,14 @@ try {
     const env = newRepo()
     const { result, prompt } = await execute(env, withPlan(), { ...TWO, rules: { 'registry.revision': rule } })
     if (result.ruleIssue !== target) fail(`the return names rule issue ${result.ruleIssue}, not RULE_ISSUE ${target}`)
-    const named = (p, re) => [...p.matchAll(re)].map((x) => x[1])
-    const reads = [...named(prompt('setup'), /^RULE ISSUE: (\S+)$/gm), ...named(prompt('setup'), /gh issue view (\S+)/g)]
-    if (reads.length !== 2 || reads.some((n) => n !== String(target))) fail(`the rule-reading prompt names ${JSON.stringify(reads)}, not RULE_ISSUE ${target} alone`)
-    const writes = [...named(prompt('file'), /gh issue comment (\S+)/g), ...named(prompt('file'), /\{issue: (\S+?), action: "comment"/g)]
-    if (writes.length !== 2 || writes.some((n) => n !== String(target))) fail(`the pending-write prompt names ${JSON.stringify(writes)}, not RULE_ISSUE ${target} alone`)
+    const captures = (p, re) => [...p.matchAll(re)].map((x) => x[1])
+    // Two sites a prompt: setup's RULE ISSUE line and its gh issue view; the file prompt's
+    // comment command and its pending line. A missing or extra site fails as a wrong one does.
+    const only = (what, nums) => { if (nums.length !== 2 || nums.some((n) => n !== String(target))) fail(`the ${what} prompt names ${JSON.stringify(nums)}, not RULE_ISSUE ${target} alone`) }
+    const setup = prompt('setup')
+    const file = prompt('file')
+    only('rule-reading', [...captures(setup, /^RULE ISSUE: (\S+)$/gm), ...captures(setup, /gh issue view (\S+)/g)])
+    only('pending-write', [...captures(file, /gh issue comment (\S+)/g), ...captures(file, /\{issue: (\S+?), action: "comment"/g)])
   }
 } catch (e) {
   console.error(`truth-audit tests: the script did not run: ${e && e.stack ? e.stack : e}`)
