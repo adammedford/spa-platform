@@ -28,9 +28,9 @@
        https://github.com/dotnet/dotnet/blob/e34a38d2ae1fc26406a317517196e55c68ff83ab/src/roslyn/src/CodeStyle/Tools/Program.cs#L262-L266
        10.0-all is the same level and bucket as 10-all, written so it differs.
        The settings carry no condition on the analyzer configs. A build that reads this file without
-       .editorconfig and .globalconfig beside it runs every rule at error with none of the exceptions,
-       and fails, rather than publishing under the SDK's defaults unseen, as a missing banned list
-       below fails the compile. Every Dockerfile copies the two configs with this file, and
+       .editorconfig and .globalconfig beside it stops on the target below, naming the missing file,
+       rather than publishing under the SDK's defaults unseen, as a missing banned list below fails
+       the compile. Every Dockerfile copies the two configs with this file, and
        tools/image_build_tests.py holds each one's build-files line to the gateway's (#673). -->
   <PropertyGroup>
     <AnalysisLevel>10-all</AnalysisLevel>
@@ -39,6 +39,17 @@
     <AnalysisLevelStyle>10.0-all</AnalysisLevelStyle>
     <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
   </PropertyGroup>
+
+  <!-- The check the comment above names (#1369; Q19 of Overnight 2026-11-01, #706). Without it,
+       whether a build missing a config failed rested on the source of the day tripping a rule. It
+       runs before the compile, so the error it raises is the build's only one, and
+       tools/analyzer_configs_build_tests.py removes each config in turn and sees that error alone. -->
+  <Target Name="_SpaRequireAnalyzerConfigs" BeforeTargets="CoreCompile">
+    <Error Condition="!Exists('$(MSBuildThisFileDirectory).editorconfig')"
+           Text="$(MSBuildThisFileDirectory).editorconfig is missing. Directory.Build.props runs the analysis with every rule at error, and that file holds the code-style options and the relaxed tier's relaxations (ADR-0035)." />
+    <Error Condition="!Exists('$(MSBuildThisFileDirectory).globalconfig')"
+           Text="$(MSBuildThisFileDirectory).globalconfig is missing. Directory.Build.props runs the analysis with every rule at error, and that file holds the per-id exceptions, each pending rule and decline (ADR-0035)." />
+  </Target>
 
   <!-- The analysis tier a project's files are in, by folder (ADR-0035 decision 3): the relaxed tier is
        every project under tests/, fixtures/, tools/spactl/, tools/bench/floor/ or src/Platform.Testing/,
