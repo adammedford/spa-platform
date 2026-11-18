@@ -156,7 +156,8 @@ the interval as missing coverage. The gateway's log lines go into the bundle unc
 challenges is a redirect and not a 401 (`GLOSSARY.md` → Shell gate), so the log could count what
 the browser never saw. The tunnel's hop is the bastion's task (#1168), never a gateway task, and
 the cutover replaces only the gateway's task definition, so the roll drains no hop; no sitting has
-yet seen a session through the bastion outlast a roll of the gateway's service (#1167's decision).
+yet seen a session through the bastion outlast a roll of the gateway's service (#1167's decision,
+under "Not verified").
 The restart #348 Q20 set for a drained hop stays as it was: once `describe-tasks` lists a new task
 RUNNING, stop `tunnel.sh`, note the UTC time, start it again in the background (it prints `through
 task <id>`, the bastion task's id: keep it for the post; it names no gateway task, so it is not the
@@ -354,7 +355,8 @@ mutation the summary does not name stops the sitting:
   `row6: launch deploy.sh now`, runs `deploy.sh` on the same commit as C1 runs it, and on
   `deploy.sh`'s pass line stops `tunnel.sh` and starts it again, as D2 does by hand, through the
   bastion's task (#1168), which the deployment does not replace. The launch waits for that line,
-  written `ContinuityBounds.Row6LaunchAfterFirstSignIn` after the first sign-in, because a session's refresh must fall inside the deployment interval, and on
+  written `ContinuityBounds.Row6LaunchAfterFirstSignIn` after the first sign-in, because a session's
+  refresh must fall inside the deployment interval, and on
   2026-11-14 a deployment launched straight after the test started ended before any session
   refreshed, twice. Ask for `deploy.sh`'s confirm on launch, C1's shape (the one replacement is the
   task definition), before the one call that starts both, in the background, with no tunnel started
