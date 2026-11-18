@@ -4,6 +4,10 @@
   [ADR-0032](0032-change-requests-are-issues-and-each-decision-has-one-layer.md):**
   decision 2's four homes become the layers in `docs/adr/README.md` → "Where a decision lives",
   which add the steering documents and a reading order; the other decisions are unchanged.
+  **Amended 2026-11-18 by [ADR-0041](0041-issues-carry-three-derived-label-groups.md):**
+  decision 1's labels gain three derived groups beside the triage labels, `kind:`, `area:` and
+  `vendor:`, which say what an issue is and never where it stands; the other decisions are
+  unchanged.
 - **Date:** 2026-10-17
 - **Deciders:** integrator
 - **Plan ref:** No decision row. `docs/agents/issue-tracker.md`, which this supersedes in part; the
