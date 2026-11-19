@@ -58,7 +58,7 @@ Owner: integrator (`docs/plan/01-plan.md` → Workstreams).
 | [0037](0037-foreground-confirm-posting.md) | Permit a foreground session to post the human's explicit, parser-checked confirmation with provenance; amends ADR-0021 decision 2 | — |
 | [0038](0038-fragments-compose-into-one-shell-at-one-host-each-with-its-own-client-and-release.md) | Fragments compose into one shell at one host, each with its own client and release; one session record holds a token set per client, each with its own session gate and refresh lease; a fragments document is `schemaVersion: 2`; amends ADR-0024 decision 1 and ADR-0001's decision | — |
 | [0039](0039-the-unit-of-adoption-is-the-gateway-image-its-contracts-and-spactl-the-infrastructure-is-a-reference.md) | The unit of adoption is the gateway image, its contracts and spactl; the infrastructure is a reference | — |
-| [0042](0042-the-gateway-validates-its-platform-configuration-at-start-up-and-refuses-to-start-on-a-failure.md) | The gateway validates its platform configuration at start-up and refuses to start on a failure; `Authority` and `BrowserOrigin` admit plain http on a loopback address | — |
+| [0042](0042-the-gateway-validates-its-platform-configuration-at-start-up-and-refuses-to-start-on-a-failure.md) | The gateway validates its platform configuration at start-up and refuses to start on a failure; `Authority` and `BrowserOrigin` admit plain http on `127.0.0.1` and `[::1]` | — |
 
 Those three open items closed on 2026-10-16, when Gate G0's items 2 and 3 passed against Cognito.
 ADR-0017 records what the run found and amends each of them: ADR-0001's mechanism held, ADR-0005's

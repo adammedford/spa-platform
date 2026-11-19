@@ -1,6 +1,7 @@
 # ADR-0042: The gateway validates its platform configuration at start-up and refuses to start on a failure
 
-- **Status:** Accepted.
+- **Status:** Accepted. Built in three steps: #1399 the schema and the smoke test's configuration,
+  #1400 the validation, #1401 the smoke test's refusal case.
 - **Date:** 2026-11-18
 - **Deciders:** Adam, on change request #544: the decision of 2026-10-30
   (https://github.com/adammedford/spa-platform/issues/544#issuecomment-6513043682) and the decision
@@ -31,13 +32,15 @@ circuit breaker already rolls back a deployment whose task never turns healthy.
    per finding under `Platform.Registry.Configuration`, naming a key and never a value, and throws.
    `spactl` validates a configuration file the same way, with the same engine.
 2. **The smoke test supplies a configuration, and proves the refusal.** `tools/smoke.sh` sets the
-   required sections from `contracts/platform-config.example.json` and keeps its probes; one more
-   case starts the same environment with `Session__MaxSessions=0`, and the process exits non-zero
-   with a log line naming `Session:MaxSessions`.
-3. **The schema states the one exception the code already made.** `Authority` and `BrowserOrigin`
-   admit plain http on a loopback address beside https. `IssuerDirectory` already fetches
-   discovery that way for the hermetic tier's test provider; nothing off the machine is fetched
-   without TLS. The schema, the validation, `spactl` and the code now hold one rule.
+   required sections from `contracts/platform-config.example.json` and keeps its probes. Once the
+   validation lands, one more case (#1401) starts the same environment with
+   `Session__MaxSessions=0`, and the process exits non-zero with a log line naming
+   `Session:MaxSessions`.
+3. **The schema states a narrower form of the exception the code already makes.** `Authority` and
+   `BrowserOrigin` admit plain http on `127.0.0.1` and `[::1]` beside https. `IssuerDirectory`
+   fetches discovery over plain http from any loopback address, for the hermetic tier's test
+   provider; the schema admits only the two addresses, so a configuration it passes is one the
+   code accepts, and nothing off the machine is fetched without TLS.
 
 ## Alternatives rejected
 
@@ -63,8 +66,9 @@ circuit breaker already rolls back a deployment whose task never turns healthy.
   never reaches a log line through this path.
 - A configuration naming a loopback http issuer passes validation. Deployed, it reaches no provider
   and its first login fails, as a wrong authority does.
-- The change is one-way for `tools/smoke.sh`'s contract with CI: the validation and the smoke
-  test's configuration land together, or the smoke test is red on the next push.
+- The change lands so each step is green: the smoke test's configuration with this ADR (#1399),
+  then the validation (#1400), then the refusal case (#1401), which fails until the validation
+  lands.
 
 ## Evidence
 
