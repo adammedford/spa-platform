@@ -3241,7 +3241,8 @@ try {
     const src = fs.readFileSync(scriptPath, 'utf8')
     for (const p of launchProblems(doc, src, loadMeta())) fail(`#489: ${p}`)
     // #635 Q32: the two paragraphs the Confirm approved, verbatim apart from wrapping, the second
-    // straight after the first and both before the after pass's launch line.
+    // straight after the first and both before the after pass's launch line. #1387's decided paragraph,
+    // on judging an after-pass refusal over a landed head, sits between them and the launch (#1434).
     const Q32 = [
       'The after pass, once `tools/land.sh` has merged the pull request: it refuses until `origin/main` contains the integration tip identified from the merged landing pull request, then closes the landed tickets, unassigns, removes the worktrees whose tips are on `origin/main`, the integration worktree last, and prunes.',
       'The after pass also applies every confirmed answer. It closes the Overnight issue once every question on it is settled: answered no, applied, or held by a ticket its `## After <date>` comment names. A commit answer counts as applied only once its commit is on `origin/main`; an unlanded commit answer keeps the issue open and is not settled merely by naming its source ticket. Any unsettled question or refusal in that pass keeps the issue open, and that comment lists what is left. Relaunch the after pass after a later Confirm or landing.',
@@ -3249,7 +3250,8 @@ try {
     const paras = doc.split(/\n\s*\n/).map((x) => x.replace(/\s+/g, ' ').trim())
     const p1 = paras.indexOf(Q32[0])
     const launch = paras.findIndex((x) => x.includes('"after": true }'))
-    if (p1 < 0 || paras[p1 + 1] !== Q32[1] || launch !== p1 + 2) fail(`#635 Q32: docs/agents/landing-work.md does not carry the two approved paragraphs, in order, before the after launch (found the first at ${p1}, the launch at ${launch})`)
+    const REFUSAL = 'When the after pass refuses because the landed head is not the one the morning verified,'
+    if (p1 < 0 || paras[p1 + 1] !== Q32[1] || !(paras[p1 + 2] || '').startsWith(REFUSAL) || launch !== p1 + 3) fail(`#635 Q32: docs/agents/landing-work.md does not carry the two approved paragraphs, in order, then #1387's refusal paragraph, before the after launch (found the first at ${p1}, the launch at ${launch})`)
     // #1082 Q13: the section's paragraphs as the ticket quotes them, verbatim apart from wrapping; the
     // follow-ups pass's paragraph and launch straight after the draft check's launch, and before the after
     // pass's first paragraph.
