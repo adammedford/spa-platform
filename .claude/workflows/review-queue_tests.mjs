@@ -1187,6 +1187,61 @@ try {
     }
   }
 
+  // A caughtAccepted entry may carry its row's kind (#1403): the verdict prompt lists a row as
+  // "- <test> (<kind>): ...", and on #1396 a verdict returned the name with " (stated)" after it, which
+  // the script read as a catch the verdict did not accept, and held. The name followed by the row's own
+  // kind accepts the row as the bare name does. Nothing looser does: another row's kind after the name,
+  // or a name no row has, accepts nothing, and a name that itself ends in parentheses is matched as it
+  // stands. The prompt says once that the string is the name without its kind.
+  checks++
+  {
+    const MJS = '.claude/workflows/review-queue_tests.mjs'
+    const MSGS = ['#1327 cause 3: the Broken cell does not record the image the break needs']
+    const T = 'review-queue_tests.mjs `#1327 cause 3` checks'
+    const OTHER = 'review-queue_tests.mjs check 12 (#905)'
+    const PAREN = 'review-queue_tests.mjs (stated mutation cells and could-not-run environment cases)'
+    const red = { ...row('reproduced', 1, 1), failingNames: MSGS }
+    const SENTENCE = "The string that goes in caughtAccepted, here and below, is the row's test name without its kind: the mutation list above prints each row as its test name and then its kind in parentheses, and the kind is not part of the name."
+    // The stated row T beside the candidate row OTHER, each red only on its own checks' messages.
+    const SHAPE = { 215: pr(215, [MJS, '.claude/workflows/review-queue.js'], { statedMutations: [stated(T, 1, -1, MJS)], candidates: [{ test: OTHER, project: MJS, file: MJS, guards: 'the fail() messages', breaks: '.claude/workflows/review-queue.js' }] }) }
+    for (const [label, entry, want, verdict] of [
+      ['its bare name', T, 'reproduced', 'merge'],
+      ['its name and its own kind', `${T} (stated)`, 'reproduced', 'merge'],
+      ["its name and the other row's kind", `${T} (candidate)`, 'did-not-fail', 'hold'],
+      ['its name and a kind no row has', `${T} (held)`, 'did-not-fail', 'hold'],
+      ['a name no row has, with its kind', 'review-queue_tests.mjs `#1327 cause 4` checks (stated)', 'did-not-fail', 'hold'],
+    ]) {
+      // OTHER is accepted by its bare name throughout, so a hold can only be T's.
+      env = run({ prs: [215] }, SHAPE, { mutate: { [T]: red, [OTHER]: red }, caught: { 215: [OTHER, entry] } })
+      result = await execute(env)
+      const c = resultOf(215, result)
+      const m = (c.mutations || []).find((x) => x.test === T && x.kind === 'stated') || {}
+      const o = (c.mutations || []).find((x) => x.test === OTHER && x.kind === 'candidate') || {}
+      if (o.result !== 'reproduced') fail(`PR 215: the candidate row ${JSON.stringify(OTHER)}, accepted by its bare name beside the entry ${JSON.stringify(entry)}, reads ${o.result}, expected reproduced`)
+      if (m.result !== want || c.verdict !== verdict) fail(`PR 215 with the stated caught row ${JSON.stringify(T)} and caughtAccepted holding ${label}, ${JSON.stringify(entry)}: row ${JSON.stringify({ result: m.result })}, verdict ${c.verdict}, expected ${want} and ${verdict}`)
+      if (want === 'did-not-fail' && !String(m.why || '').includes('a catch the verdict did not accept')) fail(`PR 215 with caughtAccepted holding ${label}, ${JSON.stringify(entry)}: the row's why does not say "a catch the verdict did not accept": ${JSON.stringify(m.why)}`)
+    }
+    {
+      const n = (env.prompts['verdict:215'] || '').split(SENTENCE).length - 1
+      if (n !== 1) fail(`PR 215: the verdict prompt names the string for caughtAccepted as the row's test name without its kind ${n} times, expected once: ${JSON.stringify(SENTENCE)}`)
+    }
+    // A name that ends in parentheses of its own, as one held row's does (#1403): its exact name
+    // accepts it, as does that name with its kind after it, and the name cut at its own parentheses
+    // accepts nothing.
+    const WITHPAREN = { 215: pr(215, [MJS, '.claude/workflows/review-queue.js'], { statedMutations: [stated(PAREN, 1, -1, MJS)] }) }
+    for (const [label, entry, want, verdict] of [
+      ['its exact name', PAREN, 'reproduced', 'merge'],
+      ['its exact name and its own kind', `${PAREN} (stated)`, 'reproduced', 'merge'],
+      ['its name cut at its own parentheses', 'review-queue_tests.mjs', 'did-not-fail', 'hold'],
+    ]) {
+      env = run({ prs: [215] }, WITHPAREN, { mutate: { [PAREN]: red }, caught: { 215: [entry] } })
+      result = await execute(env)
+      const c = resultOf(215, result)
+      const m = (c.mutations || []).find((x) => x.test === PAREN && x.kind === 'stated') || {}
+      if (m.result !== want || c.verdict !== verdict) fail(`PR 215 with the stated caught row ${JSON.stringify(PAREN)}, a name ending in parentheses, and caughtAccepted holding ${label}, ${JSON.stringify(entry)}: row ${JSON.stringify({ result: m.result })}, verdict ${c.verdict}, expected ${want} and ${verdict}`)
+    }
+  }
+
   // An .mjs companion's row is read by its file (#938): on #796 the inventory gave a stated row on
   // overnight_tests.mjs the directory as its project, which overrode its candidate's, so the row was
   // neither the whole file nor an .mjs row, and red on the companion's own messages it held. Named by
