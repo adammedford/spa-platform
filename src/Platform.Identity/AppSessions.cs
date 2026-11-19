@@ -387,8 +387,11 @@ internal abstract record RefreshOutcome
     public sealed record Ended : RefreshOutcome;
 
     /// <summary>
-    /// The provider failed other than with <c>invalid_grant</c>; the session stands, and a waiter fails
-    /// with <see cref="Platform.Abstractions.AccessTokenResult.ProviderUnavailable"/> too (T-D6).
+    /// No refresh was made: the provider failed other than with <c>invalid_grant</c>, or the host was
+    /// stopping at admission, so no provider call was started (change request P2-3's second amendment,
+    /// decision 3). The session stands, and a waiter fails with
+    /// <see cref="Platform.Abstractions.AccessTokenResult.ProviderUnavailable"/> too (T-D6), which is
+    /// the answer for both causes; the log line the refusing turn wrote tells them apart.
     /// </summary>
     public sealed record Unavailable : RefreshOutcome;
 
