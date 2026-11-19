@@ -107,6 +107,12 @@ other app's session still answers and still refreshes (ADR-0017, evidence C-2.6,
 
 **fragmentId** — a fragment's identifier, 3 to 40 lowercase letters, digits or hyphens, unique within its shell. It names the fragment's scheme, S3 prefix, path namespace and log field.
 
+**Team** — a named set of apps in one cell whose releases one principal may publish. A team's
+publishing right is to write new release keys under its own apps and to read them; it never
+reaches the registry, a secret, another team's apps or the cell. Activating a release is a
+registry change and not a team's. Not a workstream, which builds the platform, and not a tenant:
+a team has no runtime resource and the gateway does not know it exists.
+
 ## The modes of using the repository
 
 **Development** — a contributor's work on a workstation with no AWS. Its loop is the tests, plus the hermetic cell run by hand, which is never evidence. _Avoid_: "local development": Local (L) is a test tier.
