@@ -970,8 +970,9 @@ const nominated = (s, byTest, i = 0) => {
 // with its wrapper dropped; each read as one name no failing name ended in, and two rows red on
 // exactly the stated tests read did-not-fail. So a cell with no wrapper is a list on the same terms
 // (STATED_BARE_LIST): an optional `<label>:`, then two or more comma-separated identifiers. One
-// name, with or without a label, keeps its reading; prose, whose parts are no identifiers, is no list
-// and is read by statedProse below (#1436).
+// name is no list and keeps its reading. One name under a label is no list either, and since its text
+// before any '(' holds a space, statedProse below reads it as prose, as it does any cell whose parts
+// are no identifiers (#1436).
 const STATED_LIST = /^\S+\s*\((?:[^():,]*:)?([^()]*)\)$/
 const STATED_BARE_LIST = /^(?:[^():,]*:)?([^():]*)$/
 const IDENTIFIER = /^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*$/
@@ -997,7 +998,8 @@ const statedName = (s, description) => {
 }
 // A stated test the body names in prose (#1436). On #1435 the cell was 'the refusal case', which no
 // runner name can end in, so a run red on the test the body meant read did-not-fail and held. A cell
-// is prose as a nomination is (nominated() above): its text before any '(' holds a space. It is not
+// is prose as a nomination is (nominated() above): with its backticks dropped, its text before any
+// '(' holds a space. It is not
 // prose when it lists tests (statedList), is itself a candidate's test, or starts with a candidate's
 // test or a file, as 'x_tests.mjs `#1327 cause 3` checks' or 'x.py (companion)' does: those keep their
 // reading. A Node companion prints no test names, so a phrase on an .mjs project stays the caught row
@@ -1005,7 +1007,7 @@ const statedName = (s, description) => {
 // has the head checked out and runs the test, and the inventory judges nothing; readProse in
 // mutationRow judges the row by its reading.
 const statedProse = (s, byTest) => {
-  const cell = String(s.test || '').trim()
+  const cell = String(s.test || '').replace(/`/g, '').trim()
   const first = (/^[^\s(]*/.exec(cell) || [''])[0]
   if (!/\s/.test(cell.split('(')[0].trim()) || statedList(cell) || byTest.has(cell) || byTest.has(first)) return null
   if (first.includes('/') || FILE_CELL.test(first) || /\.mjs$/.test(s.project || '')) return null

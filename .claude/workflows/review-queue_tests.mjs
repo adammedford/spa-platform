@@ -3166,9 +3166,9 @@ try {
     // one name, and runs red on exactly the stated tests, as unittest prints them, read did-not-fail.
     // Each is one mutation over its names, one row per name judged by its own name: all red is four
     // reproduced rows and merge, and a name that stayed green is did-not-fail and holds. A cell of
-    // one name, of one name under a label, or of a file keeps its reading: one row, unsplit. A cell of
-    // prose is one row too, read as the test the mutation agent names (#1436, below); with no reading
-    // it keeps the cell as its test.
+    // one name or of a file keeps its reading: one row, unsplit. A cell of prose, and of one name under
+    // a label, which statedProse reads as prose, is one row too, read as the test the mutation agent
+    // names (#1436, below); with no reading it keeps the cell as its test.
     checks++
     {
       const RPY = 'tools/roadmap_tests.py'
@@ -3281,6 +3281,13 @@ try {
         const rows = (k.mutations || []).map((x) => [x.test, x.result])
         if (JSON.stringify(rows) !== JSON.stringify(want.map((t) => [t, 'reproduced'])) || (k.mutations || []).some((x) => /read as/.test(x.why || ''))) fail(`#1436 the stated ${JSON.stringify(cell)} with a readAs gives rows ${JSON.stringify(rows)}, expected ${JSON.stringify(want)} reproduced, as before`)
         if (((env.mutations[0] || {}).prompt || '').includes('READ AS: ')) fail(`#1436 the mutation prompt for the stated ${JSON.stringify(cell)} asks for a reading`)
+      }
+      // A backtick leaves the cell before it is judged prose, as in nominated(): a cell led by a
+      // backticked file keeps its reading, and the prompt asks for none.
+      for (const cell of ['`seed_tests.py` the refusal case']) {
+        env = run({ prs: [1435] }, served1435(cell), { mutate: { [cell]: ran1435([RED_REFUSES], { readAs: 'test_something_else' }) } })
+        result = await execute(env)
+        if (((env.mutations[0] || {}).prompt || '').includes('READ AS: ')) fail(`#1436 the stated ${JSON.stringify(cell)}, led by a backticked file, is read as prose`)
       }
       // A phrase on a Node companion is not read: the companion prints no test names, only its
       // checks' fail() messages, so its row stays the caught row the verdict answers by them (#905).
