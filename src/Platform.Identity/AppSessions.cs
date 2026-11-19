@@ -391,7 +391,8 @@ internal abstract record RefreshOutcome
     /// stopping at admission, so no provider call was started (change request P2-3's second amendment,
     /// decision 3). The session stands, and a waiter fails with
     /// <see cref="Platform.Abstractions.AccessTokenResult.ProviderUnavailable"/> too (T-D6), which is
-    /// the answer for both causes; the log line the refusing turn wrote tells them apart.
+    /// the answer for both causes; the log line the finishing turn wrote, <c>RefreshFailed</c> or
+    /// <c>RefusedAtStop</c>, tells them apart.
     /// </summary>
     public sealed record Unavailable : RefreshOutcome;
 
