@@ -80,12 +80,13 @@ public sealed class AssetReadRefusalTests
         JsonElement line = await MissingAssetsLineAsync(harness);
 
         // The line names the class of key the store refused, beside the feature's other two fields, and
-        // otherwise carries the telemetry contract's fields in its order. Mutation: dropping read_refused
-        // from UsePlatformTelemetry's line fails the first assertion with "The given key was not present".
+        // otherwise carries the telemetry contract's fields in its order, less fragment_id, which only a
+        // request that resolved a fragment carries (#986). Mutation: dropping read_refused from
+        // UsePlatformTelemetry's line fails the first assertion with "The given key was not present".
         Assert.Equal("asset", line.GetProperty("read_refused").GetString());
         string[] names = [.. line.EnumerateObject().Select(field => field.Name).Where(name => name != "category")];
         Assert.Equal(Array.IndexOf(names, "session_ref") + 1, Array.IndexOf(names, "read_refused"));
-        Assert.Equal(Contract.LogFields.Where(name => name != "read_refused"), names.Where(name => name != "read_refused"));
+        Assert.Equal(Contract.LogFields.Where(name => name is not "read_refused" and not "fragment_id"), names.Where(name => name != "read_refused"));
         Assert.Matches("^[0-9a-f]{12}$", line.GetProperty("session_ref").GetString());
         Assert.Equal(JsonValueKind.Null, line.GetProperty("rule").ValueKind);
 
