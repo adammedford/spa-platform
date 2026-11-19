@@ -168,7 +168,8 @@ _Avoid_: "the bucket" where the state bucket could be meant; "assets bucket".
 
 **Request gate** — the stage that accepts same-origin browser requests only on `/api` and `/bff`,
 judged by `Sec-Fetch-Site` and `Origin`, and refuses a cookie name that imitates a platform cookie.
-See ADR-0007.
+The one exception is `GET /bff/chain`, the sign-in chain step, which accepts any `Sec-Fetch-Site`
+and is protected by its continuation. See ADR-0007 and ADR-0040.
 
 **Shell gate** — the stage that requires a session before any asset is served: an unauthenticated
 navigation is challenged, an unauthenticated fetch gets 401. See ADR-0008. Distinct from the request
