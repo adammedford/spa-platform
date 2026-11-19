@@ -67,7 +67,8 @@ includes Chromium's install.
 
 ## The commands
 
-Each is a short client call with the same `--bundle`, from another terminal:
+Each is a client call with the same `--bundle`, from another terminal; all but `watch` return once
+they have answered:
 
 ```bash
 dotnet run --project tests/e2e -- sitting-browser --bundle "$E" <command>
@@ -83,8 +84,8 @@ or `bob`, `alice` when none is named; there is no password option.
 | `open [profile] --app <appId>` | Opens the profile on the app's `/` and prints what the page shows. |
 | `login [profile] --app <appId> [--as alice\|bob]` | Logs the user in to the app through the gateway's `/bff/login`, opening the profile if it is not open. |
 | `marker [profile]` | The fixture page's marker text. |
-| `session [profile]` | Fetches `/bff/session` from the page: its status, never its body. |
-| `api [profile] <name>/<path>` | Fetches `/api/<name>/<path>` from the page, GET only: its status, never its body. The path is letters, digits and `. _ ~ -`, with no query. |
+| `session [profile]` | Fetches `/bff/session` from the page and prints its status and its problem's code. |
+| `api [profile] <name>/<path>` | Fetches `/api/<name>/<path>` from the page, GET only, and prints its status and its problem's code. The path is letters, digits and `. _ ~ -`, with no query. |
 | `reload [profile]` | Reloads the page and prints what it shows. |
 | `close [profile]` | Closes the profile. |
 | `clear-provider [profile]` | Removes the profile's cookies on the identity provider's host, leaving the app's. |
@@ -92,8 +93,10 @@ or `bob`, `alice` when none is named; there is no password option.
 | `unwatch [profile]` | Ends the profile's watch. |
 | `stop` | Closes every profile and ends the process and its browser. |
 
-A command exits 0 when it made an observation, whatever it says, 1 when it could make none (a
-`failed` line, or `not-running` when no process answers at the socket), and 2 on a usage error.
+A command exits 0 when it made an observation, whatever it says, with two exceptions: a `timeout`
+line, when the command's 30-second bound passed before the page showed anything, and a `failed`
+line, when it could make none, exit 1. So does `not-running`, when no process answers at the socket.
+A usage error exits 2.
 
 ## What the run shows
 
