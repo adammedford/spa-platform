@@ -13,8 +13,10 @@ namespace Gateway.E2ETests.Deployed;
 /// <para>A sitting runs one row per invocation (#361 Q8, #442 Q169), selected by its method, so wiz's
 /// sitting D can ask its own approval before rows 4, 6 and 7:
 /// <c>dotnet test --project tests/e2e -- --filter-method "Gateway.E2ETests.Deployed.ContinuityTests.Row3_*"</c>,
-/// with <c>SPA_E2E_STACK=deployed</c>, <c>SPA_E2E_EVIDENCE</c> naming an ignored directory, and for
-/// row 4 <c>SPA_TUNNEL_TASK</c> naming the task the tunnel's hop runs on.</para>
+/// with <c>SPA_E2E_STACK=deployed</c> and <c>SPA_E2E_EVIDENCE</c> naming an ignored directory. Row 4
+/// needs no task id: the tunnel's hop is the bastion's task (#1168), never a gateway task, so the row
+/// stops the first of the gateway service's two RUNNING tasks by ordinal id and keeps the other as
+/// the survivor (#1382). It reads no <c>SPA_TUNNEL_TASK</c>, which Q145 had name the hop.</para>
 ///
 /// <para>Each row's first step is the control (Q143): one raw request whose client trace id must be
 /// found in exactly one gateway stream, or the row is not proved. A not-proved row is a red test whose
@@ -51,13 +53,13 @@ public sealed class ContinuityTests
     {
         await using ContinuityDriver driver = await ContinuityDriver.StartAsync();
         Step control = await driver.ControlAsync(Ct);
-        string survivor = Environment.GetEnvironmentVariable(ContinuityEcs.TunnelTaskVariable) ?? "";
+        string survivor = "";
         string stopped = "";
         (Profile profile, SessionCookies cookies) = await driver.SignInAsync(driver.App1);
         await using (profile)
         {
             RowResult result = await driver.Run.TwoTaskRowAsync("row4", control,
-                async ct => stopped = await driver.Ecs.StopTheOtherAsync(survivor, ct),
+                async ct => (survivor, stopped) = await driver.Ecs.StopOneAsync(ct),
                 async (n, ct) =>
                 {
                     List<Step> calls = [];

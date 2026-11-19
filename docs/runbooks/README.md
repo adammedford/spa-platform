@@ -77,15 +77,20 @@ CONFIG="$RUN/platform-config.json"
 ```
 
 Build it again after a deployment or a rollback: a new task definition can carry a new policy.
-Start the tunnel again too: its hop is the gateway task, which a deployment or rollback replaces.
-Remove the directory when the note is done (`rm -rf "$RUN"`).
+The tunnel's hop is the bastion's task, which neither replaces; if the tunnel has ended all the
+same, start it again. Remove the directory when the note is done (`rm -rf "$RUN"`).
 
 ### Waiting for the gateway: the tunnel
 
 A registry change is live once the gateway's poller has swapped to it. `spactl wait --url <origin>
 --revision <N>` reads `/readyz` until it reports revision N or later (`contracts/pipeline.md`).
 `/readyz` answers on any host, but the load balancer is internal, so the workstation reaches it
-through the tunnel (`docs/plan/05-infrastructure-and-cost.md`, Workstation access):
+through the tunnel (`docs/plan/05-infrastructure-and-cost.md`, Workstation access). The plan's
+export names the gateway task as the hop; #1168 made it the cell's bastion task instead, a service
+of one task that the platform root declares only with `bastion = true` and `bastion_image` in its
+`terraform.tfvars`, off by default ([deploy.md](deploy.md), first deployment, step 3).
+`tools/scripts/tunnel.sh` forwards through it and never through a gateway task; when the outputs
+document names no bastion it refuses, exit 2, before it asks AWS anything:
 
 ```bash
 tools/scripts/tunnel.sh                       # a second terminal; it stays in the foreground

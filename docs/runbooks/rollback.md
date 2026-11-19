@@ -54,8 +54,9 @@ targets' health as `deploy.sh`'s step 5 does, tolerating the previous task's dra
 step 5, reading each task's revision through a tunnel of its own, is not part of a rollback, so
 `rollback.sh` opens no tunnel, needs no Session Manager plugin and needs no tunnel running.
 
-Afterwards, check it yourself: start `tools/scripts/tunnel.sh` again (its hop was the replaced
-task), then:
+Afterwards, check it yourself through `tools/scripts/tunnel.sh`. Its hop is the cell's bastion task
+([README.md](README.md), "Waiting for the gateway: the tunnel"), which a rollback does not replace,
+so a tunnel started before it can still be up; if it has ended, start it again. Then:
 
 ```bash
 tools/scripts/verify-tunnel.sh /healthz

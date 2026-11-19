@@ -298,16 +298,16 @@ public sealed class ContinuityRunTests : IDisposable
     [Fact]
     public async Task A_lever_refusal_that_spends_no_attempt_keeps_its_own_message_and_the_evidence_file_says_not_proved()
     {
-        RecordedRunner ecs = Ecs((TaskA, "RUNNING"), (TaskB, "RUNNING"));
+        RecordedRunner ecs = Ecs((TaskA, "RUNNING"), (TaskB, "PENDING"));
         int made = 0;
 
         RowRefusedException refused = await Assert.ThrowsAsync<RowRefusedException>(() => Run(Runner(true, () => [])).TwoTaskRowAsync("row4", Sent("control"),
-            ct => new ContinuityEcs(Cell, ecs).StopTheOtherAsync(null, ct),
+            async ct => await new ContinuityEcs(Cell, ecs).StopOneAsync(ct),
             (n, _) => { made++; return Task.FromResult(new Attempt(n, [])); },
             (_, _) => RowResult.Passed("", []), Ct));
 
         RowEvidence written = JsonSerializer.Deserialize<RowEvidence>(await File.ReadAllTextAsync(Path.Combine(directory, "row4.json"), Ct))!;
-        Assert.Equal($"row 4 stops nothing: {ContinuityEcs.TunnelTaskVariable} must name exactly one of the service's two RUNNING tasks, and it is '' with 2 running ({TaskA}, {TaskB}).", refused.Message);
+        Assert.Equal($"row 4 stops nothing: it needs exactly two RUNNING tasks of the gateway's service, one to stop and one to survive, and 1 runs ({TaskA}).", refused.Message);
         Assert.Equal(0, made);
         Assert.Equal(0, written.Attempts);
         Assert.Equal(Verdict.NotProved, written.Verdict);
@@ -446,7 +446,7 @@ public sealed class ContinuityRunTests : IDisposable
         }
     }
 
-    // ---- row 4's lever (Q145) ----
+    // ---- row 4's lever (Q145, as #1382 changes it) ----
 
     private static string Described(params (string Id, string Status)[] tasks) => new JsonObject
     {
@@ -468,35 +468,37 @@ public sealed class ContinuityRunTests : IDisposable
         _ => throw new InvalidOperationException("unexpected call"),
     });
 
-    [Fact]
-    public async Task Row4s_lever_stops_the_task_the_tunnel_does_not_use()
+    /// <summary>
+    /// The tunnel's hop is the bastion's task (#1168), never a gateway task, so the lever takes no hop
+    /// id and chooses itself (#1382): the first RUNNING task by ordinal id, whatever order ECS lists
+    /// them in, so wiz's D4 can name the task to be stopped from a <c>list-tasks</c> read.
+    /// </summary>
+    [Theory]
+    [InlineData(TaskA, TaskB)]
+    [InlineData(TaskB, TaskA)]
+    public async Task Row4s_lever_stops_the_first_running_task_by_id_and_names_the_other_the_survivor(string listedFirst, string listedSecond)
     {
-        RecordedRunner runner = Ecs((TaskA, "RUNNING"), (TaskB, "RUNNING"));
+        RecordedRunner runner = Ecs((listedFirst, "RUNNING"), (listedSecond, "RUNNING"));
 
-        string stopped = await new ContinuityEcs(Cell, runner).StopTheOtherAsync(TaskA, Ct);
+        (string survivor, string stopped) = await new ContinuityEcs(Cell, runner).StopOneAsync(Ct);
 
-        Assert.Equal(TaskB, stopped);
+        Assert.Equal(TaskA, stopped);
+        Assert.Equal(TaskB, survivor);
         (_, string[] stop) = Assert.Single(runner.Calls, call => call.Arguments is ["ecs", "stop-task", ..]);
-        Assert.Equal(TaskB, stop[Array.IndexOf(stop, "--task") + 1]);
+        Assert.Equal(TaskA, stop[Array.IndexOf(stop, "--task") + 1]);
     }
 
     [Theory]
-    [InlineData(null)]
-    [InlineData("c0ffee00c0ffee00c0ffee00c0ffee00")]
-    public async Task Row4s_lever_refuses_a_tunnel_task_that_is_not_one_of_the_two_running(string? tunnel)
+    [InlineData("RUNNING", "PENDING", "PENDING", "1 runs")]
+    [InlineData("RUNNING", "RUNNING", "RUNNING", "3 run")]
+    public async Task Row4s_lever_refuses_unless_exactly_two_tasks_run(string a, string b, string c, string count)
     {
-        RecordedRunner runner = Ecs((TaskA, "RUNNING"), (TaskB, "RUNNING"));
+        const string TaskC = "c0ffee00c0ffee00c0ffee00c0ffee00";
+        RecordedRunner runner = Ecs((TaskA, a), (TaskB, b), (TaskC, c));
 
-        await Assert.ThrowsAsync<RowRefusedException>(() => new ContinuityEcs(Cell, runner).StopTheOtherAsync(tunnel, Ct));
-        Assert.DoesNotContain(runner.Calls, call => call.Arguments is ["ecs", "stop-task", ..]);
-    }
+        RowRefusedException refused = await Assert.ThrowsAsync<RowRefusedException>(() => new ContinuityEcs(Cell, runner).StopOneAsync(Ct));
 
-    [Fact]
-    public async Task Row4s_lever_refuses_unless_exactly_two_tasks_run()
-    {
-        RecordedRunner runner = Ecs((TaskA, "RUNNING"), (TaskB, "PENDING"));
-
-        await Assert.ThrowsAsync<RowRefusedException>(() => new ContinuityEcs(Cell, runner).StopTheOtherAsync(TaskA, Ct));
+        Assert.Contains($", and {count} (", refused.Message, StringComparison.Ordinal);
         Assert.DoesNotContain(runner.Calls, call => call.Arguments is ["ecs", "stop-task", ..]);
     }
 
@@ -520,7 +522,7 @@ public sealed class ContinuityRunTests : IDisposable
             _ => "{}",
         });
 
-        InvalidOperationException refused = await Assert.ThrowsAsync<InvalidOperationException>(() => new ContinuityEcs(Cell, runner).StopTheOtherAsync(TaskA, Ct));
+        InvalidOperationException refused = await Assert.ThrowsAsync<InvalidOperationException>(() => new ContinuityEcs(Cell, runner).StopOneAsync(Ct));
 
         Assert.Contains(Third, refused.Message, StringComparison.Ordinal);
         Assert.DoesNotContain(runner.Calls, call => call.Arguments is ["ecs", "stop-task", ..]);
