@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Regressions for PR #14: derived task state and mandatory generated blocks; and for #70: the JSON
 mode prints the derivation the blocks are written from; for #290: the check refuses a row
-merged both whole and in part; and for #1219: a `closing` clause lands a row no merge names.
-Owner: integrator."""
+merged both whole and in part; for #1219: a `closing` clause lands a row no merge names; and for
+#990: a lettered stage, and a stage whose Plan rows line names tickets. Owner: integrator."""
 
 import contextlib
 import importlib.util
@@ -328,6 +328,92 @@ class ClosingClauseTests(Documents):
         )
         # With no clause the forms read as they did before #1219.
         self.assertEqual([("2.4", "part")], roadmap.reading("Merge part of task 2.4: half"))
+
+
+class TicketStageTests(Documents):
+    """#990: a stage cut after the export sits between two others under a letter, and its Plan rows
+    line names the GitHub tickets that build it, since the frozen plan has no row for it.
+
+    The case writes a stage of its own, S9a between S9 and S10, into the scratch copy, so it reads
+    no stage the real roadmap happens to hold. Its line names `ISSUE-5` in upper case and `issue-6`;
+    issue-5 merges whole and issue-6 in part.
+    """
+
+    SUBJECTS = [
+        "Merge task issue-5: the first ticket of the lettered stage",
+        "Merge part of task issue-6: half the second",
+    ]
+    ROW = "| S9a | Do what the lettered stage adds | G99 | `g99-lettered` |"
+    SECTION = (
+        "### S9a Lettered: a stage the plan did not foresee\n\n"
+        "A stage cut after the export.\n\n"
+        "**Plan rows.** `ISSUE-5`,\n`issue-6`\n\n"
+    )
+
+    def setUp(self):
+        super().setUp()
+        path = self.root / roadmap.ROADMAP
+        text = path.read_text()
+        for anchor, insert in (("| S10 |", self.ROW + "\n"), ("### S10 ", self.SECTION)):
+            self.assertEqual(1, text.count("\n" + anchor), anchor)
+            text = text.replace("\n" + anchor, "\n" + insert + anchor)
+        path.write_text(text)
+        self.assertEqual(0, self.invoke([])[0], self.errors.getvalue())
+
+    def derived(self):
+        code, output = self.invoke(["--json"])
+        self.assertEqual(0, code, self.errors.getvalue())
+        return json.loads(output)
+
+    def test_a_lettered_row_and_heading_read_as_one_stage_in_order(self):
+        stages, problems = roadmap.ladder(self.root)
+        self.assertEqual([], problems)
+        ids = [stage.id for stage in stages]
+        self.assertEqual(ids.index("S9") + 1, ids.index("S9a"))
+        self.assertEqual(ids.index("S9a") + 1, ids.index("S10"))
+        lettered = stages[ids.index("S9a")]
+        self.assertEqual("Lettered: a stage the plan did not foresee", lettered.name)
+        self.assertEqual(("G99", "g99-lettered"), (lettered.gate, lettered.tag))
+
+    def test_a_plan_rows_line_of_tickets_yields_them_in_lower_case(self):
+        stages = {stage.id: stage for stage in roadmap.ladder(self.root)[0]}
+        self.assertEqual(["issue-5", "issue-6"], stages["S9a"].rows)
+
+    def test_a_ticket_in_one_stage_is_no_coverage_problem_and_in_two_stages_is(self):
+        stages = roadmap.ladder(self.root)[0]
+        rows = roadmap.plan_rows(self.root)
+        self.assertEqual([], roadmap.coverage(stages, rows))
+        again = roadmap.Stage("S9b", "", "G98", "g98-again")
+        again.rows = ["issue-5"]
+        problems = roadmap.coverage(stages + [again], rows)
+        self.assertEqual(
+            [f"{roadmap.ROADMAP}: 'issue-5' is in both stage S9a and stage S9b"], problems
+        )
+
+    def test_a_tickets_merges_count_in_its_stages_block_and_the_summary(self):
+        line = next(
+            line for line in self.block(roadmap.ROADMAP, "stages") if line.startswith("| S9a ")
+        )
+        self.assertEqual(
+            "| S9a Lettered: a stage the plan did not foresee | G99, not tagged | 1 of 2 | "
+            "part-landed: `issue-6` |",
+            line,
+        )
+        summary = " ".join(self.block("README.md", "summary"))
+        landed, total = re.search(r"\*\*Plan rows landed:\*\* (\d+) of (\d+)", summary).groups()
+        gated = [
+            row for stage in roadmap.ladder(self.root)[0] if stage.tag for row in stage.rows
+        ]
+        self.assertEqual((1, len(gated)), (int(landed), int(total)))
+        self.assertIn("issue-5", gated)
+        self.assertIn(", with 1 part-landed", summary)
+
+    def test_the_json_rows_still_name_no_ticket(self):
+        derived = self.derived()
+        self.assertEqual(roadmap.plan_rows(self.root), list(derived["rows"]))
+        self.assertFalse([row for row in derived["rows"] if roadmap.TICKET.match(row)])
+        self.assertEqual("landed", derived["tickets"]["issue-5"])
+        self.assertEqual("part-landed", derived["tickets"]["issue-6"])
 
 
 class LandedInsideAMergeTests(unittest.TestCase):
