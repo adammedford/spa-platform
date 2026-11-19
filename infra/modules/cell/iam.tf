@@ -1,17 +1,19 @@
-# Task 1.4a. The cell's two roles, and under the bastion input a third, the bastion task's (#1167),
+# The cell's two roles, and under the bastion input a third, the bastion task's (#1167),
 # at the end of this file.
 #
 # Two, never one. The execution role is the ECS agent's: it pulls the image and opens the log
 # stream. The task role is the workload's, and it is the security object of record for the whole
 # cell — the one object here where a careless grant is easy to write and hard to notice. It holds
-# this cell's bucket prefixes and this cell's client-secret parameter path, from what plan row 1.4
-# enumerates. Nothing else: the row's third grant, the four ssmmessages permissions the tunnel needs,
-# went with ECS Exec on the gateway's service (#787) and is the bastion's role's whole grant (#1167).
+# this cell's bucket prefixes and this cell's client-secret parameter path, which are the two things
+# the gateway reads (contracts/s3-layout.md, ADR-0003). Nothing else: a third grant, the four
+# ssmmessages permissions the tunnel once needed, went with ECS Exec on the gateway's service (#787)
+# and is the bastion's role's whole grant (#1167). The role is the task's, so an extra container
+# (variables.tf -> extra_containers) holds every grant here too.
 #
 # Every statement below is asserted at plan time in tests/module.tftest.hcl, including one
 # assertion that fails on a statement the test does not recognise, so a widened grant breaks a test
 # instead of waiting for a reviewer to notice. Those runs, with the one that holds the bucket policy
-# to refusals only, are P-03 (plan row 1.9), which ADR-0016 makes an assertion on the configuration
+# to refusals only, are P-03, which ADR-0016 makes an assertion on the configuration
 # against a mock provider rather than on an applied plan.
 
 data "aws_partition" "current" {}
@@ -23,8 +25,8 @@ locals {
   # release. Stated here and read out of the contract by the test, so the two have to agree.
   task_readable_prefixes = ["registry", "apps"]
 
-  # The path the apps root writes a client secret to, one segment per app
-  # (infra/envs/poc/apps/main.tf, contracts/infra-outputs.example.json -> clients[].secretParameter).
+  # The path a client secret is written to, one segment per app
+  # (contracts/infra-outputs.example.json -> clients[].secretParameter).
   # Scoped to this cell: another cell's secret is outside it.
   client_secret_parameter_arn = join("", [
     "arn:${data.aws_partition.current.partition}:ssm:",
@@ -108,7 +110,7 @@ resource "aws_iam_role" "task_execution" {
 }
 
 # Written out rather than the AmazonECSTaskExecutionRolePolicy managed policy, which grants its ECR
-# and logs actions on "*". Here the pull is scoped to this cell's two repositories and the log
+# and logs actions on "*". Here the pull is scoped to this cell's own repositories and the log
 # writes to this cell's one log group, which is the same reason infra/bootstrap/ci-role.tf writes
 # its own policy instead of attaching ReadOnlyAccess.
 data "aws_iam_policy_document" "task_execution" {
@@ -187,8 +189,8 @@ data "aws_iam_policy_document" "task" {
   # when it builds a snapshot (ADR-0003). GetParameter is the single read and GetParameters the
   # batched one; no write, no history and no listing.
   #
-  # The parameters are SecureString under the AWS-managed key the apps root chose
-  # (infra/envs/poc/apps/main.tf). No kms:Decrypt is granted here, because the AWS-managed key's own
+  # The parameters are SecureString under the AWS-managed key aws/ssm, which is what the
+  # parameter's writer chooses when it names no key. No kms:Decrypt is granted here, because the AWS-managed key's own
   # policy admits this account's principals when the call arrives through Systems Manager:
   # https://docs.aws.amazon.com/systems-manager/latest/userguide/ps-restrict-decryption.html
   # A customer-managed replacement key requires a reviewed, explicit kms:Decrypt grant for that
