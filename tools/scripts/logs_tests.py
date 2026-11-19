@@ -295,5 +295,29 @@ class LogsRefuses(cell.CompanionTestCase):
         self.refused("AccessDeniedException", status=1, world=world)
 
 
+class LogsElidesAFragmentsClientId(cell.CompanionTestCase):
+    """#999: the outputs document nests each fragment's client under its shell
+    (clients.{appId}.fragments.{fragmentId}), and the redaction elides a fragment's client id as it
+    does a shell's. Before #999, cell_documents.py clients listed only the top level, so a fragment's
+    id was printed as it stood."""
+
+    def test_a_fragment_client_id_comes_out_as_its_app_and_fragment(self):
+        world = logged_world()
+        world["roots"]["apps"]["clients"]["shell"] = {
+            "clientId": "1example23456789shellclient", "secretParameter": "/spa-platform/poc/apps/shell/client-secret",
+            "secretVersion": 1,
+            "fragments": {"orders": {"clientId": "7nestedfragmentordersclient",
+                                     "secretParameter": "/spa-platform/poc/apps/shell/fragments/orders/client-secret",
+                                     "secretVersion": 1}}}
+        world["log_events"] = [[f"{cell.GATEWAY}/{cell.GATEWAY}/t",
+                                "refresh for shell 1example23456789shellclient and fragment 7nestedfragmentordersclient"]]
+        case = cell.Case(self, outputs=True, world=world)
+        result = case.run(SCRIPT)
+        self.assertEqual(0, result.status, result.output)
+        self.assertNoUnexpectedCall(case)
+        self.assertNotIn("7nestedfragmentordersclient", result.output)
+        self.assertIn("refresh for shell <client-id:shell> and fragment <client-id:shell:orders>", result.stdout)
+
+
 if __name__ == "__main__":
     sys.exit(cell.main("logs_tests"))

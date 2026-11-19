@@ -117,6 +117,15 @@ run "one_client_branding_style_and_parameter_per_definition" {
     condition     = toset(keys(aws_ssm_parameter.client_secret)) == toset(keys(var.fixture_apps))
     error_message = "The root must create one secret parameter per definition, and no other."
   }
+
+  # The fixture definitions have no fragments, so they plan no fragment resource (#999).
+  assert {
+    condition = (
+      alltrue([for app in values(var.fixture_apps) : !can(app.fragments)])
+      && length(aws_cognito_user_pool_client.fragment) + length(aws_cognito_managed_login_branding.fragment) + length(aws_ssm_parameter.fragment_client_secret) == 0
+    )
+    error_message = "A definition without fragments plans no fragment client, branding style or parameter."
+  }
 }
 
 run "clients_are_confidential_code_grant_only_with_urls_from_host" {
@@ -457,10 +466,11 @@ run "a_third_definition_adds_exactly_three_resources" {
     error_message = "Onboarding a definition leaves every argument of every existing app's client, branding style and parameter as it is without it (ADR-0016 decision 2, P-02)."
   }
 
-  # The keys above are the whole plan only while the root's resources are those three maps: a
-  # fourth resource block, in any file of the root, fails here. A name is whatever sits between the
-  # quotes, since Terraform accepts capitals and hyphens in one; a pattern of lower case and
-  # underscores missed resource "aws_ssm_parameter" "Extra-Secret" with every run green.
+  # The keys above are the whole plan only while the root's resources are those three maps and the
+  # three per-fragment maps beside them (#999), and no definition here has a fragment, so those three
+  # plan nothing: a seventh resource block, in any file of the root, fails here. A name is whatever
+  # sits between the quotes, since Terraform accepts capitals and hyphens in one; a pattern of lower
+  # case and underscores missed resource "aws_ssm_parameter" "Extra-Secret" with every run green.
   assert {
     condition = length(aws_cognito_user_pool_client.app) > 0 && toset(regexall(
       "(?m)^resource\\s+\"([^\"]+)\"\\s+\"([^\"]+)\"",
@@ -469,8 +479,21 @@ run "a_third_definition_adds_exactly_three_resources" {
       ["aws_cognito_user_pool_client", "app"],
       ["aws_cognito_managed_login_branding", "app"],
       ["aws_ssm_parameter", "client_secret"],
+      ["aws_cognito_user_pool_client", "fragment"],
+      ["aws_cognito_managed_login_branding", "fragment"],
+      ["aws_ssm_parameter", "fragment_client_secret"],
     ])
-    error_message = "The apps root may hold only the three per-definition resources (P-02)."
+    error_message = "The apps root may hold only the three per-definition resources and the three per-fragment ones (P-02, #999)."
+  }
+
+  assert {
+    condition = (
+      alltrue([for d in [jsondecode(file("../../../../fixtures/onboarding/app3.json"))] : !can(d.fragments)])
+      && length(aws_cognito_user_pool_client.fragment) == 0
+      && length(aws_cognito_managed_login_branding.fragment) == 0
+      && length(aws_ssm_parameter.fragment_client_secret) == 0
+    )
+    error_message = "A definition without fragments adds no fragment client, branding style or parameter: onboarding it adds its three resources and nothing else (P-02, #999)."
   }
 
   # Both patterns here find a declaration where it starts a line, and `terraform fmt -check` passes a
@@ -523,4 +546,266 @@ run "a_scope_no_resource_server_offers_is_refused" {
   }
 
   expect_failures = [aws_cognito_user_pool_client.app]
+}
+
+# #999 (part of #961): a definition with fragments adds, per (appId, fragmentId), one client, one
+# branding style and one parameter, beside its shell's three. The definitions are this test's own
+# (tests/definitions/), since the fixture fragment definitions are another ticket's: a shell with two
+# fragments, one naming its own entry, and a shell whose one fragment asks for a scope no resource
+# server offers.
+run "each_fragment_has_a_client_a_branding_style_and_a_parameter" {
+  command = plan
+
+  variables {
+    definition_dirs = ["../../../../fixtures/apps", "tests/definitions/two-fragments"]
+    shell           = jsondecode(file("tests/definitions/two-fragments/shell.json"))
+  }
+
+  assert {
+    condition = (
+      length(var.shell.fragments) == 2
+      && toset(keys(aws_cognito_user_pool_client.fragment)) == toset([for f in var.shell.fragments : "${var.shell.appId}.${f.fragmentId}"])
+      && toset(keys(aws_cognito_managed_login_branding.fragment)) == toset([for f in var.shell.fragments : "${var.shell.appId}.${f.fragmentId}"])
+      && toset(keys(aws_ssm_parameter.fragment_client_secret)) == toset([for f in var.shell.fragments : "${var.shell.appId}.${f.fragmentId}"])
+      && toset(keys(aws_cognito_user_pool_client.app)) == setunion(keys(var.fixture_apps), [var.shell.appId])
+    )
+    error_message = "A definition with two fragments adds one client, one branding style and one parameter per (appId, fragmentId), and its shell's three as any app's."
+  }
+
+  # Every argument a fragment's client shares with its shell's client has the shell's value: the
+  # confidential code grant, the token validities, rotation with the 60-second grace, revocation,
+  # user-existence errors and the explicit flows. The four that differ are held one by one below.
+  assert {
+    condition = alltrue([
+      for f in var.shell.fragments : {
+        user_pool_id                         = aws_cognito_user_pool_client.fragment["${var.shell.appId}.${f.fragmentId}"].user_pool_id
+        generate_secret                      = aws_cognito_user_pool_client.fragment["${var.shell.appId}.${f.fragmentId}"].generate_secret
+        allowed_oauth_flows_user_pool_client = aws_cognito_user_pool_client.fragment["${var.shell.appId}.${f.fragmentId}"].allowed_oauth_flows_user_pool_client
+        allowed_oauth_flows                  = toset(aws_cognito_user_pool_client.fragment["${var.shell.appId}.${f.fragmentId}"].allowed_oauth_flows)
+        supported_identity_providers         = toset(aws_cognito_user_pool_client.fragment["${var.shell.appId}.${f.fragmentId}"].supported_identity_providers)
+        access_token_validity                = aws_cognito_user_pool_client.fragment["${var.shell.appId}.${f.fragmentId}"].access_token_validity
+        id_token_validity                    = aws_cognito_user_pool_client.fragment["${var.shell.appId}.${f.fragmentId}"].id_token_validity
+        refresh_token_validity               = aws_cognito_user_pool_client.fragment["${var.shell.appId}.${f.fragmentId}"].refresh_token_validity
+        token_validity_units                 = aws_cognito_user_pool_client.fragment["${var.shell.appId}.${f.fragmentId}"].token_validity_units[0]
+        refresh_token_rotation               = aws_cognito_user_pool_client.fragment["${var.shell.appId}.${f.fragmentId}"].refresh_token_rotation[0]
+        enable_token_revocation              = aws_cognito_user_pool_client.fragment["${var.shell.appId}.${f.fragmentId}"].enable_token_revocation
+        prevent_user_existence_errors        = aws_cognito_user_pool_client.fragment["${var.shell.appId}.${f.fragmentId}"].prevent_user_existence_errors
+        explicit_auth_flows                  = toset(aws_cognito_user_pool_client.fragment["${var.shell.appId}.${f.fragmentId}"].explicit_auth_flows)
+        } == merge(
+        { for name, value in var.existing_app_resources["app1"].client : name => value if !contains(["allowed_oauth_scopes", "callback_urls", "logout_urls"], name) },
+        { user_pool_id = data.terraform_remote_state.idp.outputs.user_pool_id },
+      )
+    ])
+    error_message = "A fragment's client is configured as its shell's client: the same confidential code grant, validities, rotation, revocation and flows (#961)."
+  }
+
+  # The fragment block sets exactly the arguments the shell's block sets, and its style and parameter
+  # exactly the shell's style's and parameter's: an argument added to one and not the other, which the
+  # comparison above would not read, fails here.
+  assert {
+    condition = length(aws_cognito_user_pool_client.fragment) > 0 && alltrue([
+      for pair in [
+        ["aws_cognito_user_pool_client", "app", "fragment"],
+        ["aws_cognito_managed_login_branding", "app", "fragment"],
+        ["aws_ssm_parameter", "client_secret", "fragment_client_secret"],
+        ] : [
+        for m in regexall("(?m)^  ([a-z_]+)\\s*[={]", regex("(?ms)^resource\\s+\"${pair[0]}\"\\s+\"${pair[1]}\"\\s*\\{(.*?)^\\}", file("main.tf"))[0]) : m[0]
+        ] == [
+        for m in regexall("(?m)^  ([a-z_]+)\\s*[={]", regex("(?ms)^resource\\s+\"${pair[0]}\"\\s+\"${pair[2]}\"\\s*\\{(.*?)^\\}", file("main.tf"))[0]) : m[0]
+      ]
+    ])
+    error_message = "A fragment's client, branding style or parameter sets an argument its shell's does not, or leaves one out."
+  }
+
+  assert {
+    condition = alltrue([
+      for f in var.shell.fragments : (
+        toset(aws_cognito_user_pool_client.fragment["${var.shell.appId}.${f.fragmentId}"].allowed_oauth_scopes) == toset(f.oauth.scopes)
+        && aws_cognito_user_pool_client.fragment["${var.shell.appId}.${f.fragmentId}"].name == "spa-platform-${var.cell}-${var.shell.appId}.${f.fragmentId}"
+      )
+    ])
+    error_message = "A fragment's client is granted exactly the fragment's own scopes, under a name that joins its two ids."
+  }
+
+  assert {
+    condition = alltrue([
+      for f in var.shell.fragments : (
+        toset(aws_cognito_user_pool_client.fragment["${var.shell.appId}.${f.fragmentId}"].callback_urls) == toset(["https://${var.shell.host}/signin-oidc/${f.fragmentId}"])
+        && length(coalesce(aws_cognito_user_pool_client.fragment["${var.shell.appId}.${f.fragmentId}"].logout_urls, [])) == 0
+      )
+    ])
+    error_message = "A fragment's only callback URL is https://<shell host>/signin-oidc/<fragmentId>, and it has no logout URL (#961)."
+  }
+
+  assert {
+    condition = alltrue([
+      for f in var.shell.fragments : (
+        aws_cognito_managed_login_branding.fragment["${var.shell.appId}.${f.fragmentId}"].use_cognito_provided_values
+        && aws_cognito_managed_login_branding.fragment["${var.shell.appId}.${f.fragmentId}"].user_pool_id == data.terraform_remote_state.idp.outputs.user_pool_id
+      )
+      ]) && can(regex(
+      "(?m)^  client_id\\s*= aws_cognito_user_pool_client\\.fragment\\[each\\.key\\]\\.id$",
+      regex("(?ms)^resource\\s+\"aws_cognito_managed_login_branding\"\\s+\"fragment\"\\s*\\{(.*?)^\\}", file("main.tf"))[0]
+    ))
+    error_message = "Each fragment client has a managed-login branding style of its own, in the same pool."
+  }
+
+  assert {
+    condition = alltrue([
+      for f in var.shell.fragments : (
+        aws_ssm_parameter.fragment_client_secret["${var.shell.appId}.${f.fragmentId}"].name == "/spa-platform/${var.cell}/apps/${var.shell.appId}/fragments/${f.fragmentId}/client-secret"
+        && aws_ssm_parameter.fragment_client_secret["${var.shell.appId}.${f.fragmentId}"].type == "SecureString"
+        && aws_ssm_parameter.fragment_client_secret["${var.shell.appId}.${f.fragmentId}"].tier == "Standard"
+      )
+    ])
+    error_message = "A fragment's secret is a Standard SecureString at /spa-platform/<cell>/apps/<appId>/fragments/<fragmentId>/client-secret."
+  }
+
+  # The shell parameter's lifecycle, read from the source as the shell's is: the value its own
+  # client's secret, ignored after creation, and the parameter re-created only when that client is
+  # replaced (#554).
+  assert {
+    condition = length(aws_ssm_parameter.fragment_client_secret) > 0 && can(regex(
+      "(?m)^  value\\s*= aws_cognito_user_pool_client\\.fragment\\[each\\.key\\]\\.client_secret\\n(?s:.*?)^  lifecycle \\{\\s*ignore_changes\\s*= \\[value\\]\\s*replace_triggered_by = \\[aws_cognito_user_pool_client\\.fragment\\[each\\.key\\]\\.id\\]\\s*\\}",
+      regex("(?ms)^resource\\s+\"aws_ssm_parameter\"\\s+\"fragment_client_secret\"\\s*\\{(.*?)^\\}", file("main.tf"))[0]
+    ))
+    error_message = "A fragment's parameter holds its own client's secret, ignores later changes to its value and is re-created with its client (#554)."
+  }
+
+  # No IAM change: every fragment parameter sits under the task role's grant
+  # (infra/modules/cell/iam.tf) and the CI plan role's (infra/bootstrap/ci-role.tf), each read from
+  # its source with the cell put in and its trailing * taken off.
+  assert {
+    condition = length(aws_ssm_parameter.fragment_client_secret) > 0 && alltrue(flatten([
+      for p in aws_ssm_parameter.fragment_client_secret : [
+        for grant in [
+          regex(":parameter(/spa-platform/\\$\\{var\\.cell\\}/apps/)\\*\"", file("../../../modules/cell/iam.tf"))[0],
+          regex(":parameter(/spa-platform/\\$\\{var\\.cell\\}/)\\*\"", file("../../../bootstrap/ci-role.tf"))[0],
+        ] : startswith(p.name, replace(grant, "$${var.cell}", var.cell)) && startswith(p.name, "/spa-platform/${var.cell}/apps/")
+      ]
+    ]))
+    error_message = "A fragment's parameter must sit under /spa-platform/<cell>/apps/, which the task role's and the CI plan role's existing grants cover."
+  }
+
+  # The fixture apps, which have no fragments, plan every argument as they do without the shell.
+  assert {
+    condition = alltrue([
+      for id, expected in var.existing_app_resources : (
+        {
+          name                                 = aws_cognito_user_pool_client.app[id].name
+          user_pool_id                         = aws_cognito_user_pool_client.app[id].user_pool_id
+          generate_secret                      = aws_cognito_user_pool_client.app[id].generate_secret
+          allowed_oauth_flows_user_pool_client = aws_cognito_user_pool_client.app[id].allowed_oauth_flows_user_pool_client
+          allowed_oauth_flows                  = toset(aws_cognito_user_pool_client.app[id].allowed_oauth_flows)
+          allowed_oauth_scopes                 = toset(aws_cognito_user_pool_client.app[id].allowed_oauth_scopes)
+          supported_identity_providers         = toset(aws_cognito_user_pool_client.app[id].supported_identity_providers)
+          callback_urls                        = toset(aws_cognito_user_pool_client.app[id].callback_urls)
+          logout_urls                          = toset(aws_cognito_user_pool_client.app[id].logout_urls)
+          access_token_validity                = aws_cognito_user_pool_client.app[id].access_token_validity
+          id_token_validity                    = aws_cognito_user_pool_client.app[id].id_token_validity
+          refresh_token_validity               = aws_cognito_user_pool_client.app[id].refresh_token_validity
+          token_validity_units                 = aws_cognito_user_pool_client.app[id].token_validity_units[0]
+          refresh_token_rotation               = aws_cognito_user_pool_client.app[id].refresh_token_rotation[0]
+          enable_token_revocation              = aws_cognito_user_pool_client.app[id].enable_token_revocation
+          prevent_user_existence_errors        = aws_cognito_user_pool_client.app[id].prevent_user_existence_errors
+          explicit_auth_flows                  = toset(aws_cognito_user_pool_client.app[id].explicit_auth_flows)
+          } == merge(expected.client, {
+            name         = "spa-platform-${var.cell}-${id}"
+            user_pool_id = data.terraform_remote_state.idp.outputs.user_pool_id
+        })
+        && {
+          user_pool_id                = aws_cognito_managed_login_branding.app[id].user_pool_id
+          use_cognito_provided_values = aws_cognito_managed_login_branding.app[id].use_cognito_provided_values
+        } == merge(expected.branding, { user_pool_id = data.terraform_remote_state.idp.outputs.user_pool_id })
+        && {
+          name        = aws_ssm_parameter.client_secret[id].name
+          description = aws_ssm_parameter.client_secret[id].description
+          type        = aws_ssm_parameter.client_secret[id].type
+          tier        = aws_ssm_parameter.client_secret[id].tier
+          } == merge(expected.parameter, {
+            name        = "/spa-platform/${var.cell}/apps/${id}/client-secret"
+            description = "OAuth client secret for app ${id} of cell ${var.cell}. Read it; never copy it into a file."
+        })
+      )
+    ])
+    error_message = "A definition with fragments leaves every argument of every app without fragments as it is without it (ADR-0016 decision 2)."
+  }
+}
+
+run "the_clients_output_nests_each_fragment_under_its_shell" {
+  command = apply
+
+  variables {
+    definition_dirs = ["../../../../fixtures/apps", "tests/definitions/two-fragments"]
+    shell           = jsondecode(file("tests/definitions/two-fragments/shell.json"))
+  }
+
+  assert {
+    condition = (
+      toset(keys(output.clients[var.shell.appId].fragments)) == toset([for f in var.shell.fragments : f.fragmentId])
+      && toset(keys(output.clients[var.shell.appId])) == setunion(jsondecode(file("../../../../contracts/infra-outputs.schema.json")).properties.clients.additionalProperties.required, ["fragments"])
+    )
+    error_message = "An app with fragments has clients.<appId>.fragments, one entry per fragmentId, beside its own three fields."
+  }
+
+  # The keys of contracts/infra-outputs.schema.json -> clients.{appId}.fragments' entries, read from
+  # the contract, and each value from the fragment's own client and parameter. Never a secret.
+  assert {
+    condition = alltrue([
+      for f in var.shell.fragments : (
+        toset(keys(output.clients[var.shell.appId].fragments[f.fragmentId])) == toset(jsondecode(file("../../../../contracts/infra-outputs.schema.json")).properties.clients.additionalProperties.properties.fragments.additionalProperties.required)
+        && output.clients[var.shell.appId].fragments[f.fragmentId].clientId == aws_cognito_user_pool_client.fragment["${var.shell.appId}.${f.fragmentId}"].id
+        && output.clients[var.shell.appId].fragments[f.fragmentId].secretParameter == aws_ssm_parameter.fragment_client_secret["${var.shell.appId}.${f.fragmentId}"].name
+        && output.clients[var.shell.appId].fragments[f.fragmentId].secretVersion == aws_ssm_parameter.fragment_client_secret["${var.shell.appId}.${f.fragmentId}"].version
+      )
+    ])
+    error_message = "Each clients.<appId>.fragments.<fragmentId> has exactly the contract's fields, from the fragment's client and parameter."
+  }
+
+  assert {
+    condition = alltrue([
+      for id, _ in var.fixture_apps : toset(keys(output.clients[id])) == toset(jsondecode(file("../../../../contracts/infra-outputs.schema.json")).properties.clients.additionalProperties.required)
+    ])
+    error_message = "An app without fragments keeps today's clients entry: the three fields and no fragments key."
+  }
+}
+
+# A replaced fragment client re-creates its parameter, as a shell's does (#554).
+run "a_replaced_fragment_client_re_creates_its_parameter" {
+  command = apply
+
+  variables {
+    definition_dirs = ["../../../../fixtures/apps", "tests/definitions/two-fragments"]
+  }
+
+  plan_options {
+    replace = [aws_cognito_user_pool_client.fragment["shell.orders"]]
+  }
+
+  assert {
+    condition = length(aws_ssm_parameter.fragment_client_secret) > 0 && alltrue([
+      for key, c in aws_cognito_user_pool_client.fragment : aws_ssm_parameter.fragment_client_secret[key].value == c.client_secret
+    ])
+    error_message = "A replaced fragment client's parameter still holds the old client's secret: it must be re-created with its client (#554)."
+  }
+}
+
+run "a_fragment_scope_no_resource_server_offers_is_refused" {
+  command = plan
+
+  variables {
+    definition_dirs = ["tests/definitions/ungrantable-fragment-scope"]
+  }
+
+  override_data {
+    target = data.terraform_remote_state.idp
+    values = {
+      outputs = {
+        user_pool_id     = "us-east-1_EXAMPLE"
+        resource_servers = {}
+      }
+    }
+  }
+
+  expect_failures = [aws_cognito_user_pool_client.fragment]
 }

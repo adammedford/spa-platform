@@ -36,4 +36,44 @@ public sealed class SchemeNamesTests
     {
         Assert.NotEqual(SchemeNames.Oidc("app1"), SchemeNames.Cookie("app1"));
     }
+
+    [Fact]
+    public void A_fragment_scheme_is_the_appId_and_fragmentId_behind_an_oidc_prefix()
+    {
+        // The fragments spec (#961): the literal is the specification, as for the per-app pair.
+        Assert.Equal("oidc:app1:orders-ui", SchemeNames.Oidc("app1", "orders-ui"));
+    }
+
+    [Fact]
+    public void A_fragment_never_shares_a_scheme_name_with_its_shell_or_another_fragment()
+    {
+        string fragment = SchemeNames.Oidc("app1", "orders-ui");
+
+        Assert.NotEqual(SchemeNames.Oidc("app1"), fragment);
+        Assert.NotEqual(SchemeNames.Cookie("app1"), fragment);
+        Assert.NotEqual(SchemeNames.Oidc("app1", "billing-ui"), fragment);
+        Assert.NotEqual(SchemeNames.Oidc("app2", "orders-ui"), fragment);
+    }
+
+    [Fact]
+    public void ParseOidc_round_trips_the_shell_form_and_the_fragment_form()
+    {
+        // Mutation: return (parts[0], null) for every name, or swap the two parts.
+        Assert.Equal(("app1", (string?)null), SchemeNames.ParseOidc(SchemeNames.Oidc("app1")));
+        Assert.Equal(("app1", (string?)"orders-ui"), SchemeNames.ParseOidc(SchemeNames.Oidc("app1", "orders-ui")));
+    }
+
+    [Theory]
+    [InlineData("cookie:app1")]
+    [InlineData("oidc:")]
+    [InlineData("oidc:app1:")]
+    [InlineData("oidc::orders-ui")]
+    [InlineData("oidc:a:b:c")]
+    [InlineData("OIDC:app1")]
+    [InlineData("app1")]
+    public void ParseOidc_is_null_for_a_name_that_is_not_an_oidc_scheme_of_either_shape(string scheme)
+    {
+        // Mutation: drop the empty-part check, or allow more than two parts.
+        Assert.Null(SchemeNames.ParseOidc(scheme));
+    }
 }

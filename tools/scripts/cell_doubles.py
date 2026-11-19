@@ -77,7 +77,8 @@ def terraform_local(path: pathlib.Path, name: str, cell: str = CELL) -> str:
 CLUSTER = terraform_local(MODULE / "ecs.tf", "cluster_name")
 SERVICE = terraform_local(MODULE / "ecs.tf", "service_name")
 GATEWAY = terraform_local(MODULE / "ecs.tf", "gateway_container_name")
-MOCK_API = terraform_local(MODULE / "ecs.tf", "mock_api_container_name")
+# The mock API is the proof-cell root's extra container since #1342, so its name lives in that root.
+MOCK_API = terraform_local(ROOT / "infra" / "envs" / "poc" / "platform" / "main.tf", "mock_api_container_name")
 LOG_GROUP = terraform_local(MODULE / "ecs.tf", "log_group_name")
 FAMILY = terraform_local(MODULE / "network.tf", "name_prefix")
 # The bastion, the tunnel's hop (#1167): its service in the cluster, its one container and its task
@@ -1282,13 +1283,42 @@ def spactl_wait(world: dict, args: list[str], stdout, stderr) -> int:
     return 1
 
 
+def default_entry() -> str:
+    """contracts/registry.schema.json's default entry module, read from the contract."""
+    return json.loads((ROOT / "contracts" / "registry.schema.json").read_text())["$defs"]["entry"]["default"]
+
+
 def spactl_change(world: dict, args: list[str], record: dict) -> int:
-    """`spactl release publish` and `spactl app add`, the two commands seed.sh runs."""
+    """`spactl release publish`, `spactl fragment publish` and `spactl app add`, the commands seed.sh
+    runs. The two fragment shapes are #993's: `fragment publish <appId> <fragmentId> <dir> <release>
+    --entry <file>`, which refuses a <dir> without its entry and writes the entry last, and app add's
+    `--fragment-release id=rel,id=rel`, which completes each fragment from the outputs' nested client
+    and refuses a fragment the outputs lack, one the list does not name, and one whose release has no
+    entry file under the definition's entry. A fault "fragment publish <fragmentId>" fails that
+    fragment's publish, as a refused claim or a lost connection would."""
     status = 0
     options = {args[i]: args[i + 1] for i in range(len(args)) if args[i].startswith("--") and i + 1 < len(args)}
     outputs = json.loads(pathlib.Path(options["--outputs"]).read_text())
     bucket = outputs["bucket"]
-    if args[:2] == ["release", "publish"]:
+    if args[:2] == ["fragment", "publish"]:
+        if len(args) != 10 or set(options) != {"--entry", "--outputs"}:
+            raise Unexpected(f"spactl {args}")
+        app, fragment, directory, release = args[2:6]
+        entry = options["--entry"]
+        root = pathlib.Path(directory)
+        if world["faults"].get(f"fragment publish {fragment}"):
+            sys.stderr.write(f"Could not publish fragment {fragment}: the claim for a key is held by another release.\n")
+            return 1
+        if not (root / entry).is_file():
+            sys.stderr.write(f"{directory} has no {entry}.\n")
+            return 1
+        files = sorted((p for p in root.rglob("*") if p.is_file()), key=lambda p: p == root / entry)
+        for file in files:
+            key = f"apps/{app}/fragments/{fragment}/releases/{release}/{file.relative_to(root).as_posix()}"
+            if not any(item["Key"] == key for item in world["objects"]):
+                world["objects"].append({"Key": key, "VersionId": f"v{len(world['objects'])}"})
+        sys.stdout.write(f"Published apps/{app}/fragments/{fragment}/releases/{release}/ to {bucket}.\n")
+    elif args[:2] == ["release", "publish"]:
         app, directory, release = args[2:5]
         root = pathlib.Path(directory)
         for file in sorted(p for p in root.rglob("*") if p.is_file()):
@@ -1301,13 +1331,34 @@ def spactl_change(world: dict, args: list[str], record: dict) -> int:
         config = json.loads(pathlib.Path(options["--config"]).read_text())
         record["config"] = config
         app = definition["appId"]
+        listed = definition.get("fragments", [])
+        named = {}
+        if "--fragment-release" in options:
+            named = dict(pair.split("=", 1) for pair in options["--fragment-release"].split(","))
+            record["fragmentReleases"] = named
+        nested = (outputs["clients"].get(app) or {}).get("fragments", {})
+        missing = ([f["fragmentId"] for f in listed if f["fragmentId"] not in nested or f["fragmentId"] not in named]
+                   + [name for name in named if name not in {f["fragmentId"] for f in listed}])
+        unfinished = [f["fragmentId"] for f in listed if f["fragmentId"] in named and not any(
+            item["Key"] == f"apps/{app}/fragments/{f['fragmentId']}/releases/{named[f['fragmentId']]}/{f.get('entry', default_entry())}"
+            for item in world["objects"])]
         if app not in outputs["clients"]:
             sys.stderr.write(f"The infrastructure outputs name no client for '{app}'.\n")
+            status = 1
+        elif missing:
+            sys.stderr.write(f"Fragments {missing} of '{app}' have no client in the outputs, or no release named, or are not the definition's.\n")
+            status = 1
+        elif unfinished:
+            sys.stderr.write(f"Fragments {unfinished} of '{app}': no entry file: publish it first.\n")
             status = 1
         else:
             registry = world["registry"] or {"schemaVersion": 1, "revision": 0, "apps": []}
             registry["apps"] = [entry for entry in registry["apps"] if entry["appId"] != app]
-            registry["apps"].append({"appId": app, "release": options["--release"]})
+            added = {"appId": app, "release": options["--release"]}
+            if listed:
+                registry["schemaVersion"] = 2
+                added["fragments"] = [{"fragmentId": f["fragmentId"], "release": named[f["fragmentId"]]} for f in listed]
+            registry["apps"].append(added)
             registry["revision"] += 1
             world["registry"] = registry
             world["objects"].append({"Key": "registry/registry.json", "VersionId": f"r{registry['revision']}"})

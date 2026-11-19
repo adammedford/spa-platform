@@ -28,8 +28,8 @@ output "ecr_gateway" {
 }
 
 output "ecr_mock_api" {
-  description = "The contract's `ecrMockApi`."
-  value       = module.cell.ecr_mock_api
+  description = "The contract's `ecrMockApi`: the module's repository at mock-api, the extra repository main.tf names."
+  value       = module.cell.ecr_repositories["mock-api"]
 }
 
 # Task 1.4a's four.

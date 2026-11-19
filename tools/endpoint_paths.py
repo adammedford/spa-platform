@@ -26,9 +26,9 @@ guards"):
 - a path the first cell of a row of the Endpoints table names, such as `GET /bff/session`; a cell
   naming a path with a `{placeholder}`, `/api/{name}/{rest}`, makes known every path that begins
   with the text before its first placeholder, so an `/api/` path matches on its prefix;
-- a path the reserved-paths sentence after the table names ("An SPA cannot serve content under
-  ..."), except one ending `/`, which names a prefix and makes no path under it known: `/healthz`
-  and `/readyz` are known, `/bff/user` is not.
+- a path the reserved-paths sentence after the table names ("A path reserved outright is served
+  from no release ...", #982), except one ending `/`, which names a prefix and makes no path under
+  it known: `/healthz` and `/readyz` are known, `/bff/user` is not.
 
 It prints each unknown path as `endpoint-paths: <file>:<line>: <path> is not an endpoint
 contracts/http-contract.md makes known` on stderr, then one verdict line on stdout,
@@ -48,7 +48,7 @@ import sys
 
 ME = "endpoint-paths"
 CONTRACT = "contracts/http-contract.md"
-SENTENCE = "An SPA cannot serve content under"
+SENTENCE = "A path reserved outright is served from no release"
 # Where a path a session steers by is written: the skills, the runbooks and the test catalogue.
 READ = (re.compile(r"\.claude/skills/.+\.md"), re.compile(r"docs/runbooks/[^/]+\.md"),
         re.compile(r"docs/plan/04-tests\.md"))

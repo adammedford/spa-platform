@@ -16,8 +16,8 @@ it, D-3 in docs/dependencies.md), and binds one workstation port, --local-port.
 
 **Names.** Every name is read from infra/envs/poc/outputs.json (contracts/infra-outputs.schema.json:
 "The scripts and the deployed tests read it"): ecsCluster, ecsService, logGroup, albDnsName,
-gatewayImage. Nothing is looked up by name and nothing is read from Terraform state, as the cell
-scripts do (#198). The document has no target group, so it is read from the service's
+gatewayImage and ecsBastionService, the hop's service. Nothing is looked up by name and nothing is
+read from Terraform state, as the cell scripts do (#198). The document has no target group, so it is read from the service's
 loadBalancers in describe-services, with the container the load balancer sends to; that
 container's log stream prefix is read from its task definition (grilling record, facts 5 and 7).
 
@@ -42,8 +42,10 @@ new pair is what #286 Q135 and #305 Q9 measure and two tasks would be a differen
 Clock zero is the gateway container's StartedAt from the task metadata endpoint v4, read once the
 service is stable by one ECS Exec session running a bash one-liner (Q1, Q11): the image has bash with
 /dev/tcp and no curl (the grilling record's fact 1). Any failure falls back to pullStoppedAt, and
-the output says so and why. S is the task's startedAt, so S - T0 crosses clocks and is printed as
-a range.
+the output says so and why. A cell applied since #787 runs the gateway's tasks with ECS Exec off, so
+there the session is never sent: describe-tasks says the new task's Exec is off, and every restart
+takes the fallback with that reason (#1378). S is the task's startedAt, so S - T0 crosses clocks and
+is printed as a range.
 
 **Log clocks** (#286 Q137; Q4, Q5) come from the new task's own stream: listening (log) is
 Kestrel's "Now listening on", registry live (log) the "Registry revision ... is live" line, and
@@ -52,16 +54,16 @@ line carries no path (contracts/telemetry.md), so that last one rests on a premi
 prints: nothing on the cell calls /healthz during the run. "ready" labels no deployed row.
 
 **The hop and the 302** (#286 Q139; Q7, Q10). Before each restart the script opens its own
-AWS-StartPortForwardingSessionToRemoteHost session to albDnsName:443 through the task about to be
-replaced, which outlives the new target's first checks: that task is deregistered once the new
-target is healthy and stops after the 30 s drain and up to the 30 s stopTimeout, so the forward
-lasts about 30 to 60 s past target healthy: 30 s when the gateway exits soon after SIGTERM, 60 s
-only when it takes the whole stopTimeout. The default probe loop (--probe-attempts 30 x
---probe-interval 2.0 s) sleeps 60 s, the upper end only, and each round's probe and log read add
-to it, so a 302 that needs more than about 30 s of probing can find the forward gone and end the
-restart incomplete. #347 leaves the forward's continuity through a roll unproved.
-tools/scripts/tunnel.sh is not used, since its hop can be the task being measured. Once the new
-target is healthy it sends a
+AWS-StartPortForwardingSessionToRemoteHost session to albDnsName:443 through the cell's bastion
+task (#1167), and closes it once the restart's 302 is found. Q10 took the task about to be
+replaced so that the session agent never shared the measured task's CPU; #787 turns ECS Exec off on
+every task of the gateway's service, so no gateway task can carry a session, and the bastion, a
+service of its own outside the target group, is the hop that keeps Q10's reason and is not rolled by
+the restart (#1378). Its service is the outputs document's ecsBastionService, present only when the
+platform root was applied with bastion = true; without it the run is refused before any AWS call.
+The hop is the first running task of that service whose Exec is on and whose bastion container's
+ExecuteCommandAgent runs, as tools/scripts/tunnel.sh takes it; that script is not run, since this
+one owns the forward's lifetime and its stderr. Once the new target is healthy it sends a
 cookieless navigation to app1's registry host through that forward, TLS verified against the
 authority certs.sh issued, until a 302 lands in the new task's stream. It reads the status line and
 nothing else: the 302 is the OpenID Connect challenge, whose Location holds state and whose
@@ -72,8 +74,8 @@ Set-Cookie holds the correlation cookie. The clock is that log line's duration_m
   2  a usage error, a refusal, a failed AWS call or any other failure before restart 1's
      update-service is sent (no Region, no outputs document for it, no credentials, a missing tool,
      a service whose desiredCount is not 1, the service not stable on gatewayImage or running more
-     or fewer tasks than one, a malformed image digest, caller account or hop task id); nothing is
-     written
+     or fewer tasks than one, no ecsBastionService in the document, no bastion task a session can
+     reach, a malformed image digest, caller account or hop task id); nothing is written
   3  a breach: the scheduler stopped the new task for failing the load balancer's health checks
      (#286 Q148), the first such stop ending the run wherever it falls. ecs.tf's reading of the
      target group's defaults (#171) puts that stop past the T0 + 60 s hard bound, three failures 30 s
@@ -138,6 +140,14 @@ RESTARTS = 10                 # #286 Q135
 CHECK_INTERVAL_S = 30         # the target group sets none, so the provider's default (ecs.tf's comment)
 ALB_NODES = 2                 # one checker stream per node, one node per subnet (grilling record, Q13)
 HARD_BOUND_S = 60             # T0 + 60 s, the third check (#175 Q4, ecs.tf's comment)
+# The hop's container: the bastion task's one container (infra/modules/cell/ecs.tf,
+# bastion_container_name; #1167). fargate_doubles.py reads that local, so a rename turns the hop red.
+BASTION_CONTAINER = "bastion"
+NO_BASTION = ("infra/envs/poc/outputs.json names no ecsBastionService, so the cell has no bastion for the port forward's hop "
+              "(#1167): no task of the gateway's service can carry a session, since #787 turns its ECS Exec off. Set "
+              "bastion = true and bastion_image in infra/envs/poc/platform/terraform.tfvars, apply that root, and rewrite "
+              "the document with tools/scripts/seed.sh.")
+NO_EXEC = "no session: ECS Exec is off on the gateway's task (#787), so no metadata read was sent"
 
 EXIT_CLEAN, EXIT_USAGE, EXIT_BREACH, EXIT_INCOMPLETE = 0, 2, 3, 4
 
@@ -394,7 +404,7 @@ def ms(later: Optional[int], earlier: Optional[int]) -> Optional[float]:
     return None if later is None or earlier is None else (later - earlier) / 1e6
 
 
-# --- the zero: the metadata endpoint through ECS Exec -----------------------------------------------
+# --- the zero: the metadata endpoint through ECS Exec, on a task run with it on --------------------
 
 BEGIN, END, NO_ENDPOINT = "SPA-BENCH-BEGIN-", "SPA-BENCH-END-", "SPA-BENCH-NO-ENDPOINT"
 
@@ -630,6 +640,12 @@ def read_outputs(region: str) -> dict:
         names[field] = value
     if not IMAGE_DIGEST.fullmatch(names["gatewayImage"].partition("@")[2]):
         raise Refused("infra/envs/poc/outputs.json's gatewayImage is not pinned by digest.")
+    # Present only when the cell declares a bastion (contracts/infra-outputs.schema.json), and the
+    # forward has no other hop: refused here, before any AWS call.
+    bastion = document.get("ecsBastionService")
+    if not isinstance(bastion, str) or not bastion:
+        raise Refused(NO_BASTION)
+    names["ecsBastionService"] = bastion
     return names
 
 
@@ -769,22 +785,39 @@ class Bench:
 
     # --- the hop ---
 
-    def open_forward(self, through: dict, refuse: bool) -> str:
-        """Q10: a port forward of our own, through the task about to be replaced."""
-        container = _container(through, self.container)
-        agent = next((a for a in container.get("managedAgents", []) if a.get("name") == "ExecuteCommandAgent"), {})
-        task_id = task_id_of(through["taskArn"])
+    def bastion_hop(self, problem) -> Tuple[str, str]:
+        """The first running task of the bastion service a session can reach (#1167), as
+        tools/scripts/tunnel.sh takes its hop: running, ECS Exec on, and a bastion container with a
+        runtime id whose ExecuteCommandAgent is RUNNING. Its task id and that runtime id."""
+        bastion = self.names["ecsBastionService"]
+        arns = self.aws("ecs", "list-tasks", "--cluster", self.cluster, "--service-name", bastion,
+                        "--desired-status", "RUNNING").get("taskArns") or []
+        if not arns:
+            raise problem(compose("{bastion} has no running task, so the port forward has no hop. Is the service steady?",
+                                  bastion=bastion))
+        for task in self.describe_tasks(arns):
+            task_id = task_id_of(task.get("taskArn"))
+            if task_id is None:
+                raise problem("a bastion task's ARN holds no well-formed task id.")
+            container = _container(task, BASTION_CONTAINER)
+            agent = next((a for a in container.get("managedAgents", []) if a.get("name") == "ExecuteCommandAgent"), {})
+            # A container takes a session once its task runs with Exec on and its
+            # ExecuteCommandAgent's lastStatus is RUNNING.
+            # https://docs.aws.amazon.com/AmazonECS/latest/developerguide/ecs-exec.html#ecs-exec-enabling
+            if task.get("lastStatus") == "RUNNING" and task.get("enableExecuteCommand") is True \
+                    and container.get("runtimeId") and agent.get("lastStatus") == "RUNNING":
+                return task_id, container["runtimeId"]
+        raise problem(compose("no task of {bastion} can carry a session: none runs with ECS Exec on and its {container} "
+                              "container's ExecuteCommandAgent running.", bastion=bastion, container=BASTION_CONTAINER))
+
+    def open_forward(self, refuse: bool) -> str:
+        """Q10: a port forward of our own, through the bastion's task (#1167), never through a task
+        of the gateway's service, whose ECS Exec #787 turns off."""
         problem = Refused if refuse else Incomplete
-        if task_id is None:
-            raise problem("the outgoing task's ARN holds no well-formed task id.")
-        # A container takes a session once its ExecuteCommandAgent's lastStatus is RUNNING.
-        # https://docs.aws.amazon.com/AmazonECS/latest/developerguide/ecs-exec.html#ecs-exec-enabling
-        if through.get("lastStatus") != "RUNNING" or not container.get("runtimeId") or agent.get("lastStatus") != "RUNNING":
-            raise problem(compose("task {task} cannot carry a session: its {container} container's ExecuteCommandAgent is not running.",
-                                  task=self.task(task_id), container=self.container))
+        task_id, runtime_id = self.bastion_hop(problem)
         # ecs:<cluster>_<task id>_<container runtime id> names an ECS container to Session Manager.
         # https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-sessions-start.html#sessions-remote-port-forwarding
-        target = f"ecs:{self.cluster}_{task_id}_{container['runtimeId']}"
+        target = f"ecs:{self.cluster}_{task_id}_{runtime_id}"
         parameters = json.dumps({"host": [self.names["albDnsName"]], "portNumber": ["443"],
                                  "localPortNumber": [str(self.options.local_port)]})
         self.forward_errors = open(os.devnull, "w")
@@ -827,7 +860,7 @@ class Bench:
             raise (Refused if index == 1 else Incomplete)(
                 f"{self.service} runs {len(outgoing)} tasks before restart {index}, not one: the benchmark runs on one task, "
                 "and a second task between settled restarts means the service changed under the run.")
-        record["hop_task"] = self.open_forward(outgoing[0], refuse=index == 1)
+        record["hop_task"] = self.open_forward(refuse=index == 1)
         try:
             # Counted before the call: once it is sent, the service may have changed (Endings: 4).
             self.updates_issued += 1
@@ -853,7 +886,7 @@ class Bench:
         final = self.describe_tasks([record["task_arn"]])
         if final:
             self.task_times(final[0], record)
-        self.read_zero(record)
+        self.read_zero(record, final[0] if final else None)
         self.wait_for_log(record)
         record["complete"] = True
         return record
@@ -953,9 +986,14 @@ class Bench:
 
     # --- the zero ---
 
-    def read_zero(self, record: dict) -> None:
+    def read_zero(self, record: dict, task: Optional[dict]) -> None:
         """Q1, Q11: one interactive exec session on the new task, once stable; any failure takes
-        pullStoppedAt, and the reason is kept."""
+        pullStoppedAt, and the reason is kept. A task run with ECS Exec off, every task of a cell
+        applied since #787, takes it without a session: none could open. A task describe-tasks did
+        not describe is tried, and a failed session is the fallback as ever."""
+        if task is not None and task.get("enableExecuteCommand") is not True:
+            record["zero"] = {"source": "pullStoppedAt", "ns": record.get("pull_stopped_ns"), "fallback": NO_EXEC}
+            return
         try:
             status, out, code = self.aws.output("ecs", "execute-command", "--cluster", self.cluster,
                                                 "--task", record["task_id"], "--container", self.container,
@@ -1263,8 +1301,8 @@ def main(argv: List[str]) -> int:
         bench.preflight()
         # Q12's "about an hour" rested on the provider's 300 s drain; alb.tf sets 30 s (#347). A
         # restart now is the new task's pull and start (about 30 s), up to the T0 + 60 s third check,
-        # the probe, the 30 s drain, up to the 30 s stopTimeout, the waiter's 15 s polls and the exec
-        # read: about three minutes, so about half an hour for ten.
+        # the probe, the 30 s drain, up to the 30 s stopTimeout, the waiter's 15 s polls and, on a
+        # task run with Exec on, the exec read: about three minutes, so about half an hour for ten.
         bench.say(f"ten restarts, about half an hour, on one task: each restart runs the old task and the new one side by "
                   f"side, and the old one drains for 30 s and stops before the service is stable (#305 Q12, alb.tf's "
                   f"deregistration delay; #975)")

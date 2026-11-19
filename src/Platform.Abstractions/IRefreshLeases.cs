@@ -1,10 +1,16 @@
 namespace Platform.Abstractions;
 
 /// <summary>
-/// The refresh lease: one holder per session key for a bounded time, the cross-task half of the
+/// The refresh lease: one holder per token set for a bounded time, the cross-task half of the
 /// refresh gate (ADR-0024; change request contracts/changes/p2-3-session-lease-abstraction.md,
 /// Decision items 1 to 6; the <c>continuity</c> spec, #332). The session gate, <c>AppSessions</c>,
 /// stays the in-process half: fifty calls on one task queue on the gate and take one lease.
+///
+/// <para>The key names one token set, not one record: the session key for the shell's set, and
+/// <c>{sessionKey}:{fragmentId}</c> for a fragment's, so a record's due sets refresh in parallel. The
+/// parameter keeps its name and the interface its signature. The fragments spec (#961) changes the
+/// rule from one lease per session key to one lease per token set. Either form carries the session
+/// key, so neither is ever logged.</para>
 ///
 /// <para>The lease is independent of the session record (ADR-0024 decision 3): acquiring on a key
 /// with no record succeeds, and the loser's loop, not the lease, handles a record that is gone. The

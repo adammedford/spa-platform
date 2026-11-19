@@ -90,6 +90,66 @@ public sealed class FakeAccessTokenSourceTests
         Assert.Equal([null], source.Calls);
     }
 
+    [Fact]
+    public async Task A_fragment_request_is_answered_from_its_fragment_arrangement()
+    {
+        // Mutation: key the fragment arrangement by fragment id alone, or read the app's first.
+        FakeAccessTokenSource source = new();
+        source.ForApp("app1", "shell-token");
+        source.ForFragment("app2", "orders-ui", "other-app-token");
+        source.ForFragment("app1", "orders-ui", "orders-token");
+
+        AccessTokenResult result = await source.GetAsync(ContextFor("app1", "orders-ui"), Ct);
+
+        Assert.Equal("orders-token", Assert.IsType<AccessTokenResult.Token>(result).Value);
+        Assert.Equal("shell-token", await TokenFor(source, "app1"));
+    }
+
+    [Fact]
+    public async Task A_fragment_with_no_arrangement_needs_its_login_even_when_the_shell_has_a_token()
+    {
+        // The real source never returns the shell's set on a fragment route (#961).
+        // Mutation: fall back to ForApp or Result for a fragment request.
+        FakeAccessTokenSource source = new() { Result = new AccessTokenResult.Token("default-token") };
+        source.ForApp("app1", "shell-token");
+
+        AccessTokenResult result = await source.GetAsync(ContextFor("app1", "orders-ui"), Ct);
+
+        Assert.IsType<AccessTokenResult.FragmentLoginRequired>(result);
+    }
+
+    [Fact]
+    public async Task FragmentResult_answers_any_fragment_without_its_own()
+    {
+        FakeAccessTokenSource source = new() { FragmentResult = new AccessTokenResult.SessionEnded() };
+        source.ForFragment("app1", "orders-ui", new AccessTokenResult.StoreUnavailable());
+
+        Assert.IsType<AccessTokenResult.SessionEnded>(await source.GetAsync(ContextFor("app1", "billing-ui"), Ct));
+        Assert.IsType<AccessTokenResult.StoreUnavailable>(await source.GetAsync(ContextFor("app1", "orders-ui"), Ct));
+    }
+
+    [Fact]
+    public async Task Every_call_records_its_fragment_beside_its_app()
+    {
+        FakeAccessTokenSource source = new();
+
+        await source.GetAsync(ContextFor("app1", "orders-ui"), Ct);
+        await source.GetAsync(ContextFor("app1"), Ct);
+        await source.GetAsync(Context(), Ct);
+
+        Assert.Equal(["app1", "app1", null], source.Calls);
+        Assert.Equal(["orders-ui", null, null], source.FragmentCalls);
+    }
+
+    private static HttpContext ContextFor(string appId, string fragmentId)
+    {
+        AppDefinition app = TestApps.Entry(appId, fragments: [TestApps.Fragment(fragmentId, appId: appId)]);
+        DefaultHttpContext context = new();
+        context.Features.Set<IAppFeature>(SettableAppFeature.For(app));
+        context.Features.Set<IFragmentFeature>(SettableFragmentFeature.For(app, fragmentId));
+        return context;
+    }
+
     private static async Task<string> TokenFor(FakeAccessTokenSource source, string appId)
     {
         AccessTokenResult result = await source.GetAsync(ContextFor(appId), Ct);

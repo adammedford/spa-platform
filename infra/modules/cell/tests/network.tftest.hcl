@@ -1,21 +1,21 @@
-# Task 1.2. The cell's network boundary, checked against a mock AWS provider: no credentials, no
+# The cell's network boundary, checked against a mock AWS provider: no credentials, no
 # AWS apply and no network beyond `terraform init`.
 #   terraform -chdir=infra/modules/cell init -backend=false
 #   terraform -chdir=infra/modules/cell test
 #
-# Plan row 1.2's done-when is "the plan has no NAT, bastion or database, and no other ingress rule".
+# The network's rule is "the plan has no NAT, bastion or database, and no other ingress rule".
 # Under ADR-0016 both halves are properties of the configuration, proved here at plan time. P-01
 # in the platform root's tests holds the first half: a NAT gateway or a database only in the gated
 # form it admits (#583, issue-338). The resource-type allowlist in module.tftest.hcl adds that no
 # instance type can be declared; it names the gated types, so it cannot tell gated from ungated.
-# This file holds the second. The cell declares exactly the four security-group rules plan row 1.2
-# names, two in each direction, and the VPC's default group, which AWS creates admitting all traffic
+# This file holds the second. The cell declares exactly four security-group rules, two in each
+# direction, and the VPC's default group, which AWS creates admitting all traffic
 # from its own members, is adopted with none. Two runs check what a deployment would otherwise trip
 # over first: where the two subnets go, and that every description is one EC2 accepts.
 #
 # What it does not prove is the deployed half of P-06, that a connection from outside to the task's
-# public address on the gateway's port times out. That needs the applied cell and runs at G3 (task
-# 6.9). No rule can be declared outside this module: the platform root declares no resource of its
+# public address on the gateway's port times out. That needs the applied cell and runs at G3. No
+# rule can be declared outside this module: the platform root declares no resource of its
 # own, which its tests hold (P-01).
 #
 # Its own file, rather than more runs in module.tftest.hcl, so the plan-time ids below are this
@@ -96,7 +96,7 @@ variables {
 # (https://developer.hashicorp.com/terraform/language/syntax/configuration#identifiers), and a
 # pattern of lower case and underscores alone would miss a rule named "open-8080", with every run
 # here passing beside it.
-run "the_cell_declares_exactly_the_four_security_group_rules_plan_row_1_2_names" {
+run "the_cell_declares_exactly_the_four_security_group_rules_of_its_boundary" {
   command = plan
 
   assert {
@@ -106,7 +106,7 @@ run "the_cell_declares_exactly_the_four_security_group_rules_plan_row_1_2_names"
         join("\n", [for f in fileset(path.module, "*.tf") : file("${path.module}/${f}")])
       ) : m[0]
     ]) == toset(["alb_https_from_task", "task_from_alb"])
-    error_message = "The cell admits two things and no third (plan row 1.2): 443 to the ALB security group from the task security group, and the gateway's port to the task security group from the ALB security group."
+    error_message = "The cell admits two things and no third: 443 to the ALB security group from the task security group, and the gateway's port to the task security group from the ALB security group."
   }
 
   assert {
@@ -116,7 +116,7 @@ run "the_cell_declares_exactly_the_four_security_group_rules_plan_row_1_2_names"
         join("\n", [for f in fileset(path.module, "*.tf") : file("${path.module}/${f}")])
       ) : m[0]
     ]) == toset(["alb_to_task", "task_https_out"])
-    error_message = "The cell sends two things and no third (plan row 1.2): the ALB security group to the gateway's port on the task security group, and the task security group's 443 out."
+    error_message = "The cell sends two things and no third: the ALB security group to the gateway's port on the task security group, and the task security group's 443 out."
   }
 
   assert {
@@ -126,7 +126,7 @@ run "the_cell_declares_exactly_the_four_security_group_rules_plan_row_1_2_names"
         join("\n", [for f in fileset(path.module, "*.tf") : file("${path.module}/${f}")])
       ) : m[0]
     ]) == toset(["alb", "task"])
-    error_message = "The cell has two security groups, the ALB's and the task's, and together they are its whole network boundary (docs/plan/01-plan.md -> Trust boundaries). A third group is a third boundary nothing here checks."
+    error_message = "The cell has two security groups, the ALB's and the task's, and together they are its whole network boundary. A third group is a third boundary nothing here checks."
   }
 
   # An inline rule is a rule too, and the four assertions on values below never see one: ingress and
@@ -146,8 +146,8 @@ run "the_cell_declares_exactly_the_four_security_group_rules_plan_row_1_2_names"
 
 # --- What each rule admits ---------------------------------------------------------------------
 
-# Every rule's port, protocol, group and peer, at plan time. The ports are plan row 1.2's own
-# numbers where the row fixes one, 443, and otherwise the port the load balancer actually sends to,
+# Every rule's port, protocol, group and peer, at plan time. The ports are fixed where the design
+# fixes one, 443, and otherwise the port the load balancer actually sends to,
 # read off the target group. The run changes the gateway's port, because at the default 8080 a rule
 # that wrote the number in would pass alongside one that follows var.gateway_port.
 run "each_rule_admits_one_port_between_the_two_groups_and_only_the_task_s_443_leaves_the_vpc" {
@@ -157,8 +157,7 @@ run "each_rule_admits_one_port_between_the_two_groups_and_only_the_task_s_443_le
     gateway_port = 9090
   }
 
-  # The tunnel's path, and the only way in (docs/plan/05-infrastructure-and-cost.md -> Workstation
-  # access): the Session Manager port forward runs through the task to the listener on 443.
+  # The tunnel's path, and the only way in from a workstation: the Session Manager port forward runs through the task to the listener on 443.
   assert {
     condition = (
       aws_vpc_security_group_ingress_rule.alb_https_from_task.security_group_id == aws_security_group.alb.id
@@ -167,10 +166,10 @@ run "each_rule_admits_one_port_between_the_two_groups_and_only_the_task_s_443_le
       && aws_vpc_security_group_ingress_rule.alb_https_from_task.from_port == 443
       && aws_vpc_security_group_ingress_rule.alb_https_from_task.to_port == 443
     )
-    error_message = "The ALB security group admits TCP 443 from the task security group and from nothing else (plan row 1.2): that is the tunnel's path to the listener."
+    error_message = "The ALB security group admits TCP 443 from the task security group and from nothing else: that is the tunnel's path to the listener."
   }
 
-  # P-06, plan half: "The task group admits 8080 from the ALB group only" (docs/plan/04-tests.md).
+  # P-06, plan half: "The task group admits 8080 from the ALB group only".
   assert {
     condition = (
       aws_vpc_security_group_ingress_rule.task_from_alb.security_group_id == aws_security_group.task.id
@@ -179,7 +178,7 @@ run "each_rule_admits_one_port_between_the_two_groups_and_only_the_task_s_443_le
       && aws_vpc_security_group_ingress_rule.task_from_alb.from_port == aws_lb_target_group.gateway.port
       && aws_vpc_security_group_ingress_rule.task_from_alb.to_port == aws_lb_target_group.gateway.port
     )
-    error_message = "The task security group admits the gateway's port, the one the target group sends to, from the ALB security group alone (P-06): only the ALB reaches the gateway (docs/plan/01-plan.md -> Invariants)."
+    error_message = "The task security group admits the gateway's port, the one the target group sends to, from the ALB security group alone (P-06): only the ALB reaches the gateway."
   }
 
   assert {
@@ -190,11 +189,11 @@ run "each_rule_admits_one_port_between_the_two_groups_and_only_the_task_s_443_le
       && aws_vpc_security_group_egress_rule.alb_to_task.from_port == aws_lb_target_group.gateway.port
       && aws_vpc_security_group_egress_rule.alb_to_task.to_port == aws_lb_target_group.gateway.port
     )
-    error_message = "The ALB security group sends to the gateway's port on the task security group and nowhere else (plan row 1.2)."
+    error_message = "The ALB security group sends to the gateway's port on the task security group and nowhere else."
   }
 
   # Out to Cognito, S3, Parameter Store, ECR and logs from the task's public address: there is no
-  # NAT gateway (plan row 1.2, docs/plan/05-infrastructure-and-cost.md -> Phase 1 topology). Under
+  # NAT gateway in Phase 1's shape (network.tf). Under
   # multi_task the same one rule goes out through the NAT gateway (#347).
   assert {
     condition = (
@@ -204,7 +203,7 @@ run "each_rule_admits_one_port_between_the_two_groups_and_only_the_task_s_443_le
       && aws_vpc_security_group_egress_rule.task_https_out.from_port == 443
       && aws_vpc_security_group_egress_rule.task_https_out.to_port == 443
     )
-    error_message = "The task security group sends TCP 443 out and nothing else: every service the task calls is an HTTPS endpoint (plan row 1.2)."
+    error_message = "The task security group sends TCP 443 out and nothing else: every service the task calls is an HTTPS endpoint."
   }
 
   # The anti-widening half. A rule that names an address range is a rule anyone in that range
@@ -219,7 +218,7 @@ run "each_rule_admits_one_port_between_the_two_groups_and_only_the_task_s_443_le
         task_https_out      = aws_vpc_security_group_egress_rule.task_https_out
       } : name if rule.cidr_ipv4 != null || rule.cidr_ipv6 != null || rule.prefix_list_id != null
     ] == ["task_https_out"]
-    error_message = "Only the task's 443 out names an address range. A CIDR or a prefix list on any other rule admits whoever holds an address in it, which is the ingress plan row 1.2 forbids."
+    error_message = "Only the task's 443 out names an address range. A CIDR or a prefix list on any other rule admits whoever holds an address in it, which is the ingress the network's rule forbids."
   }
 }
 
@@ -248,14 +247,14 @@ run "the_two_public_subnets_sit_in_two_zones_that_need_no_opt_in" {
     error_message = "The zone query asks for zones in the available state, so an impaired zone is not chosen."
   }
 
-  # Two subnets in two zones (plan row 1.2), each a zone the query returned.
+  # Two subnets in two zones, each a zone the query returned.
   assert {
     condition = (
       length(aws_subnet.public) == 2
       && length(toset([for s in aws_subnet.public : s.availability_zone])) == 2
       && alltrue([for s in aws_subnet.public : contains(data.aws_availability_zones.available.names, s.availability_zone)])
     )
-    error_message = "The cell has two public subnets in two different zones, both from the zone query: the load balancer needs two zones (plan row 1.2)."
+    error_message = "The cell has two public subnets in two different zones, both from the zone query: the load balancer needs two zones."
   }
 }
 
@@ -294,7 +293,7 @@ run "the_vpc_s_default_security_group_is_adopted_and_holds_no_rule" {
       length(aws_default_security_group.cell.ingress) == 0
       && length(aws_default_security_group.cell.egress) == 0
     )
-    error_message = "The default security group holds no ingress and no egress rule. AWS creates it admitting all traffic from its members (plan row 1.2: no other ingress rule)."
+    error_message = "The default security group holds no ingress and no egress rule. AWS creates it admitting all traffic from its members (the network's rule: no other ingress rule)."
   }
 }
 

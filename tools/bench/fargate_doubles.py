@@ -39,6 +39,11 @@ CLUSTER = terraform_local("cluster_name")
 SERVICE = terraform_local("service_name")
 GATEWAY = terraform_local("gateway_container_name")
 LOG_GROUP = terraform_local("log_group_name")
+# The tunnel's hop since #1167: the bastion service and its one container, read from ecs.tf as the
+# gateway's names are, so a rename there turns the hop cases red against fargate.py's constant.
+BASTION_SERVICE = terraform_local("bastion_service_name")
+BASTION_CONTAINER = terraform_local("bastion_container_name")
+BASTION_N = 900                  # the bastion task's number: its id and ARN as task_id(), task_arn() give them
 DIGEST = "sha256:" + "a1" * 32
 IMAGE = f"{ACCOUNT}.dkr.ecr.{REGION}.amazonaws.com/spa-poc/gateway@{DIGEST}"
 TD_ARN = f"arn:aws:ecs:{REGION}:{ACCOUNT}:task-definition/spa-platform-poc:7"
@@ -93,6 +98,7 @@ def plan(**changes) -> dict:
         "stop": ["ServiceSchedulerInitiated", f"Task failed ELB health checks in (target-group {TG_ARN}) {FOREIGN_FORMS}"],
         "probe_lands": ["new"],                  # each probe in turn, the last repeated
         "stable": True,
+        "undescribed_once_stable": False,        # True: the first describe-tasks after the waiter describes nothing (#1378)
         "exec": "ok",
         "pull_started": 5000, "pull_stopped": 20000, "container_started": 21500, "started": 22000,
         "log": [[f"Now listening on: http://[::]:8080 {FOREIGN_FORMS}", 900], ["Registry revision 42 (\"etag\") is live with 1 app(s).", 1500],
@@ -139,6 +145,15 @@ def world(plans=None, second_task=None, **changes) -> dict:
         "update_service_fail_at": None,          # this restart's (1-based) update-service fails ThrottlingException
         "error_code": "ThrottlingException",     # the code those two failures name
         "exec_error_code": "TargetNotConnectedException",
+        # ECS Exec on the gateway service's tasks. Off, as #787 applies it (ecs.tf); a case sets it
+        # True for a cell last applied before #787, whose gateway container ran the Exec agent.
+        "gateway_exec": False,
+        # The bastion service's tasks (#1167), each {"n", "last", "exec", "agent"}: a task's status,
+        # whether its Exec is on and its bastion container's ExecuteCommandAgent status; "runtime":
+        # False leaves that container without a runtime id. Each is
+        # listed as running, since list-tasks reads the desired status; empty, a service running none.
+        "bastion_tasks": {str(BASTION_N): {"n": BASTION_N, "last": "RUNNING", "exec": True, "agent": "RUNNING"}},
+        "bastion_gone_after": None,              # the bastion service lists no task from this restart on
         "account_answer": ACCOUNT,               # get-caller-identity's Account
         "platform_version": "1.4.0",
         "stopped_reason": None,                  # a stop's stoppedReason as given, in place of the plan's
@@ -195,13 +210,50 @@ def created_ns(task: dict) -> int:
     return (BASE_S + (task["n"] % 100_000) * 1000) * 1_000_000_000
 
 
+def gateway_agents(document: dict) -> list:
+    """A container's managedAgents: the Exec agent runs only in a task whose Exec is on.
+    https://docs.aws.amazon.com/AmazonECS/latest/developerguide/ecs-exec.html"""
+    return [{"name": "ExecuteCommandAgent", "lastStatus": "RUNNING"}] if document["gateway_exec"] else []
+
+
+def bastion_json(document: dict, task: dict) -> dict:
+    out = {"taskArn": task_arn(task["n"]), "lastStatus": task["last"], "desiredStatus": "RUNNING",
+           "enableExecuteCommand": task["exec"], "startedBy": "ecs-svc/3000000000000000001",
+           "containers": [{"name": BASTION_CONTAINER, "runtimeId": f"{task_id(task['n'])}-3333",
+                           "managedAgents": [{"name": "ExecuteCommandAgent", "lastStatus": task["agent"]}]}]}
+    if task.get("runtime") is False:
+        # A container not yet started has no runtime id, whatever its agent reports.
+        del out["containers"][0]["runtimeId"]
+    if str(task["n"]) in document["arn_ids"]:
+        out["taskArn"] = f"arn:aws:ecs:{REGION}:{ACCOUNT}:task/{CLUSTER}/{document['arn_ids'][str(task['n'])]}"
+    return out
+
+
+def session_target(document: dict, target: str):
+    """The task an ecs:<cluster>_<task id>_<runtime id> target names, if a session can reach that
+    container: Exec on for its task and its agent running, or None, as Session Manager refuses it."""
+    match = re.fullmatch(rf"ecs:{re.escape(CLUSTER)}_([0-9a-f]{{32}})_([0-9a-f]{{32}})-(\d{{4}})", target)
+    if match is None:
+        return None
+    n, suffix = str(int(match[1], 16)), match[3]
+    bastion = document["bastion_tasks"].get(n)
+    if bastion is not None:
+        reachable = suffix == "3333" and bastion["last"] == "RUNNING" and bastion["exec"] and bastion["agent"] == "RUNNING" \
+            and bastion.get("runtime") is not False
+        return bastion["n"] if reachable else None
+    task = document["tasks"].get(n)
+    if task is not None and document["gateway_exec"] and task["last"] == "RUNNING" and suffix in ("1111", "2222"):
+        return task["n"]
+    return None
+
+
 def task_json(document: dict, task: dict) -> dict:
     base = created_ns(task)
     entry = document["plans"][task["plan"]] if task.get("plan") is not None else plan()
     out = {
         "taskArn": task_arn(task["n"]), "lastStatus": task["last"], "desiredStatus": task["desired"],
         "startedBy": task["startedBy"], "platformVersion": document["platform_version"],
-        "taskDefinitionArn": TD_ARN,
+        "taskDefinitionArn": TD_ARN, "enableExecuteCommand": document["gateway_exec"],
         "createdAt": iso(base),
         "pullStartedAt": iso(base + entry["pull_started"] * 1_000_000),
         "pullStoppedAt": iso(base + entry["pull_stopped"] * 1_000_000),
@@ -210,9 +262,9 @@ def task_json(document: dict, task: dict) -> dict:
             {"name": "subnetId", "value": "subnet-0abc"}, {"name": "privateIPv4Address", "value": ip_of(task["n"])}]}],
         "containers": [
             {"name": "mock-api", "runtimeId": f"{task_id(task['n'])}-1111", "imageDigest": "sha256:" + "b2" * 32,
-             "managedAgents": [{"name": "ExecuteCommandAgent", "lastStatus": "RUNNING"}]},
+             "managedAgents": gateway_agents(document)},
             {"name": GATEWAY, "runtimeId": f"{task_id(task['n'])}-2222", "imageDigest": task.get("digest", DIGEST),
-             "managedAgents": [{"name": "ExecuteCommandAgent", "lastStatus": "RUNNING"}]},
+             "managedAgents": gateway_agents(document)},
         ],
     }
     if task.get("stop"):
@@ -280,7 +332,12 @@ def answer_aws(case: pathlib.Path, argv: list) -> int:
         return status
 
     def tasks_named(arns):
-        return [document["tasks"][str(int(arn.rsplit("/", 1)[1], 16))] for arn in arns]
+        return [document["tasks"][str(int(arn.rsplit("/", 1)[1], 16))] for arn in arns
+                if str(int(arn.rsplit("/", 1)[1], 16)) in document["tasks"]]
+
+    def bastions_named(arns):
+        return [document["bastion_tasks"][str(int(arn.rsplit("/", 1)[1], 16))] for arn in arns
+                if str(int(arn.rsplit("/", 1)[1], 16)) in document["bastion_tasks"]]
 
     if shape == "sts get-caller-identity":
         if not document["credentials"]:
@@ -319,6 +376,7 @@ def answer_aws(case: pathlib.Path, argv: list) -> int:
         for task in document["tasks"].values():
             if task.get("decoy") and not entry["decoy_stays"]:
                 task["desired"], task["last"] = "STOPPED", "STOPPED"
+        document["undescribed_pending"] = entry["undescribed_once_stable"]
         save(case, document)
         return 0
     elif shape == "ecs list-tasks" and options.get("cluster") == CLUSTER and options.get("service-name") == SERVICE \
@@ -342,14 +400,31 @@ def answer_aws(case: pathlib.Path, argv: list) -> int:
         listed.sort(key=lambda task: (not task.get("decoy"), task["n"]))
         out = {"taskArns": [task_arn(task["n"]) for task in listed]}
         save(case, document)
+    elif shape == "ecs list-tasks" and options.get("cluster") == CLUSTER and options.get("service-name") == BASTION_SERVICE \
+            and options.get("desired-status") == "RUNNING" and set(options) == {"cluster", "service-name", "desired-status", "output"}:
+        gone = document["bastion_gone_after"] is not None and document["restart"] >= document["bastion_gone_after"]
+        out = {"taskArns": [] if gone else [task_arn(task["n"]) for task in document["bastion_tasks"].values()]}
+    elif shape == "ecs describe-tasks" and options.get("cluster") == CLUSTER and options.get("tasks") \
+            and bastions_named(options["tasks"]):
+        if tasks_named(options["tasks"]):
+            raise Unexpected("one describe-tasks naming a bastion task and a gateway task")
+        out = {"tasks": [bastion_json(document, task) for task in bastions_named(options["tasks"])], "failures": []}
     elif shape == "ecs describe-tasks" and options.get("cluster") == CLUSTER and options.get("tasks"):
         named = tasks_named(options["tasks"])
-        for task in named:
-            entry = document["plans"][task["plan"]] if task.get("plan") is not None else None
-            if entry and entry["stop_at_sample"] is not None and document["samples"] >= entry["stop_at_sample"] and task["n"] == int(document["new"]):
-                task["last"], task["desired"], task["stop"] = "STOPPED", "STOPPED", entry["stop"]
-        save(case, document)
-        out = {"tasks": [task_json(document, task) for task in named], "failures": []}
+        if document.get("undescribed_pending") and [task["n"] for task in named] == [int(document["new"])]:
+            # ECS lists a task it cannot describe under failures, not tasks.
+            # https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_DescribeTasks.html
+            document["undescribed_pending"] = False
+            save(case, document)
+            out = {"tasks": [], "failures": [{"arn": task_arn(named[0]["n"]), "reason": "MISSING"}]}
+        else:
+            for task in named:
+                entry = document["plans"][task["plan"]] if task.get("plan") is not None else None
+                if entry and entry["stop_at_sample"] is not None and document["samples"] >= entry["stop_at_sample"] \
+                        and task["n"] == int(document["new"]):
+                    task["last"], task["desired"], task["stop"] = "STOPPED", "STOPPED", entry["stop"]
+            save(case, document)
+            out = {"tasks": [task_json(document, task) for task in named], "failures": []}
     elif shape == "ecs update-service" and options.get("cluster") == CLUSTER and options.get("service") == SERVICE \
             and options.get("force-new-deployment") is True and set(options) == {"cluster", "service", "force-new-deployment", "output"}:
         if document["restart"] >= len(document["plans"]):
@@ -409,6 +484,10 @@ def answer_aws(case: pathlib.Path, argv: list) -> int:
         task = document["tasks"].get(str(int(options["task"], 16)))
         if task is None or task["n"] != int(document["current"]):
             raise Unexpected("an exec on a task that is not the service's running one")
+        if not document["gateway_exec"]:
+            # What ECS answers an exec on a task run with Exec off.
+            # https://docs.aws.amazon.com/AmazonECS/latest/developerguide/ecs-exec.html#ecs-exec-troubleshooting
+            return fail("InvalidParameterException")
         kind = document["plans"][task["plan"]]["exec"]
         if kind == "no-session":
             return fail(document["exec_error_code"])
@@ -417,6 +496,10 @@ def answer_aws(case: pathlib.Path, argv: list) -> int:
                                              json.dumps({"kind": "exec", "task": task["n"]}), "https://ecs"])
     elif shape == "ssm start-session" and options.get("document-name") == "AWS-StartPortForwardingSessionToRemoteHost":
         parameters = json.loads(options["parameters"])
+        if session_target(document, options["target"]) is None:
+            # Session Manager refuses a target whose container runs no Exec agent.
+            # https://docs.aws.amazon.com/AmazonECS/latest/developerguide/ecs-exec.html#ecs-exec-troubleshooting
+            return fail("TargetNotConnected")
         session = {"SessionId": "operator-0abc", "StreamUrl": "wss://example", "TokenValue": TOKEN_CANARY}
         os.execvp("session-manager-plugin", ["session-manager-plugin", json.dumps(session), REGION, "StartSession", "",
                                              json.dumps({"kind": "forward", "Target": options["target"], "Parameters": parameters}),
