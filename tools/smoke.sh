@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # G1a's exit test: the gateway starts and answers 404 to an unknown host. Owner: integrator.
 #
-# It starts the gateway with a whole platform configuration, the required sections of
-# contracts/platform-config.example.json as environment variables (#544, ADR-0042): a gateway that
-# validates its configuration at start-up refuses to start with none.
+# It starts the gateway with a whole platform configuration, contracts/platform-config.example.json
+# as environment variables (#544, ADR-0042): a gateway that validates its configuration at start-up
+# refuses to start with none.
 #
 # Nothing else proves it: the suite never starts the gateway, so a composition root that throws, or
 # a settings file the configuration binder rejects, builds and tests clean. Both have happened.
@@ -27,28 +27,41 @@ cd "$(git rev-parse --show-toplevel)"
 out="$(mktemp -d)"
 dotnet publish src/Gateway/Gateway.csproj --configuration "$configuration" --no-build -o "$out" > /dev/null
 
-# The required sections of contracts/platform-config.example.json, in the deployed form: a colon is
-# a double underscore and every value is a string. With Registry:* set and no AWS Region the poller
-# logs that the S3 client could not be built and /readyz stays 503, which is what the probes expect.
-export Platform__Cell=poc
-export Registry__Bucket=spa-platform-poc-111122223333-us-east-1-an
-export Registry__Key=registry/registry.json
-export Registry__PollSeconds=15
-export Assets__Bucket=spa-platform-poc-111122223333-us-east-1-an
-export Policy__AllowedHostSuffixes__0=.spa-poc.test:8443
-export Policy__AllowedUpstreams__0=http://127.0.0.1:5080
-export Policy__AllowedUpstreams__1=http://127.0.0.1:5081
-export ForwardedHeaders__TrustedNetworks__0=10.20.0.0/16
-export Session__Store=memory
-export Session__MaxSessions=10000
-# The issuer's name carries a hyphen, which a shell variable's name cannot, so env sets the three.
-issuer=(
-  "Issuers__cognito-poc__Authority=https://cognito-idp.us-east-1.amazonaws.com/us-east-1_EXAMPLE"
-  "Issuers__cognito-poc__Profile=cognito"
-  "Issuers__cognito-poc__BrowserOrigin=https://spa-platform-poc-111122223333.auth.us-east-1.amazoncognito.com"
+# The platform configuration is contracts/platform-config.example.json itself, read here rather
+# than copied, in the deployed form: a colon is a double underscore, an array's items are numbered
+# keys and every value is a string. An issuer's name can carry a hyphen, which a shell variable's
+# name cannot, so env sets each pair.
+config=()
+while IFS= read -r pair; do
+  config+=("$pair")
+done < <(python3 -I -c '
+import json, sys
+def walk(key, value):
+    if isinstance(value, dict):
+        for name, item in value.items():
+            yield from walk(key + [name], item)
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            yield from walk(key + [str(index)], item)
+    else:
+        text = ("true" if value else "false") if isinstance(value, bool) else str(value)
+        yield "__".join(key) + "=" + text
+for pair in walk([], json.load(open(sys.argv[1]))):
+    print(pair)
+' contracts/platform-config.example.json)
+
+# The registry's S3 client is to find no AWS Region: each poll then logs "The registry could not
+# be polled (AmazonClientException: No RegionEndpoint or ServiceURL configured)" and /readyz stays
+# 503, which is what the probes expect. A
+# workstation's region or profile, or an instance's metadata, would instead send a real GetObject to
+# the example's placeholder bucket, so the gateway is started with none of them.
+aws_off=(
+  -u AWS_REGION -u AWS_DEFAULT_REGION -u AWS_PROFILE -u AWS_DEFAULT_PROFILE
+  -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY -u AWS_SESSION_TOKEN
+  AWS_CONFIG_FILE=/dev/null AWS_SHARED_CREDENTIALS_FILE=/dev/null AWS_EC2_METADATA_DISABLED=true
 )
 
-env "${issuer[@]}" ASPNETCORE_HTTP_PORTS="$port" dotnet "$out/Gateway.dll" > "$out/gateway.log" 2>&1 &
+env "${aws_off[@]}" "${config[@]}" ASPNETCORE_HTTP_PORTS="$port" dotnet "$out/Gateway.dll" > "$out/gateway.log" 2>&1 &
 gateway=$!
 trap 'kill $gateway 2> /dev/null || true; rm -rf "$out"' EXIT
 
