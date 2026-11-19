@@ -220,6 +220,13 @@ class NothingRead(Tree):
         self.git("rm", "-q", "-f", "README.md")
         self.assertUnread(self.run_check(), "README.md could not be read")
 
+    def test_a_readme_that_is_not_utf8_exits_2_on_the_verdict_line(self) -> None:
+        # A file the check cannot decode is one it cannot read, so it ends on the verdict line, not
+        # on a traceback (CODING_STANDARDS.md, "A check fails closed").
+        (self.dir / "README.md").write_bytes(readme(ROWS).encode() + b"\xff\xfe\n")
+        self.git("add", "README.md")
+        self.assertUnread(self.run_check(), "README.md could not be read")
+
     def test_a_row_with_an_unknown_value_exits_2(self) -> None:
         self.write("README.md", readme(ROWS + ["| `docs/` | Documentation |"]))
         self.assertUnread(self.run_check(), "a row it cannot read")

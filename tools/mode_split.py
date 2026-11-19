@@ -103,7 +103,12 @@ class Span:
 
 
 def git(*args: str) -> str:
-    done = subprocess.run(["git", *args], capture_output=True, text=True, check=False)
+    # A git that cannot start, or a listing that is not UTF-8, is a listing that cannot be read: it
+    # exits 2 on the verdict line, never on a traceback (CODING_STANDARDS.md, "A check fails closed").
+    try:
+        done = subprocess.run(["git", *args], capture_output=True, text=True, encoding="utf-8", check=False)
+    except (OSError, UnicodeDecodeError) as error:
+        raise Unreadable(f"git {' '.join(args)} could not be run or read: {error}") from error
     if done.returncode != 0:
         raise Unreadable(f"git {' '.join(args)} failed: {done.stderr.strip()}")
     return done.stdout
@@ -111,8 +116,8 @@ def git(*args: str) -> str:
 
 def between(root: pathlib.Path, name: str, markers: tuple[str, str], what: str) -> list[str]:
     try:
-        text = (root / name).read_text()
-    except OSError as error:
+        text = (root / name).read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as error:
         raise Unreadable(f"{name} could not be read: {error}") from error
     begin, end = markers
     if text.count(begin) != 1 or text.count(end) != 1 or text.index(begin) > text.index(end):
