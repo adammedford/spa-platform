@@ -281,9 +281,20 @@ correlates a session's requests without being usable as a credential. Log this, 
 key.
 
 **Session gate** — the in-process, per-token-set serialisation of refreshes: one holder reads,
-decides, refreshes and writes, and the callers queued behind it take its outcome. In process only;
-two tasks share no gate. See ADR-0017 and ADR-0024.
+decides, refreshes and writes, and the callers queued behind it take its outcome. Every change or
+end the gateway itself makes to a live session runs under it, one holder at a time and never
+cancelled; the cookie handler's own read and removals, and the options invalidator's purge of an
+app's sessions on a registry swap, do not. In process only; two tasks share no gate. Not a stage
+like the request gate and the shell gate, and not a gate of the ladder. See ADR-0017, ADR-0024 and
+ADR-0043.
 _Avoid_: "lock", and "lease" for this.
+
+**AppSessions** — the one module through which the gateway opens, reads, changes and ends a
+session, above `ISessionStore`: each answers to the app-and-client ownership check, and each change
+or end runs under the session gate. The cookie handler's per-request read and its own removals
+reach it through the ticket store outside the session gate; the options invalidator's purge of an
+app's sessions on a registry swap does not reach it. See ADR-0043.
+_Avoid_: session manager, session service, session owner.
 
 **Refresh lease** — the cross-task claim on one token set's refresh, held by one task for a bounded
 time and given back when its refresh is written. The **holder** is the task that took it; a
