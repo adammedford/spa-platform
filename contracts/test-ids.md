@@ -19,7 +19,7 @@ first lived (ADR-0016 decision 7). This file never freezes.
 lands between gates as prose, under [`README.md`](README.md)'s rule, except that a row whose check
 waits for a gate (one needing a new rule id, say) lands in that gate's integrator commit.
 
-**Numbering.** A new id continues its prefix's sequence: F-43, N-47, P-08 and A-06 are next. A number
+**Numbering.** A new id continues its prefix's sequence: F-44, N-47, P-08 and A-06 are next. A number
 is given only when the row's change request is decided, is never reused and never takes a letter
 suffix. A dropped check keeps its row, its Tier cell reading `retired` and its Recorded by cell
 gaining the decision that retired it, so old merge bodies, tags and review records stay true. An
@@ -63,6 +63,7 @@ table and a Recorded by column naming the ADR, change request or confirmed answe
 | F-40 | Prompt-less fallback on one host, O8 (#961): `tests/e2e/Deployed/FragmentsTests.cs`: `FragmentsTests.G9_O8_the_fallback_is_page_less_inside_the_managed_login_hour_and_prompts_after_it` | On Cognito, `/bff/login?fragment=` for a second client on the same host shows no page inside the managed-login hour, and prompts after it | D | None | change request #989 (fragments rows); #961 |
 | F-41 | Entry import, O12 (#961): `tests/e2e/Deployed/FragmentsTests.cs`: `FragmentsTests.G9_O12_the_entry_module_imports_and_its_relative_chunk_resolves` | `import('/fragments/{id}/entry.js')` loads, and its relative chunk resolves under `/fragments/{id}/assets/` | D | None | change request #989 (fragments rows); #961 |
 | F-42 | Chain navigation on a real provider, O13 (#961): `tests/e2e/Deployed/FragmentsTests.cs`: `FragmentsTests.G9_O13_the_chain_completes_and_each_step_s_fetch_metadata_is_recorded` | At N = 2 on Cognito in each sitting browser, the chain completes, and the `Sec-Fetch-Site`, `-Mode` and `-Dest` each `/bff/chain` step receives are recorded | D | None | change request #989 (fragments rows); #961 |
+| F-43 | A `login_required` or transient hop, functional core (#961): `tests/Gateway.IntegrationTests/Fragments/ChainTests.cs`: `G9_a_fragment_whose_hop_is_answered_login_required_reads_loginRequired_and_the_chain_continues`, `G9_a_fragment_whose_hop_fails_transiently_reads_loginRequired_and_the_chain_continues` | With TestIdp's fidelity switch on and no provider session when one fragment's hop reaches the provider, that hop is answered `login_required` and no interactive request follows for the fragment; the chain continues past it and lands on `returnUrl`; `/bff/session` reads `loginRequired` for that fragment, not `unavailable`. With one fragment's hop meeting a transient provider failure in place of `login_required`, the outcome is the same: the chain continues past it and lands on `returnUrl`, and `/bff/session` reads `loginRequired` for that fragment, not `unavailable` | H | None | change request #1158 (`login_required` row); #961 |
 
 ## Negative security (N)
 
