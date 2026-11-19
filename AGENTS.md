@@ -4,7 +4,8 @@ This repository builds the Enterprise SPA Platform: one internal ALB, one ASP.NE
 gateway and one private S3 bucket that serve many SPAs, each with its own OAuth client.
 Tokens stay on the server.
 
-The plan is in `docs/plan/`. Read the part for your task before you write anything.
+Your task is a ticket, an issue on this repository, or a plan row that no ticket carries. Read it,
+and the part of the plan in `docs/plan/` it cites, before you write anything.
 
 ## Where to look
 
@@ -12,8 +13,8 @@ The plan is in `docs/plan/`. Read the part for your task before you write anythi
 | --- | --- |
 | Why your task exists: what gateway capability it is part of | `docs/roadmap.md` |
 | Architecture, gates, decisions, assumptions | `docs/plan/01-plan.md` |
-| Interfaces, schemas, the request pipeline order | `docs/plan/02-contracts.md`, and `contracts/` once task I-2 has landed |
-| Your task: what, needs, done when | `docs/plan/03-workstreams-and-tasks.md` |
+| Interfaces, schemas, the request pipeline order | `contracts/`, and `docs/plan/02-contracts.md`, the export they were written from |
+| A plan row: what, needs, done when | `docs/plan/03-workstreams-and-tasks.md` |
 | Test ids (`F-`, `N-`, `P-`, `A-`) | `docs/plan/04-tests.md`, and `contracts/test-ids.md` for ids named after the export |
 | Terraform roots, scripts, deployment, cost | `docs/plan/05-infrastructure-and-cost.md` |
 | Evidence ids (`S-`, `R-`) and the mechanism's source | `docs/plan/07-evidence.md` |
@@ -31,16 +32,17 @@ The plan is in `docs/plan/`. Read the part for your task before you write anythi
   (`tools/land.sh`, `.claude/workflows/`, the wiz scripts), answers a different question: which proof
   does this make cheaper or safer? `docs/roadmap.md` names the capability each stage of the gateway's
   ladder proves, and the plan rows that prove it.
-- **Write only inside your owner's paths.** Reading anywhere is fine. `OWNERSHIP.md` lists the paths,
-  and `.githooks/pre-push` checks them. How a task lands: `docs/agents/landing-work.md`.
-- **The integrator's paths are off limits**, even for a one-line fix. Need one changed (a contract, a package, a version, a project)? File a change request and stop: `docs/agents/tracker-policy.md` → "Change requests". `SpaPlatform.slnx` and `Directory.Packages.props` are the integrator's.
 - **A commit that changes a steering document names its authority** in an `Authority:` trailer: `#<n>` for the ticket that asks for the change, or the URL of the comment holding a confirmed answer. `.githooks/pre-push` and CI hold a commit that names none; `docs/agents/landing-work.md` has the forms.
 - **Build against `Platform.Testing`**, not against another workstream's branch.
 - **Fill in the entry points the pipeline contract assigns to you, and add no others.** `Program.cs` calls them.
-- **A test id under "Done when" names a behaviour.** Prove it in your own test project, against the doubles. Workstream 6 proves it again in the composed suites.
+- **A test id in your ticket's acceptance criteria, or under a plan row's "Done when", names a behaviour.** Prove it in your own test project, against the doubles. Workstream 6 proves it again in the composed suites.
 - **A task is done** as `GLOSSARY.md` → "Done" defines it.
 
 ## Who owns what
+
+- **Write only inside your owner's paths.** Reading anywhere is fine. `OWNERSHIP.md` lists the paths,
+  and `.githooks/pre-push` checks them. How a task lands: `docs/agents/landing-work.md`.
+- **The integrator's paths are off limits**, even for a one-line fix. Need one changed (a contract, a package, a version, a project)? File a change request and stop: `docs/agents/tracker-policy.md` → "Change requests". `SpaPlatform.slnx` and `Directory.Packages.props` are the integrator's.
 
 | Owner | Paths |
 | --- | --- |
@@ -72,7 +74,6 @@ tools/check.sh --full --port 5180               # and the tests, the smoke test,
   check catches.
 
 - **Tests run on Microsoft Testing Platform**, set in `global.json`. Name what to run with `--solution` or `--project`: both forms work on every .NET 10 SDK.
-- **A test project with no tests reports exit code 8**, the platform's "zero tests" code. On the empty skeleton that is expected, and `--ignore-exit-code 8` suppresses it.
 - **A project named `*Tests` is a test project.** `Directory.Build.props` makes it an executable and adds xUnit v3. Do not add xUnit yourself.
 - **Packages:** add `<PackageReference Include="Name" />` with no version to your own project file. The version comes from `Directory.Packages.props`.
 - **Warnings are errors.** Package advisories are the exception: they warn.
@@ -112,14 +113,11 @@ using an older snapshot to choose work.
 - **Which gates have closed:** `git tag --merged origin/main`. Inspect each annotated gate tag's
   message for its exit test and CI evidence; an unrelated local tag is not a trunk gate.
 - **What has landed:** `git log --oneline origin/main`, where each task's merge names its id.
-- **What opens next:** the dispatch table in `docs/plan/03-workstreams-and-tasks.md`, read from
-  origin/main against those tags.
+- **What opens next:** the tickets open to an agent, which `docs/agents/tracker-policy.md` →
+  "This repository's additions" defines; and for a plan row that no ticket carries, the dispatch
+  table in `docs/plan/03-workstreams-and-tasks.md`, read from origin/main against those tags.
 - **Which gate is open:** the gates table in `docs/plan/01-plan.md`, or for a gate defined after
   the export the gate register `contracts/gates.md`, read from origin/main against those tags.
 - **All three at once, per gateway capability:** read `docs/roadmap.md` from origin/main with
   `git show origin/main:docs/roadmap.md`. `tools/roadmap.py` derives its generated block; after
   landing a row, run that script in the landing checkout.
-
-One rule does not depend on progress, so it is safe to state here: nothing in
-`src/Platform.Identity` starts before task I-6 tags `contracts-v1`, because that tag records the identity
-freeze. `contracts/README.md` -> "What G1b froze" lists the affected parts and tag requirement.

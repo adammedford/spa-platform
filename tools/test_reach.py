@@ -76,13 +76,16 @@ PASSED_ASSEMBLY = re.compile(r"(?P<path>/\S+?)/bin/\S+\.dll \([^)]*\) passed\b")
 
 # Paths the test sources read by name from the repository root, found by the string literals that
 # name a top-level entry (tests/Platform.Abstractions.Tests reads contracts/*.md, tests/e2e reads
-# infra/ and tools/aws-project.env, the harness reads fixtures/). Each top-level entry a test source
-# names is a key of RUNTIME_ROOTS, with what covers it; tools/test_reach_tests.py fails when a test
-# source names one that is not, so a new runtime read is decided here before it is trusted.
-RUNTIME_READS = ("contracts/", "fixtures/", "infra/", "docs/plan/", "tools/aws-project.env")
+# infra/ and tools/aws-project.env, the harness reads fixtures/, and fixtures/Fixtures.Tests is to
+# read the browser client under client/ once #1353 moves it onto the tree (#1338); until then the
+# client/ entry is held ahead of its reader and no test source names it). Each top-level entry a test source names is a key of
+# RUNTIME_ROOTS, with what covers it; tools/test_reach_tests.py fails when a test source names one
+# that is not, so a new runtime read is decided here before it is trusted.
+RUNTIME_READS = ("contracts/", "fixtures/", "client/", "infra/", "docs/plan/", "tools/aws-project.env")
 RUNTIME_ROOTS = {
     "contracts": "RUNTIME_READS",
     "fixtures": "RUNTIME_READS",
+    "client": "RUNTIME_READS",
     "infra": "RUNTIME_READS",
     "docs": "RUNTIME_READS names docs/plan/, the one folder of docs/ a test reads (04-tests.md)",
     "tools": "RUNTIME_READS names tools/aws-project.env; tools/spactl is a project",

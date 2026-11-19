@@ -121,4 +121,8 @@ module "cell" {
   session_store                    = var.session_store
   data_protection_parameter_prefix = var.data_protection_parameter_prefix
   data_protection_kms_key_id       = var.data_protection_kms_key_id
+
+  # #1167. The tunnel's hop, off by default and set in terraform.tfvars (terraform.tfvars.example).
+  bastion       = var.bastion
+  bastion_image = var.bastion_image
 }

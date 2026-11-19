@@ -72,12 +72,12 @@ TUNNEL_DOUBLE = r"""#!/bin/bash
 echo "tunnel.sh $*" >> "$WIZ_D6_CASE/calls"
 port="$2"
 if [ "$(cat "$WIZ_D6_CASE/tunnel.mode")" = "die" ]; then
-  echo "tunnel: no task of spa-poc in spa-poc can carry a session:" >&2
+  echo "tunnel: no task of bastion in spa-poc can carry a session:" >&2
   exit 1
 fi
 echo "$$" > "$WIZ_D6_CASE/tunnel.pid"
 echo "tunnel: forwarding local port ${port} to internal-x.elb.amazonaws.com:443"
-echo "tunnel: through task NEW_TASK, container gateway, of spa-poc in spa-poc"
+echo "tunnel: through task NEW_TASK, container bastion, of bastion in spa-poc"
 echo "Starting session with SessionId: botocore-session-1763251200-0a1b2c3d4e5f60789" >&2
 exec python3 -c 'import time; time.sleep(120)' ssm start-session --document-name AWS-StartPortForwardingSessionToRemoteHost \
   --parameters "{\"host\":[\"x\"],\"portNumber\":[\"443\"],\"localPortNumber\":[\"${port}\"]}"
@@ -316,14 +316,18 @@ class WithoutThePassLine(Case):
         self.assertIsNone(old.poll(), "the tunnel was stopped though deploy.sh did not pass")
         self.assertIn("deploy.sh exited 3 without its pass line; no tunnel was stopped or started", done.stderr)
 
-    def test_a_deploy_that_exits_0_with_no_pass_line_starts_no_tunnel_and_exits_0(self) -> None:
-        test = self.alive_test()
+    def test_a_deploy_that_exits_0_with_no_pass_line_starts_no_tunnel_and_exits_1(self) -> None:
+        # #1284: d.md's D6 reads the lever's exit 0 as the tunnel having moved, so a deploy.sh that
+        # exits 0 without its pass line (its --help, say) must not give the lever's exit 0.
+        test, old = self.alive_test(), self.old_tunnel()
         self.mode("deploy", "silent")
         self.said("now")
         done = self.run_d6(test.pid, "--wait", "10")
-        self.assertEqual(done.returncode, 0)
+        self.assertEqual(done.returncode, 1)
         self.assertEqual(self.calls(), ["deploy.sh "])
+        self.assertIsNone(old.poll(), "the tunnel was stopped though deploy.sh did not pass")
         self.assertIn("deploy.sh exited 0 without its pass line; no tunnel was stopped or started", done.stderr)
+        self.assertNotIn("wiz_d6: through task", self.record_text())
 
 
 class Header(unittest.TestCase):

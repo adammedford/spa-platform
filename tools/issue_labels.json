@@ -78,6 +78,7 @@
     ["OWNERSHIP.md", "process"],
     ["README.md", "process"],
     ["GLOSSARY.md", "docs"],
+    ["LICENSE", "docs"],
     ["docs/adr/", "docs"],
     ["docs/plan/", "docs"],
     ["docs/roadmap.md", "docs"],

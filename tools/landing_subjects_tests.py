@@ -48,7 +48,8 @@ FINISHED = """## Acceptance criteria
 - [X] The second thing.
 """
 
-# The fake gh reads issue bodies from GH_ISSUES. Its GraphQL endpoint models the CLI's
+# The fake gh reads issue bodies from GH_ISSUES, and each title from <n>.title beside its body, or
+# "Issue <n>" when a case gives none. Its GraphQL endpoint models the CLI's
 # --paginate and --slurp output: without --paginate it returns only the first page, and without
 # --slurp it prints separate JSON documents. GH_LIST_PAGES supplies a deliberately damaged receipt.
 # The legacy issue-list endpoint is kept for the before-fix reproduction: it returns only the nodes
@@ -60,8 +61,9 @@ if [ "$1 $2" = "issue list" ] || [ "$1 $2" = "api graphql" ]; then
   if [ -n "$GH_LIST_FAIL" ]; then echo "error connecting to api.github.com" >&2; exit 1; fi
   exec python3 -I -c 'import json, os, pathlib, sys
 d = pathlib.Path(os.environ["GH_ISSUES"])
-issues = [{"number": int(p.stem), "body": p.read_text()} for p in sorted(d.glob("*.md"), key=lambda p: int(p.stem))
-          if not (d / (p.stem + ".closed")).exists()]
+title = lambda p: (d / (p.stem + ".title")).read_text() if (d / (p.stem + ".title")).exists() else "Issue " + p.stem
+issues = [{"number": int(p.stem), "title": title(p), "body": p.read_text()}
+          for p in sorted(d.glob("*.md"), key=lambda p: int(p.stem)) if not (d / (p.stem + ".closed")).exists()]
 if os.environ.get("GH_LIST_PAGES"):
     pages = json.loads(pathlib.Path(os.environ["GH_LIST_PAGES"]).read_text())
 else:
@@ -142,8 +144,10 @@ class Case:
         self.git("commit", "-q", "--allow-empty", "-m", message)
         return self.git("rev-parse", "--short", "HEAD")
 
-    def issue(self, number: int, body: str, *, closed: bool = False):
+    def issue(self, number: int, body: str, *, closed: bool = False, title: str | None = None):
         (self.issues / f"{number}.md").write_text(body)
+        if title is not None:
+            (self.issues / f"{number}.title").write_text(title)
         if closed:
             (self.issues / f"{number}.closed").write_text("")
 
@@ -520,6 +524,9 @@ class PartTicketTests(unittest.TestCase):
 
 
 def listing_page(nodes, total, *, more=False, cursor="page-1"):
+    # Each node gets a title unless it names its own, so each case is refused by the guard it is
+    # about rather than by the title's.
+    nodes = [{"title": "An issue", **node} if isinstance(node, dict) else node for node in nodes]
     return {"data": {"repository": {"issues": {
         "nodes": nodes, "totalCount": total,
         "pageInfo": {"hasNextPage": more, "endCursor": cursor},
@@ -621,6 +628,8 @@ class ListingCompletenessTests(unittest.TestCase):
             ("a missing body", [listing_page([{"number": 344}], 1)], None),
             ("a null body", [listing_page([{"number": 344, "body": None}], 1)], no_shape),
             ("a boolean number", [listing_page([{"number": True, "body": ""}], 1)], no_shape),
+            ("a null title", [listing_page([{"number": 344, "body": CARRIER_P2_1, "title": None}], 1)],
+             "an issue has no readable title"),
             ("an empty cursor on a nonempty page", [listing_page(
                 [{"number": 344, "body": CARRIER_P2_1}], 1, cursor="")],
              "a page has an absent or repeated endCursor"),
@@ -984,6 +993,213 @@ class GitTimeoutTests(unittest.TestCase):
         self.assertIn(f"timed out after {self.TIMEOUT} seconds", str(raised.exception))
 
 
+SITTING_6_9 = "**Owner:** ws6-verification\n**Plan row:** 6.9\n\n- [x] The deployed gate.\n"
+CLOSING_HELD_FAIL = ("landing-subjects: fail: 1 merge's clause closes a row an open issue names; leave the row "
+                     "out of the clause until no open issue names it (#1219).")
+
+
+class ClosingModeTests(unittest.TestCase):
+    """#1219: `--closing <row>[,<row>...]` says, before a subject is written, whether its `closing`
+    clause may close the rows: exit 0 when no open issue names any, 1 with a held line per row and
+    issue when one does, 2 when the open-issue listing cannot be read whole."""
+
+    def ask(self, case: Case, rows: str, **env: str) -> subprocess.CompletedProcess:
+        return case.run("--closing", rows, **env)
+
+    def test_rows_no_open_issue_names_may_be_closed(self):
+        case = Case(self)
+        case.issue(63, SITTING_6_9, closed=True, title="6.9 — Deployed gate runs G3 to G5")
+        case.issue(244, "**Plan row:** 6.7\n\n- [ ] The rollback walk.\n", title="6.7 sitting: walk the runbooks")
+        done = self.ask(case, "1.3,6.9")
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        self.assertEqual("landing-subjects: pass: no open issue names 1.3, 6.9; the `closing` clause may close "
+                         "them.", last_line(done))
+
+    def test_an_open_issue_names_a_row_by_its_title(self):
+        # #244 on 2026-11-18: open, its title leading with 6.7, and no Plan row line.
+        case = Case(self)
+        case.issue(244, "The gateway rollback walk.\n", title="6.7 sitting: walk the runbooks on the cell")
+        done = self.ask(case, "6.9,6.7")
+        self.assertEqual(1, done.returncode, done.stdout + done.stderr)
+        self.assertIn("landing-subjects: held: 6.7: #244 is open and names it by its title", done.stdout.splitlines())
+        # The fake answers whatever it is asked, so the query is held to asking for the title.
+        self.assertRegex("\n".join(case.asked()), r"nodes\{[^}]*\btitle\b")
+        self.assertEqual("landing-subjects: fail: 1 row of 2 named by an open issue (6.7); leave it out of the "
+                         "`closing` clause.", last_line(done))
+
+    def test_an_open_issue_names_a_row_by_its_plan_row_line(self):
+        for line in ("**Plan row:** 6.9", "**Plan row:** 1.3, 6.9", "**Plan row:** 1.3 and `6.9` (the gate)",
+                     "**Plan rows:** 6.9 (`docs/plan/03-workstreams-and-tasks.md`); stage S5"):
+            with self.subTest(line=line):
+                case = Case(self)
+                case.issue(63, f"**Owner:** ws6\n{line}\n")
+                done = self.ask(case, "6.9")
+                self.assertEqual(1, done.returncode, done.stdout + done.stderr)
+                self.assertIn("landing-subjects: held: 6.9: #63 is open and names it by its Plan row line",
+                              done.stdout.splitlines())
+
+    def test_an_open_issue_names_a_row_by_its_part_declaration(self):
+        case = Case(self)
+        case.issue(338, PART_338)
+        done = self.ask(case, "P2-2")
+        self.assertEqual(1, done.returncode, done.stdout + done.stderr)
+        self.assertIn("landing-subjects: held: P2-2: #338 is open and names it by its part declaration",
+                      done.stdout.splitlines())
+
+    def test_every_row_and_issue_is_named(self):
+        case = Case(self)
+        case.issue(244, "x\n", title="6.7 sitting: walk")
+        case.issue(63, SITTING_6_9)
+        case.issue(64, SITTING_6_9)
+        done = self.ask(case, "6.7,1.3,6.9")
+        self.assertEqual(1, done.returncode)
+        held = [line for line in done.stdout.splitlines() if ": held: " in line]
+        self.assertEqual(["landing-subjects: held: 6.7: #244 is open and names it by its title",
+                          "landing-subjects: held: 6.9: #63 is open and names it by its Plan row line",
+                          "landing-subjects: held: 6.9: #64 is open and names it by its Plan row line"], held)
+        self.assertIn("2 rows of 3 named by an open issue (6.7, 6.9)", last_line(done))
+
+    def test_a_row_is_matched_whole_never_by_its_prefix(self):
+        case = Case(self)
+        case.issue(70, "**Plan row:** 1.6\n", title="1.6 the certificate")
+        case.issue(71, "**Plan row:** 6.10\n", title="6.10: a later row")
+        case.issue(72, "**Plan row:** 6.8 (unlike 6.9, which has a sitting)\n", title="Ticket 6.9 mentioned late")
+        case.issue(73, "**Plan row:** none (row 6.9's runbooks)\n")
+        case.issue(74, NO_PART + "\nRow 6.9 in prose.\n", title="6.9-adjacent, not the row")
+        done = self.ask(case, "1.6b,6.1,6.9")
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+
+    def test_an_unreadable_or_incomplete_listing_exits_2(self):
+        case = Case(self)
+        done = self.ask(case, "6.9", GH_LIST_FAIL="1")
+        self.assertEqual(2, done.returncode, done.stdout + done.stderr)
+        self.assertNotIn("landing-subjects: pass:", done.stdout)
+        case.listing([listing_page([{"number": 344, "body": CARRIER_P2_1}], 2)])
+        done = self.ask(case, "6.9")
+        self.assertEqual(2, done.returncode, done.stdout + done.stderr)
+        self.assertIn("returned 1 distinct issues of 2", done.stdout)
+
+    def test_a_title_the_listing_lacks_exits_2(self):
+        case = Case(self)
+        case.listing([listing_page([{"number": 244, "body": "x", "title": None}], 1)])
+        done = self.ask(case, "6.7")
+        self.assertEqual(2, done.returncode, done.stdout + done.stderr)
+        self.assertIn("an issue has no readable title", done.stdout)
+
+    def test_anything_but_row_ids_exits_2_and_lists_nothing(self):
+        for rows in ("issue-5", "6.9,issue-5", "6.9 6.7", ""):
+            with self.subTest(rows=rows):
+                case = Case(self)
+                done = self.ask(case, rows)
+                self.assertEqual(2, done.returncode, done.stdout + done.stderr)
+                self.assertEqual([], case.asked())
+
+
+class ClosingRangeTests(unittest.TestCase):
+    """#1219: `--base` holds a commit whose subject carries a `closing` clause while an open issue
+    names a row it closes, whatever its head and whether or not it has a Ticket line, and passes it
+    when none does."""
+
+    def test_a_clause_under_a_full_head_with_no_ticket_line_is_held(self):
+        case = Case(self)
+        case.issue(63, SITTING_6_9)
+        sha = case.commit("Merge task issue-1219, closing rows 1.3 and 6.9: the next landing")
+        done = case.run()
+        self.assertEqual(1, done.returncode, done.stdout + done.stderr)
+        self.assertIn(f'landing-subjects: held: {sha} "Merge task issue-1219, closing rows 1.3 and 6.9: the next '
+                      'landing" closes 6.9, but #63 is open and names 6.9 by its Plan row line', done.stdout.splitlines())
+        self.assertEqual(CLOSING_HELD_FAIL, last_line(done))
+
+    def test_a_clause_under_a_part_head_is_held(self):
+        case = Case(self)
+        case.issue(244, "x\n", title="6.7 sitting: walk")
+        sha = case.commit("Merge part of task 2.4, closing row 6.7: half", "Outstanding: the rest.",
+                          "Outstanding test ids: none.")
+        done = case.run()
+        self.assertEqual(1, done.returncode, done.stdout + done.stderr)
+        self.assertIn(f'landing-subjects: held: {sha} "Merge part of task 2.4, closing row 6.7: half" closes 6.7, '
+                      'but #244 is open and names 6.7 by its title', done.stdout.splitlines())
+        self.assertEqual(CLOSING_HELD_FAIL, last_line(done))
+
+    def test_a_clause_no_open_issue_holds_passes(self):
+        case = Case(self)
+        case.issue(63, SITTING_6_9, closed=True)
+        case.commit("Merge part of task 2.4, closing row 6.9: half", "Outstanding: the rest.",
+                    "Outstanding test ids: none.")
+        done = case.run()
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        self.assertEqual("landing-subjects: pass: no full-landing merge from base to HEAD; 1 closing clause clear.",
+                         last_line(done))
+
+    def test_a_clause_beside_a_full_landing_is_counted_in_the_pass(self):
+        case = Case(self)
+        case.commit("Merge task issue-1219, closing rows 1.3 and 6.9: the next landing")
+        done = case.run()
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        self.assertEqual("landing-subjects: pass: 1 full-landing merge from base to HEAD: 0 clear, 0 unchecked, "
+                         "1 with no Ticket line. 1 closing clause clear.", last_line(done))
+
+    def test_the_merges_own_ticket_is_not_excused(self):
+        # A row the merge's own ticket names is landed by the head, not the clause.
+        case = Case(self)
+        case.issue(63, SITTING_6_9)
+        case.commit("Merge task issue-63, closing row 6.9: the gate", "Ticket: #63")
+        done = case.run()
+        self.assertEqual(1, done.returncode, done.stdout + done.stderr)
+        self.assertIn("closes 6.9, but #63 is open and names 6.9 by its Plan row line", done.stdout)
+
+    def test_a_closed_row_is_judged_on_the_closing_ground_alone(self):
+        # The part-ticket ground reads the head's rows; a closed row is held once, by the clause.
+        case = Case(self)
+        case.issue(9, "**Plan row:** none\n\n- [x] Done.\n")
+        case.issue(338, PART_338)
+        case.commit("Merge task issue-9, closing row P2-1: next", "Ticket: #9")
+        done = case.run()
+        self.assertEqual(1, done.returncode, done.stdout + done.stderr)
+        held = [line for line in done.stdout.splitlines() if ": held: " in line]
+        self.assertEqual(1, len(held), done.stdout)
+        self.assertIn("closes P2-1, but #338 is open and names P2-1 by its part declaration", held[0])
+        self.assertEqual(CLOSING_HELD_FAIL, last_line(done))
+
+    def test_a_held_full_landing_and_a_held_clause_are_both_counted(self):
+        case = Case(self)
+        case.issue(344, CARRIER_P2_1)
+        case.issue(338, PART_338)
+        case.issue(63, SITTING_6_9)
+        case.commit("Merge task P2-1: the session store", "Ticket: #344")
+        case.commit("Merge task issue-9, closing row 6.9: next")
+        done = case.run()
+        self.assertEqual(1, done.returncode, done.stdout + done.stderr)
+        self.assertIn("but #338 is open and declares itself part of P2-1", done.stdout)
+        self.assertIn("closes 6.9, but #63 is open", done.stdout)
+        self.assertEqual("landing-subjects: fail: 1 full-landing merge held, and 1 closing clause held on a row an "
+                         "open issue names; see each held line above.", last_line(done))
+
+    def test_an_unreadable_listing_cannot_clear_a_clause(self):
+        case = Case(self)
+        case.commit("Merge part of task 2.4, closing row 6.9: half", "Outstanding: the rest.",
+                    "Outstanding test ids: none.")
+        done = case.run(GH_LIST_FAIL="1")
+        self.assertEqual(2, done.returncode, done.stdout + done.stderr)
+        self.assertNotIn("landing-subjects: pass:", done.stdout)
+
+    def test_a_range_with_no_clause_lists_no_issues(self):
+        case = Case(self)
+        case.commit("Merge part of task 2.4: half", "Outstanding: the rest.", "Outstanding test ids: none.")
+        done = case.run()
+        self.assertEqual("landing-subjects: pass: no full-landing merge from base to HEAD.", last_line(done))
+        self.assertEqual([], case.asked())
+
+    def test_a_closed_row_reads_landed_so_subject_for_names_it_no_more(self):
+        # #388 Q6 names a part-landed row on its last part's merge; a row a clause closed is landed.
+        case = Case(self)
+        case.issue(417, PART_417)
+        case.commit("Merge part of task P2-1: the store", "Outstanding: a part.", "Outstanding test ids: none.")
+        case.commit("Merge task issue-9, closing row P2-1: the sitting's row")
+        done = case.run("--subject-for", "issue-417", "--ticket", "417")
+        self.assertEqual("landing-subjects: subject: Merge task issue-417", last_line(done))
+
+
 def load(name: str):
     """A tools/ script as a module, loaded by path: `python3 -I` leaves tools/ off sys.path."""
     import importlib.util
@@ -1006,6 +1222,10 @@ class RoadmapAgreementTests(unittest.TestCase):
         "merge PART OF tasks 6.7 and 1.6b: runbooks",
         "Merge tasks I-4,2.1 and P2-12: a list without spaces",
         "Merge task issue-9x: not an id",
+        "Merge task issue-1219, closing rows 1.3, 1.6b and 6.9: a sitting's rows",
+        "Merge part of task 2.4, Closing row 6.9: a part head",
+        "Merge task issue-14, closing rows 2.1b and issue-15: names that are not rows",
+        "Merge part of task 2.4, closing: a clause naming nothing",
         "Merge pull request #12 from a/task/p2-1-store",
         "Task 5.5: a branch commit",
     ]
@@ -1016,13 +1236,15 @@ class RoadmapAgreementTests(unittest.TestCase):
             with self.subTest(subject=subject):
                 read = landing.ids(subject)
                 theirs = roadmap.reading(subject) if roadmap.LANDED_SUBJECT.match(subject) else []
-                ours = [] if read is None else [(name, "part" if read[0] else "landed") for name in read[1]]
+                ours = [] if read is None else (
+                    [(name, "part" if read[0] else "landed") for name in read[1]]
+                    + [(name, "closed") for name in read[2]])
                 self.assertEqual(theirs, ours)
 
     def test_the_copied_forms_are_roadmaps(self):
         landing, roadmap = load("landing_subjects"), load("roadmap")
         for theirs, ours in ((roadmap.LANDED_SUBJECT, landing.ANY_LANDING), (roadmap.ID, landing.ID),
-                             (roadmap.TICKET, landing.TICKET_ID)):
+                             (roadmap.TICKET, landing.TICKET_ID), (roadmap.CLOSING, landing.CLOSING)):
             # TICKET_ID only adds a group around the number, which matches the same strings.
             self.assertEqual(theirs.pattern, ours.pattern.replace(r"(\d+)", r"\d+"))
             self.assertEqual(theirs.flags, ours.flags)

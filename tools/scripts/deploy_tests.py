@@ -33,9 +33,10 @@ import unittest  # noqa: E402
 SCRIPT = "deploy.sh"
 
 
-def seeded_world() -> dict:
-    """After seed.sh: the two fixture apps in the live registry."""
-    world = cell.default_world()
+def seeded_world(bastion: bool = True) -> dict:
+    """After seed.sh: the two fixture apps in the live registry, on a cell with the bastion on (#1167),
+    which the readiness wait's own tunnel goes through unless --url names an origin."""
+    world = cell.with_bastion(cell.default_world()) if bastion else cell.default_world()
     world["registry"] = {"schemaVersion": 1, "revision": 2,
                          "apps": [{"appId": "app1", "release": "r1"}, {"appId": "app2", "release": "r1"}]}
     world["objects"] = [{"Key": "registry/registry.json", "VersionId": "r2"}]
@@ -197,7 +198,9 @@ class DeployBuildsPushesAppliesAndAsserts(cell.CompanionTestCase):
         case, _ = self.deployed()
         document = json.loads((case.repo / "infra/envs/poc/outputs.json").read_text())
         schema = json.loads((cell.ROOT / "contracts/infra-outputs.schema.json").read_text())
-        self.assertEqual(sorted(schema["required"]), sorted(document))
+        # Every required field, and the bastion's optional one, which this cell publishes (#1167).
+        self.assertEqual(sorted(schema["required"] + ["ecsBastionService"]), sorted(document))
+        self.assertEqual(cell.BASTION_SERVICE, document["ecsBastionService"])
         applied = next(c for c in case.calls("terraform") if c.get("command") == "apply")["vars"]
         self.assertEqual(applied["gateway_image"], document["gatewayImage"])
 
@@ -326,11 +329,15 @@ class TheReadinessWaitOpensAndClosesItsOwnTunnel(cell.CompanionTestCase):
         self.assertNoUnexpectedCall(case)
         session, port = self.session(case)
         self.assertNotEqual(8443, port)
-        # Through a running task of the new deployment: the double answers only a target that is a
-        # task of the world's, which after the apply are the applied task definition's.
+        # Through the bastion's task, never a task of the deployment it waits on (#1167): the double
+        # answers only a target that is a running bastion task's container.
         world = case.load()
-        self.assertIn(session["task"], [task["id"] for task in world["tasks"]])
-        self.assertEqual({f"{cell.FAMILY}:2"}, {task["taskDefinition"] for task in world["tasks"]})
+        self.assertIn(session["task"], [task["id"] for task in world["bastion_tasks"]])
+        self.assertNotIn(session["task"], [task["id"] for task in world["tasks"]])
+        # The bastion service is listed once, by the tunnel; every other listing is the gateway's.
+        lists = [c["options"]["service-name"] for c in case.aws("ecs list-tasks")]
+        self.assertEqual(cell.BASTION_SERVICE, lists[-1])
+        self.assertEqual({cell.SERVICE}, set(lists[:-1]))
         wait = next(c["spactl"] for c in case.calls("dotnet") if c["spactl"][:1] == ["wait"])
         self.assertEqual(f"https://app1.spa-poc.test:{port}", wait[wait.index("--url") + 1])
         reads = [c["received"] for c in case.calls("session-manager-plugin") if c["event"] == "connection"]
@@ -425,6 +432,49 @@ class TheReadinessWaitOpensAndClosesItsOwnTunnel(cell.CompanionTestCase):
         self.assertIn(f"closed the wait's tunnel on local port {port}", result.stdout)
         self.assertEqual([], [c for c in case.calls("dotnet") if c["spactl"][:1] == ["wait"]])
 
+    def test_with_no_bastion_and_no_url_it_refuses_before_it_builds_naming_both(self):
+        # #1168: the wait's tunnel needs the bastion, and deploy.sh never turns it on. The outputs
+        # document names the last apply's cell, so a document with no ecsBastionService is refused
+        # before anything is built or pushed, and the last line says what to do.
+        case = cell.Case(self, outputs=True, world=seeded_world(bastion=False))
+        result = case.run(SCRIPT)
+        self.assertEqual(2, result.status, result.output)
+        self.assertNoUnexpectedCall(case)
+        last = result.stderr.strip().splitlines()[-1]
+        self.assertIn("bastion = true", last)
+        self.assertIn("--url", last)
+        self.assertEqual([], [c for c in case.calls("docker") if c["argv"][:2] == ["buildx", "build"]])
+        self.assertEqual([], [c for c in case.calls("terraform") if c.get("command") in ("plan", "apply")])
+        self.assertEqual([], case.aws("ssm start-session"))
+
+    def test_with_no_bastion_and_a_url_it_passes(self):
+        # --url names an origin the caller already reaches, so no tunnel is needed and no bastion.
+        with listening() as port:
+            case = cell.Case(self, outputs=True, world=seeded_world(bastion=False))
+            result = case.run(SCRIPT, "--url", f"https://app1.spa-poc.test:{port}")
+        self.assertEqual(0, result.status, result.output)
+        self.assertNoUnexpectedCall(case)
+        self.assertIn("pass:", result.stdout)
+        self.assertEqual([], case.aws("ssm start-session"))
+        self.assertNotIn(cell.BASTION_SERVICE, [c["options"]["service-name"] for c in case.aws("ecs list-tasks")])
+
+    def test_an_apply_that_leaves_no_bastion_fails_the_wait_before_a_tunnel_naming_both(self):
+        # The document named a bastion when the run started, but terraform.tfvars had since set it
+        # false, so the deployment's own apply destroyed it: the wait fails, exit 1, before it opens
+        # a tunnel, on the same line.
+        world = seeded_world()
+        world["faults"]["bastion_dropped"] = True
+        case = cell.Case(self, outputs=True, world=world)
+        result = case.run(SCRIPT)
+        self.assertEqual(1, result.status, result.output)
+        self.assertNoUnexpectedCall(case)
+        last = result.stderr.strip().splitlines()[-1]
+        self.assertIn("bastion = true", last)
+        self.assertIn("--url", last)
+        self.assertEqual([], case.aws("ssm start-session"))
+        self.assertEqual(1, len([c for c in case.calls("terraform") if c.get("command") == "apply"]))
+        self.assertNotIn("pass:", result.stdout)
+
     def test_without_the_session_manager_plugin_it_refuses_before_it_builds(self):
         case = cell.Case(self, outputs=True, world=seeded_world())
         case.remove("session-manager-plugin")
@@ -471,7 +521,7 @@ class DeployRefusesAnEmptyRegistry(cell.CompanionTestCase):
         self.refused(world, "holds no app")
 
     def test_no_registry_at_all(self):
-        world = cell.default_world()
+        world = cell.with_bastion(cell.default_world())
         self.refused(world, "Run tools/scripts/seed.sh first")
 
     def test_a_registry_with_no_revision_to_wait_for(self):

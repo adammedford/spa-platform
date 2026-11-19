@@ -14,6 +14,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import pathlib
+import re
 import sys
 
 _spec = importlib.util.spec_from_file_location("cell_doubles", pathlib.Path(__file__).resolve().parent / "cell_doubles.py")
@@ -33,6 +34,64 @@ def setUpModule():
 
 def spactl_calls(case) -> list[list[str]]:
     return [call["spactl"] for call in case.calls("dotnet")]
+
+
+# The contracts a document is checked against, by the $id each declares, so the outputs schema's
+# references to registry.schema.json resolve to the file beside it.
+_CONTRACTS = {json.loads(path.read_text())["$id"]: json.loads(path.read_text())
+              for path in (cell.ROOT / "contracts").glob("*.schema.json")}
+
+
+def schema_errors(value, schema: dict, root: dict, where: str = "$") -> list[str]:
+    """Where value breaks schema: the JSON Schema keywords contracts/infra-outputs.schema.json and the
+    definitions it references use, and no others (no jsonschema package is on the machine, and D-3 is
+    the standard library). A keyword this does not know fails, so a schema that grows one cannot pass
+    unread."""
+    known = {"$ref", "type", "pattern", "minLength", "maxLength", "minimum", "required", "properties",
+             "additionalProperties", "propertyNames", "description", "$schema", "$id", "title", "x-freeze",
+             "$defs", "$comment", "examples"}
+    unknown = set(schema) - known
+    if unknown:
+        return [f"{where}: the checker does not know {sorted(unknown)}"]
+    if "$ref" in schema:
+        base, _, pointer = schema["$ref"].partition("#")
+        target = _CONTRACTS[base] if base else root
+        node = target
+        for part in pointer.strip("/").split("/"):
+            node = node[part]
+        return schema_errors(value, node, target, where)
+    errors = []
+    kind = schema.get("type")
+    types = {"string": str, "object": dict, "integer": int}
+    if kind and (not isinstance(value, types[kind]) or (kind == "integer" and isinstance(value, bool))):
+        return [f"{where}: not a {kind}"]
+    if isinstance(value, str):
+        if "pattern" in schema and not re.search(schema["pattern"], value):
+            errors.append(f"{where}: does not match {schema['pattern']}")
+        if len(value) < schema.get("minLength", 0) or len(value) > schema.get("maxLength", len(value)):
+            errors.append(f"{where}: length out of bounds")
+    if isinstance(value, int) and "minimum" in schema and value < schema["minimum"]:
+        errors.append(f"{where}: below {schema['minimum']}")
+    if isinstance(value, dict):
+        for name in schema.get("required", []):
+            if name not in value:
+                errors.append(f"{where}: {name} is required")
+        properties = schema.get("properties", {})
+        for name, member in value.items():
+            if "propertyNames" in schema:
+                errors += schema_errors(name, schema["propertyNames"], root, f"{where} key {name}")
+            if name in properties:
+                errors += schema_errors(member, properties[name], root, f"{where}.{name}")
+            elif schema.get("additionalProperties") is False:
+                errors.append(f"{where}: {name} is not a property")
+            elif isinstance(schema.get("additionalProperties"), dict):
+                errors += schema_errors(member, schema["additionalProperties"], root, f"{where}.{name}")
+    return errors
+
+
+def outputs_errors(document: dict) -> list[str]:
+    schema = json.loads((cell.ROOT / "contracts" / "infra-outputs.schema.json").read_text())
+    return schema_errors(document, schema, schema)
 
 
 class SeedPublishesTheFixturesAndWritesTheFirstRegistry(cell.CompanionTestCase):
@@ -136,6 +195,49 @@ class SeedPublishesTheFixturesAndWritesTheFirstRegistry(cell.CompanionTestCase):
         result = case.run(SCRIPT, env=case.env(SPACTL=str(case.bin / "spactl")))
         self.assertEqual(0, result.status, result.output)
         self.assertEqual({"/given"}, {call["project"] for call in case.calls("dotnet")})
+
+
+class SeedWritesTheBastionServiceOnlyWhenTheRootPublishesIt(cell.CompanionTestCase):
+    """#1168: the outputs document's one optional field, ecsBastionService, is copied when the
+    platform root publishes ecs_bastion_service (bastion = true) and absent when it does not
+    (bastion = false, whose null output terraform output -json leaves out), and both documents are
+    contracts/infra-outputs.schema.json's."""
+
+    def document(self, world: dict) -> dict:
+        case = cell.Case(self, world=world)
+        result = case.run(SCRIPT)
+        self.assertEqual(0, result.status, result.output)
+        self.assertNoUnexpectedCall(case)
+        return json.loads((case.repo / "infra" / "envs" / "poc" / "outputs.json").read_text())
+
+    def test_with_the_bastion_the_document_names_its_service(self):
+        document = self.document(cell.with_bastion(cell.default_world()))
+        self.assertEqual(cell.BASTION_SERVICE, document["ecsBastionService"])
+        self.assertEqual([], outputs_errors(document))
+
+    def test_without_the_bastion_the_document_has_no_such_key(self):
+        document = self.document(cell.default_world())
+        self.assertNotIn("ecsBastionService", document)
+        self.assertEqual([], outputs_errors(document))
+
+    def test_a_null_output_is_no_bastion_either(self):
+        # Terraform 1.11.0 leaves a null output out of -json (#1167), and should one ever print it
+        # as null, it is still no bastion.
+        world = cell.default_world()
+        world["roots"]["platform"]["ecs_bastion_service"] = None
+        document = self.document(world)
+        self.assertNotIn("ecsBastionService", document)
+        self.assertEqual([], outputs_errors(document))
+
+    def test_the_checker_refuses_what_the_schema_refuses(self):
+        # The check above can fail: a document with an unknown key, without a required one, or with
+        # a bastion service name the contract's awsName refuses.
+        document = self.document(cell.with_bastion(cell.default_world()))
+        for broken in ({**document, "ecsBastion": "bastion"},
+                       {key: value for key, value in document.items() if key != "ecsService"},
+                       {**document, "ecsBastionService": "-bastion"}):
+            with self.subTest(keys=sorted(set(broken) ^ set(document)), value=broken.get("ecsBastionService")):
+                self.assertNotEqual([], outputs_errors(broken))
 
 
 class SeedRefuses(cell.CompanionTestCase):

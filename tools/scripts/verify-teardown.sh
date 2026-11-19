@@ -68,7 +68,9 @@ TAG_WAIT_SECONDS="${SPA_TEARDOWN_TAG_WAIT:-300}"
 TAG_POLL_SECONDS="${SPA_TEARDOWN_TAG_POLL:-30}"
 # The roles infra/modules/cell/iam.tf declares, "${local.name_prefix}-<suffix>", where the prefix is
 # spa-platform-<cell> (network.tf). verify_teardown_tests.py reads iam.tf and holds this list to it.
-CELL_ROLE_SUFFIXES="task-execution task"
+# The bastion task's role exists only for a cell that applied bastion = true (#1167), and is checked
+# all the same: get-role answers NoSuchEntity for a role never created as for one destroyed.
+CELL_ROLE_SUFFIXES="task-execution task bastion_task"
 
 usage() {
   # The header above, up to the Owner line, is this script's manual.

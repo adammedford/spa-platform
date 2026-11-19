@@ -421,6 +421,9 @@ run "the_root_publishes_the_four_fields_task_1_4a_adds_to_the_outputs_contract" 
         ecs_service   = output.ecs_service
         log_group     = output.log_group
         gateway_image = output.gateway_image
+        # #1167: null on these inputs, and named here all the same, since the name is what the
+        # contract has to hold.
+        ecs_bastion_service = output.ecs_bastion_service
         } : contains(
         keys(jsondecode(file("../../../../contracts/infra-outputs.schema.json")).properties),
         join("", [for index, part in split("_", name) : index == 0 ? part : title(part)])
@@ -773,7 +776,9 @@ run "the_root_declares_no_resource_and_calls_the_cell_module_once_and_nothing_el
 # cluster, one task definition, one service and a log group, with a role for the agent and a role
 # for the task, each with its one policy. Row P2-4 (#347): behind multi_task, two private subnets
 # with a route table, a default route and an association each, one Elastic IP, one NAT gateway and
-# two gateway endpoints, all of which plan no instance here.
+# two gateway endpoints, all of which plan no instance here. The tunnel's hop (#1167): behind
+# bastion, a second service, its task definition, its task role and that role's policy, which plan
+# no instance here either; the last run in this file counts them at one each.
 #
 # A run against the module rather than the root, because only that can address the module's
 # resources, and three of them are for_each: their instance counts are in the plan, not the source.
@@ -829,8 +834,12 @@ run "the_platform_plan_holds_exactly_the_allowlisted_types_and_counts" {
         "aws_route.private_egress"            = aws_route.private_egress
         "aws_route_table_association.private" = aws_route_table_association.private
         "aws_vpc_endpoint.gateway"            = aws_vpc_endpoint.gateway
+        "aws_iam_role.bastion_task"           = aws_iam_role.bastion_task
+        "aws_iam_role_policy.bastion_task"    = aws_iam_role_policy.bastion_task
+        "aws_ecs_task_definition.bastion"     = aws_ecs_task_definition.bastion
+        "aws_ecs_service.bastion"             = aws_ecs_service.bastion
     }))
-    error_message = "Only the subnets, their route table associations, the image repositories and their lifecycle policies, the session table and the two-task cell's gated egress (#347) may carry count or for_each: every other declaration is one instance, and that is how the next assertion counts it. A new count or for_each needs its instances counted there."
+    error_message = "Only the subnets, their route table associations, the image repositories and their lifecycle policies, the session table, the two-task cell's gated egress (#347) and the bastion's four declarations (#1167) may carry count or for_each: every other declaration is one instance, and that is how the next assertion counts it. A new count or for_each needs its instances counted there."
   }
 
   # The session table is counted at its planned instances, which on these inputs, Phase 1's, is none
@@ -854,6 +863,10 @@ run "the_platform_plan_holds_exactly_the_allowlisted_types_and_counts" {
           "aws_route.private_egress"            = length(aws_route.private_egress)
           "aws_route_table_association.private" = length(aws_route_table_association.private)
           "aws_vpc_endpoint.gateway"            = length(aws_vpc_endpoint.gateway)
+          "aws_iam_role.bastion_task"           = length(aws_iam_role.bastion_task)
+          "aws_iam_role_policy.bastion_task"    = length(aws_iam_role_policy.bastion_task)
+          "aws_ecs_task_definition.bastion"     = length(aws_ecs_task_definition.bastion)
+          "aws_ecs_service.bastion"             = length(aws_ecs_service.bastion)
         }, "${m[0]}.${m[1]}", 1)
         if m[0] == type
       ])
@@ -922,6 +935,13 @@ run "the_platform_plan_holds_exactly_the_allowlisted_types_and_counts" {
 # count is exactly var.multi_task ? 1 : 0, and a plan assertion that the default inputs plan none.
 # Mutations that turn this run red: the count made ? 2 : 0, or written as local.multi_task ? 1 : 0;
 # a second NAT gateway with the same count line; the condition inverted.
+#
+# The bastion (#1167) is a second ECS service, so it is exempt from the one-of-each assertion in the
+# same form: aws_ecs_service "bastion", whose count is exactly var.bastion ? 1 : 0, and a plan
+# assertion that the default inputs plan none. P-01's "one ECS service" is read as holding on the
+# default inputs, as #583 read the NAT gateway (#1167, the decision's reading of P-01). Mutations
+# that turn this run red: the count made ? 2 : 0; the bastion input's default made true; a second
+# aws_ecs_service with no count, or with the same count line.
 run "the_platform_plan_holds_one_alb_listener_target_group_service_and_bucket_and_no_nat_gateway_instance_or_database" {
   command = plan
 
@@ -935,15 +955,25 @@ run "the_platform_plan_holds_one_alb_listener_target_group_service_and_bucket_an
     cell_source           = join("\n", [for f in fileset("../../../modules/cell", "*.tf") : file("../../../modules/cell/${f}")])
   }
 
-  # One declaration of each, carrying no count or for_each, is exactly one instance of each.
+  # One declaration of each, carrying no count or for_each, is exactly one instance of each. The
+  # one exemption is the bastion service (#1167), which is left out of the list only when its
+  # count is exactly the bastion switch.
   assert {
     condition = alltrue([
       for type in ["aws_lb", "aws_lb_listener", "aws_lb_target_group", "aws_ecs_service", "aws_s3_bucket"] : [
         for m in regexall("(?ms)^resource\\s+\"([^\"]+)\"\\s+\"([^\"]+)\"\\s*\\{(.*?)^\\}", var.cell_source) :
         length(regexall("(?m)^  (count|for_each)\\s*=", m[2])) if m[0] == type
+        && !(m[0] == "aws_ecs_service" && m[1] == "bastion"
+        && length(regexall("(?m)^  count\\s*=\\s*var\\.bastion \\? 1 : 0$", m[2])) == 1)
       ] == [0]
     ])
-    error_message = "P-01: exactly one ALB, one listener, one target group, one ECS service and one bucket. Each is one declaration with no count or for_each."
+    error_message = "P-01: exactly one ALB, one listener, one target group, one ECS service and one bucket on the default inputs. Each is one declaration with no count or for_each. The one exemption is aws_ecs_service \"bastion\" with exactly count = var.bastion ? 1 : 0 (#1167)."
+  }
+
+  # And on the default inputs, which are Phase 1's, the exempted bastion service plans no instance.
+  assert {
+    condition     = length(aws_ecs_service.bastion) == 0
+    error_message = "P-01: on the default inputs the platform plan holds one ECS service. Only bastion = true creates a second (#1167)."
   }
 
   # The exemption reads the declaration's body, so it is matched against whole blocks; the first run
@@ -1015,6 +1045,10 @@ run "under_dynamodb_the_platform_plan_holds_one_session_table_and_every_other_co
           "aws_route.private_egress"            = length(aws_route.private_egress)
           "aws_route_table_association.private" = length(aws_route_table_association.private)
           "aws_vpc_endpoint.gateway"            = length(aws_vpc_endpoint.gateway)
+          "aws_iam_role.bastion_task"           = length(aws_iam_role.bastion_task)
+          "aws_iam_role_policy.bastion_task"    = length(aws_iam_role_policy.bastion_task)
+          "aws_ecs_task_definition.bastion"     = length(aws_ecs_task_definition.bastion)
+          "aws_ecs_service.bastion"             = length(aws_ecs_service.bastion)
         }, "${m[0]}.${m[1]}", 1)
         if m[0] == type
       ])
@@ -1095,6 +1129,10 @@ run "under_multi_task_the_platform_plan_holds_d6_s_egress_and_every_other_count_
           "aws_route.private_egress"            = length(aws_route.private_egress)
           "aws_route_table_association.private" = length(aws_route_table_association.private)
           "aws_vpc_endpoint.gateway"            = length(aws_vpc_endpoint.gateway)
+          "aws_iam_role.bastion_task"           = length(aws_iam_role.bastion_task)
+          "aws_iam_role_policy.bastion_task"    = length(aws_iam_role_policy.bastion_task)
+          "aws_ecs_task_definition.bastion"     = length(aws_ecs_task_definition.bastion)
+          "aws_ecs_service.bastion"             = length(aws_ecs_service.bastion)
         }, "${m[0]}.${m[1]}", 1)
         if m[0] == type
       ])
@@ -1132,5 +1170,97 @@ run "under_multi_task_the_platform_plan_holds_d6_s_egress_and_every_other_count_
       aws_dynamodb_table                                 = 1
     }
     error_message = "Under multi_task = true the platform plan holds D6's egress, one NAT gateway with its Elastic IP, two private subnets with their tables, routes and associations, and the two gateway endpoints, with the session table, and every other type at its Phase 1 count (#347)."
+  }
+}
+
+# Under the bastion switch the plan holds the tunnel's hop (#1167): the bastion's service, its task
+# definition, its task role and that role's policy, one of each, and every other type at its Phase 1
+# count. With every other input at its default, so the one change from the Phase 1 map is the
+# switch's own. Mutations that turn this run red: the service's count made ? 2 : 0; a second role
+# policy on the bastion role. The four left out of this run's lookup map leave it green, since the
+# map's default of one is each one's count under the switch; left out of the three maps above,
+# they turn those runs red, where each plans none.
+#
+# The role is counted through its first instance's name, as the session table is above: the
+# provider marks aws_iam_role's deprecated inline_policy and managed_policy_arns, and when an
+# assertion that names the whole role fails, Terraform 1.16 panics printing it ("value has marks, so
+# it cannot be serialized as JSON"), where a name carries no mark. Seen on this run with a wrong
+# expected count. So this run holds the role at one or none; that its count is exactly
+# var.bastion ? 1 : 0, never two, is held on the source by the module's suite
+# (the_bastion_s_four_declarations_each_carry_exactly_the_bastion_switch).
+run "under_bastion_the_platform_plan_holds_the_bastion_service_and_every_other_count_unchanged" {
+  command = plan
+
+  module {
+    source = "../../../modules/cell"
+  }
+
+  variables {
+    allowed_host_suffixes = [".spa-poc.test:8443"]
+    allowed_upstreams     = ["http://127.0.0.1:5080", "http://127.0.0.1:5081"]
+    bastion               = true
+    bastion_image         = "public.ecr.aws/nginx/nginx-unprivileged@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    cell_source           = join("\n", [for f in fileset("../../../modules/cell", "*.tf") : file("../../../modules/cell/${f}")])
+  }
+
+  assert {
+    condition = {
+      for type in distinct([for m in regexall("(?m)^resource\\s+\"([^\"]+)\"\\s+\"([^\"]+)\"", var.cell_source) : m[0]]) :
+      type => sum([
+        for m in regexall("(?m)^resource\\s+\"([^\"]+)\"\\s+\"([^\"]+)\"", var.cell_source) :
+        lookup({
+          "aws_subnet.public"                   = length(aws_subnet.public)
+          "aws_route_table_association.public"  = length(aws_route_table_association.public)
+          "aws_ecr_repository.repository"       = length(aws_ecr_repository.repository)
+          "aws_ecr_lifecycle_policy.repository" = length(aws_ecr_lifecycle_policy.repository)
+          "aws_dynamodb_table.sessions"         = can(aws_dynamodb_table.sessions[0].name) ? 1 : 0
+          "aws_subnet.private"                  = length(aws_subnet.private)
+          "aws_eip.nat"                         = length(aws_eip.nat)
+          "aws_nat_gateway.egress"              = length(aws_nat_gateway.egress)
+          "aws_route_table.private"             = length(aws_route_table.private)
+          "aws_route.private_egress"            = length(aws_route.private_egress)
+          "aws_route_table_association.private" = length(aws_route_table_association.private)
+          "aws_vpc_endpoint.gateway"            = length(aws_vpc_endpoint.gateway)
+          "aws_iam_role.bastion_task"           = can(aws_iam_role.bastion_task[0].name) ? 1 : 0
+          "aws_iam_role_policy.bastion_task"    = length(aws_iam_role_policy.bastion_task)
+          "aws_ecs_task_definition.bastion"     = length(aws_ecs_task_definition.bastion)
+          "aws_ecs_service.bastion"             = length(aws_ecs_service.bastion)
+        }, "${m[0]}.${m[1]}", 1)
+        if m[0] == type
+      ])
+      } == {
+      aws_vpc                                            = 1
+      aws_internet_gateway                               = 1
+      aws_subnet                                         = 2
+      aws_route_table                                    = 1
+      aws_route                                          = 1
+      aws_route_table_association                        = 2
+      aws_eip                                            = 0
+      aws_nat_gateway                                    = 0
+      aws_vpc_endpoint                                   = 0
+      aws_security_group                                 = 2
+      aws_vpc_security_group_ingress_rule                = 2
+      aws_vpc_security_group_egress_rule                 = 2
+      aws_default_security_group                         = 1
+      aws_lb                                             = 1
+      aws_lb_listener                                    = 1
+      aws_lb_target_group                                = 1
+      aws_s3_bucket                                      = 1
+      aws_s3_bucket_versioning                           = 1
+      aws_s3_bucket_public_access_block                  = 1
+      aws_s3_bucket_ownership_controls                   = 1
+      aws_s3_bucket_server_side_encryption_configuration = 1
+      aws_s3_bucket_policy                               = 1
+      aws_ecr_repository                                 = 2
+      aws_ecr_lifecycle_policy                           = 2
+      aws_ecs_cluster                                    = 1
+      aws_ecs_task_definition                            = 2
+      aws_ecs_service                                    = 2
+      aws_cloudwatch_log_group                           = 1
+      aws_iam_role                                       = 3
+      aws_iam_role_policy                                = 3
+      aws_dynamodb_table                                 = 0
+    }
+    error_message = "Under bastion = true the platform plan holds two ECS services, two task definitions, three roles and three role policies, and every other type at its Phase 1 count (#1167)."
   }
 }
