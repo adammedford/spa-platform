@@ -25,11 +25,13 @@ answered. As the real CLI does, `ssm start-session` and `ecs execute-command` ha
 session-manager-plugin: for a port forward the plugin double listens on the local port with TLS
 under a test authority and answers every request the OpenID Connect challenge, a 302 whose headers
 carry a state and a cookie canary; for an exec it prints what the case's world says the session
-printed.
+printed. The world is a cell applied since #787 unless a case says otherwise: the gateway's tasks run
+with ECS Exec off, an exec on one fails and a port forward reaches only the bastion's container
+(#1167), as AWS refuses a session to a container that runs no Exec agent (#1378).
 
 **The world's names are read from the Terraform that makes them** (CODING_STANDARDS.md, "A guard
-reads the thing it guards"): the cluster, the service, the gateway container and the log group are
-the locals in infra/modules/cell/ecs.tf.
+reads the thing it guards"): the cluster, the service, the gateway container, the bastion's service
+and container and the log group are the locals in infra/modules/cell/ecs.tf.
 
 **Canaries.** The account id is in every ARN the doubles hand out (task, task definition, target
 group, the stop reason's target group) and in the gateway image's repository URI; the 302 carries a
@@ -86,6 +88,9 @@ LOG_GROUP, DIGEST, IMAGE, TG_ARN, ALB = doubles.LOG_GROUP, doubles.DIGEST, doubl
 SECRETS, APP_HOST, REPOSITORY_TAIL = doubles.SECRETS, doubles.APP_HOST, doubles.REPOSITORY_TAIL
 FOREIGN, FOREIGN_FORMS = doubles.FOREIGN, doubles.FOREIGN_FORMS
 plan, world, task_id, save = doubles.plan, doubles.world, doubles.task_id, doubles.save
+BASTION_SERVICE, BASTION_CONTAINER, BASTION_N = doubles.BASTION_SERVICE, doubles.BASTION_CONTAINER, doubles.BASTION_N
+# The bastion's session target, as Session Manager names its container (#1167).
+BASTION_TARGET = f"ecs:{CLUSTER}_{task_id(BASTION_N)}_{task_id(BASTION_N)}-3333"
 
 
 # --- the cases ------------------------------------------------------------------------------------
@@ -167,7 +172,7 @@ def run_case(document: dict, outputs: dict = None, region: str = REGION, extra=(
                    "ecrMockApi": f"{ACCOUNT}.dkr.ecr.{REGION}.amazonaws.com/spa-poc/mock-api", "gatewayImage": IMAGE,
                    "issuer": f"https://cognito-idp.{REGION}.amazonaws.com/{REGION}_EXAMPLE",
                    "cognitoDomain": f"spa-platform-poc-{ACCOUNT}.auth.{REGION}.amazoncognito.com",
-                   "clients": {}, "testUsers": {}, "logGroup": LOG_GROUP}
+                   "clients": {}, "testUsers": {}, "logGroup": LOG_GROUP, "ecsBastionService": BASTION_SERVICE}
         written.update(outputs or {})
         (repo / OUTPUTS).write_text(json.dumps(written))
     for name in ("leaf.pem", "leaf.key", "ca.pem", "other.pem"):
@@ -229,13 +234,15 @@ class CaseBase(unittest.TestCase):
 
 
 class TenCleanRestarts(CaseBase):
-    """One clean run, read by every test here."""
+    """One clean run, read by every test here, on a cell last applied before #787, whose gateway
+    tasks still ran ECS Exec: the one shape in which the zero is the metadata StartedAt (Q1, Q11).
+    AfterExecOff runs the shape a cell applied since #787 has."""
 
     @classmethod
     def setUpClass(cls):
         plans = [plan() for _ in range(10)]
         plans[1] = plan(probe_lands=["old", "old", "new"])
-        cls.result = run_case(world(plans))
+        cls.result = run_case(world(plans, gateway_exec=True))
 
     def test_exits_0_and_writes_both_files_complete(self):
         self.assertEqual(0, self.result.code, self.result.stderr)
@@ -327,12 +334,13 @@ class TenCleanRestarts(CaseBase):
         self.assertIn("S - T0", self.result.txt)
         self.assertIn("cross-clock", self.result.txt)
 
-    def test_each_hop_is_its_own_port_forward_through_the_outgoing_task(self):
+    def test_each_hop_is_its_own_port_forward_through_the_bastion_task(self):
+        # Through the bastion even where the gateway's tasks still run Exec (#1167): never through
+        # a task of the gateway's service.
         sessions = self.result.aws("ssm", "start-session")
         self.assertEqual(10, len(sessions))
-        hops = [task_id(1)] + [task_id(100 + 2 * i) for i in range(9)]
-        for argv, hop in zip(sessions, hops):
-            self.assertEqual(f"ecs:{CLUSTER}_{hop}_{hop}-2222", argv[argv.index("--target") + 1])
+        for argv in sessions:
+            self.assertEqual(BASTION_TARGET, argv[argv.index("--target") + 1])
             parameters = json.loads(argv[argv.index("--parameters") + 1])
             self.assertEqual([ALB], parameters["host"])
             self.assertEqual(["443"], parameters["portNumber"])
@@ -342,12 +350,14 @@ class TenCleanRestarts(CaseBase):
                          [s for s in shapes if s in ("ssm start-session", "ecs update-service")])
 
     def test_the_302_probe_is_a_cookieless_navigation_retried_until_the_new_stream_holds_a_302(self):
-        # Restart 2's first two probes land on the old task; the third reaches the new one.
-        by_hop = {}
+        # Restart 2's first two probes land on the old task; the third reaches the new one. Every
+        # probe goes through the bastion.
+        by_restart = {}
         for probe in self.result.probes:
-            by_hop.setdefault(probe["hop"], []).append(probe)
-        second = by_hop[100]
+            by_restart.setdefault(probe["restart"], []).append(probe)
+        second = by_restart[2]
         self.assertEqual([100, 100, 102], [probe["task"] for probe in second])
+        self.assertEqual({BASTION_N}, {probe["hop"] for probe in self.result.probes})
         self.assertEqual(3, len(self.result.json["restarts"][1]["probes"]))
         for probe in self.result.probes:
             self.assertEqual("GET / HTTP/1.1", probe["request"])
@@ -382,6 +392,103 @@ class TenCleanRestarts(CaseBase):
     def test_no_call_ran_with_a_credential_in_its_environment(self):
         self.assertTrue(self.result.calls)
         self.assertEqual([], [call for call in self.result.calls if call["credential_env"]])
+
+
+class AfterExecOff(CaseBase):
+    """Ten clean restarts of a cell applied since #787: the gateway service's tasks run with ECS
+    Exec off and no Exec agent, and the bastion (#1167) is the only container a session reaches. The
+    doubles refuse a session to any other target and an exec on a task run with Exec off, as AWS
+    does (#1378)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.result = run_case(world())
+
+    def test_exits_0_with_ten_complete_restarts(self):
+        self.assertEqual(0, self.result.code, self.result.stderr)
+        self.assertNoUnexpectedCalls(self.result)
+        self.assertEqual("clean", self.result.json["ending"])
+        self.assertEqual([True] * 10, [restart["complete"] for restart in self.result.json["restarts"]])
+        self.assertNoSecrets(self.result)
+
+    def test_every_forward_goes_through_the_bastion_task(self):
+        sessions = self.result.aws("ssm", "start-session")
+        self.assertEqual(10, len(sessions))
+        self.assertEqual([BASTION_TARGET] * 10, [argv[argv.index("--target") + 1] for argv in sessions])
+        self.assertEqual([task_id(BASTION_N)] * 10, [restart["hop_task"] for restart in self.result.json["restarts"]])
+        # Its tasks are listed from the bastion service the outputs document names.
+        listed = self.result.aws("ecs", "list-tasks", "--cluster", CLUSTER, "--service-name", BASTION_SERVICE)
+        self.assertEqual(10, len(listed))
+
+    def test_no_exec_is_sent_and_every_zero_is_pull_stopped_at_saying_why(self):
+        # Asserted, not left to assertNoUnexpectedCalls: an exec the doubles refuse would read as
+        # one more fallback.
+        self.assertEqual([], self.result.aws("ecs", "execute-command"))
+        for restart in self.result.json["restarts"]:
+            self.assertEqual({"source": "pullStoppedAt", "ns": restart["pull_stopped_ns"], "fallback": fargate.NO_EXEC},
+                             restart["zero"])
+        self.assertIn(f"#1 pullStoppedAt (fallback: {fargate.NO_EXEC})", self.result.txt)
+        # From pullStoppedAt, 1500 ms before the container started: listening at 900 ms after that.
+        self.assertRegex(self.result.txt, r"listening \(log\)\s+2400\s+2400\n")
+
+
+class TheHop(CaseBase):
+    """The forward's hop is the bastion's task (#1167), refused before restart 1 when there is none
+    a session can reach, and incomplete when one goes missing later."""
+
+    def assertRefusedSaying(self, run, says):
+        self.assertEqual(2, run.code, run.stderr)
+        self.assertIsNone(run.txt)
+        self.assertIsNone(run.json)
+        self.assertEqual([], run.aws("ecs", "update-service"))
+        self.assertEqual([], run.aws("ssm", "start-session"))
+        self.assertIn(says, run.stderr)
+        self.assertNoUnexpectedCalls(run)
+        self.assertNoSecrets(run)
+
+    def test_an_outputs_document_naming_no_bastion_is_refused_before_any_aws_call(self):
+        for given in (None, ""):
+            with self.subTest(repr(given)):
+                run = run_case(world(), outputs={"ecsBastionService": given})
+                self.assertRefusedSaying(run, "names no ecsBastionService, so the cell has no bastion")
+                self.assertIn("bastion = true", run.stderr)
+                self.assertEqual([], run.calls)
+
+    def test_a_bastion_with_no_running_task_is_refused(self):
+        run = run_case(world(bastion_tasks={}))
+        self.assertRefusedSaying(run, f"{BASTION_SERVICE} has no running task, so the port forward has no hop.")
+
+    def test_a_bastion_task_no_session_can_reach_is_refused(self):
+        for name, change in (("stopping", {"last": "DEACTIVATING"}), ("Exec off", {"exec": False}),
+                             ("agent not running", {"agent": "STOPPED"}), ("no runtime id", {"runtime": False})):
+            with self.subTest(name):
+                # Each is listed, since list-tasks reads the desired status, and described as it is.
+                tasks = {str(BASTION_N): dict(world()["bastion_tasks"][str(BASTION_N)], **change)}
+                run = run_case(world(bastion_tasks=tasks))
+                self.assertRefusedSaying(run, f"no task of {BASTION_SERVICE} can carry a session")
+
+    def test_the_first_bastion_task_a_session_can_reach_is_the_hop(self):
+        tasks = {"899": {"n": 899, "last": "RUNNING", "exec": True, "agent": "PENDING"},
+                 str(BASTION_N): {"n": BASTION_N, "last": "RUNNING", "exec": True, "agent": "RUNNING"}}
+        run = run_case(world([plan(stable=False)], bastion_tasks=tasks))
+        self.assertEqual(4, run.code, run.stderr)
+        self.assertEqual([BASTION_TARGET], [argv[argv.index("--target") + 1] for argv in run.aws("ssm", "start-session")])
+
+    def test_a_bastion_gone_after_restart_1_is_incomplete(self):
+        document = world()
+        document["bastion_gone_after"] = 1
+        run = run_case(document)
+        self.assertEqual(4, run.code, run.stderr)
+        self.assertEqual(1, len(run.aws("ecs", "update-service")))
+        self.assertEqual("incomplete", run.json["ending"])
+        self.assertEqual(f"{BASTION_SERVICE} has no running task, so the port forward has no hop. Is the service steady?",
+                         run.json["reason"])
+        self.assertEqual([True, False], [restart["complete"] for restart in run.json["restarts"]])
+        self.assertNoUnexpectedCalls(run)
+        self.assertNoSecrets(run)
+
+    def test_the_container_name_is_the_one_ecs_tf_gives_the_bastion(self):
+        self.assertEqual(BASTION_CONTAINER, fargate.BASTION_CONTAINER)
 
 
 class Endings(CaseBase):
@@ -602,6 +709,7 @@ class Endings(CaseBase):
             "no Region": dict(region=None),
             "no outputs document": dict(outputs=False),
             "an outputs document for another Region": dict(outputs={"region": "eu-west-1"}),
+            "an outputs document naming no bastion": dict(outputs={"ecsBastionService": None}),
             "no credentials": dict(document=world(credentials=False)),
             "not on gatewayImage": dict(document=world(td_image=IMAGE.replace("a1" * 32, "ff" * 32))),
             "not stable": dict(document=world(initially_stable=False)),
@@ -695,8 +803,9 @@ class TheOneTaskShape(CaseBase):
 
 class TheZero(CaseBase):
     def test_every_failure_of_the_exec_read_falls_back_to_pull_stopped_at_with_its_reason(self):
+        # A cell last applied before #787, where the session can open and its read can fail.
         plans = [plan(exec="no-session"), plan(exec="no-endpoint"), plan(exec="no-parse")] + [plan() for _ in range(7)]
-        run = run_case(world(plans))
+        run = run_case(world(plans, gateway_exec=True))
         self.assertEqual(0, run.code, run.stderr)
         zeros = [restart["zero"] for restart in run.json["restarts"][:4]]
         self.assertEqual(["pullStoppedAt"] * 3 + ["metadata StartedAt"], [zero["source"] for zero in zeros])
@@ -710,6 +819,23 @@ class TheZero(CaseBase):
         # The fallback zero is pullStoppedAt itself, so listening is 900 + 1500 ms after it.
         self.assertEqual(2400.0, fargate.clocks(run.json["restarts"][1])["listening"])
         self.assertNoSecrets(run)
+
+    def test_a_new_task_describe_tasks_did_not_describe_still_gets_the_exec_try(self):
+        # #1378: only an answer saying Exec is off skips the session. One that describes nothing
+        # says nothing about Exec, so the session is tried: here it opens, on a pre-#787 cell, and
+        # off it, the double's refusal is the fallback with its own code, never NO_EXEC.
+        for exec_on, source in ((True, "metadata StartedAt"), (False, "pullStoppedAt")):
+            with self.subTest(gateway_exec=exec_on):
+                run = run_case(world([plan(undescribed_once_stable=True), plan(stable=False)], gateway_exec=exec_on))
+                self.assertEqual(4, run.code, run.stderr)
+                self.assertNoUnexpectedCalls(run)
+                self.assertEqual(1, len(run.aws("ecs", "execute-command")))
+                zero = run.json["restarts"][0]["zero"]
+                self.assertEqual(source, zero["source"])
+                self.assertNotEqual(fargate.NO_EXEC, zero.get("fallback"))
+                if not exec_on:
+                    self.assertIn("InvalidParameterException", zero["fallback"])
+                self.assertNoSecrets(run)
 
 
 class TheOneLiner(unittest.TestCase):
@@ -1076,8 +1202,10 @@ class TheSecrecyMatrix(CaseBase):
     def setUpClass(cls):
         cls.path_name = f"report{FOREIGN}.txt"
         plans = [plan(exec="no-session") for _ in range(10)]
-        cls.clean = run_case(world(plans, platform_version=f"LATEST-{FOREIGN}", exec_error_code=f"Target{FOREIGN}Exception"),
-                             txt_name=cls.path_name)
+        # gateway_exec: a cell last applied before #787, so the exec is sent and its error code is
+        # free text on its way in.
+        cls.clean = run_case(world(plans, platform_version=f"LATEST-{FOREIGN}", exec_error_code=f"Target{FOREIGN}Exception",
+                                   gateway_exec=True), txt_name=cls.path_name)
 
     def test_clean(self):
         run = self.clean
@@ -1103,9 +1231,11 @@ class TheSecrecyMatrix(CaseBase):
         self.assertIn("000000000000", first)
         self.assertIn(f"#1 task {first} complete", run.txt)
         self.assertEqual(first, run.json["restarts"][0]["task_id"])
-        self.assertIn(f"restart 2/10: deployment ecs-svc/2000000000000000001, hop through task {first}", run.stdout)
+        hop = task_id(BASTION_N)
+        self.assertIn("000000000000", hop)
+        self.assertIn(f"restart 2/10: deployment ecs-svc/2000000000000000001, hop through task {hop}", run.stdout)
         self.assertEqual("ecs-svc/2000000000000000000", run.json["restarts"][0]["deployment"])
-        self.assertEqual(task_id(1), run.json["restarts"][0]["hop_task"])
+        self.assertEqual(hop, run.json["restarts"][0]["hop_task"])
 
     def test_the_commit_keeps_a_long_digit_run_where_arbitrary_text_would_lose_it(self):
         # Digits of its own: the designated source keeps its run, so a canary in SECRETS cannot stand in it.
@@ -1180,7 +1310,7 @@ class TheSecrecyMatrix(CaseBase):
                ["health", 200, 3000],
                ["raw", {"msg": "Request", "route": "health", "status": 200, "duration_ms": 1.2,
                         "_event_timestamp": ACCOUNT_IN_A_NUMBER_MS}, 3100]]
-        finished = run_case(world([plan(created_at=created, log=log), plan(stable=False)]))
+        finished = run_case(world([plan(created_at=created, log=log), plan(stable=False)], gateway_exec=True))
         self.assertEqual(4, finished.code, finished.stderr)
         first = finished.json["restarts"][0]
         self.assertEqual(ACCOUNT_IN_A_NUMBER_NS, first["created_ns"])
@@ -1257,8 +1387,8 @@ class TheMalformedValues(CaseBase):
                 self.assertRefused(run_case(world(account_answer=answer)), "no well-formed account id", answer)
 
     def test_a_malformed_task_id_on_the_hop_of_restart_1_is_refused(self):
-        run = run_case(world(arn_ids={"1": self.BAD}))
-        self.assertRefused(run, "holds no well-formed task id", self.BAD)
+        run = run_case(world(arn_ids={str(BASTION_N): self.BAD}))
+        self.assertRefused(run, "a bastion task's ARN holds no well-formed task id.", self.BAD)
 
     def test_a_malformed_task_id_on_the_new_task_is_incomplete(self):
         run = run_case(world(arn_ids={"100": self.BAD}))
@@ -1315,7 +1445,7 @@ class TheMalformedValues(CaseBase):
             ["raw", {"ts": self.BAD, "msg": "Request", "route": "health", "status": 200}, 3300]]
         plans = [plan(log=log, exec="bad-drift", probe_status_line=f"HTTP/1.1 {FOREIGN} Found"),
                  plan(stable=False, probe_status_line="HTTP/1.1 BADVALUE Found")]
-        run = run_case(world(plans, health_reason=[self.BAD]), git_stdout=self.BAD)
+        run = run_case(world(plans, health_reason=[self.BAD], gateway_exec=True), git_stdout=self.BAD)
         self.assertEqual(4, run.code, run.stderr)
         self.assertEqual(2, len(run.aws("ecs", "update-service")))
         first = run.json["restarts"][0]
@@ -1416,6 +1546,28 @@ class TheDoubles(unittest.TestCase):
         self.assertEqual(97, done.returncode)
         calls = [json.loads(line) for line in (case / "calls.jsonl").read_text().splitlines()]
         self.assertEqual("ecs delete-service", calls[-1]["unexpected"])
+
+    def double(self, document, *argv):
+        case = pathlib.Path(tempfile.mkdtemp(prefix="fargate-double-"))
+        save(case, document)
+        return subprocess.run([sys.executable, "-I", str(DOUBLES), "aws", str(case), "--region", REGION, *argv, "--output", "json"],
+                              capture_output=True, text=True, env={"PATH": "/usr/bin:/bin"})
+
+    def test_a_session_to_a_gateway_container_is_refused_once_exec_is_off(self):
+        # The double this ticket's script once passed against (#1378): Session Manager reaches no
+        # container whose task runs Exec off, so a forward through a gateway task fails here as there.
+        gateway = f"ecs:{CLUSTER}_{task_id(1)}_{task_id(1)}-2222"
+        parameters = json.dumps({"host": [ALB], "portNumber": ["443"], "localPortNumber": ["9"]})
+        forward = ("ssm", "start-session", "--target", gateway, "--document-name", "AWS-StartPortForwardingSessionToRemoteHost",
+                   "--parameters", parameters)
+        done = self.double(world(), *forward)
+        self.assertEqual(254, done.returncode)
+        self.assertIn("(TargetNotConnected)", done.stderr)
+        # Its exec, likewise.
+        done = self.double(world(), "ecs", "execute-command", "--cluster", CLUSTER, "--task", task_id(1), "--container", GATEWAY,
+                           "--interactive", "--command", fargate.EXEC_COMMAND)
+        self.assertEqual(254, done.returncode)
+        self.assertIn("(InvalidParameterException)", done.stderr)
 
     def test_the_tests_and_the_script_import_nothing_from_tools_scripts(self):
         for path in (SCRIPT, DOUBLES, pathlib.Path(__file__).resolve()):
