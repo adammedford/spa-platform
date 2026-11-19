@@ -17,16 +17,17 @@ This reads every commit from the base to HEAD, whatever its parents, and judges 
 is a full landing, by the same reading as roadmap.py's LANDED_SUBJECT less its "part of" branch:
 for each line of its message that starts `Ticket: #<n>`, it reads issue n's body through gh and
 holds the commit when that body has an open `- [ ]` box, naming the commit, the issue and each open
-box by its place among the body's boxes. A line inside a fenced block the body quotes is no box of
-the ticket and takes no place (#1402): on 2026-11-18 --subject-for made #1215 a part on the two
-boxes of a template it quotes, and the session wrote the full subject by hand. That line is written by overnight.js's integrate step, into
+box by its place among the body's boxes. That line is written by overnight.js's integrate step, into
 the body of each task merge it makes on the run branch; docs/agents/landing-work.md calls that
 merge the ticket's merge body in a run-branch landing. A foreground landing carries no such line in
 its merge: the guide puts its tickets in the pull request description, and tools/land.sh merges it
 on the server, so that merge is never in a range this reads (#897). A "Merge part of task" subject
 is never judged: it says the row is unfinished, and tools/check.sh holds it to its Outstanding lines
 instead (#291). A full-landing subject with no Ticket line is never judged either; it is named in a
-note, since the merges from before the tracker moved to GitHub carry none.
+note, since the merges from before the tracker moved to GitHub carry none. A line inside a fenced
+block the body quotes is no box of the ticket and takes no place (#1402): on 2026-11-18
+--subject-for made #1215 a part on the two boxes of a template it quotes, and the session wrote the
+full subject by hand.
 
 A full landing is held on a second ground too (#388). On 2026-10-24 the run wrote "Merge task P2-2"
 over #340, all its boxes ticked, directly after "Merge part of task issue-338", whose ticket and
@@ -116,12 +117,15 @@ TICKET = re.compile(r"(?m)^Ticket:[ \t]*#(\d+)[ \t]*$")
 # one line at a time, since open_boxes reads the body by its lines to leave out the fenced ones.
 BOX = re.compile(r"^[ \t]*- \[(?P<mark>[ xX])\][ \t]*(?P<text>[^\n]*)$")
 
-# A line that opens or shuts a fenced block, copied from tools/ticket_shape.py's FENCE for the
-# reason the forms below are copied, with one change: the whole run of the marker is read, not its
-# first three characters, so a longer fence can hold a shorter one (#1402). ticket_shape.py's
-# three-character reading shuts a five-backtick block on the three-backtick line inside it, which
-# is how #1215's body is written.
-FENCE = re.compile(r"^[ \t]*(`{3,}|~{3,})")
+# A line that opens or shuts a fenced block, from tools/ticket_shape.py's FENCE for the reason the
+# forms below are copied, with three changes, each as CommonMark reads a fence (#1402). The whole run
+# of the marker is read, not its first three characters, so a longer fence can hold a shorter one:
+# ticket_shape.py's three-character reading shuts a five-backtick block on the three-backtick line
+# inside it, which is how #1215's body is written. A backtick run with another backtick later on its
+# line is an inline code span, "```x``` reads", and opens nothing. And only a run with nothing but
+# white space after it shuts a fence, so "```x" inside one is a quoted line. Without the last two a
+# real box after such a line was hidden, and --base passed a full landing over it.
+FENCE = re.compile(r"^[ \t]*(`{3,}|~{3,})(.*)$")
 
 # Either subject form, as tools/roadmap.py's LANDED_SUBJECT reads it; group 1 is set on a part. This
 # script runs under `python3 -I`, which leaves its own directory off sys.path, so roadmap.py's forms
@@ -372,19 +376,23 @@ def open_boxes(body: str) -> list[tuple[int, str]]:
     text). A line inside a fenced block the body quotes is no box, as tools/ticket_shape.py's
     headings() reads a heading there as none (#1402), so "box 2" is the second box a reader of the
     rendered ticket sees. A fence is shut by a run of its own marker at least as long as the one
-    that opened it; a shorter run, or the other marker, inside it is a quoted line."""
+    that opened it with nothing but white space after it; a shorter run, the other marker, or a run
+    with text after it, inside it is a quoted line. A backtick run with a backtick after it on its
+    line opens no fence."""
     found: list[tuple[int, str]] = []
     fence = ""
     place = 0
     for line in body.split("\n"):
         marked = FENCE.match(line)
         if marked:
-            run = marked.group(1)
-            if not fence:
+            run, rest = marked.group(1), marked.group(2)
+            if not fence and not (run[0] == "`" and "`" in rest):
                 fence = run
-            elif run[0] == fence[0] and len(run) >= len(fence):
-                fence = ""
-            continue
+                continue
+            if fence:
+                if run[0] == fence[0] and len(run) >= len(fence) and not rest.strip():
+                    fence = ""
+                continue
         box = None if fence else BOX.match(line)
         if box:
             place += 1

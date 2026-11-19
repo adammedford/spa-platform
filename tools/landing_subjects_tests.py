@@ -948,8 +948,10 @@ class FencedBoxTests(unittest.TestCase):
 
     def test_a_box_after_a_fence_shuts_is_a_box(self):
         # The other direction, which would let a full landing through over a real open box: a fence
-        # is shut by a run as long as its opener or longer, with a carriage return or spaces after
-        # it, and a shorter run or the other marker inside it shuts nothing.
+        # is shut by a run as long as its opener or longer, with nothing but a carriage return or
+        # spaces after it, and a shorter run, the other marker, or a run with text after it inside it
+        # shuts nothing. A backtick run with another backtick later on its line is an inline code
+        # span and opens nothing, as CommonMark reads it; a tilde fence's info string may hold one.
         bodies = {
             "three backticks": "```\n- [ ] Quoted.\n```\n- [ ] Open.\n",
             "three tildes": "~~~\n- [ ] Quoted.\n~~~\n- [ ] Open.\n",
@@ -958,6 +960,9 @@ class FencedBoxTests(unittest.TestCase):
             "spaces after the closing run": "```\n- [ ] Quoted.\n```  \n- [ ] Open.\n",
             "a longer fence holding a shorter one": "````\n```\n- [ ] Quoted.\n```\n````\n- [ ] Open.\n",
             "two blocks": "```\n- [ ] Quoted.\n```\n- [ ] Open.\n```\n- [ ] Quoted.\n```\n",
+            "a run with text after it inside a fence": "```\n```x\n```\n- [ ] Open.\n",
+            "a line that starts with an inline code span": "```inline``` is how a span reads\n- [ ] Open.\n",
+            "a tilde fence whose info string holds a backtick": "~~~ `x`\n- [ ] Quoted.\n~~~\n- [ ] Open.\n",
         }
         for fence, body in bodies.items():
             with self.subTest(fence=fence):
