@@ -17,7 +17,9 @@ markers in `docs/roadmap.md` and `README.md`:
                        each row it names whole: a row whose last work was a sitting, which no
                        merge of its own will ever name (#1219).
     rows that exist    the task tables in docs/plan/03-workstreams-and-tasks.md, and the package
-                       table in docs/plan/06-phase-2-and-risks.md.
+                       table in docs/plan/06-phase-2-and-risks.md. A stage cut after the export, such
+                       as S8a, names GitHub tickets as issue-N on its Plan rows line instead (#776),
+                       each landed by its own "Merge task issue-N" subject.
 
 It also checks what no reader can check by eye: that the ladder covers every plan row exactly once
 and names none that does not exist. A roadmap that quietly drops a row is worse than no roadmap,
@@ -73,9 +75,13 @@ TARGETS = {"README.md": ("summary",), ROADMAP: ("stages",)}
 # `parent` below folds back into the row it came from.
 ID = re.compile(r"^(?:I-\d+|\d+\.\d+[a-z]?|P2-\d+)$")
 
+# A stage's id: S1 to S10, a stage inserted between two of them with a letter (S8a, #776, so that no
+# "S9" already written in the tracker or a map changes meaning), and SX.
+STAGE = r"S\d+[a-z]?|SX"
+
 # The ladder's summary table: | S1 | what the gateway can do | G1a | `skeleton-v1` |
-LADDER_ROW = re.compile(r"^\|\s*(S\d+|SX)\s*\|([^|]*)\|([^|]*)\|([^|]*)\|\s*$")
-STAGE_HEADING = re.compile(r"^###\s+(S\d+|SX)\s+(.+?)\s*$")
+LADDER_ROW = re.compile(rf"^\|\s*({STAGE})\s*\|([^|]*)\|([^|]*)\|([^|]*)\|\s*$")
+STAGE_HEADING = re.compile(rf"^###\s+({STAGE})\s+(.+?)\s*$")
 STAGE_ROWS = re.compile(r"^\*\*Plan rows\.\*\*\s*(.*)$")
 BACKTICKED = re.compile(r"`([^`]+)`")
 
@@ -157,7 +163,9 @@ def ladder(root: pathlib.Path) -> tuple[list[Stage], list[str]]:
                 collecting = False
             elif current is not None:
                 current.rows += [
-                    id_ for id_ in BACKTICKED.findall(line) if ID.match(id_)
+                    id_.lower() if TICKET.match(id_) else id_
+                    for id_ in BACKTICKED.findall(line)
+                    if claimable(id_)
                 ]
                 continue
         heading = STAGE_HEADING.match(line)
@@ -179,7 +187,9 @@ def ladder(root: pathlib.Path) -> tuple[list[Stage], list[str]]:
         claim = STAGE_ROWS.match(line)
         if claim:
             current.rows = [
-                id_ for id_ in BACKTICKED.findall(claim.group(1)) if ID.match(id_)
+                id_.lower() if TICKET.match(id_) else id_
+                for id_ in BACKTICKED.findall(claim.group(1))
+                if claimable(id_)
             ]
             collecting = True
 
@@ -200,13 +210,21 @@ def ladder(root: pathlib.Path) -> tuple[list[Stage], list[str]]:
 
 
 def coverage(stages: list[Stage], rows: list[str]) -> list[str]:
-    """Every plan row belongs to exactly one stage, and no stage invents one."""
+    """Every plan row belongs to exactly one stage, and no stage invents one. A ticket a stage names
+    is no plan row, so only its uniqueness across the stages is checked."""
     problems: list[str] = []
     seen: dict[str, str] = {}
 
     for stage in stages:
         for id_ in stage.rows:
-            if id_ not in rows:
+            if TICKET.match(id_):
+                if id_ in seen:
+                    problems.append(
+                        f"{ROADMAP}: '{id_}' is in both stage {seen[id_]} and stage {stage.id}"
+                    )
+                else:
+                    seen[id_] = stage.id
+            elif id_ not in rows:
                 problems.append(
                     f"{ROADMAP}: stage {stage.id} names '{id_}', which is not a row in "
                     f"{PLAN_TASKS} or {PLAN_PHASE2}"
@@ -340,6 +358,16 @@ def parent(id_: str, rows: list[str]) -> str | None:
 TICKET = re.compile(r"^issue-\d+$", re.IGNORECASE)
 
 
+def claimable(id_: str) -> bool:
+    """Whether a stage's Plan rows line may name an id: a plan row's, or a ticket's (#776).
+
+    A stage cut after the export has no rows in the plan, which is frozen, so its line names the
+    tickets that build it. A ticket on that line is counted like a row, by its own merge subjects,
+    and still never reaches --json's "rows", which holds the plan's rows alone (#71).
+    """
+    return bool(ID.match(id_) or TICKET.match(id_))
+
+
 def reading(subject: str) -> list[tuple[str, str]]:
     """Every (id, how) one commit subject lands: how is 'landed', 'part' or 'closed'.
 
@@ -459,7 +487,7 @@ def closing_problems(root: pathlib.Path, rows: list[str]) -> list[str] | None:
 
 
 def landed(root: pathlib.Path, rows: list[str]) -> dict[str, str]:
-    """Each plan row's state: 'landed', 'part', or absent."""
+    """Each plan row's state, and each ticket's: 'landed', 'part', or absent."""
     state: dict[str, str] = {}
     for id_, how in landings(root):
         if how == "closed":
@@ -467,7 +495,7 @@ def landed(root: pathlib.Path, rows: list[str]) -> dict[str, str]:
             if id_ not in rows:
                 continue
             how = "landed"
-        row = parent(id_, rows)
+        row = id_ if TICKET.match(id_) else parent(id_, rows)
         if row is None:
             continue
         # A split id never lands its parent row, however its own merge was worded.
