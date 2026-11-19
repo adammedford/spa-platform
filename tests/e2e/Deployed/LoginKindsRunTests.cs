@@ -55,7 +55,7 @@ public sealed class LoginKindsRunTests
     {
         LoginKindsTests.Environment.Value = name => name == StackSwitch.Variable ? stack : null;
         int started = 0;
-        LoginKindsTests.Start.Value = () =>
+        Stacks.Instead.Value = () =>
         {
             started++;
             // Never dereferenced under the skip: the fact opens the stack only after it.
@@ -77,7 +77,7 @@ public sealed class LoginKindsRunTests
     {
         LoginKindsTests.Environment.Value = name => name == StackSwitch.Variable ? "deployed" : null;
         int started = 0;
-        LoginKindsTests.Start.Value = async () =>
+        Stacks.Instead.Value = async () =>
         {
             started++;
             return await LocalStack.StartAsync();
@@ -100,11 +100,11 @@ public sealed class LoginKindsRunTests
     {
         LoginKindsTests.Environment.Value = variable => variable == StackSwitch.Variable ? "deployed" : null;
         HarnessApp? app1 = null;
-        LoginKindsTests.Start.Value = async () =>
+        Stacks.Instead.Value = async () =>
         {
             LocalStack local = await LocalStack.StartAsync();
             app1 = local.App("app1");
-            return new RefusingStack(local);
+            return new StandInStack(local, async (profile, app) => throw await RefusalAsync(profile, app), async (profile, app) => throw await RefusalAsync(profile, app));
         };
 
         Exception? thrown = await InvokeAsync(typeof(LoginKindsTests).GetMethod(name)!);
@@ -138,21 +138,70 @@ public sealed class LoginKindsRunTests
         Assert.Equal("stopped at 'start the stack', with no page open: InvalidOperationException: no tunnel at https://app1.spa-poc.test:8443/healthz", failed.Message);
     }
 
-    /// <summary>
-    /// The local stack, with every login refused the way a cell's provider might refuse one: the page is
-    /// sent to an app URL whose query holds a code and a state, the context gets a cookie, and the
-    /// failure's message carries all three, in the URL, bare, and as a cookie header written out.
-    /// </summary>
-    private sealed class RefusingStack(LocalStack inner) : IBrowserStack
+    [Fact]
+    public async Task A_step_whose_cookies_cannot_be_read_withholds_its_message()
     {
-        private static async Task<Exception> RefuseAsync(Profile profile, HarnessApp app)
-        {
-            string leaky = app.Url($"/healthz?code={CodeCanary}&state={StateCanary}").ToString();
-            await profile.GotoAsync(leaky);
-            await profile.Context.AddCookiesAsync([new Cookie { Name = "planted", Value = CookieCanary, Url = app.Origin.ToString() }]);
-            return new InvalidOperationException($"the provider refused the login at {leaky} with state {StateCanary} and code {CodeCanary}; Cookie: planted={CookieCanary}");
-        }
+        // The context closed inside the step, so the cookies that would be taken out of the message
+        // cannot be read: the message goes unprinted rather than printed as it came (review of #1305).
+        await using LocalStack local = await LocalStack.StartAsync();
+        await using Profile profile = await local.OpenAsync();
+        string page = local.App("app1").Url("/healthz").ToString();
+        await profile.GotoAsync(page);
 
+        FailException failed = await Assert.ThrowsAsync<FailException>(() => LoginKindsTests.StepAsync(profile, "sign in", async () =>
+        {
+            await profile.Context.CloseAsync();
+            throw new InvalidOperationException($"refused with state {StateCanary}; Cookie: planted={CookieCanary}");
+        }));
+
+        Assert.Equal(
+            $"stopped at 'sign in', with the page at {page}: InvalidOperationException (its message withheld: the context's cookies could not be read to take them out of it)",
+            failed.Message);
+    }
+
+    [Fact]
+    public async Task A_fact_whose_session_read_is_refused_names_that_step()
+    {
+        LoginKindsTests.Environment.Value = variable => variable == StackSwitch.Variable ? "deployed" : null;
+        Stacks.Instead.Value = async () => new StandInStack(await LocalStack.StartAsync(), SignInThenDropCookiesAsync,
+            (profile, app) => throw new NotSupportedException("only the sign-in fact runs here"));
+
+        Exception? thrown = await InvokeAsync(typeof(LoginKindsTests).GetMethod(nameof(LoginKindsTests.A_sign_in_reaches_the_shell))!);
+
+        // The shell said "signed in" before its cookies went, so the login step passes and the
+        // gateway's own answer, read with no session cookie, is what fails the fact.
+        FailException failed = Assert.IsType<FailException>(thrown);
+        Assert.StartsWith("stopped at 'read the session', with the page at ", failed.Message, StringComparison.Ordinal);
+        Assert.Contains("/bff/session answered ", failed.Message, StringComparison.Ordinal);
+        Assert.Contains(", not 200: the profile is not signed in", failed.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A login refused the way a cell's provider might refuse one: the page is sent to an app URL whose
+    /// query holds a code and a state, the context gets a cookie, and the failure's message carries all
+    /// three, in the URL, bare, and as a cookie header written out.
+    /// </summary>
+    private static async Task<Exception> RefusalAsync(Profile profile, HarnessApp app)
+    {
+        string leaky = app.Url($"/healthz?code={CodeCanary}&state={StateCanary}").ToString();
+        await profile.GotoAsync(leaky);
+        await profile.Context.AddCookiesAsync([new Cookie { Name = "planted", Value = CookieCanary, Url = app.Origin.ToString() }]);
+        return new InvalidOperationException($"the provider refused the login at {leaky} with state {StateCanary} and code {CodeCanary}; Cookie: planted={CookieCanary}");
+    }
+
+    /// <summary>A sign-in that completes, then loses the session: the shell shows signed in, and the cookie jar is emptied.</summary>
+    private static async Task SignInThenDropCookiesAsync(Profile profile, HarnessApp app)
+    {
+        await profile.WaitSignedInAsync(app);
+        await profile.Context.ClearCookiesAsync();
+    }
+
+    /// <summary>
+    /// The local stack with its login replaced: the sign-in's completion by <paramref name="completeLogin"/>
+    /// and the hold at the callback by <paramref name="stopAtCallback"/>.
+    /// </summary>
+    private sealed class StandInStack(LocalStack inner, Func<Profile, HarnessApp, Task> completeLogin, Func<Profile, HarnessApp, Task<Uri>> stopAtCallback) : IBrowserStack
+    {
         public async Task<Profile> OpenAsync()
         {
             // The profile's own stack is this one, so its sign-in and its hold come here.
@@ -160,9 +209,9 @@ public sealed class LoginKindsRunTests
             return new Profile(this, opened.Context, opened.Page);
         }
 
-        public async Task CompleteLoginAsync(Profile profile, HarnessApp app) => throw await RefuseAsync(profile, app);
+        public Task CompleteLoginAsync(Profile profile, HarnessApp app) => completeLogin(profile, app);
 
-        public async Task<Uri> StopAtCallbackAsync(Profile profile, HarnessApp app, Func<Task> start) => throw await RefuseAsync(profile, app);
+        public Task<Uri> StopAtCallbackAsync(Profile profile, HarnessApp app, Func<Task> start) => stopAtCallback(profile, app);
 
         public StackKind Kind => inner.Kind;
 

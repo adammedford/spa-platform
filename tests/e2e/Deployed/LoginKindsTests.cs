@@ -26,12 +26,6 @@ public sealed class LoginKindsTests
     /// <summary>A test's own environment, in place of the process's (the companion's skip test).</summary>
     internal static readonly AsyncLocal<Func<string, string?>?> Environment = new();
 
-    /// <summary>
-    /// A test's own stack, in place of the deployed cell: the companion counts its starts ahead of the
-    /// skip, and runs the facts on the local stack. Unset everywhere else, so a sitting starts the cell.
-    /// </summary>
-    internal static readonly AsyncLocal<Func<Task<IBrowserStack>>?> Start = new();
-
     /// <summary>The reason each fact is skipped off the cell, naming the switch.</summary>
     internal static string SkipReason =>
         $"{StackSwitch.Variable} is unset or 'local': the login kinds are proved on the deployed cell only, with {StackSwitch.Variable}=deployed";
@@ -55,8 +49,10 @@ public sealed class LoginKindsTests
             Assert.Skip(SkipReason);
         }
 
+        // Past the skip the switch names the cell, so Stacks.StartAsync starts a DeployedStack; the
+        // companion puts its own stack in through Stacks.Instead, the seam DeployedRunTests uses (#211).
         IBrowserStack stack = null!;
-        await StepAsync(null, "start the stack", async () => stack = await (Start.Value ?? (async () => await DeployedStack.StartAsync()))());
+        await StepAsync(null, "start the stack", async () => stack = await Stacks.StartAsync());
         await using (stack)
         {
             HarnessApp app = stack.App("app1");
