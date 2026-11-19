@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Whether a full-landing merge names a ticket or a plan row that is still unfinished. Owner: integrator.
+"""Whether a full-landing merge names a ticket or a plan row that is still unfinished, or a `closing`
+clause closes a row an open issue still names. Owner: integrator.
 
     python3 -I tools/landing_subjects.py --base <ref>
     python3 -I tools/landing_subjects.py --subject-for <id> --ticket <n>
+    python3 -I tools/landing_subjects.py --closing <row>[,<row>...]
 
 A merge whose subject reads "Merge task <id>: ..." or "Merge tasks <ids>: ..." says its row landed
 whole, and tools/roadmap.py reads that subject anywhere in the history as landed and never takes it
@@ -67,12 +69,27 @@ A failed, incomplete or malformed listing cannot clear a row or choose its full-
 it exits 2. A git that cannot read the range likewise fails (CODING_STANDARDS.md, "A check fails
 closed").
 
+A row can end in a sitting, whose last part is records on a ticket, so no merge is left to name it
+whole, and the next merge names it after its own ids, behind the word `closing`, under either head:
+"Merge task issue-1219, closing rows 1.3 and 6.9: ...", "Merge part of task 2.4, closing row 6.9:
+..." (#1219). tools/roadmap.py reads every row after `closing` as landed whole, and reads no
+tracker, so the tracker's evidence is read here, before the merge and over the range. A row may be
+closed only when no open issue names it: by a title whose leading token is the row id ("6.7
+sitting: ..."), by a `**Plan row:**` line whose value is or lists it, read up to the first `(` or
+`;`, or by a part declaration as above. --closing <row>[,<row>...] answers that for the session about
+to write the subject: a `held:` line per row and naming issue and exit 1, or exit 0 when none names
+any. The range check holds every commit whose subject carries the clause on the same ground, whatever
+its head and whether or not it has a Ticket line: unlike a part ticket, no open issue is excused,
+since a row the merge's own ticket names is one the merge lands under its head, not by the clause.
+The listing that answers both is the complete one above, and one it cannot prove complete exits 2.
+
 Each finding is a line `landing-subjects: held: ...`, `landing-subjects: unchecked: ...` or
 `landing-subjects: note: ...`, and the last line is the verdict: `landing-subjects: pass: ...` with
 exit 0, `landing-subjects: fail: ...` with exit 1 when a merge was held or, under --fail-unchecked,
 went unchecked, and exit 2 when nothing was judged. --subject-for's last line is
 `landing-subjects: subject: <head>`, with exit 0, or exit 2 when it could not read the history or
-the complete open-issue listing. tools/check.sh runs the range check over the range it already
+the complete open-issue listing. --closing's last line is a pass with exit 0, a fail with exit 1, or
+exit 2 when the listing could not be read whole. tools/check.sh runs the range check over the range it already
 judges, so the pre-push hook and the overnight integrate gate, which runs the full check, refuse
 the subject before it is written into history to stay.
 """
@@ -98,12 +115,20 @@ BOX = re.compile(r"(?m)^[ \t]*- \[(?P<mark>[ xX])\][ \t]*(?P<text>[^\n]*)$")
 
 # Either subject form, as tools/roadmap.py's LANDED_SUBJECT reads it; group 1 is set on a part. This
 # script runs under `python3 -I`, which leaves its own directory off sys.path, so roadmap.py's forms
-# are copied here rather than imported: ID, TICKET_ID and the token split below are its ID, TICKET
-# and reading()'s split.
+# are copied here rather than imported: ID, TICKET_ID, the token split and CLOSING below are its ID,
+# TICKET, reading()'s split and CLOSING. A closed id is read as reading() reads one, by ID alone, so
+# the clause's own words, `row` and `rows`, need no copy here.
 ANY_LANDING = re.compile(r"^Merge\s+(part of\s+)?tasks?\s+(.+?):", re.IGNORECASE)
 ID = re.compile(r"^(?:I-\d+|\d+\.\d+[a-z]?|P2-\d+)$")
 TICKET_ID = re.compile(r"^issue-(\d+)$", re.IGNORECASE)
 TOKENS = re.compile(r"[,\s]+and[,\s]+|[,\s]+")
+CLOSING = re.compile(r"[,\s]+closing\b\s*", re.IGNORECASE)
+
+# How an open issue names a row it holds against a `closing` clause (#1219), beside PART_OF: its
+# title's leading token, and a Plan row line's value up to the first `(` or `;`. The plural "Plan
+# rows" is read too, since a live ticket writes it.
+TITLE_ROW = re.compile(r"^\s*([^\s:,;]+)")
+PLAN_ROW = re.compile(r"(?m)^\*\*Plan rows?:\*\*[ \t]*([^\n(;]*)")
 
 # A part ticket's declaration (#388 Q5): its Plan row line, `none (part of <ids>[; prose])`, the ids
 # read up to the first `;` or `)`.
@@ -118,7 +143,7 @@ GH_OPEN_ISSUES = (
     "gh", "api", "graphql", "--paginate", "--slurp", "-F", "owner={owner}", "-F", "name={repo}",
     "-f", "query=query($owner:String!,$name:String!,$endCursor:String){"
     "repository(owner:$owner,name:$name){issues(states:OPEN,first:100,after:$endCursor){"
-    "totalCount pageInfo{hasNextPage endCursor} nodes{number body}}}}",
+    "totalCount pageInfo{hasNextPage endCursor} nodes{number title body}}}}",
 )
 
 # How long to wait for gh, or for git's listing of the range, before saying so, as
@@ -170,28 +195,34 @@ def history(rev: str) -> list[str]:
     return listed.stdout.splitlines()
 
 
-def ids(subject: str) -> tuple[bool, list[str]] | None:
-    """(whether it is a part, the ids it names) for a landing subject, or None for any other."""
+def ids(subject: str) -> tuple[bool, list[str], list[str]] | None:
+    """(whether its head is a part, the ids its head names, the plan-row-shaped ids its `closing`
+    clause closes) for a landing subject, or None for any other."""
     match = ANY_LANDING.match(subject)
     if not match:
         return None
-    named = [token for token in TOKENS.split(match.group(2)) if ID.match(token) or TICKET_ID.match(token)]
-    return bool(match.group(1)), [name.lower() if TICKET_ID.match(name) else name for name in named]
+    parts = CLOSING.split(match.group(2), maxsplit=1)
+    named = [token for token in TOKENS.split(parts[0]) if ID.match(token) or TICKET_ID.match(token)]
+    closed = [token for token in TOKENS.split(parts[1].strip()) if ID.match(token)] if len(parts) > 1 else []
+    return (bool(match.group(1)), [name.lower() if TICKET_ID.match(name) else name for name in named],
+            closed)
 
 
 def states(subjects: list[str]) -> dict[str, str]:
-    """Each id these subjects land: 'landed' when one names it whole, else 'part'."""
+    """Each id these subjects land: 'landed' when one names it whole or closes it, else 'part'."""
     found: dict[str, str] = {}
     for subject in subjects:
         read = ids(subject)
         if read is None:
             continue
-        part, named = read
+        part, named, closed = read
         for name in named:
             if not part:
                 found[name] = "landed"
             else:
                 found.setdefault(name, "part")
+        for name in closed:
+            found[name] = "landed"
     return found
 
 
@@ -226,14 +257,43 @@ def declared(body: str) -> list[str]:
     return rows(TOKENS.split(match.group(1).strip())) if match else []
 
 
+def rows_named(title: str, body: str) -> dict[str, str]:
+    """Each plan row an issue names, as a `closing` clause reads it (#1219), with how it names it."""
+    found: dict[str, str] = {}
+    leading = TITLE_ROW.match(title)
+    if leading and ID.match(leading.group(1)):
+        found[leading.group(1)] = "by its title"
+    # A `none` line names no row by its value: "none (row 6.7's runbooks)" reads as "none", since
+    # the value stops at the `(`; a part declaration is read by `declared` below.
+    for line in PLAN_ROW.finditer(body):
+        for row in rows([token.strip("`") for token in TOKENS.split(line.group(1).strip())]):
+            found.setdefault(row, "by its Plan row line")
+    for row in declared(body):
+        found.setdefault(row, "by its part declaration")
+    return found
+
+
 class Parts:
-    """The complete open-issue listing, read once when a plan row is first asked about."""
+    """The complete open-issue listing, read once when a plan row is first asked about: the rows each
+    issue declares itself part of (#388), and the rows each names by title, Plan row line or part
+    declaration, which a `closing` clause is held on (#1219)."""
 
     def __init__(self):
         self.listed: dict[int, list[str]] | None = None
+        self.names: dict[int, dict[str, str]] = {}
 
     def of(self, row: str) -> list[int]:
         """Open issues declaring `row`; an unproven listing raises Broken instead of clearing it."""
+        self.read()
+        return sorted(number for number, declares in self.listed.items() if row in declares)
+
+    def naming(self, row: str) -> list[tuple[int, str]]:
+        """Open issues naming `row` as a `closing` clause reads it, each with how (#1219)."""
+        self.read()
+        return [(number, self.names[number][row]) for number in sorted(self.names) if row in self.names[number]]
+
+    def read(self):
+        """List the open issues once, whole, or raise Broken."""
         if self.listed is None:
             text, why = gh(list(GH_OPEN_ISSUES))
             if text is None:
@@ -244,6 +304,7 @@ class Parts:
                     raise ValueError("no paginated listing receipt")
                 total = None
                 bodies: dict[int, str] = {}
+                titles: dict[int, str] = {}
                 cursors = set()
                 for index, page in enumerate(pages):
                     if not isinstance(page, dict) or page.get("errors"):
@@ -274,15 +335,19 @@ class Parts:
                         number, body = issue["number"], issue["body"]
                         if type(number) is not int or number <= 0 or not isinstance(body, str):
                             raise ValueError("an issue has no readable number or body")
+                        title = issue.get("title")
+                        if not isinstance(title, str):
+                            raise ValueError("an issue has no readable title")
                         if number in bodies:
                             raise ValueError("an issue number is repeated in the listing")
                         bodies[number] = body
+                        titles[number] = title
                 if len(bodies) != total:
                     raise ValueError(f"the listing returned {len(bodies)} distinct issues of {total}")
+                self.names = {number: rows_named(titles[number], body) for number, body in bodies.items()}
                 self.listed = {number: declared(body) for number, body in bodies.items()}
             except (ValueError, TypeError, KeyError) as error:
                 raise Broken(f"the open issues could not be listed completely: {error}") from error
-        return sorted(number for number, declares in self.listed.items() if row in declares)
 
 
 def open_parts(parts: Parts, row: str, own: set[int], landed: dict[str, str]) -> list[int]:
@@ -302,14 +367,33 @@ def plural(count: int, one: str, many: str) -> str:
     return f"{count} {one if count == 1 else many}"
 
 
+def held_closings(parts: Parts, closings: list[tuple[str, str, list[str]]]) -> int:
+    """Say each `closing` clause that closes a row an open issue names; return how many commits."""
+    held = 0
+    for sha, subject, closed in closings:
+        named = [(row, number, how) for row in closed for number, how in parts.naming(row)]
+        for row, number, how in named:
+            say(f'held: {sha} "{subject}" closes {row}, but #{number} is open and names {row} {how}')
+        held += bool(named)
+    return held
+
+
 def judge(base: str, fail_unchecked: bool = False) -> int:
-    landings = [(sha, subject, message) for sha, subject, message in commits(base)
+    listed = commits(base)
+    landings = [(sha, subject, message) for sha, subject, message in listed
                 if FULL_LANDING.match(subject)]
+    read = [(sha, subject, ids(subject)) for sha, subject, _ in listed]
+    closings = [(sha, subject, named[2]) for sha, subject, named in read if named is not None and named[2]]
+    parts = Parts()
     if not landings:
-        say(f"pass: no full-landing merge from {base} to HEAD.")
+        closed_held = held_closings(parts, closings)
+        if closed_held:
+            say(closing_fail(closed_held))
+            return 1
+        cleared = f"; {plural(len(closings), 'closing clause', 'closing clauses')} clear" if closings else ""
+        say(f"pass: no full-landing merge from {base} to HEAD{cleared}.")
         return 0
     bodies: dict[int, tuple[str | None, str]] = {}
-    parts = Parts()
     clear = unchecked = unticketed = held = on_box = on_part = 0
     for sha, subject, message in landings:
         numbers = [int(found) for found in TICKET.findall(message)]
@@ -335,7 +419,7 @@ def judge(base: str, fail_unchecked: bool = False) -> int:
                 verdict = "held"
         boxed = verdict == "held"
         parted = False
-        named_rows = rows(ids(subject)[1])
+        named_rows = rows(ids(subject)[1])  # the head's rows: a closed row is judged below
         landed = states(history(sha)) if named_rows else {}
         for row in named_rows:
             owed = open_parts(parts, row, set(numbers), landed)
@@ -352,6 +436,15 @@ def judge(base: str, fail_unchecked: bool = False) -> int:
             unchecked += 1
         else:
             clear += 1
+    closed_held = held_closings(parts, closings)
+    if held and closed_held:
+        say(f"fail: {held} full-landing {'merge' if held == 1 else 'merges'} held, and "
+            f"{plural(closed_held, 'closing clause', 'closing clauses')} held on a row an open issue names; "
+            "see each held line above.")
+        return 1
+    if closed_held:
+        say(closing_fail(closed_held))
+        return 1
     if held:
         names = "merge names" if held == 1 else "merges name"
         it = "it" if held == 1 else "each"
@@ -371,8 +464,34 @@ def judge(base: str, fail_unchecked: bool = False) -> int:
         say(f"fail: {unchecked} full-landing {merges} went unchecked, and --fail-unchecked holds what it could "
             "not read; sign gh in or reach GitHub, then run it again.")
         return 1
+    cleared = f" {plural(len(closings), 'closing clause', 'closing clauses')} clear." if closings else ""
     say(f"pass: {plural(len(landings), 'full-landing merge', 'full-landing merges')} from {base} to HEAD: {clear} clear, "
-        f"{unchecked} unchecked, {unticketed} with no Ticket line.")
+        f"{unchecked} unchecked, {unticketed} with no Ticket line.{cleared}")
+    return 0
+
+
+def closing_fail(held: int) -> str:
+    merges = "merge's clause closes" if held == 1 else "merges' clauses close"
+    return (f"fail: {held} {merges} a row an open issue names; leave the row out of the clause until no "
+            "open issue names it (#1219).")
+
+
+def closing_mode(listed: str) -> int:
+    """Whether rows may be closed by a `closing` clause: no open issue names any of them (#1219)."""
+    asked = [row.strip() for row in listed.split(",") if row.strip()]
+    if not asked or any(not ID.match(row) for row in asked):
+        raise Broken(f"--closing takes plan row ids separated by commas, not {listed!r}")
+    parts = Parts()
+    held = [(row, number, how) for row in asked for number, how in parts.naming(row)]
+    for row, number, how in held:
+        say(f"held: {row}: #{number} is open and names it {how}")
+    if held:
+        rows_held = sorted({row for row, _, _ in held}, key=asked.index)
+        say(f"fail: {plural(len(rows_held), 'row', 'rows')} of {len(asked)} named by an open issue "
+            f"({', '.join(rows_held)}); leave {'it' if len(rows_held) == 1 else 'them'} out of the `closing` clause.")
+        return 1
+    say(f"pass: no open issue names {', '.join(asked)}; the `closing` clause may close "
+        f"{'it' if len(asked) == 1 else 'them'}.")
     return 0
 
 
@@ -421,10 +540,13 @@ def subject_for(id_: str, number: int) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Hold a full-landing merge whose ticket has an open box or whose plan row has an open "
-                    "part ticket; or say which subject a complete lane's merge takes.")
+                    "part ticket, or a closing clause over a row an open issue names; or say which subject a "
+                    "complete lane's merge takes, or whether rows may be closed.")
     asked = parser.add_mutually_exclusive_group(required=True)
     asked.add_argument("--base", help="judge the commits from this ref to HEAD")
     asked.add_argument("--subject-for", metavar="ID", help="the id a complete lane landed: a plan row or issue-<n>")
+    asked.add_argument("--closing", metavar="ROWS",
+                       help="plan rows, separated by commas, a merge subject's closing clause is to close")
     parser.add_argument("--ticket", type=int, help="with --subject-for: the lane's issue number")
     parser.add_argument("--fail-unchecked", action="store_true",
                         help="with --base: fail a merge whose ticket or part tickets could not be read")
@@ -433,7 +555,11 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--subject-for needs --ticket")
     if arguments.subject_for is not None and arguments.fail_unchecked:
         parser.error("--fail-unchecked is an option of --base, not of --subject-for")
+    if arguments.closing is not None and (arguments.fail_unchecked or arguments.ticket is not None):
+        parser.error("--closing takes no other option")
     try:
+        if arguments.closing is not None:
+            return closing_mode(arguments.closing)
         if arguments.subject_for is not None:
             return subject_for(arguments.subject_for, arguments.ticket)
         return judge(arguments.base, arguments.fail_unchecked)

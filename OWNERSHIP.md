@@ -42,6 +42,7 @@ or it needs an integrator path, which is a change request (`docs/agents/tracker-
 
 # 5 Fixtures
 /fixtures/                            ws5-fixtures
+/client/                              ws5-fixtures
 
 # 6 Verification and operations
 /src/Platform.Telemetry/              ws6-verification

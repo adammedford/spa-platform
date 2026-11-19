@@ -134,24 +134,23 @@ ADR-0020 records the decision and its reasons. What it adds to `docs/agents/issu
   implementer changes nothing but the wrapping; when a quoted paragraph has changed on `main` since
   the approval, the session re-quotes it and asks again. The commit cites the human's approval of
   the ticket as `Authority: #<n>` (`docs/agents/landing-work.md`), and an approval covers the body
-  as it stood when given. A proposal that a confirmed answer will commit, under
-  `## Proposed steering changes` or in a grill's proposals, is quoted the same way.
+  as it stood when given. A change request's `## The change` and a draft decision on one are quoted
+  the same way.
 - **Steering change template.** Use the template below to file an ordinary ticket that needs
   approval of exact steering text. Use the Change requests rules when those rules require a
   change request.
 
   ```markdown
-  **Owner:** integrator
   **Touches:** <steering paths>
 
   ## What to build
 
   <Why the change is needed and the exact destination in each file.>
 
-  ## Proposed steering changes
+  ### Proposed steering changes
 
   <For each edit, label the path and section and quote the complete text as it will read.
-  For an insertion or removal, quote the neighboring paragraphs. Quote a table row with its
+  For an insertion or removal, quote the neighbouring paragraphs. Quote a table row with its
   header, a non-prose edit with the smallest enclosing object, or a new file in full.>
 
   ## Acceptance criteria
@@ -182,13 +181,14 @@ a label or a line in the body (ADR-0020):
 
 **The derived labels say what an issue is, never where it stands.** Beside the triage labels an
 issue carries three groups, `kind:`, `area:` and `vendor:`, and no session chooses them or adds or
-removes one by hand. A workflow derives them: `tools/issue_labels.py` works them out from the issue
-alone, its title, its sub-issues and its `**Touches:**` and `**Vendor:**` lines, against
-`tools/issue_labels.json`, and `.github/workflows/issue-labels.yml` writes them on every issue event
-and in a daily run over every open issue. A ticket's `**Vendor:**` line is where its filer records
-what its paths cannot show: `none`, or the vendors it ties the work to, by the names
-`tools/issue_labels.json` defines. A wrong label is fixed in the title, the Touches or Vendor line or
-the table, never on the label.
+removes one by hand (ADR-0041). A workflow derives them: `tools/issue_labels.py` works them out from
+the issue alone, its title, its sub-issues and its `**Touches:**` and `**Vendor:**` lines, against
+`tools/issue_labels.json`, and `.github/workflows/issue-labels.yml` writes them when an issue is
+opened, edited, reopened, labelled or unlabelled, and reconciles every open issue in a daily run.
+Adding a sub-issue fires no event on its parent, so a parent's `kind:parent` can wait for that run.
+A ticket's `**Vendor:**` line is where its filer records what its paths cannot show: `none`, or the
+vendors it ties the work to, by the names `tools/issue_labels.json` defines. A wrong label is fixed
+in the title, the Touches or Vendor line or the table, never on the label.
 
 The archive's `**Status:**` lines (`claimed`, `blocked`, `resolved`, `closed`, `partial`, `moved to #NNN`)
 are dated records of the tickets filed before ADR-0020. Read them as history; never write one, and

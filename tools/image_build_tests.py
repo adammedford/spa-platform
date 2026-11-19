@@ -12,8 +12,10 @@ the tree this run happens to be in:
   `.dockerignore` to Docker's own matching rules, read below from the vendor's documentation, over
   paths named for each thing the context must not carry, and over every tracked file a Dockerfile
   copies, which it must.
-- **The outputs document.** `tools/scripts/cell-common.sh` writes infra/envs/poc/outputs.json, which
-  carries the account id and both apps' client ids. git itself answers whether it is ignored.
+- **The outputs document.** The scripts write infra/envs/poc/outputs.json, which carries the
+  account id and both apps' client ids: the path infra/envs/poc/cell.env assigns to a variable, or,
+  before that file exists, the one tools/scripts/cell-common.sh holds. git itself answers whether
+  it is ignored.
 - **The runtime user's read.** `COPY` and `dotnet publish` keep the modes the files had on the
   workstation, so an owner-only appsettings.json reached the final stage owner-only and the gateway,
   running as `$APP_UID`, died with UnauthorizedAccessException in `WebApplication.CreateBuilder`.
@@ -28,13 +30,14 @@ Every case reads the checkout and none reads a script of its own, so a change to
 turn a case red with no change here. The line below names those files for tools/check.sh, whose full
 mode runs this companion when a change touches one (#390), as CI's Documents job runs it on every
 change: the root .dockerignore, every Dockerfile, which the census below finds wherever it is, the
-files each Dockerfile copies from the context, git's ignore files and the script that writes the
-outputs document. A case reads the checkout through DOCKERIGNORE, DOCKERFILES, OTHER_OWNERS, what
-they copy, OUTPUTS_DOCUMENT's ignore files or CELL_COMMON, and tools/check_tests.py derives what
-the line must cover from those names and fails while a path they reach is missing from it. A case
-that starts reading another file reads it through such a name, and the file joins the line.
+files each Dockerfile copies from the context, git's ignore files, and the proof cell's entry file
+and the script that name the outputs document's path. A case reads the checkout through
+DOCKERIGNORE, DOCKERFILES, OTHER_OWNERS, what they copy, OUTPUTS_DOCUMENT's ignore files, CELL_ENV
+or CELL_COMMON, and tools/check_tests.py derives what the line must cover from those names and
+fails while a path they reach is missing from it. A case that starts reading another file reads it
+through such a name, and the file joins the line.
 
-Checkout inputs: .dockerignore Dockerfile */Dockerfile global.json nuget.config Directory.Build.props Directory.Packages.props .editorconfig .globalconfig BannedSymbols.*.txt contracts/*.schema.json src/* fixtures/MockApi/* tools/bench/floor/* .gitignore */.gitignore tools/scripts/cell-common.sh
+Checkout inputs: .dockerignore Dockerfile */Dockerfile global.json nuget.config Directory.Build.props Directory.Packages.props .editorconfig .globalconfig BannedSymbols.*.txt contracts/*.schema.json src/* fixtures/MockApi/* tools/bench/floor/* .gitignore */.gitignore tools/scripts/cell-common.sh infra/envs/poc/cell.env
 
 Run: python3 -I tools/image_build_tests.py
 """
@@ -100,7 +103,9 @@ MUST_NOT_SEND = {
 }
 
 OUTPUTS_DOCUMENT = "infra/envs/poc/outputs.json"
-# The script that writes the outputs document, which a case reads for the path it writes to.
+# The proof cell's entry file, one of whose KEY=value lines names the outputs document's path once it exists,
+# and the script that held the path as a literal before it. A case reads whichever names it.
+CELL_ENV = "infra/envs/poc/cell.env"
 CELL_COMMON = "tools/scripts/cell-common.sh"
 
 
@@ -279,11 +284,33 @@ class TheOutputsDocument(unittest.TestCase):
         self.assertEqual(result.returncode, 0,
                          f"git does not ignore {OUTPUTS_DOCUMENT}; one `git add .` commits it")
 
+    @staticmethod
+    def assigned_values(text):
+        """The values a cell.env assigns, comments and lines with no assignment left out."""
+        return [line.partition("=")[2].strip().strip('"') for line in text.splitlines()
+                if "=" in line and not line.lstrip().startswith("#")]
+
+    def test_the_cell_env_branch_reads_the_assigned_path(self):
+        # infra/envs/poc/cell.env is not on the tree until #1348, so the branch below that reads it
+        # has never run. This runs its reading on a stand-in: it finds the outputs path where a
+        # variable assigns it, and finds nothing where only a comment or another path names it.
+        assigns = f'OUTPUTS_FILE="{OUTPUTS_DOCUMENT}"\n'
+        self.assertIn(OUTPUTS_DOCUMENT, self.assigned_values(assigns))
+        for text in (f'# OUTPUTS_FILE="{OUTPUTS_DOCUMENT}"\n', 'OUTPUTS_FILE="infra/envs/poc/outputs-moved.json"\n', ""):
+            with self.subTest(text=text):
+                self.assertNotIn(OUTPUTS_DOCUMENT, self.assigned_values(text))
+
     def test_the_scripts_still_write_it_there(self):
         # A guard reads the thing it guards: the ignore line is only right while the scripts write
-        # where it points.
-        common = (ROOT / CELL_COMMON).read_text()
-        self.assertIn('OUTPUTS_FILE="${REPO_ROOT}/' + OUTPUTS_DOCUMENT + '"', common)
+        # where it points. They take the path from the proof cell's entry file once it exists
+        # (#1335), and from cell-common.sh's literal before then.
+        entry = ROOT / CELL_ENV
+        if entry.exists():
+            values = self.assigned_values(entry.read_text())
+            self.assertIn(OUTPUTS_DOCUMENT, values, f"{CELL_ENV} assigns {OUTPUTS_DOCUMENT} to no variable")
+        else:
+            common = (ROOT / CELL_COMMON).read_text()
+            self.assertIn('OUTPUTS_FILE="${REPO_ROOT}/' + OUTPUTS_DOCUMENT + '"', common)
 
 
 class TheRuntimeUserReadsThePublishedTree(unittest.TestCase):

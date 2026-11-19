@@ -1761,7 +1761,7 @@ class InputTests(CheckTestCase):
         spec = importlib.util.spec_from_file_location("image_build_tests", ROOT / IMAGE_COMPANION)
         image = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(image)
-        reads = [image.DOCKERIGNORE.relative_to(ROOT).as_posix(), image.CELL_COMMON]
+        reads = [image.DOCKERIGNORE.relative_to(ROOT).as_posix(), image.CELL_COMMON, image.CELL_ENV]
         dockerfiles = (*image.DOCKERFILES, *image.OTHER_OWNERS)
         reads += dockerfiles
         # Its census of Dockerfiles finds a new one anywhere, at the top level too.
