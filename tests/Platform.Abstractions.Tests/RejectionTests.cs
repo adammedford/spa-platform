@@ -127,6 +127,21 @@ public sealed class RejectionTests
     }
 
     [Fact]
+    public void Noting_auth_chain_writes_the_rule_and_no_response()
+    {
+        // The refused /bff/chain step's redirect is the identity stage's to write (#961); Note only
+        // reaches the request line.
+        (DefaultHttpContext context, SettableRequestTelemetryFeature feature) = WithFeature();
+
+        Rejection.Note(context, RuleIds.AuthChain);
+
+        Assert.Equal("auth.chain", feature.Rule);
+        Assert.Equal(200, context.Response.StatusCode);
+        Assert.Null(context.Response.ContentType);
+        Assert.Equal("", Contexts.Body(context));
+    }
+
+    [Fact]
     public void Noting_with_no_feature_installed_costs_nothing()
     {
         DefaultHttpContext context = Contexts.WithBody();
@@ -140,6 +155,7 @@ public sealed class RejectionTests
     [Theory]
     [InlineData("gate.method", "EndMethodAsync")]
     [InlineData("auth.callback", "remote-failure")]
+    [InlineData("auth.chain", "redirects to '/'")]
     public async Task Ending_under_an_id_with_another_entry_throws_naming_it(string rule, string named)
     {
         // Mutation: drop either throw from EndAsync. (Adding auth.callback to Rejection.Rows is a

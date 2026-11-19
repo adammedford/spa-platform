@@ -104,6 +104,16 @@
             "$ref": "https://spa-platform.internal/contracts/registry.schema.json#/$defs/api/properties/upstream",
             "description": "An upstream origin an entry may name. Phase 2 uses https patterns only."
           }
+        },
+        "FragmentsPerShell": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "The most fragments one registry entry may list. Optional: absent, it is 5, a placeholder from 4 + 3N redirects against the browser's 20, which G9's sitting (O1) replaces (#961)."
+        },
+        "MergeBudget": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "How many attempts a fragment callback's versioned replace makes. Optional: absent, it is 3, a placeholder G9's sitting (O2) sets (#961)."
         }
       }
     },
