@@ -42,6 +42,15 @@ public static class Problems
     /// <summary>401. The refresh token was refused and the session was removed.</summary>
     public const string SessionEnded = "session_ended";
 
+    /// <summary>
+    /// 401. The request is under a fragment's namespace and the session holds no usable token set
+    /// for that fragment; the session is kept and the shell's set is never sent in its place. The
+    /// body names no fragment and the answer carries no rule id, like the live-session 401 on
+    /// <c>/api</c>. With no session at all the answer stays <see cref="Unauthenticated"/>. The
+    /// fragments spec, #961 → "The session record".
+    /// </summary>
+    public const string FragmentLoginRequired = "fragment_login_required";
+
     /// <summary>403. The request gate refused the request.</summary>
     public const string OriginRejected = "origin_rejected";
 
@@ -108,6 +117,7 @@ public static class Problems
         (StatusCodes.Status400BadRequest, InvalidRequest),
         (StatusCodes.Status401Unauthorized, Unauthenticated),
         (StatusCodes.Status401Unauthorized, SessionEnded),
+        (StatusCodes.Status401Unauthorized, FragmentLoginRequired),
         (StatusCodes.Status403Forbidden, OriginRejected),
         (StatusCodes.Status403Forbidden, CsrfFailed),
         (StatusCodes.Status404NotFound, NotFound),

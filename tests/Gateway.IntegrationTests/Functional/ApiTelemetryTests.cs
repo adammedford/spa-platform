@@ -144,10 +144,12 @@ public sealed partial class ApiTelemetryTests(ApiTelemetryTests.Call call) : ICl
             .Select(field => field.Name)
             .Where(name => name != "category");
 
-        // read_refused is the one field a line carries only when it has a value: the asset route's
-        // refused object read (contracts/telemetry.md; #429), and an API call reads no object. So the
-        // expected list is the row without it, and a line that wrote it as null fails here.
-        Assert.Equal(Contract.LogFields.Where(name => name != "read_refused"), written);
+        // read_refused and fragment_id are the two fields a line carries only when it has a value: the
+        // asset route's refused object read (contracts/telemetry.md; #429), and the fragment a request
+        // resolved (#986). An API call on a host with no fragments reads no object and resolves no
+        // fragment. So the expected list is the row without both, and a line that wrote either as null
+        // fails here.
+        Assert.Equal(Contract.LogFields.Where(name => name is not "read_refused" and not "fragment_id"), written);
         Assert.Contains(TheCall.Line.GetProperty("route").GetString(), Contract.RouteValues);
         Assert.Equal("information", TheCall.Line.GetProperty("level").GetString());
         Assert.Equal(200, TheCall.Line.GetProperty("status").GetInt32());

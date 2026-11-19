@@ -213,6 +213,68 @@ public sealed partial class StaticSpaFixtureTests
         Assert.Equal(twoKinds, IsReserved("/fragments/f1/entry.js", ReservedPaths()));
     }
 
+    // The tests above read the real contract, so they run only the branch of ReservedPaths that matches
+    // the form contracts/http-contract.md has at the time. These feed it #982's paragraph as that
+    // ticket's change writes it, so the two-kind branch and its guard run on either form (#1379).
+
+    /// <summary>
+    /// #982's reserved-path paragraph, word for word from its change, item 2, followed by the 404
+    /// paragraph's opening so a list that ran past its full stop would show.
+    /// </summary>
+    private const string TwoKindContract = """
+        Two kinds of path are reserved. A path reserved outright is served from no release, the shell's
+        or a fragment's: `/bff/`, `/api/`, `/fragments/{fragmentId}/api/`, `/signin-oidc` (and
+        `/signin-oidc/{fragmentId}`), `/signout-callback-oidc`, `/signout-oidc`, `/healthz` and `/readyz`.
+        A path reserved from the shell's release is served by the platform and never from the shell's
+        release: `/fragments/`, on every host. On a host whose app has no fragments, a path under
+        `/fragments/` answers 404 under rule id `path.reserved`; a `fragmentId` the app does not list
+        answers 404 `not_found`. `spactl fragment publish` refuses a release with a top-level `api/`.
+
+        Every 404 the asset row answers carries `Cache-Control: private, no-store`: a key the store
+        answered as absent, a key whose read the store refused, and a reserved path refused before any
+        read.
+        """;
+
+    [Fact]
+    public void A_two_kind_contract_reserves_each_outright_path_and_fragments_from_the_shell()
+    {
+        // Expected values are #982's lists, read by eye from its change, not by the parse under test.
+        Assert.Equal(
+            ["/bff/", "/api/", "/fragments/{fragmentId}/api/", "/signin-oidc", "/signin-oidc/{fragmentId}",
+             "/signout-callback-oidc", "/signout-oidc", "/healthz", "/readyz", "/fragments/"],
+            ReservedPaths(TwoKindContract));
+        Assert.True(IsReserved("/fragments/f1/entry.js", ReservedPaths(TwoKindContract)));
+    }
+
+    [Fact]
+    public void A_dotted_path_in_either_list_does_not_cut_that_list_short()
+    {
+        // 953e6d4: a full stop inside a code span is part of a path, not the sentence's end. Each list
+        // carries a dotted path before its last one, so a parse that stopped at the first full stop
+        // would drop /readyz from the first list and /assets-of-the-platform/ from the second.
+        const string dotted = """
+            Two kinds of path are reserved. A path reserved outright is served from no release:
+            `/bff/`, `/.well-known/openid.json`, `/healthz` and `/readyz`.
+            A path reserved from the shell's release is served by the platform: `/fragments/`,
+            `/platform.js` and `/assets-of-the-platform/`, on every host.
+            """;
+
+        Assert.Equal(
+            ["/bff/", "/.well-known/openid.json", "/healthz", "/readyz", "/fragments/", "/platform.js", "/assets-of-the-platform/"],
+            ReservedPaths(dotted));
+    }
+
+    [Fact]
+    public void A_contract_that_reserves_paths_outright_but_none_from_the_shell_is_refused()
+    {
+        // Without the guard a two-kind contract that lost its second sentence would quietly reserve
+        // nothing from the shell, and every release check above would pass a file under /fragments/.
+        string oneSentence = TwoKindContract.Replace("A path reserved from the shell's release is", "The platform serves paths", StringComparison.Ordinal);
+
+        Exception refused = Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => ReservedPaths(oneSentence));
+        Assert.Contains("none from the shell's release", refused.Message, StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData("/fragments/f1/api/x.json", "/fragments/{fragmentId}/api/", true)]
     [InlineData("/fragments/f1/entry.js", "/fragments/{fragmentId}/api/", false)]
@@ -306,10 +368,12 @@ public sealed partial class StaticSpaFixtureTests
     /// Every path the browser contract keeps out of a shell's release, as the contract writes it
     /// (<c>/bff/</c>, <c>/fragments/{fragmentId}/api/</c>, <c>/healthz</c>).
     /// </summary>
-    private static IReadOnlyList<string> ReservedPaths()
-    {
-        string contract = File.ReadAllText(FixtureFiles.Path("contracts", "http-contract.md"));
+    private static IReadOnlyList<string> ReservedPaths() =>
+        ReservedPaths(File.ReadAllText(FixtureFiles.Path("contracts", "http-contract.md")));
 
+    /// <summary>The reserved paths <paramref name="contract"/>, the browser contract's text, lists.</summary>
+    private static IReadOnlyList<string> ReservedPaths(string contract)
+    {
         // #982's paragraph, "Two kinds of path are reserved.", has one sentence per kind, each listing
         // its paths between a colon and its own full stop: "A path reserved outright is ...: ..." and
         // "A path reserved from the shell's release is ...: `/fragments/`, on every host." Each list

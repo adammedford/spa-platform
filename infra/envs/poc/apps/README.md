@@ -12,6 +12,21 @@ exactly three resources:
 | Managed-login branding style | Cognito's default values | Managed login serves a client only once it has a style |
 | `SecureString` parameter `/spa-platform/<cell>/apps/<appId>/client-secret` | The client secret; later value changes ignored; re-created when its client's id changes | A rotation (docs/plan/05 -> Rotating a client secret) is not undone by the next apply, and a replaced client does not leave its old secret in the parameter (#554) |
 
+And for each entry of a definition's `fragments[]` (#999, part of #961), the same three again:
+
+| Resource | Settings | Why |
+| --- | --- | --- |
+| Cognito app client `spa-platform-<cell>-<appId>.<fragmentId>` | The shell's client's settings, with the fragment's own `oauth.scopes` under the same grantable-scope precondition | A fragment's token set is refreshed, rotated and revoked through its own client |
+| | Callback `https://<shell host>/signin-oidc/<fragmentId>` only; no sign-out URL | Without the redirect URI a silent sign-in stops at the provider with a 400 (#961, "Failing hops"); the one provider logout is the shell's |
+| Managed-login branding style | Cognito's default values | The fragment fallback is a managed-login sign-in; each style counts against Cognito's 20 per pool |
+| `SecureString` parameter `/spa-platform/<cell>/apps/<appId>/fragments/<fragmentId>/client-secret` | The shell parameter's lifecycle | Under the cell's `apps/` path, which the task role's and the CI plan role's grants already cover, so no IAM change |
+
+The `clients` output nests them as `clients.<appId>.fragments.<fragmentId>` (`clientId`,
+`secretParameter`, `secretVersion`); an app with no fragments keeps its three fields alone. A
+definition with no `fragments` plans exactly as before. The fragment-bearing fixture definitions
+are not in `fixtures/apps/`, so no ordinary apply creates a fragment client: the G9 run adds their
+directory to `definition_dirs` (#961, "The deployment prerequisite").
+
 Nothing else. Onboarding an app is copying its definition into `fixtures/apps/`; the plan then
 shows those three resources only (P-02). The identity and platform roots plan nothing.
 

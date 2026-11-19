@@ -2,7 +2,7 @@
 #
 # 1.11 is the floor for the whole repository, because that release gave the S3
 # backend its native lock file. A module declares no backend: the root that calls
-# it does (infra/envs/poc/platform).
+# it does.
 #
 # 6.37 is this module's provider floor: aws_s3_bucket's bucket_namespace argument,
 # which storage.tf sets, arrived in 6.37.0 (the provider's CHANGELOG, #46917). An

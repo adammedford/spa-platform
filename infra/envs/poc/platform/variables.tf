@@ -107,10 +107,41 @@ variable "gateway_image" {
 variable "mock_api_image" {
   description = <<-EOT
     The mock API container's image, or empty for a task with the gateway alone. Empty until task 5.3
-    has built it, which is after the first apply of this root.
+    has built it, which is after the first apply of this root. Set, this root writes the mock API's
+    container definition and passes it to the module as its one extra container (main.tf).
+
+    Like gateway_image, no default that names a tag.
   EOT
   type        = string
   default     = ""
+
+  # gateway_image's rule in the module, when there is an image at all (#470): the contract's
+  # gatewayImage pattern for the repository half, read rather than copied, and the full 64 hex
+  # characters of a SHA-256 digest.
+  validation {
+    condition = var.mock_api_image == "" || (
+      can(regex(jsondecode(file("${path.module}/../../../../contracts/infra-outputs.schema.json")).properties.gatewayImage.pattern, var.mock_api_image))
+      && can(regex("@sha256:[0-9a-f]{64}$", var.mock_api_image))
+    )
+    error_message = "mock_api_image is empty, or a digest reference, <repository>@sha256:<64 lowercase hex>. A tag, an empty digest or a short one is refused."
+  }
+
+  # Assumption A4 is one issuer per environment, and the mock API validates against one issuer
+  # (fixtures/MockApi/Program.cs). Without this the root would silently hand it the alphabetically
+  # first of several, and its listeners would refuse every token from the others. A validation and
+  # not a resource's precondition: this root declares no resource of its own.
+  validation {
+    condition     = var.mock_api_image == "" || length(var.issuers) == 1
+    error_message = "The mock API validates against one issuer (fixtures/MockApi/Program.cs, assumption A4), and issuers names ${length(var.issuers)}. Supply one issuer, or leave mock_api_image empty."
+  }
+
+  # fixtures/MockApi/Program.cs throws on a missing client id, so the alternative to failing the
+  # plan here is a container that crash-loops after the apply reported success. The ids are the
+  # apps root's (main.tf), so an apps root state with no clients output refuses the image.
+  validation {
+    condition     = var.mock_api_image == "" || (local.mock_api_clients.app1 != "" && local.mock_api_clients.app2 != "")
+    error_message = "A mock API image needs the client ids of apps 1 and 2 from the apps root's state: fixtures/MockApi/Program.cs refuses to start without either. Apply the apps root first, or leave mock_api_image empty."
+  }
 }
 
 variable "issuers" {

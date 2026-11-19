@@ -1,4 +1,4 @@
-# Task 1.2. The cell's network: a VPC, two public subnets in two zones, and the two
+# The cell's network: a VPC, two public subnets in two zones, and the two
 # security groups that are the whole of this platform's network boundary. The VPC's
 # own default group is adopted with no rule, so it is not a third way in.
 #
@@ -268,7 +268,7 @@ resource "aws_route_table_association" "private" {
   route_table_id = aws_route_table.private[each.key].id
 }
 
-# AWS's default policy on both (#347 Q15): a destination allowlist is P2-9's, not this row's.
+# AWS's default policy on both (#347 Q15): a destination allowlist is a later hardening's, not #347's.
 resource "aws_vpc_endpoint" "gateway" {
   for_each = var.multi_task ? toset(["s3", "dynamodb"]) : toset([])
 

@@ -57,7 +57,7 @@ public sealed class DependencyUnavailableContractTests
         string errors = Section(ContractFiles.ReadText("http-contract.md"), ErrorsHeading);
 
         Assert.Contains(
-            "| 503 | `store_unavailable` | The object store could not be read to serve an asset or the shell, for a reason other than a refusal; the live snapshot is unaffected |",
+            "| 503 | `store_unavailable` | The object store could not be read to serve an asset or the app's document, for a reason other than a refusal; the live snapshot is unaffected |",
             errors);
     }
 

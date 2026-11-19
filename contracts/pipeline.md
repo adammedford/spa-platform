@@ -31,13 +31,13 @@ Called in this order, before the pipeline is built.
 | 1 | `UsePlatformTelemetry` | 6 | The request log line and the trace scope. It replaces the framework's default request log, which includes the query string. First, so that every rejection a later stage answers reaches the line and `security.rejections` under its rule id. |
 | 2 | `UsePlatformForwardedHeaders` | 4 | `X-Forwarded-Proto` and `X-Forwarded-For` are trusted from `ForwardedHeaders:TrustedNetworks` only. `X-Forwarded-Host` is never read. The method allowlist runs here too: a method no path accepts (`TRACE`, `CONNECT`) gets 405 under `gate.method` before any later stage sees it. |
 | 3 | `UsePlatformHealth` | 2 | Answers `/healthz` and `/readyz` on any host |
-| 4 | `UsePlatformHostResolution` | 2 | The request authority must equal a registry `host` exactly. The app and the snapshot are pinned for the request as `IAppFeature`. Any other host gets 404 before routing runs. |
+| 4 | `UsePlatformHostResolution` | 2 | The request authority must equal a registry `host` exactly. The app and the snapshot are pinned for the request as `IAppFeature`. Any other host gets 404 before routing runs. A request whose path is under `/fragments/{fragmentId}/`, where `{fragmentId}` names one of that app's fragments in the same snapshot, also has that fragment pinned as `IFragmentFeature`; no other request carries one, and this stage answers nothing for a `fragmentId` it does not know, which the later stages answer (Which token set a request uses, below). |
 | 5 | `UsePlatformSecurityHeaders` | 4 | The app's content security policy and the fixed header set, on every response |
 | 6 | `UsePlatformRequestGate` | 4 | `contracts/request-gate.md`. It runs before authentication. |
 | 7 | `UseRouting`, then `UseAuthentication` | framework | The schemes come from workstream 3. The OpenID Connect callback is handled here. A session store failure in this stage ends under `auth.store`: the callback's here, by workstream 3's OpenID Connect scheme, any other at stage 8 (`contracts/request-gate.md` -> Rule ids). |
 | 8 | `UsePlatformShellGate` | 3 | A session before any asset: an unauthenticated navigation is challenged, an unauthenticated fetch gets 401 |
-| 9 | `UsePlatformAntiforgery` | 4 | Unsafe methods on `/api` need a valid `X-CSRF-TOKEN`. The check runs after the request gate because it needs the user. |
-| 10 | `MapPlatformBff`, `MapPlatformProxy`, `MapPlatformAssets` | 3, 4, 2 | `/bff/*`; `/api/{name}/{rest}` through YARP; everything else from S3 |
+| 9 | `UsePlatformAntiforgery` | 4 | Unsafe methods on `/api` and on `/fragments/{fragmentId}/api` need a valid `X-CSRF-TOKEN`, one token per app. The check runs after the request gate because it needs the user. |
+| 10 | `MapPlatformBff`, `MapPlatformProxy`, `MapPlatformAssets` | 3, 4, 2 | `/bff/*`; `/api/{name}/{rest}` and `/fragments/{fragmentId}/api/{name}/{rest}` through YARP; everything else from S3, a fragment's `/fragments/{fragmentId}/**` from its own release |
 
 Four orderings carry a reason, and none of them is a preference.
 
@@ -53,6 +53,25 @@ Four orderings carry a reason, and none of them is a preference.
   registry entry and no known host.
 - **The request gate runs before authentication**, and the antiforgery check after it, because the
   token check needs the user and the gate does not.
+
+## Which token set a request uses
+
+A host serves a shell and its fragments, and each holds its own token set in the one session. Host
+resolution pins the fragment a request belongs to as `IFragmentFeature`, beside `IAppFeature` and
+from the same snapshot, so every later stage reads the one fragment the request was resolved
+against, never the path again and never the registry, and one request never straddles a swap. A
+request with no `IFragmentFeature` is the shell's.
+
+`IAccessTokenSource.GetAsync` reads the feature to choose the set: the fragment's when the feature
+is present, the shell's when it is not. Before it asks for a token, the token step behind
+`MapPlatformProxy` cross-checks the feature against the route the proxy matched, whose metadata
+names the fragment a fragment's route belongs to: it forwards only when both name the same fragment
+of the same app, or neither names one. Any other combination fails closed: nothing is forwarded,
+the shell's set is never sent on a fragment's route nor a fragment's on the shell's, and the request
+is answered as a `fragmentId` the app does not list is answered, 404 `not_found` with no rule id. A
+user can reach it: the proxy's routes follow the live snapshot while a request keeps the one it was
+resolved against, so a request resolved just before a swap that adds a fragment can match that
+fragment's route with no `IFragmentFeature`. The next request resolves against the new snapshot.
 
 ## What the composed gateway can show before task 2.3
 
