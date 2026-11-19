@@ -168,8 +168,10 @@ public sealed class ContentSecurityPolicyTests
 
         MergedContentSecurityPolicy merged = ContentSecurityPolicy.Merge(shell, Origin);
 
+        // Mutation: swap two directives in ContentSecurityPolicy.Baseline. The contract's order is read
+        // from contracts/http-contract.md, not from the array Merge walks.
         Assert.Equal(
-            ContentSecurityPolicy.Baseline.Select(b => b.Directive),
+            ContractTables.BaselineCspDirectives(),
             merged.Directives.Select(d => d.Directive));
         Assert.Empty(merged.SourcesOf("worker-src"));
         Assert.Equal(["script-src", "style-src", "img-src", "font-src", "connect-src"], ContentSecurityPolicy.FragmentDirectives);

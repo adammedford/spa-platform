@@ -49,6 +49,65 @@ internal static class ContractTables
         ];
     }
 
+    /// <summary>
+    /// The directives of contracts/http-contract.md -> "The baseline content security policy", in the
+    /// order its text block writes them.
+    /// </summary>
+    public static string[] BaselineCspDirectives() =>
+        ParseBaselineCspDirectives(File.ReadAllLines(Path.Combine(ContractsDirectory(), "http-contract.md")));
+
+    /// <summary>
+    /// The first fenced block under the "### The baseline content security policy" heading, joined and
+    /// split on <c>;</c>, each part's first word. A missing heading or an empty block fails, so a
+    /// renamed heading cannot pass as an empty policy.
+    /// </summary>
+    public static string[] ParseBaselineCspDirectives(IEnumerable<string> lines)
+    {
+        List<string> block = [];
+        bool inSection = false;
+        bool inFence = false;
+
+        foreach (string line in lines)
+        {
+            string trimmed = line.Trim();
+            if (!inSection)
+            {
+                inSection = trimmed == "### The baseline content security policy";
+                continue;
+            }
+
+            if (trimmed.StartsWith("```", StringComparison.Ordinal))
+            {
+                if (inFence)
+                {
+                    break;
+                }
+
+                inFence = true;
+                continue;
+            }
+
+            if (inFence)
+            {
+                block.Add(trimmed);
+            }
+            else if (trimmed.StartsWith('#'))
+            {
+                break;
+            }
+        }
+
+        string[] directives =
+        [
+            .. string.Join(' ', block)
+                .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Select(part => part.Split(' ')[0]),
+        ];
+
+        Assert.NotEmpty(directives);
+        return directives;
+    }
+
     private static IEnumerable<string[]> Rows(IEnumerable<string> lines, string heading, string header)
     {
         List<string[]> rows = [];
