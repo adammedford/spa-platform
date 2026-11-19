@@ -82,6 +82,45 @@ public sealed class PlatformConfigurationTests
             "a browser origin with a path");
     }
 
+    /// <summary>
+    /// The one exception to https (#544, ADR-0042): plain http on a loopback address, which is where the
+    /// hermetic tier's test provider listens. A host off the machine stays refused.
+    /// </summary>
+    [Theory]
+    [InlineData("http://127.0.0.1:5082")]
+    [InlineData("http://127.0.0.1")]
+    [InlineData("http://[::1]:5082")]
+    public void An_issuer_on_a_loopback_address_may_be_plain_http(string origin)
+    {
+        Schemas.AcceptsPlatformConfig(
+            Documents.PlatformConfig(c => c["Issuers"]!["cognito-poc"]!.AsObject()["Authority"] = origin),
+            "a loopback http authority");
+        Schemas.AcceptsPlatformConfig(
+            Documents.PlatformConfig(c => c["Issuers"]!["cognito-poc"]!.AsObject()["Authority"] = origin + "/realms/x"),
+            "a loopback http authority with a path");
+        Schemas.AcceptsPlatformConfig(
+            Documents.PlatformConfig(c => c["Issuers"]!["cognito-poc"]!.AsObject()["BrowserOrigin"] = origin),
+            "a loopback http browser origin");
+        Schemas.RejectsPlatformConfig(
+            Documents.PlatformConfig(c => c["Issuers"]!["cognito-poc"]!.AsObject()["BrowserOrigin"] = origin + "/login"),
+            "a loopback http browser origin with a path");
+    }
+
+    [Theory]
+    [InlineData("http://localhost:5082")]
+    [InlineData("http://127.0.0.2:5082")]
+    [InlineData("http://127.0.0.1.example.com")]
+    [InlineData("http://10.20.0.5:5082")]
+    public void Plain_http_off_the_two_loopback_addresses_is_refused(string origin)
+    {
+        Schemas.RejectsPlatformConfig(
+            Documents.PlatformConfig(c => c["Issuers"]!["cognito-poc"]!.AsObject()["Authority"] = origin),
+            "an http authority that is not 127.0.0.1 or [::1]");
+        Schemas.RejectsPlatformConfig(
+            Documents.PlatformConfig(c => c["Issuers"]!["cognito-poc"]!.AsObject()["BrowserOrigin"] = origin),
+            "an http browser origin that is not 127.0.0.1 or [::1]");
+    }
+
     [Fact]
     public void The_issuer_name_is_the_name_an_entry_may_use()
     {
