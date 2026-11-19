@@ -22,9 +22,9 @@ cell = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(cell)
 # The fields the scripts write, from the list they write them from, not from the schema's root
 # required: the contract may require fewer of every cell than this cell's scripts write (#1367).
-_fields_spec = importlib.util.spec_from_file_location("cell_documents", pathlib.Path(__file__).resolve().parent / "cell_documents.py")
-cell_documents = importlib.util.module_from_spec(_fields_spec)
-_fields_spec.loader.exec_module(cell_documents)
+_documents_spec = importlib.util.spec_from_file_location("cell_documents", pathlib.Path(__file__).resolve().parent / "cell_documents.py")
+cell_documents = importlib.util.module_from_spec(_documents_spec)
+_documents_spec.loader.exec_module(cell_documents)
 WRITTEN_FIELDS = sorted(field for field, _, _ in cell_documents.FIELDS)
 
 import unittest  # noqa: E402
@@ -237,7 +237,7 @@ class SeedWritesTheBastionServiceOnlyWhenTheRootPublishesIt(cell.CompanionTestCa
     def test_the_checker_refuses_what_the_schema_refuses(self):
         # The check above can fail: a document with an unknown key, without a required one, or with
         # a bastion service name the contract's awsName refuses. The required one dropped is bucket,
-        # which every cell's document carries (#1336).
+        # required under the schema as it stands and under #1336's.
         document = self.document(cell.with_bastion(cell.default_world()))
         for broken in ({**document, "ecsBastion": "bastion"},
                        {key: value for key, value in document.items() if key != "bucket"},
