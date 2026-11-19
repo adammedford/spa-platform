@@ -9,8 +9,10 @@ is a SPA release, a registry entry, a client or a secret, use that lever instead
 a deployment.
 
 Start with the operator session in [README.md](README.md). Docker Desktop must be running, with
-buildx (decision D-2 in `docs/dependencies.md`), and the Session Manager plugin must be installed
-for the readiness wait's tunnel unless `--url` is given.
+buildx (decision D-2 in `docs/dependencies.md`), and unless `--url` is given the readiness wait's
+tunnel needs the Session Manager plugin installed and the cell's bastion: its hop is the bastion's
+task, never a gateway task (#1168), and the platform root declares that task only with
+`bastion = true` (README.md, "Waiting for the gateway: the tunnel").
 
 Docker Desktop must also use the containerd image store. Step 2 builds each image with
 `--sbom=true --provenance=mode=max`, and those attestations make the pushed tag an image index.
@@ -50,20 +52,28 @@ detail):
    the outputs document names the applied gateway. Then it waits until each running task has
    answered `/readyz` at the revision step 1 read or later: one answer through the load balancer
    speaks for one task only, so a task the load balancer never picks fails the wait. The load
-   balancer is internal, so this wait opens a tunnel of its own, `tools/scripts/tunnel.sh` through a
-   running task of this deployment, on a free ephemeral local port the system picks, and closes it
-   when the wait ends, pass, fail or Ctrl-C. An operator's tunnel on 8443 is left alone.
+   balancer is internal, so this wait opens a tunnel of its own, `tools/scripts/tunnel.sh` through
+   the cell's bastion task, on a free ephemeral local port the system picks, and closes it when the
+   wait ends, pass, fail or Ctrl-C. An operator's tunnel on 8443 is left alone.
 
 `tools/scripts/deploy.sh --url https://app1.spa-poc.test:9443` names an origin this workstation
-already reaches for the wait to read through instead, and then it opens no tunnel.
+already reaches for the wait to read through instead, and then it opens no tunnel and needs no
+bastion.
+
+Without `--url` it needs the bastion, and it never turns the bastion on or off: when the outputs
+document names no bastion it refuses before anything is built, exit 2, with a line naming
+`bastion = true` and `--url`. Should the apply leave no bastion all the same, because
+`terraform.tfvars` set it false after the document was last written, the wait fails, exit 1, with
+the same line, before it opens a tunnel.
 
 Exit 0 means the new gateway runs steady and healthy. Exit 1 names the step that failed; exit 2
 means it did not start (a usage error, a missing tool, no Region, no credentials, no outputs
-document).
+document, or one that names no bastion without `--url`).
 
 Then check it yourself from the workstation, through a tunnel of your own: the one `deploy.sh`
-opened is closed by the time it exits. The tunnel's hop is the gateway task, which the deployment
-replaced, so a tunnel opened before it has ended: start `tools/scripts/tunnel.sh` again, then
+opened is closed by the time it exits. The tunnel's hop is the bastion's task, which the deployment
+does not replace: it replaces the gateway's task definition only. If a tunnel you started before
+the deployment is still up, use it; if it has ended, start `tools/scripts/tunnel.sh` again. Then
 
 ```bash
 tools/scripts/verify-tunnel.sh /healthz
@@ -90,11 +100,16 @@ First deployment):
 2. The identity root, then the apps root: `terraform -chdir=infra/envs/poc/idp apply`, then
    `terraform -chdir=infra/envs/poc/apps apply`. Cognito now has the two clients.
 3. The platform root on the sample image: `terraform -chdir=infra/envs/poc/platform apply`, whose
-   health check is `/` for the sample.
+   health check is `/` for the sample. Before it, set `bastion = true` and `bastion_image`, the
+   sample image pinned by digest as `gateway_image` is, in that root's `terraform.tfvars`
+   (`terraform.tfvars.example` has both lines): the bastion is the tunnel's hop, and without it
+   `tunnel.sh` refuses and `deploy.sh` exits 2 unless `--url` names an origin this workstation
+   already reaches. The bastion task runs, and is billed, until an apply sets it back to false.
 4. `tools/scripts/seed.sh` publishes the fixture releases and writes the first registry through
-   `spactl`. `deploy.sh` refuses to run before it.
+   `spactl`, and writes the outputs document, which names the bastion. `deploy.sh` refuses to run
+   before it.
 5. `tools/scripts/deploy.sh`, as above; no tunnel need be running, since its readiness wait opens
-   its own. The target turns healthy only once `/readyz` reports a snapshot. While the service
+   its own through the bastion. The target turns healthy only once `/readyz` reports a snapshot. While the service
    settles, the sample task's target shows as draining and fails the new `/readyz` check;
    `deploy.sh` tolerates that (#207).
 6. After `deploy.sh` exits 0, your own check: `tools/scripts/tunnel.sh`, then

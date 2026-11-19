@@ -358,13 +358,14 @@ public static class ContinuityObserver
     }
 
     /// <summary>
-    /// Row 4 (#348 Q20, Q21): after <c>aws ecs stop-task</c> on the task the tunnel does not use, the
-    /// session answers 200 on the survivor, and a later request of it is served by a task that was not
-    /// running at the row's start: the replacement.
+    /// Row 4 (#348 Q20, Q21): after <c>aws ecs stop-task</c> on one of the two gateway tasks, the
+    /// session answers 200 on the other, the survivor, and a later request of it is served by a task
+    /// that was not running at the row's start: the replacement. The tunnel's hop is the bastion's
+    /// task (#1168), neither of these (#1382).
     /// </summary>
     public static RowResult Replacement(string survivor, string stopped, IReadOnlyList<Attempt> attempts, GatewayCapture capture)
     {
-        List<string> observed = [$"stopped {stopped}; the tunnel's hop {survivor} survives"];
+        List<string> observed = [$"stopped {stopped}; {survivor} survives"];
         DateTimeOffset? onSurvivor = null;
         foreach (Attempt attempt in attempts)
         {
