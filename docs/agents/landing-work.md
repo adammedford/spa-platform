@@ -340,6 +340,14 @@ its `## After <date>` comment names. A commit answer counts as applied only once
 its source ticket. Any unsettled question or refusal in that pass keeps the issue open, and that
 comment lists what is left. Relaunch the after pass after a later Confirm or landing.
 
+When the after pass refuses because the landed head is not the one the morning verified, judge
+the commits between them by hand. When the verified head is an ancestor of the landed head, every
+commit between them is a review repair, the landed head's review record says merge and names the
+range from the verified head, and CI on the landed head is green, a foreground session may, on
+Adam's word, set `result.head` in `.scratch/overnight/log/morning-<date>/verify.json` to the
+landed head, keep the original beside it as `verify.json.before-head-edit`, and relaunch the after
+pass. Any other difference stays refused until Adam decides it.
+
 ```js
 Workflow({ scriptPath: "/Users/adammedford/Projects/spa-platform/.claude/workflows/morning.js", args: { "repo": "/Users/adammedford/Projects/spa-platform", "date": "2026-10-29", "wt": "/Users/adammedford/.worktrees/overnight-2026-10-29", "after": true } })
 ```

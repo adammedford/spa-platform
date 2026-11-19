@@ -1,8 +1,8 @@
-# What the platform root publishes, and what task 1.4 builds on.
+# What the cell publishes to the root that calls it.
 #
 # The names follow contracts/infra-outputs.schema.json where that contract has a
-# field for them. The rest are the module's own seams: the service of task 1.4 takes
-# the network, the repositories and the target group from here.
+# field for them. The rest are the module's own seams: the network, the repositories,
+# the target group and the task's container definitions.
 
 output "vpc_id" {
   description = "The cell's VPC."
@@ -27,15 +27,15 @@ output "task_security_group_id" {
 output "bucket" {
   description = <<-EOT
     The platform bucket's name, as the infrastructure outputs contract's `bucket`. Every consumer
-    reads it rather than deriving the name (contracts/s3-layout.md), except infra/bootstrap, which
-    applies before the bucket exists and derives the same default. The configured name rather than
+    reads it rather than deriving the name, except infra/bootstrap, which applies before the bucket
+    exists and derives the same default (README.md -> The bucket's name). The configured name rather than
     the id, which the provider sets to the same string only after an apply, so a plan shows it.
   EOT
   value       = aws_s3_bucket.platform.bucket
 }
 
 output "bucket_arn" {
-  description = "The platform bucket, for the task role of task 1.4."
+  description = "The platform bucket's ARN, which the task role's grants are scoped to."
   value       = aws_s3_bucket.platform.arn
 }
 
@@ -44,9 +44,13 @@ output "ecr_gateway" {
   value       = aws_ecr_repository.repository["gateway"].repository_url
 }
 
-output "ecr_mock_api" {
-  description = "The mock API repository's URL, as the contract's `ecrMockApi`."
-  value       = aws_ecr_repository.repository["mock-api"].repository_url
+output "ecr_repositories" {
+  description = <<-EOT
+    Every repository the module creates, keyed by its name, gateway and each of
+    extra_repositories, to its URL. A root that publishes an extra repository in its own outputs
+    reads it here by name.
+  EOT
+  value       = { for name, repository in aws_ecr_repository.repository : name => repository.repository_url }
 }
 
 output "alb_dns_name" {
@@ -55,16 +59,16 @@ output "alb_dns_name" {
 }
 
 output "target_group_arn" {
-  description = "The one target group, which task 1.4's service registers its task in."
+  description = "The one target group, which the gateway's service registers its task in."
   value       = aws_lb_target_group.gateway.arn
 }
 
 output "https_listener_arn" {
-  description = "The one HTTPS listener. Task 1.4's service depends on it, so the target group is attached to the load balancer before the service registers a task."
+  description = "The one HTTPS listener. The gateway's service depends on it, so the target group is attached to the load balancer before the service registers a task."
   value       = aws_lb_listener.https.arn
 }
 
-# --- Task 1.4a ---------------------------------------------------------------------------------
+# --- The cell's compute ------------------------------------------------------------------------
 
 output "ecs_cluster" {
   description = "The cell's cluster, as the contract's `ecsCluster`. tunnel.sh needs it to build the Session Manager target."
@@ -113,4 +117,13 @@ output "continuity_environment" {
       ]).environment : e.value if e.name == key
     ])
   }
+}
+
+output "container_definitions" {
+  description = <<-EOT
+    The gateway's task's container definitions, the JSON its task definition carries: the gateway's
+    container, then each of extra_containers. A root that adds a container reads here what the task
+    will run, which a root's test cannot read off the module's resources.
+  EOT
+  value       = aws_ecs_task_definition.gateway.container_definitions
 }

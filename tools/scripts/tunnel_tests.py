@@ -105,7 +105,8 @@ def terraform_local(path: pathlib.Path, name: str, cell: str = CELL) -> str:
 CLUSTER = terraform_local(ECS_TF, "cluster_name")
 SERVICE = terraform_local(ECS_TF, "service_name")
 GATEWAY = terraform_local(ECS_TF, "gateway_container_name")
-SIDECAR = terraform_local(ECS_TF, "mock_api_container_name")
+# The mock API is the proof-cell root's extra container since #1342, so its name lives in that root.
+SIDECAR = terraform_local(ROOT / "infra" / "envs" / "poc" / "platform" / "main.tf", "mock_api_container_name")
 # The hop (#1167): the bastion service's task and its one container.
 HOP_SERVICE = terraform_local(ECS_TF, "bastion_service_name")
 CONTAINER = terraform_local(ECS_TF, "bastion_container_name")

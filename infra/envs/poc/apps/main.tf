@@ -45,6 +45,22 @@ locals {
     }
   ]...)
 
+  # One entry per (appId, fragmentId) of each definition's fragments[] (#961, "The registry entry
+  # and the app definition"), keyed "<appId>.<fragmentId>": neither id may hold a dot
+  # (contracts/registry.schema.json, appId and fragmentId), so the key splits one way. A definition
+  # with no fragments adds no entry, so its app plans as it did before fragments (ADR-0016
+  # decision 2).
+  fragments = merge(concat([{}], [
+    for app_id, app in local.apps : {
+      for f in try(app.fragments, []) : "${app_id}.${f.fragmentId}" => {
+        app_id      = app_id
+        fragment_id = f.fragmentId
+        host        = app.host
+        scopes      = f.oauth.scopes
+      }
+    }
+  ])...)
+
   user_pool_id = data.terraform_remote_state.idp.outputs.user_pool_id
 
   # Scopes a client may ask for: the resource servers' full scope names, plus Cognito's own.
@@ -161,5 +177,87 @@ resource "aws_ssm_parameter" "client_secret" {
   lifecycle {
     ignore_changes       = [value]
     replace_triggered_by = [aws_cognito_user_pool_client.app[each.key].id]
+  }
+}
+
+# One confidential client per fragment, in the same pool, configured as its shell's client above
+# (#961, "The registry entry and the app definition"): a fragment's token set is refreshed, rotated
+# and revoked through its own client, so rotation with the 60-second grace and revocation matter as
+# much here as for the shell. The test holds every argument both blocks share to the shell's value.
+# The name joins the ids with a dot, which neither id may hold and Cognito's client name allows
+# (ClientName's pattern, [\w\s+=,.@-]+).
+# https://docs.aws.amazon.com/cognito-user-identity-pools/latest/APIReference/API_CreateUserPoolClient.html
+resource "aws_cognito_user_pool_client" "fragment" {
+  for_each = local.fragments
+
+  name         = "spa-platform-${var.cell}-${each.key}"
+  user_pool_id = local.user_pool_id
+
+  generate_secret                      = true
+  allowed_oauth_flows_user_pool_client = true
+  allowed_oauth_flows                  = ["code"]
+  allowed_oauth_scopes                 = each.value.scopes
+  supported_identity_providers         = ["COGNITO"]
+
+  # The fragment's own callback at its shell's host, and nothing else: a silent sign-in whose
+  # redirect URI the client lacks stops at the provider with a 400 and never returns (#961,
+  # "Failing hops"). No logout URL: the one provider logout is the shell client's.
+  callback_urls = ["https://${each.value.host}/signin-oidc/${each.value.fragment_id}"]
+  logout_urls   = []
+
+  access_token_validity  = 5
+  id_token_validity      = 5
+  refresh_token_validity = local.refresh_token_minutes
+
+  token_validity_units {
+    access_token  = "minutes"
+    id_token      = "minutes"
+    refresh_token = "minutes"
+  }
+
+  refresh_token_rotation {
+    feature                    = "ENABLED"
+    retry_grace_period_seconds = 60
+  }
+
+  enable_token_revocation       = true
+  prevent_user_existence_errors = "ENABLED"
+  explicit_auth_flows           = ["ALLOW_USER_SRP_AUTH"]
+
+  lifecycle {
+    precondition {
+      condition     = alltrue([for s in each.value.scopes : contains(local.grantable_scopes, s)])
+      error_message = "Fragment ${each.key} asks for a scope no resource server in the identity root offers (fixtures/cognito/pool.json)."
+    }
+  }
+}
+
+# Each fragment client's managed-login style: the fragment fallback is an interactive managed-login
+# sign-in, which shows a client's page only when the client has a style. Each counts against
+# Cognito's 20 styles per pool, a profile fact (#961), not a contract limit.
+# https://docs.aws.amazon.com/cognito/latest/developerguide/managed-login-branding.html
+resource "aws_cognito_managed_login_branding" "fragment" {
+  for_each = local.fragments
+
+  user_pool_id                = local.user_pool_id
+  client_id                   = aws_cognito_user_pool_client.fragment[each.key].id
+  use_cognito_provided_values = true
+}
+
+# The fragment client's secret, nested under its shell's path in the cell's apps/ prefix, which the
+# task role's and the CI plan role's grants already cover, so no IAM changes. Its lifecycle is the
+# shell parameter's (#554).
+resource "aws_ssm_parameter" "fragment_client_secret" {
+  for_each = local.fragments
+
+  name        = "/spa-platform/${var.cell}/apps/${each.value.app_id}/fragments/${each.value.fragment_id}/client-secret"
+  description = "OAuth client secret for fragment ${each.value.fragment_id} of app ${each.value.app_id} of cell ${var.cell}. Read it; never copy it into a file."
+  type        = "SecureString"
+  tier        = "Standard"
+  value       = aws_cognito_user_pool_client.fragment[each.key].client_secret
+
+  lifecycle {
+    ignore_changes       = [value]
+    replace_triggered_by = [aws_cognito_user_pool_client.fragment[each.key].id]
   }
 }

@@ -349,8 +349,9 @@ mutation the summary does not name stops the sitting:
   row, the service replaces the task; read the two tasks again before D5 and name the new id. After
   a failed D2 that kept no id, or one whose task is no longer RUNNING, run D2's restart first if a new
   task is RUNNING, and use the id it prints; with none, say so when asking: the row then refuses and
-  stops nothing. Its evidence file then records not proved and names only the exception, so post it as
-  not proved with the refusal's line from the test's output. A refusal spends no attempt.
+  stops nothing. Its evidence file then records not proved, with the refusal's type and message as its
+  reason (#1194), so post it as not proved with the refusal's line from the test's output. A refusal
+  spends no attempt.
 - **D6 (row 6, F1; #348 Q29, #1203, #1216).** The class drives for up to 40 minutes while the operator
   deploys, and `tools/wiz_d6.sh` (#1204) is the lever: it waits for the driver's line starting
   `row6: launch deploy.sh now`, runs `deploy.sh` on the same commit as C1 runs it, and on

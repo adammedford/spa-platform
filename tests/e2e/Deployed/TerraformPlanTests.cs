@@ -41,6 +41,27 @@ public sealed class TerraformPlanTests
     }
 
     [Fact]
+    public void A_resource_block_keyed_by_fragment_is_the_apps_once_per_fragment_and_none_without_fragments()
+    {
+        // Mutation: drop the local.fragments branch, so a fragment block is refused; or key its
+        // addresses by the fragment id alone.
+        const string root = """
+            resource "aws_cognito_user_pool_client" "app" {
+              for_each = local.apps
+            }
+
+            resource "aws_cognito_user_pool_client" "fragment" {
+              for_each = local.fragments
+            }
+            """;
+
+        Assert.Equal(
+            ["aws_cognito_user_pool_client.app[\"app1\"]", "aws_cognito_user_pool_client.fragment[\"app1.orders-ui\"]", "aws_cognito_user_pool_client.fragment[\"app1.reports\"]"],
+            TerraformPlan.PerAppAddresses(root, "app1", "reports", "orders-ui"));
+        Assert.Equal(["aws_cognito_user_pool_client.app[\"app3\"]"], TerraformPlan.PerAppAddresses(root, "app3"));
+    }
+
+    [Fact]
     public void The_changes_are_the_resource_changes_that_do_something_and_carry_no_value()
     {
         string plan = Plan(
