@@ -42,5 +42,6 @@ If your output contradicts an existing ADR, surface it explicitly rather than si
 
 > _Contradicts ADR-0008 (session required before any asset), but worth reopening because…_
 
-ADR-0017 records how the G0 report changes ADR-0001, ADR-0005 and ADR-0011. Check an ADR's
-**Status** line and the annotated gate tags reachable from origin/main before treating a gate as closed.
+ADR-0017 records how the G0 report changes ADR-0001, ADR-0005 and ADR-0011. Before treating a
+gate as closed, check the ADR's **Status** line; how a closed gate is read: `AGENTS.md` → "Where
+the work stands".

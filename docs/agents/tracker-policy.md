@@ -26,7 +26,9 @@ ADR-0020 records the decision and its reasons. What it adds to `docs/agents/issu
      two branches, and the landing merges them; how that landing is built is in
      `docs/agents/landing-work.md` → "Land it".
   5. Every ticket carries a `**Touches:**` line of the paths it writes; its owner is derived from
-     those paths through `OWNERSHIP.md`.
+     those paths through `OWNERSHIP.md`. Under it every ticket carries a `**Vendor:**` line, which
+     says what the paths cannot show: `none`, or the vendors the work is tied to, by the names
+     `tools/issue_labels.json` defines ("The derived labels", below).
 - **The ticket-shape check holds them where a ticket is written.** `tools/ticket_shape.py` reads one
   issue and fails it, naming the rule, on: `**Touches:**` paths of more than one owner; an
   `**Owner:**` line naming other than exactly the role those paths derive, or other than exactly one
@@ -40,17 +42,18 @@ ADR-0020 records the decision and its reasons. What it adds to `docs/agents/issu
   #N) describes another ticket's wait and is not read. It also prints as a note, failing nothing, a
   `##` heading outside the ticket's set (`Parent`, `What to build`, `Acceptance criteria`, `Blocked
   by`) and an `**Owner:**` line beside a Touches line that names a path, since rule 5 derives the
-  owner. It holds none of rule 2's last three sentences, the ones on observation boxes
-  (`GLOSSARY.md` → "Observation box"): no word marks such a box, no field says whether a ticket's
-  open boxes are all of that kind, and which separate ticket's work an observation needs landed
-  first is a judgement, not a word. The session that applies `ready-for-agent` routes each
-  observation box to its own ready-for-human ticket, relabels in place a ticket whose open boxes are
-  all observation boxes, and adds the blocked-by edges that observation ticket needs; a passing
-  check says nothing of any of the three. `.github/workflows/ticket-shape.yml` runs it when an issue
-  carrying `ready-for-agent` is opened, edited or labelled, and on a failure swaps that label for
-  `needs-triage` and comments the failing rule. The words are a list, and a list misfires. The
-  escape is to reword the box, or to make it a ready-for-human ticket blocked by the ticket that
-  builds what it runs; then relabel.
+  owner. It does not hold rule 5's `**Vendor:**` line, which `tools/issue_labels.py` reads for the
+  derived labels, noting an `area:product` issue without one. It holds none of rule 2's last three
+  sentences, the ones on observation boxes (`GLOSSARY.md` → "Observation box"): no word marks such a
+  box, no field says whether a ticket's open boxes are all of that kind, and which separate ticket's
+  work an observation needs landed first is a judgement, not a word. The session that applies
+  `ready-for-agent` routes each observation box to its own ready-for-human ticket, relabels in place
+  a ticket whose open boxes are all observation boxes, and adds the blocked-by edges that
+  observation ticket needs; a passing check says nothing of any of the three.
+  `.github/workflows/ticket-shape.yml` runs it when an issue carrying `ready-for-agent` is opened,
+  edited or labelled, and on a failure swaps that label for `needs-triage` and comments the failing
+  rule. The words are a list, and a list misfires. The escape is to reword the box, or to make it a
+  ready-for-human ticket blocked by the ticket that builds what it runs; then relabel.
 - **A ticket is filed after a search for what was filed since its subject was last searched.**
   Another session on the same account can file the same ticket while one drafts: #558 duplicated
   #547, filed two and a half hours earlier. Just before `gh issue create`, run
@@ -68,7 +71,11 @@ ADR-0020 records the decision and its reasons. What it adds to `docs/agents/issu
   is read from its author"). `.github/steering.py` refuses an `Authority: <URL>` whose comment
   another account wrote, and `tools/overnight_collect.py` lists a ticket whose `ready-for-agent`
   another account last applied as `needs-triage`; both read the account from this line, and the
-  repository's owner while it is absent.
+  repository's owner while it is absent. Every agent session posts through this account too, so
+  the author check stops an outsider and cannot tell a session from the human. That no session
+  writes a `Confirm`, a decision comment or an approval except on Adam's words, as the rules below
+  allow, is a convention the shared account cannot enforce: the sessions' prompts and the reviewer
+  guard it (#418; ADR-0022 → "This reopens").
 - **A decision Adam gives in a session is posted on the issue it decides, by the session he gave it
   in.** When a foreground session puts an open question that no grill numbered to Adam and he
   answers it there, the session posts his answer, before the work that rests on it is pushed, as a
@@ -82,9 +89,8 @@ ADR-0020 records the decision and its reasons. What it adds to `docs/agents/issu
   acceptance criteria do not ask for, which stays a change request (ADR-0032 decision 3). A
   question a grill numbered is answered by his `Confirm` on the run's `Overnight <date>` issue,
   which a session posts only as the `Confirm` rule under "A body is rewritten only to carry
-  confirmed decisions" allows. Every session posts as `@adammedford`, so this is a convention the
-  shared account cannot enforce: the prompts and the reviewer guard it, as they guard the `Confirm`
-  rule. #435's Rows-prefix decision of 2026-10-29 is the precedent, posted under the Deciding rule
+  confirmed decisions" allows. Nothing mechanical holds this: "The human's account", above, states
+  the limit. #435's Rows-prefix decision of 2026-10-29 is the precedent, posted under the Deciding rule
   before this one was written.
 - **A body is rewritten only to carry confirmed decisions.** An answer is confirmed when the human
   wrote it, or confirmed a pre-accepted one on the run's `Overnight <date>` issue; a pre-accepted
@@ -101,15 +107,21 @@ ADR-0020 records the decision and its reasons. What it adds to `docs/agents/issu
   is its state, labels, assignee, sub-issue and blocked-by relationships, corrected in place, and
   its body under the rule above; "Lifecycle: not labels" below says
   which field holds which state. A comment, a merge body and an archived ticket file are records:
-  true on the day they were written, and never rewritten. A later truth is a new comment. So a body
+  true on the day they were written, and never rewritten. A merge body becomes a record once it is
+  reachable from `main`; before that, a task merge on an unlanded run branch is a draft, which a
+  foreground session may rebuild (`docs/agents/landing-work.md` → "A task merge's message is changed
+  by rebuilding the run branch"). A later truth is a new comment or a new commit. So a body
   states no status in prose ("remains future work"); where it must say what has landed, it cites the
   merge. Archived overnight ticket 66 carried such a sentence past the merge of its own work,
   because no check reads one.
 - **An issue is held open by its own scope.** It closes when what its body asks for has landed,
-  been answered or been declined, and its `## Answer` comment says where each part went, naming
-  anything declined. A ticket whose work lands is closed by the `Closes #n` line in the landing
-  pull request's description when that pull request merges (`docs/agents/landing-work.md`, "Land
-  it"), never by hand before its work is on `main`. A spec's required work is its sub-issues, and
+  been answered or been declined, and its Answer comment, the comment headed `## Answer`, says
+  where each part went, naming anything declined. A ticket whose work lands is closed by the
+  `Closes #n` line in the landing pull request's description when that pull request merges
+  (`docs/agents/landing-work.md`, "Land it"), never by hand before its work is on `main`; the
+  implementing session posts the Answer comment before the landing, so that no merge closes a
+  ticket that has none. A ticket that ends with no merge, answered, declined or withdrawn, gets its Answer
+  comment and is then closed by hand. A spec's required work is its sub-issues, and
   the spec closes when they are closed. A follow-up, raised by another issue's work, review or
   out-of-scope list, names where it came from on a `**Raised by:** #NNN` line at the top of its
   body and is filed as neither a sub-issue nor a blocker of that issue, so it holds its origin open
@@ -118,9 +130,9 @@ ADR-0020 records the decision and its reasons. What it adds to `docs/agents/issu
 - **Cite an issue or a pull request as `#NNN`.** A merge body, an ADR, a contract or a code comment
   cites that way; the two share one number sequence. `.github/steering.py` fails a push over a
   `#NNN` that names neither.
-- **Decisions outlive issues.** A decision a later session builds on goes into a contract, an ADR or
-  `GLOSSARY.md`, and the merge body cites the issue it came from. Nothing that must survive the
-  feature lives only in an issue.
+- **Decisions outlive issues.** Where a decision a later session builds on is written, so that
+  nothing that must survive the feature lives only in an issue: `docs/adr/README.md` → "Where a
+  decision lives".
 - **The overnight run reports as an issue** titled `Overnight <date>`: the report, then the
   questions as numbered items. Answers are comments on it.
 - **A ticket that edits a steering document quotes each paragraph it changes whole, as it will read
@@ -134,24 +146,23 @@ ADR-0020 records the decision and its reasons. What it adds to `docs/agents/issu
   implementer changes nothing but the wrapping; when a quoted paragraph has changed on `main` since
   the approval, the session re-quotes it and asks again. The commit cites the human's approval of
   the ticket as `Authority: #<n>` (`docs/agents/landing-work.md`), and an approval covers the body
-  as it stood when given. A proposal that a confirmed answer will commit, under
-  `## Proposed steering changes` or in a grill's proposals, is quoted the same way.
+  as it stood when given. A change request's `## The change` and a draft decision on one are quoted
+  the same way.
 - **Steering change template.** Use the template below to file an ordinary ticket that needs
   approval of exact steering text. Use the Change requests rules when those rules require a
   change request.
 
   ```markdown
-  **Owner:** integrator
   **Touches:** <steering paths>
 
   ## What to build
 
   <Why the change is needed and the exact destination in each file.>
 
-  ## Proposed steering changes
+  ### Proposed steering changes
 
   <For each edit, label the path and section and quote the complete text as it will read.
-  For an insertion or removal, quote the neighboring paragraphs. Quote a table row with its
+  For an insertion or removal, quote the neighbouring paragraphs. Quote a table row with its
   header, a non-prose edit with the smallest enclosing object, or a new file in full.>
 
   ## Acceptance criteria
@@ -171,24 +182,35 @@ a label or a line in the body (ADR-0020):
 | Blocked | An open blocked-by relationship (`docs/agents/issue-tracker.md` → Blocking) | `issue_dependencies_summary.blocked_by` above zero, from `gh api repos/{owner}/{repo}/issues/<n>`; `gh issue view --json` has no such field |
 | Resolved | Closed, after an `## Answer` comment saying where the work or the answer is | `state` is `CLOSED` |
 
+This overrides the `Part of #<parent>` and `Blocked by:` body-line fallbacks that the template text
+of `docs/agents/issue-tracker.md` offers.
+
 - **Declined** is resolved too: closed as not planned (`gh issue close <n> --reason "not planned"`),
   labelled `wontfix`, with a comment saying why.
-- **Partial** is not a state. Work done in part leaves the issue open, and its `## Answer` carries
-  an `Outstanding:` line naming what is left. The assignee stays until that part lands and is then
-  removed, so the rest can be claimed: **Frontier query** in `docs/agents/issue-tracker.md` passes
-  over an assigned issue.
+- **Part-landed** is not a state. Work done in part leaves the issue open, and its Answer comment
+  carries an `Outstanding:` line naming what is left. The assignee stays until that part lands and
+  is then removed, so the rest can be claimed: **Frontier query** in `docs/agents/issue-tracker.md`
+  passes over an assigned issue.
+- **An issue's claim is its assignee.** A session claims an issue by assigning itself, never by
+  cutting a branch alone. What claims a plan row no issue carries: `docs/agents/landing-work.md` →
+  "Take a task". `tools/overnight_collect.py` also passes over a
+  ticket while a branch named for it, `task/issue-<n>-` or `task/<its plan row>-`, exists with its
+  work not landed, and `tools/prune_branches.py` keeps a part-landed ticket's branch, so that branch
+  is renamed before the rest is taken: the claims line of `tools/overnight_preflight.sh` prints the
+  rename.
 - **A follow-up is not a state of its origin.** It is an issue of its own, and holds the issue it
   came from open neither way ("An issue is held open by its own scope", above).
 
 **The derived labels say what an issue is, never where it stands.** Beside the triage labels an
 issue carries three groups, `kind:`, `area:` and `vendor:`, and no session chooses them or adds or
-removes one by hand. A workflow derives them: `tools/issue_labels.py` works them out from the issue
-alone, its title, its sub-issues and its `**Touches:**` and `**Vendor:**` lines, against
-`tools/issue_labels.json`, and `.github/workflows/issue-labels.yml` writes them on every issue event
-and in a daily run over every open issue. A ticket's `**Vendor:**` line is where its filer records
-what its paths cannot show: `none`, or the vendors it ties the work to, by the names
-`tools/issue_labels.json` defines. A wrong label is fixed in the title, the Touches or Vendor line or
-the table, never on the label.
+removes one by hand (ADR-0041). A workflow derives them: `tools/issue_labels.py` works them out from
+the issue alone, its title, its sub-issues and its `**Touches:**` and `**Vendor:**` lines, against
+`tools/issue_labels.json`, and `.github/workflows/issue-labels.yml` writes them when an issue is
+opened, edited, reopened, labelled or unlabelled, and reconciles every open issue in a daily run.
+Adding a sub-issue fires no event on its parent, so a parent's `kind:parent` can wait for that run.
+A ticket's `**Vendor:**` line is where its filer records what its paths cannot show: `none`, or the
+vendors it ties the work to, by the names `tools/issue_labels.json` defines. A wrong label is fixed
+in the title, the Touches or Vendor line or the table, never on the label.
 
 The archive's `**Status:**` lines (`claimed`, `blocked`, `resolved`, `closed`, `partial`, `moved to #NNN`)
 are dated records of the tickets filed before ADR-0020. Read them as history; never write one, and
@@ -236,9 +258,8 @@ A scripted session never posts a comment whose first line begins `Decision:`. It
 `## Draft decision`, and its first two lines read `Proposed decision: …` and `Proposed ADR: yes|no`.
 A foreground session may post a decision comment only on Adam's words given in that session, under
 "A decision Adam gives in a session" (above): its first line is the `Decision:` form, not that
-rule's heading, and its last line is that rule's. Every session posts as `@adammedford`, so this is
-a convention the shared account cannot enforce, as the `Confirm` rule is (above): the prompts
-and the reviewer guard it.
+rule's heading, and its last line is that rule's. Nothing mechanical holds this: "The human's
+account", above, states the limit.
 
 The same holds for an approval of a ticket that is no change request, filed `ready-for-human`
 because its scope awaits Adam's approval: it is posted under "A decision Adam gives in a session"

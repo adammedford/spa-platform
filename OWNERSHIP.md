@@ -6,6 +6,10 @@ The owners are the roles in the plan (`docs/plan/03-workstreams-and-tasks.md`). 
 names, not GitHub handles**: this repository has one author, so handle resolution would be theatre.
 `.github/path-ownership.py` reads the block below as text and nothing else consumes it.
 
+A component's test project is `tests/<Project>.Tests`, and its line in the block gives it to the
+owner of `<Project>`. The block decides: a test project with no line of its own is the integrator's,
+by `*`.
+
 Check A-05 runs in `.githooks/pre-push`. A linear branch must touch one owner's set across its
 whole diff. A history containing a merge must keep each ordinary commit and each merge's resolution
 edits within one owner's set; imported parent commits are audited separately, including reverted
@@ -42,6 +46,7 @@ or it needs an integrator path, which is a change request (`docs/agents/tracker-
 
 # 5 Fixtures
 /fixtures/                            ws5-fixtures
+/client/                              ws5-fixtures
 
 # 6 Verification and operations
 /src/Platform.Telemetry/              ws6-verification

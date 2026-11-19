@@ -6,11 +6,12 @@ product.
 ## Take a task
 
 The dispatch table in `docs/plan/03-workstreams-and-tasks.md` says what is open. A task's `Needs`
-column names gates and other tasks: a gate is met when `git tag` shows it, another task is met when
-`git log --oneline` shows a merge naming its id.
+column names gates and other tasks. How to read whether each is met: `AGENTS.md` → "Where the work
+stands".
 
-**The branch is the claim.** Git refuses a second branch of the same name, so nothing else is
-needed:
+**The branch is the claim** for a plan row that no issue carries. Git refuses a second branch of
+the same name, so nothing else is needed. A row an issue carries is claimed on the issue
+(`docs/agents/tracker-policy.md` → "Lifecycle: not labels"), and its branch is made the same way:
 
 ```bash
 git worktree add -b task/<id>-<slug> ../spa-<id> origin/main
@@ -42,18 +43,16 @@ print `/bin/bash` (#183).
 
 ## Build it
 
-Write only inside your owner's paths. `OWNERSHIP.md` lists them, and `.githooks/pre-push` fails a
-push that reaches outside one owner's set. When it fires, either the change went somewhere it did
-not mean to, or it needs an integrator path.
+Which paths are your owner's, the check that holds a push to them and what to do when it fires:
+`OWNERSHIP.md`.
 
 **Needing an integrator path** — a contract, a package version, a new project, anything in
 `src/Platform.Abstractions` — means filing a change request and stopping the task:
 `docs/agents/tracker-policy.md` → "Change requests".
 
-Needing *another workstream's* path means something has gone wrong: A-03 says a workstream project
-references `Platform.Abstractions` and no other workstream's project, so a real need for another
-workstream's code is a need for Abstractions, which is the case above. Otherwise the row was taken
-out of order.
+Needing *another workstream's* path means something has gone wrong: under A-03 (`AGENTS.md` →
+"Rules that hold everywhere"), a real need for another workstream's code is a need for
+Abstractions, which is the case above. Otherwise the row was taken out of order.
 
 **A commit that changes a steering document names its authority** (ADR-0023). The steering
 documents are `GLOSSARY.md`, `AGENTS.md`, `CLAUDE.md`, `OWNERSHIP.md`, `CODING_STANDARDS.md`,
@@ -103,6 +102,21 @@ The subject is read by a check: `tools/roadmap.py` derives the roadmap's state f
 subjects, so "Merge task 2.4: ..." lands the row and "Merge part of task 2.4: ..." does not. Run the
 script before the push and commit what it writes, or `.githooks/pre-push` will say so.
 
+**A row whose last work is no merge is closed by the next merge's subject.** A row can end in a
+sitting: its last part is sitting records on a ticket, and no merge is left to name it whole, so
+`tools/roadmap.py` reads it as owed for good (#1219). The next merge names each such row after its
+own ids, behind the word `closing`, under either form: `Merge task issue-1219, closing rows 1.3 and
+6.9: <what landed>`, or `Merge part of task 2.4, closing row 6.9: <what landed>`. `tools/roadmap.py`
+reads every id after `closing` as a row landed whole, and `--check` fails a clause that names
+anything but a plan row, or that closes a row the same range merges in part. A row is closed only
+when no open issue names it, by its title's leading row id, its `**Plan row:**` line or a part
+declaration: `python3 -I tools/landing_subjects.py --closing <row>[,<row>...]` answers that before
+the subject is written, and `tools/check.sh` holds a `closing` clause in the range it judges on the
+same ground. The merge body names, for each row it closes, the tickets whose sitting records
+finished it. The clause is only for a row no merge will name: a row the merge itself lands takes the
+two forms above. The tracker is read before the merge and never by the derivation, which stays a
+function of tags, merge subjects and the plan (ADR-0034).
+
 **Two halves that must land together land as one combined branch**
 (`docs/agents/tracker-policy.md` rule 4). Each half commits on its own owner's branch, and neither
 is pushed alone when it fails the check without the other: on 2026-10-29 #504's half failed
@@ -148,7 +162,9 @@ it merges pinned to the head it saw, ends the body with `Unreviewed: <reason>`, 
 review open until a record names the merged head ("Gates" below). A merge made any other way is not
 checked at all, which is why nothing else is a sanctioned merge path.
 
-**The pull request's description closes the tickets it completes.** It carries one `Closes #n`
+**The pull request's description closes the tickets it completes.** When a ticket closes, and
+the Answer comment it carries first: `docs/agents/tracker-policy.md` → "An issue is held open by
+its own scope". The description carries one `Closes #n`
 line for each of them and one `Ticket: #n` line for each ticket it only advances. When
 `tools/land.sh` merges the pull request into `main`, GitHub closes each ticket a `Closes` line
 names; `Ticket:` is not a closing keyword, so its ticket stays open
@@ -169,16 +185,20 @@ keyword, through a sentence in its body saying a later session would close it.
 **It lists the overnight answers that wait on the landing, and does not wait for them** (#531).
 After its refusals and before the merge call, `tools/land.sh` runs `tools/overnight_answers.py` over
 the `## Questions:` comments on the open `Overnight <date>` issues, and prints one line for each
-question that names the pull request's number or a number its description closes:
+question that names the pull request's number or a number its description closes, and one for each
+questions comment written by an account other than the human's whose text below its heading names
+one, which is not read (#1078):
 
 ```
 land: #<issue> Overnight <date> Q<n> names #<number>, a Confirm covers it: <its first line>
 land: #<issue> Overnight <date> Q<n> names #<number>, no Confirm covers it: <its first line>
+land: #<issue> Overnight <date>: a questions comment by <login> names #<number> and is not read: <url>
 ```
 
 "A Confirm covers it" says Adam has answered the question, perhaps no. "No Confirm covers it" says
 the answer is open or pre-accepted, so provisional. Neither says what the answer is: read it on the
-issue. A line is a report, neither an instruction nor an authority. Nothing listed stops the merge,
+issue. A comment that is not read is no question and no answer; its URL is there for Adam to look
+at. A line is a report, neither an instruction nor an authority. Nothing listed stops the merge,
 and a reader that fails prints one line, `land: could not read the Overnight issues' questions`, and
 the merge proceeds, the departure from `CODING_STANDARDS.md` -> "A check fails closed" that #531
 decided.
@@ -199,7 +219,7 @@ being finished, add an `Outstanding:` line saying what it still owes, and an
 `Closes #n` line names a change request whose decision says `ADR: no`, the body states the why and
 cites the decision comment's URL (`docs/agents/tracker-policy.md` → "Landing"); `tools/land.sh`
 refuses a body that lacks the URL, naming the request and the URL to cite (#530), and the why
-stays the reviewer's to judge. The claim branch is deleted when the **task** is done, not when a
+stays the reviewer's to judge. The claim branch is deleted when the row has landed, not when a
 pull request merges.
 
 In a run-branch landing, each ticket's task merge on the run branch is that ticket's merge body. A
@@ -253,10 +273,12 @@ current tip's work is on `main`, as an ancestor or as patch-equivalent commits w
 carrying changes of its own, and no worktree has it checked out or is rebasing it, and a push to it
 on `origin` since it was checked keeps it there. Everything else stays: a `--delete` run counts
 what it keeps under each reason, and `--verbose` or a dry run lists each with its reason (#524).
-A part-landed row keeps its claim, because the claim is how the next session knows the row is
-taken. Run without `--delete` from a checkout at `origin/main`, the script says what it would do,
-deletes nothing and writes no file; with it, it clears what an earlier landing left, by the same
-rule, and when it deletes anything its own last line names that file.
+A part-landed row keeps its branch. For a plan row no issue carries, that branch is the claim,
+which is how the next session knows the row is taken; how the rest of a part-landed ticket is
+freed: `docs/agents/tracker-policy.md` → "Lifecycle: not labels". Run without `--delete` from a
+checkout at `origin/main`, the script says what it would do, deletes nothing and writes no file;
+with it, it clears what an earlier landing left, by the same rule, and when it deletes anything its
+own last line names that file.
 
 A task is **done** as `GLOSSARY.md` → "Done" defines it.
 
@@ -330,20 +352,13 @@ stops here.
 
 ## Review
 
-Every pull request into `main` is reviewed by an agent session that wrote none of its commits, with
-`/code-review`, and its findings answered before merge. The integrator's own work is no exception:
-the unit a review is independent of is the agent session, not the workstream, so any fresh session
-can review it, and the human's reading is the decision to land rather than a review. The spec axis
-is the plan row plus the contracts rows naming it, cited by path; work with no row is held to its
-issue and the decisions it was handed. `docs/agents/review.md` has the rest: how to read a branch
-without touching the shared tree, every source each axis is held to, when a finding holds a merge
-rather than becoming an `Outstanding:` line, and the review record a review leaves.
+Who may review a pull request into `main`, what each axis is held to, when a finding holds a merge
+and the review record a review leaves: `docs/agents/review.md`.
 
-A review covers exactly the head its record names, and `tools/land.sh` refuses a head no record
-clears ("Land it" above). The check sits in the merge script rather than in branch protection
-because this repository has one GitHub account, which can neither approve its own pull request nor
-be held to a required review without `--admin`, and `--admin` would skip the required CI checks too.
-ADR-0022 records that choice and when it reopens.
+`tools/land.sh` refuses a head no record clears ("Land it" above). The check sits in the merge
+script rather than in branch protection because this repository has one GitHub account, which can
+neither approve its own pull request nor be held to a required review without `--admin`, and
+`--admin` would skip the required CI checks too. ADR-0022 records that choice and when it reopens.
 
 Only one kind of change reaches `main` without a pull request: a generated roadmap refresh, the one
 `tools/land.sh` pushes after a merge or the one made after a gate tag. Everything else arrives
@@ -387,9 +402,8 @@ head after `--pr`, is refused with both forms named.
 
 ## Drafting a Confirm comment
 
-A `Confirm` comment on an `Overnight <date>` issue is Adam's act. No scripted session posts one,
-and a foreground session posts one only on Adam's words given in that session
-(`docs/agents/tracker-policy.md`, ADR-0037). A session that drafts one for him writes the draft
+Who may post a `Confirm` comment on an `Overnight <date>` issue: `docs/agents/tracker-policy.md` →
+"A body is rewritten only to carry confirmed decisions". A session that drafts one for Adam writes the draft
 to a file and runs the morning's own parser over it and the issue's comments before handing it over
 or posting it, and posts it only when the check exits 0 or Adam accepts what it reports:
 

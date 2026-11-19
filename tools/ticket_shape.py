@@ -3,10 +3,10 @@
 
 docs/agents/tracker-policy.md states five rules a ticket keeps, confirmed on #227, and this holds
 them but for rule 2's last three sentences on observation boxes (GLOSSARY.md), which no word or
-field shows. Until #247 nothing held them where a ticket is written: A-05
-(.github/path-ownership.py) catches a two-owner ticket at the push, after a lane has built half of
-it, which is why seven of the 22 tickets of #226 ended partial instead of never starting. This reads
-one issue and fails it, naming the rule, on:
+field shows, and rule 5's Vendor line, which tools/issue_labels.py reads. Until #247 nothing held
+them where a ticket is written: A-05 (.github/path-ownership.py) catches a two-owner ticket at the
+push, after a lane has built half of it, which is why seven of the 22 tickets of #226 ended partial
+instead of never starting. This reads one issue and fails it, naming the rule, on:
 
 - one-owner: its `**Touches:**` paths have more than one owner in OWNERSHIP.md (rules 1 and 5),
   read with A-05's own `rules` and `owner_of`;

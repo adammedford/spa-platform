@@ -154,9 +154,14 @@ before `unwatch` has ended, and the `failed` line it printed is in the log too, 
 interval's start: run `unwatch`, run the watch line again with the log left where it is, and post
 the interval as missing coverage. The gateway's log lines go into the bundle uncounted (`tools/scripts/logs.sh` into `"$E/row2.log"`), because a navigation the shell gate
 challenges is a redirect and not a 401 (`GLOSSARY.md` → Shell gate), so the log could count what
-the browser never saw. The tunnel's hop is an old task, which the roll drains (#348 Q20): once
-`describe-tasks` lists a new task RUNNING, stop `tunnel.sh`, note the UTC time, start it again in
-the background (it picks a running task and prints `through task <id>`: keep that id, D4 needs it),
+the browser never saw. The tunnel's hop is the bastion's task (#1168), never a gateway task, and
+the cutover replaces only the gateway's task definition, so the roll drains no hop; no sitting has
+yet seen a session through the bastion outlast a roll of the gateway's service (#1167's decision,
+under "Not verified").
+The restart #348 Q20 set for a drained hop stays as it was: once `describe-tasks` lists a new task
+RUNNING, stop `tunnel.sh`, note the UTC time, start it again in the background (it prints `through
+task <id>`, the bastion task's id: keep it for the post; it names no gateway task, so it is not the
+id D4's `SPA_TUNNEL_TASK` asks for, which #1382 settles),
 run `verify-tunnel.sh /healthz`, and note the time it passed; the interval between the two times is
 the gap, posted as missing coverage, and any `tunnel-down` line outside it is named as further
 missing coverage. Then convergence:
@@ -247,11 +252,10 @@ the human's answer, and wiz holds it to no wait. On it:
 
 - **The tunnel.** If the restart has not run, or the task its id names is no longer RUNNING, and a
   new task is RUNNING, offer it now as above (rule 1), and keep the id; its times and id go into the
-  next step's post. With no new task it has nothing to go through yet: wiz says that D4 still has no
-  id from D2, and that D0's tunnel is up if the restart never stopped it and down if the hop it moved
-  to has gone. D0's id is not one for D4: a row 4 on D0's revision says nothing of the cutover.
-  `tunnel.sh` takes the first task it can reach, so mid-roll its id can name an old task that the roll
-  then drains: name that task's revision from `describe-tasks` when keeping the id.
+  next step's post. With no new task it is not offered: wiz says that D4 still has no id from D2,
+  and that D0's tunnel, through the bastion's task, stands as D0 left it. D0's id is not one for D4:
+  a row 4 on D0's revision says nothing of the cutover. The roll replaces no bastion task, so the
+  restart's id names the task D0's tunnel went through unless the bastion itself was replaced.
 - **Each later step, D1 and D3 to D9.** Run the `describe-services` read above first, and open the
   step's post with "D2 failed" and what that read showed. A read that has since settled makes no
   row 2 pass and is no convergence: only D2's own block is that.
@@ -326,7 +330,8 @@ shown dotnet test --project tests/e2e -- --filter-method "Gateway.E2ETests.Deplo
 ```
 
 The selector is the class summary's, read from the tree before D0; a summary that names another
-form wins over the line above. The report flag and its exit 5 are as in C2. Each row test is the
+form wins over the line above. The report flag and its exit 5 are as in C2, except in D6, whose
+row runs through the suite's console runner as its bullet says. Each row test is the
 driver and the observer together (#358): it sends the requests, matches each to its task by the
 client trace id in the request line's stream, pulls the row's own lever, and writes one JSON
 evidence file under `SPA_E2E_EVIDENCE`, holding no cookie, token or key; a rerun of a row reads
@@ -346,34 +351,43 @@ mutation the summary does not name stops the sitting:
   task is RUNNING, and use the id it prints; with none, say so when asking: the row then refuses and
   stops nothing. Its evidence file then records not proved and names only the exception, so post it as
   not proved with the refusal's line from the test's output. A refusal spends no attempt.
-- **D6 (row 6, F1; #348 Q29, #1203).** The class drives for up to 40 minutes while the operator
+- **D6 (row 6, F1; #348 Q29, #1203, #1216).** The class drives for up to 40 minutes while the operator
   deploys, and `tools/wiz_d6.sh` (#1204) is the lever: it waits for the driver's line starting
   `row6: launch deploy.sh now`, runs `deploy.sh` on the same commit as C1 runs it, and on
-  `deploy.sh`'s pass line stops `tunnel.sh` and starts it again through a new task, as D2 does by
-  hand. The launch waits for that line, written `ContinuityBounds.Row6LaunchAfterFirstSignIn` after
-  the first sign-in, because a session's refresh must fall inside the deployment interval, and on
+  `deploy.sh`'s pass line stops `tunnel.sh` and starts it again, as D2 does by hand, through the
+  bastion's task (#1168), which the deployment does not replace. The launch waits for that line,
+  written `ContinuityBounds.Row6LaunchAfterFirstSignIn` after the first sign-in, because a session's
+  refresh must fall inside the deployment interval, and on
   2026-11-14 a deployment launched straight after the test started ended before any session
-  refreshed, twice. Ask for `deploy.sh`'s confirm on launch, C1's shape (the one replacement is the
-  task definition), before the one call that starts both, in the background, with no tunnel started
-  by hand while it runs:
+  refreshed, twice. The driver writes the line to its standard output, which `dotnet test`'s
+  testing platform keeps from the terminal and from any file, so this row alone runs through the
+  suite's console runner, the `ConsoleRunner.Run` branch of `tests/e2e/Program.cs`, which passes
+  it through. Ask for `deploy.sh`'s confirm on launch, C1's shape (the one replacement is the
+  task definition), before the one call that starts both, in the background, with no tunnel
+  started by hand while it runs:
 
   ```bash
-  shown dotnet test --project tests/e2e -- --filter-method "Gateway.E2ETests.Deployed.ContinuityTests.Row6_*" \
-    --report-xunit-junit --results-directory "$E/results-row6" > "$E/row6-test.out" &
+  mkdir -p "$E/results-row6"
+  shown dotnet run --project tests/e2e -- -method "Gateway.E2ETests.Deployed.ContinuityTests.Row6_*" \
+    -result-junit "$E/results-row6/row6.junit.xml" > "$E/row6-test.out" &
   tools/wiz_d6.sh --test-pid $! --test-output "$E/row6-test.out" --record "$R"; echo "wiz_d6 exit=$?"; wait
   ```
 
   The lever runs bare, not under `shown`: it writes `deploy.sh`'s command and output and its own
-  `wiz_d6:` lines to the record itself, and prints `deploy.sh`'s output redacted. Under `dotnet test`
-  the driver's line never reaches `"$E/row6-test.out"`, since the testing platform keeps a test's
-  standard output from it, so until #1216 decides how the row runs the lever waits out its 600 s
-  and exits 1 having launched nothing: the row then runs on with no deployment, and is posted as
-  what it reports. The lever exits 0 only once the restarted tunnel has named its task; without
+  `wiz_d6:` lines to the record itself, and prints `deploy.sh`'s output redacted. The console
+  runner's switches are its own: `-method` takes the selector with its trailing `*`, and
+  `-result-junit` names the report, the one `*.junit.xml` under `results-row6/` that
+  `tools/wiz_row_post.py` reads. Its exit codes are not the testing platform's, so C2's exit 5
+  does not apply, and the post takes the row's verdict from the test's verdict line and the junit,
+  never from `exit=`. When the lever exits 1 having launched nothing (the test ended, or the line
+  did not come within its 600 s), the row runs on with no deployment and is posted as what it
+  reports. The lever exits 0 only once the restarted tunnel has named its task; without
   `deploy.sh`'s pass line it moves no tunnel and exits non-zero, even when `deploy.sh` exited 0
   (#1284). After the lever's exit 0, run `shown tools/scripts/verify-tunnel.sh /healthz` and
   note the time it passed; from the lever's `tunnel stopped at` time to that one is the gap, recorded
-  as missing coverage, and the id after `through task` is the new hop's. The old hop's task drains
-  during the roll, so requests through it fail before the stop. The class reads the old and new task
+  as missing coverage, and the id after `through task` is the bastion task's, never a gateway
+  task's: the roll drains no hop, so a request that fails before the stop is the roll's or the
+  session's, not a drained hop's. The class reads the old and new task
   ids and both image digests from ECS and posts nothing itself; `deploy.sh`'s wait names both new
   task ids, and those go into the post.
 - **D7 (row 7; #348 Q31).** The class onboards app 3 with #212's F-07 flow (the apps root's plan

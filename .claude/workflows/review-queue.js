@@ -117,6 +117,17 @@ export const meta = {
 // a hold on something else, so a removed row in a holding record answers nothing, and the next review
 // mutates the test again as held. On a stated, nominated or candidate mutation it is a could-not-run.
 //
+// A stated mutation as the body states it (#1327). On #1316 three things read a sound break as not
+// reproduced. A cell listing tests in a bracket, '<file> (<label>: test_a, test_b)', is one mutation
+// over those names: one agent and one place under the cap, and one row per name from that run, each
+// judged by its own name (statedList); a bracket of one token keeps its reading. A stated test keeps
+// the name as the body writes it: a dotted qualifier the description never writes is the inventory's
+// guess, and the row reads the bare name, its why saying what was stated (statedName). And a break
+// that fails only in one image runs there: the body's environment for a stated mutation, the Broken
+// cell's ` (run in <image>)` for a held one (RUN_IN), once, in a container of that image; the agent
+// reports where it ran, the cell records it when that was not the host, and a run anywhere else is
+// could-not-run, which holds.
+//
 // Follow-ups (#292). A finding the review carries rather than holds on lived only in records: #287's
 // three records each carried three with no ticket. The verdict agent names, for every carried finding,
 // the open ticket that owns it or none, and the earliest record on the pull request that carried it;
@@ -305,6 +316,10 @@ const recordsIn = (inv) => {
 // MUTATION_HEAD_FIVE, whose Test cell is `<named test> (caught by <tests>)` for a caught row and whose
 // Result cell leads with the internal value; it still reads, so a hold or a reproduced row on an open
 // pull request keeps counting for its next review.
+// Since #1327 a Broken cell whose run was not on the host ends ` (run in <image>)`, RUN_IN: the row
+// reads it back as its environment, and its broken without it. A cell with no such suffix, every
+// record written before #1327 and every five-column one, reads as the host.
+const RUN_IN = / \(run in ([^()\s]+)\)$/
 const MUTATION_HEAD = '| Broken | Failed of total | Result | Log |'
 const MUTATION_HEAD_FIVE = '| Test | What was broken | Failed of total | Result | Log file |'
 const RESULT_WORDS = { reproduced: 'reproduced', 'did-not-fail': 'not reproduced', 'could-not-run': 'could not run', removed: 'removed' }
@@ -329,12 +344,13 @@ const mutationTableOf = (body) => {
     const cells = line.slice(1, -1).split(/(?<!\\)\|/).map((c) => c.trim().replace(/\\\|/g, '|'))
     if (five) {
       const result = cells.length === 5 && /^(reproduced|did-not-fail|could-not-run|removed)\b/.exec(cells[3])
-      if (result && cells[0]) rows.push({ test: heldTestOf(cells[0]), broken: cells[1], result: result[1] })
+      if (result && cells[0]) rows.push({ test: heldTestOf(cells[0]), broken: cells[1], result: result[1], environment: '' })
       continue
     }
     const broken = cells.length === 4 && BROKEN_CELL.exec(cells[0])
     const result = Object.keys(RESULT_WORDS).find((k) => RESULT_WORDS[k] === cells[2])
-    if (broken && result) rows.push({ test: broken[1], broken: broken[2], result })
+    const ranIn = broken && RUN_IN.exec(broken[2])
+    if (broken && result) rows.push({ test: broken[1], broken: ranIn ? broken[2].slice(0, ranIn.index) : broken[2], result, environment: ranIn ? ranIn[1] : '' })
   }
   return rows
 }
@@ -483,14 +499,16 @@ const RANGE = {
   },
   required: ['from', 'ancestor', 'commits', 'merges', 'changedFiles', 'since', 'mapping', 'error'],
 }
-// A mutation the pull request's body states, quoted, with its counts (-1 when the body gives none).
+// A mutation the pull request's body states, quoted, with its counts (-1 when the body gives none),
+// and the image the body says the break fails in, "" when it names none (#1327).
 const STATED = {
   type: 'object',
   properties: {
     test: { type: 'string' }, project: { type: 'string' }, mutation: { type: 'string' },
+    environment: { type: 'string', description: 'the container image the body says the break fails in, such as ubuntu:26.04; "" when it names none' },
     failed: { type: 'integer' }, total: { type: 'integer' }, quote: { type: 'string' },
   },
-  required: ['test', 'project', 'mutation', 'failed', 'total', 'quote'],
+  required: ['test', 'project', 'mutation', 'environment', 'failed', 'total', 'quote'],
 }
 // A nomination's test is the bare test name; the assertion it suspects goes in why (#763).
 const NOMINATION = {
@@ -592,8 +610,12 @@ const MUTATION = {
     failed: { type: 'integer' }, total: { type: 'integer' },
     failingNames: { type: 'array', items: { type: 'string' } },
     result: { type: 'string', enum: RESULTS }, why: { type: 'string' },
+    // Where the run happened (#1327): the image name alone, "" for the host. absent: the tests a
+    // listed mutation names that the run did not include, [] for a mutation of one test.
+    environment: { type: 'string', description: 'the container image the project ran in, its name alone such as ubuntu:26.04; "" when it ran on the host' },
+    absent: { type: 'array', items: { type: 'string' }, description: 'the tests TESTS lists that the run did not include; [] when the mutation names one test' },
   },
-  required: ['test', 'broken', 'failed', 'total', 'failingNames', 'result', 'why'],
+  required: ['test', 'broken', 'failed', 'total', 'failingNames', 'result', 'why', 'environment', 'absent'],
 }
 const POST = {
   type: 'object',
@@ -665,7 +687,7 @@ OUTPUT FILE: ${DIR(n)}/inventory.json
 3b. reviewCommits: from \`git -C ${REPO} log --format='%H%x09%s' <forkPoint>..<head>\`, one entry per commit whose subject starts \`Review:\`: sha, subject, and files = \`git -C ${REPO} diff-tree --no-commit-id --name-only -r <sha>\` (for a merge, \`git -C ${REPO} diff --name-only <sha>^1 <sha>\`). [] when none.
 4. ownership: run \`cd ${REPO} && python3 -I .github/path-ownership.py <forkPoint> <head>\`; owners = the owner sets it names, ok = whether it exited 0, output = its last lines.
 5. ci: one row per check of statusCheckRollup, state one of success, failure, pending, skipped.
-6. cites: the plan row id, the issue numbers and the merge subject the body proposes (empty when absent). bodyClaims: every claim the body makes about what it did or proved, quoted, mutation statements with their counts included. statedMutations: one entry per mutation the body states: the test it names, the project that runs it, the mutation as stated, failed and total as the body gives them (-1 for a count it does not give), and the sentence quoted.
+6. cites: the plan row id, the issue numbers and the merge subject the body proposes (empty when absent). bodyClaims: every claim the body makes about what it did or proved, quoted, mutation statements with their counts included. statedMutations: one entry per mutation the body states: the test exactly as the body writes it, with no class, module or namespace the body does not write beside it, the project that runs it, the mutation as stated, the environment the body says the break fails in ("" when it names none), failed and total as the body gives them (-1 for a count it does not give), and the sentence quoted.
 6a. statedHeads: one entry per sha the body gives as this pull request's head, the head it says it describes ("head \`76704c5\`"): sha exactly as written, full or abbreviated, and quote, the sentence that gives it. Leave out the fork point, the base, a listed commit, and a sha the body names as an earlier head or as history ("the earlier head \`ed8d063\`"). [] when the body gives none. Do not compare it with the head: the script does.
 6c. description: the body exactly as gh serves it, byte for byte ("" when it is empty). commitMessages: one entry per line \`git -C ${REPO} log --format=%H <forkPoint>..<head> | while read -r s; do echo "$s $(git -C ${REPO} log -1 --format=%P "$s" | wc -w | tr -d ' ') $(git -C ${REPO} log -1 --format=%B "$s" | jq -Rs 'sub("[ \\t\\r\\n]+$"; "") | length')"; done\` prints, in that order, its three fields exactly as printed: sha, parents (the commit's parent shas counted, 2 or more for a merge) and length (the characters its message runs before any whitespace at its end). message: when the lengths sum to at most ${MESSAGES_AT_ONCE}, \`git -C ${REPO} log -1 --format=%B <sha>\` copied byte for byte, every character and never a summary, an elision or a stand-in, since the script counts them against length; when they sum to more, "" for every commit, and the script has them read by agents of their own. Do not look for dates or Closes lines in them: the script does.
 6b. candidates: every candidate invariant test the diff adds or changes: each xUnit fact or theory (test = its class and method name, project = its test project's directory), each Terraform test file (project = its directory), each Python test companion (test and project = its path, and nothing added to the test). file: the repository path of the file the test is written in. guards: one sentence on what it guards. breaks: the source file it would take to break that, never the test itself.
@@ -780,7 +802,7 @@ ${stale.length ? `The script compared every head the description states with the
 ${mut.rows.length ? mut.rows.map((r) => `- ${r.test} (${r.kind}): ${r.result}, ${r.failed} of ${r.total} failed.${r.caughtBy.length ? (r.checksOnly ? ` On a Node companion, red on the fail() messages ${r.caughtBy.join(', ')}: a caught row, which holds unless you put ${JSON.stringify(r.test)} in caughtAccepted.` : ` Caught by ${r.caughtBy.join(', ')}, not by ${r.test}.`) : ''} ${r.why}`).join('\n') : '- None ran.'}${mut.rows.some((r) => r.kind === 'held') ? '\nA held row is a test an earlier record held on as did-not-fail and no later record reproduced, mutated again with the break that record named.' : ''}${mut.cut.length ? `\nThe cap (${MUTATION_CAP}) left unmutated: ${mut.cut.join(', ')}.` : ''}${mut.cleared.length ? `\nNot mutated, cleared by an earlier record that reproduced it, its test file and the source it breaks unchanged since that record's head: ${clearedText(mut.cleared)}.` : ''}
 ${mut.holds.length ? `The rows already hold the verdict: ${mut.holds.join('; ')}. Say so in summary.` : ''}
 ${d ? deltaBrief(d) + (d.verdict === 'hold' ? ' Put each of the held record\'s findings in earlierFindings: held true when that record held on it, false when it carried it as a follow-up that did not hold; answered true when the range answers it, false when it does not; finding is the held record\'s title for it, as that record wrote it, and how states only what changed since the held record, in one sentence; never restate its finding or its evidence, which the record links. An unanswered finding the record held on holds, and so does an empty list; an unanswered follow-up does not, and goes in followUps.' : ' earlierFindings is [].') : 'earlierFindings is [].'}
-verdict is hold when a verified finding shows the change does not do what it says, or a test that proves it cannot fail: a did-not-fail row, or a stated or held mutation that did not reproduce. A could-not-run on a stated, held or nominated mutation holds too; one on a candidate nobody suspected is reported and does not. A removed row is a held break whose target the range deleted, so it holds nothing by itself, but it answers the held test only if the deletion is sound: read the commit its why names, and it answers when the removed code could never run (say why) or the same check is still enforced elsewhere (say where), each as a verified finding; otherwise, or if you cannot show either, the held test is unanswered and the verdict is hold. A caught row is a held or candidate break the project caught through other tests while the named test stayed green (#684, #689). It answers the named test only when you verify, as a verified finding, that a test it names guards the break: for a held row, the break the held record named. For a candidate, you must also verify, as a verified finding, why the named test could not go red on that break: either the break lies outside what the named test guards, or the case the break reaches skips where the review runs. Then put the named test in caughtAccepted. A candidate that guards the break and stayed green proves nothing: leave it out. A caught row of any kind on a Node companion, a row whose project is an .mjs file or whose file or test cell's leading path is one, whatever project the inventory gives it (#938), is read another way, since such a companion prints no test names, only its checks' fail() messages (#905): read the named checks' source at the head, and when every message the row went red on is one of those checks' own fail() messages, say so as a verified finding and put the named test in caughtAccepted; the check for a candidate's green named test does not apply. On a Node companion, a stated or nominated row that went red on any message of another check is not answered by it: leave it out of caughtAccepted, and the verdict is hold. A held or candidate row there keeps its catch (#684, #689): one that went red on another check's message is answered only when you verify that the check whose fail() printed it guards the break (for a held row, the break the held record named) and, for a candidate, unlike a row red only on its own checks' messages, that its named check went red on its own fail() messages as well or why it could not go red on that break; then put the named test in caughtAccepted. In every other case leave the named test out of caughtAccepted, and the named test is unanswered and the verdict is hold. Otherwise merge. outstanding lists what stays for the merge body's Outstanding: line.
+verdict is hold when a verified finding shows the change does not do what it says, or a test that proves it cannot fail: a did-not-fail row, or a stated or held mutation that did not reproduce. A could-not-run on a stated, held or nominated mutation holds too; one on a candidate nobody suspected is reported and does not. A removed row is a held break whose target the range deleted, so it holds nothing by itself, but it answers the held test only if the deletion is sound: read the commit its why names, and it answers when the removed code could never run (say why) or the same check is still enforced elsewhere (say where), each as a verified finding; otherwise, or if you cannot show either, the held test is unanswered and the verdict is hold. A caught row is a held or candidate break the project caught through other tests while the named test stayed green (#684, #689). It answers the named test only when you verify, as a verified finding, that a test it names guards the break: for a held row, the break the held record named. For a candidate, you must also verify, as a verified finding, why the named test could not go red on that break: either the break lies outside what the named test guards, or the case the break reaches skips where the review runs. Then put the named test in caughtAccepted. The string that goes in caughtAccepted, here and below, is the row's test name without its kind: the mutation list above prints each row as its test name and then its kind in parentheses, and the kind is not part of the name. A candidate that guards the break and stayed green proves nothing: leave it out. A caught row of any kind on a Node companion, a row whose project is an .mjs file or whose file or test cell's leading path is one, whatever project the inventory gives it (#938), is read another way, since such a companion prints no test names, only its checks' fail() messages (#905): read the named checks' source at the head, and when every message the row went red on is one of those checks' own fail() messages, say so as a verified finding and put the named test in caughtAccepted; the check for a candidate's green named test does not apply. On a Node companion, a stated or nominated row that went red on any message of another check is not answered by it: leave it out of caughtAccepted, and the verdict is hold. A held or candidate row there keeps its catch (#684, #689): one that went red on another check's message is answered only when you verify that the check whose fail() printed it guards the break (for a held row, the break the held record named) and, for a candidate, unlike a row red only on its own checks' messages, that its named check went red on its own fail() messages as well or why it could not go red on that break; then put the named test in caughtAccepted. In every other case leave the named test out of caughtAccepted, and the named test is unanswered and the verdict is hold. Otherwise merge. outstanding lists what stays for the merge body's Outstanding: line.
 followUps: every finding this review carries rather than holds on, whatever the verdict: a finding left standing for after the merge, and each outstanding entry that is a defect still to fix. Each: axis, title (one line; when an earlier record's "## Follow-ups" table (five columns: Finding, Axis, Where, First carried by, Fails on) lists the finding, its Finding cell verbatim), where, failsOn, ticket and firstCarried. failsOn is the input or state on which the finding gives the wrong result, in one sentence (#966): what a reader would run or set up to see it go wrong. A carried finding is a follow-up only when it leaves the gateway, or a proof of it, wrong (#1307): its failsOn shows one of three things, (1) a gateway behaviour that is wrong, (2) a test, suite, script or sitting step that would pass, or lose its evidence, while the gateway is wrong, or (3) process tooling that would land or pass work it should refuse. A carried finding for which you cannot name one, or whose failsOn shows none of the three, is not a follow-up: write it in findings under the axis that found it, as a note, and leave it out of followUps; it files nothing; the wording of a document, and a defect in tooling that puts no proof at risk, are notes. The script writes any followUp with an empty failsOn as such a note. ticket is the open issue that owns the fix, as "#<n>", checked with \`cd ${REPO} && gh issue view <n> --json state,title\` (it must be OPEN and its title or body must be about this fix; an issue the finding merely mentions does not own it), or "" when there is no open ticket for it, which you search for with \`cd ${REPO} && gh issue list --state open --search "<key words> in:title,body" --json number,title\`. firstCarried is the earliest of the records on this pull request that carried the same finding, by its URL: ${(() => { const urls = recordsIn(inv).map((r) => r.url).filter(Boolean); return urls.length ? `read ${urls.join(', ')} (oldest first)` : 'there is none, so it is ""' })()}; "" when none did. The script keeps those with ticket "" as the comment's follow-ups, which the follow-ups pass files, from this pull request while it is open and on the first pass after it merges; one still unfiled when it merges is named by tools/land.sh and may be filed by hand sooner (#514, #573, #1082).
 ${heldChangeRoute(n, inv)}
 Return the result. Write no file for it: the script hands what you return to the post agent, which writes verdict.json (#1092).`
@@ -790,6 +812,12 @@ const mutationLog = (n, i) => `${DIR(n)}/mutation-${i}.txt`
 const mutatePrompt = (n, inv, m, i) => {
   const wt = mutationWorktree(n, i)
   const project = m.project || 'the project that runs it alone (find it from its name)'
+  // A listed stated cell names its tests, each judged by the script from failingNames and absent
+  // (#1327); a mutation that names an environment runs there once and nowhere else.
+  const named = m.tests ? `any of ${m.tests.join(', ')}` : m.test
+  const where = m.environment
+    ? ` Run only ${project} there, once, in a container of the image ${m.environment} with the worktree mounted (\`docker run --rm -v ${wt}:${wt} -w ${wt} ${m.environment} ...\`), installing inside it only what the project needs; report that run's counts alone, and never run it again in another image or on the host. When Docker is absent or the image cannot be pulled, the result is could-not-run with why.`
+    : ''
   return `Run one mutation for the review of pull request #${n}: break what one test guards, and see whether the test goes red. You wrote none of its commits.
 
 ${HOUSE}
@@ -797,8 +825,8 @@ ${HOUSE}
 OUTPUT FILE: ${mutationLog(n, i)}
 WORKTREE: ${wt}
 TEST: ${m.test}
-
-The test: ${m.test}, run by ${project}. ${m.kind === 'stated'
+${m.tests ? `TESTS: ${m.tests.join(', ')}\n` : ''}
+The test: ${m.test}, run by ${project}.${m.tests ? ` The author's cell lists ${m.tests.length} tests: ${m.tests.join(', ')}. One run serves them all.` : ''}${m.environment ? ` The break needs the image ${m.environment}.` : ''} ${m.kind === 'stated'
     ? `The author states this mutation; apply it exactly as stated: ${m.mutation}. The body says: ${JSON.stringify(m.quote)}${m.failed >= 0 ? ` (failed ${m.failed}${m.total >= 0 ? ` of ${m.total}` : ''})` : ''}.`
     : m.kind === 'held'
     ? `The review record ${m.heldBy} held because this test did not fail with this broken: ${m.mutation}. Apply that break again, exactly as it says, never in the test${m.cell !== m.test ? ` (the record's row named ${JSON.stringify(m.cell)}; judge ${m.test} alone)` : ''}, and see whether the test goes red now.`
@@ -806,8 +834,8 @@ The test: ${m.test}, run by ${project}. ${m.kind === 'stated'
 
 1. Write \`HEAD=${inv.head}\` as the OUTPUT FILE's first line. If ${wt} already exists, an earlier run left it: \`git -C ${REPO} worktree remove --force ${wt}\`, then \`git -C ${REPO} worktree prune\`.
 2. \`git -C ${REPO} worktree add --detach ${wt} ${inv.head}\`. If the worktree cannot be made, the result is could-not-run with why.
-3. Make the mutation in ${wt} only. Run only ${project} there: a .NET test project with \`dotnet test --project <it>\`, a Terraform test directory with \`terraform test\` in it, a Python companion with \`python3 -I <it>\`. Never the solution. Append the runner's output to the OUTPUT FILE as it prints it; never add a credential, token, cookie, code or state value to it.
-4. failed and total: the counts the runner printed; failingNames: the tests it named as failing, each whole as the runner printed it, its namespace or module and class kept where the runner printed them. result: reproduced when ${m.test} went red, did-not-fail when the project passed with the mutation in place, could-not-run when it could not be judged (the project does not build at the head, a tool is absent, the test was not found, the run timed out, the worktree could not be made), with why.${m.kind === 'held' ? ` removed, for this held mutation only: the code the held break names no longer exists at the head, so there is nothing to break. Prove it before you say so: search the head for the quoted code, and \`git -C ${wt} log -S'<a distinctive string of it>' --oneline ${inv.forkPoint}..${inv.head}\` must name the commit that removed it; why names that commit and quotes what it removed. Code that moved or was renamed, a break you could not locate, or a test that fails to build is not removed: it is could-not-run.` : ''}${m.kind === 'held' || m.kind === 'candidate' ? ` When the project went red with the break in place but ${m.test} stayed green, the result is reproduced all the same: failingNames names the tests that went red, and why says the break is caught by them and not by ${m.test}.` : ` When the project went red with the break in place but ${m.test} stayed green, the result is did-not-fail: failingNames names the tests that went red.`} broken: what you broke, in one line.
+3. Make the mutation in ${wt} only. Run only ${project} there: a .NET test project with \`dotnet test --project <it>\`, a Terraform test directory with \`terraform test\` in it, a Python companion with \`python3 -I <it>\`. Never the solution.${where} Append the runner's output to the OUTPUT FILE as it prints it; never add a credential, token, cookie, code or state value to it.
+4. failed and total: the counts the runner printed; failingNames: the tests it named as failing, each whole as the runner printed it, its namespace or module and class kept where the runner printed them. environment: the image you ran the project in, its name alone, or "" when you ran it on the host. absent: ${m.tests ? `the tests of ${m.tests.join(', ')} the run did not include, [] when it ran them all` : '[]'}. result: reproduced when ${named} went red, did-not-fail when the project passed with the mutation in place, could-not-run when it could not be judged (the project does not build at the head, a tool is absent, the test was not found, the run timed out, the worktree could not be made), with why.${m.kind === 'held' ? ` removed, for this held mutation only: the code the held break names no longer exists at the head, so there is nothing to break. Prove it before you say so: search the head for the quoted code, and \`git -C ${wt} log -S'<a distinctive string of it>' --oneline ${inv.forkPoint}..${inv.head}\` must name the commit that removed it; why names that commit and quotes what it removed. Code that moved or was renamed, a break you could not locate, or a test that fails to build is not removed: it is could-not-run.` : ''}${m.kind === 'held' || m.kind === 'candidate' ? ` When the project went red with the break in place but ${m.test} stayed green, the result is reproduced all the same: failingNames names the tests that went red, and why says the break is caught by them and not by ${m.test}.` : ` When the project went red with the break in place but ${m.tests ? 'none of them' : m.test} stayed green, the result is did-not-fail: failingNames names the tests that went red.`} broken: what you broke, in one line.
 5. Always, whatever happened above: \`git -C ${REPO} worktree remove --force ${wt}\` and \`git -C ${REPO} worktree prune\`.
 6. Write \`RESULT: <result>\` as the OUTPUT FILE's last line, then return the result.`
 }
@@ -913,6 +941,38 @@ const nominated = (s, byTest, i = 0) => {
   return { ...(byTest.get(test) || byTest.get(bare)), ...s, test, why, kind: 'nominated', cls }
 }
 
+// A stated cell that lists tests (#1327): a leading token and one parenthesis which, after an
+// optional `<label>:`, holds two or more comma-separated bare or dotted identifiers. On #1316 the
+// cell 'tools/scripts/tunnel_tests.py (both Ctrl-C cases: test_a, test_b)' was no whole file and
+// matched neither red name, so a run red on both read did-not-fail. Such a cell is one stated
+// mutation over its names (tests): one agent, one place under the cap, and one row per name from
+// that run (statedRows), each judged by its own name. A parenthesis of one token keeps its reading:
+// '(companion)', '(check: ...)', '(Assert.Null)', '(pkg.Class)' and prose are not lists.
+const STATED_LIST = /^\S+\s*\((?:[^():,]*:)?([^()]*)\)$/
+const IDENTIFIER = /^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*$/
+const statedList = (cell) => {
+  const [, inner] = STATED_LIST.exec(String(cell || '').trim()) || []
+  const names = inner === undefined ? [] : inner.split(',').map((t) => t.trim())
+  return names.length >= 2 && names.every((t) => IDENTIFIER.test(t)) ? names : null
+}
+// A stated test whose dotted qualifier the description never writes (#1327): the inventory guessed
+// it. On #1316 the body wrote test_ctrl_c_leaves_none_running and the inventory gave it a class that
+// does not define it, so the row read the right red test as caught elsewhere. The row keeps the bare
+// name, which is matched as any bare stated name is, and its why says what was stated. A cell that
+// is a file (FILE_CELL), or a description the inventory returned empty, keeps the cell as it is.
+const FILE_CELL = /\.(py|mjs|cjs|js|ts|cs|sh|tf|hcl|json|ya?ml|md)$/
+const statedName = (s, description) => {
+  const cell = String(s.test || '').trim()
+  if (!description || FILE_CELL.test(cell) || !/^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+$/.test(cell)) return s
+  const at = cell.lastIndexOf('.')
+  const qualifier = cell.slice(0, at)
+  if (new RegExp(`(?<!\\w)${qualifier.replace(/\./g, '\\.')}(?!\\w)`).test(description)) return s
+  return { ...s, test: cell.slice(at + 1), statedAs: `(stated as ${cell}; the description names no ${qualifier})` }
+}
+// The rows one mutation gives: one per name of a listed stated cell, each carrying the cell it was
+// listed in, or the mutation itself.
+const statedRows = (m) => (m.tests ? m.tests.map((t) => ({ ...m, test: t, listedIn: m.test })) : [m])
+
 // The mutation list: when the latest record held, first the tests the records list as did-not-fail
 // and no later record reproduced (#289); then the body's stated mutations, then the Standards axis's
 // nominations, then the candidates whose file or broken source a commit titled `Review: ...` since
@@ -956,7 +1016,7 @@ const mutationList = (inv, standards, d, prior = { held: null, clearers: [] }) =
     return { ...hits[0], ...m, file: hits[0].file, project: hits[0].project }
   }
   const held = prior.held ? [...prior.held.rows].reverse().flatMap((h) => {
-    const base = { mutation: h.broken, quote: h.broken, failed: -1, total: -1, kind: 'held', heldBy: h.url, cell: h.test }
+    const base = { mutation: h.broken, quote: h.broken, failed: -1, total: -1, kind: 'held', heldBy: h.url, cell: h.test, environment: h.environment || '' }
     const byName = candidates.filter((c) => names(h.test, c.test))
     const named = byName.length ? byName : wholeFor(h.test)
     const answered = (test) => h.later.some((t) => t === test || names(t, test))
@@ -968,7 +1028,11 @@ const mutationList = (inv, standards, d, prior = { held: null, clearers: [] }) =
   const touched = (c) => [c.file, c.breaks].some((f) => f && reviewed.has(f))
   const all = [
     ...held,
-    ...(inv.statedMutations || []).map((s) => borrowed({ ...byTest.get(s.test), ...s, kind: 'stated' })),
+    ...(inv.statedMutations || []).map((s) => {
+      const tests = statedList(s.test)
+      const read = tests ? { ...s, tests } : statedName(s, inv.description)
+      return borrowed({ ...(byTest.get(read.test) || byTest.get(s.test)), ...read, environment: s.environment || '', kind: 'stated' })
+    }),
     ...((standards && standards.nominations) || []).map((s, i) => borrowed(nominated(s, byTest, i))), // empty-ok: a null Standards axis fails the pull request before mutationList runs, so standards is never null here
     ...candidates.filter(touched).map((c) => ({ ...c, kind: 'candidate' })),
     ...candidates.filter((c) => !touched(c)).map((c) => ({ ...c, kind: 'candidate' })),
@@ -1008,7 +1072,28 @@ const mutationRow = (n, m, i, got) => {
     why: ok ? (got.result === 'removed' && m.kind !== 'held' ? `removed is only for a held mutation: ${got.why || ''}` : (got.why || '')) : (got ? `the mutation agent returned the result ${JSON.stringify(got.result)}, which is none of ${RESULTS.join(', ')}` : 'the mutation agent died or returned nothing'),
     // An unnamed nomination ran no agent, so it has no log to name (#811).
     countsMatched: null, logFile: m.unnamed ? '-' : mutationLog(n, i),
+    environment: ok ? String(got.environment || '').trim() : '',
+    // The image the break needs, which the Broken cell records: where a run happened to be is no
+    // requirement, and the next review reads the cell back as one (#1396).
+    needs: m.environment || '',
   }
+  // A judged row (reproduced or did-not-fail) the script cannot take as judged becomes could-not-run,
+  // which holds a stated or held row; removed is proven from git history, wherever the agent ran.
+  const unjudged = (when, why) => {
+    if (!when || (row.result !== 'reproduced' && row.result !== 'did-not-fail')) return
+    row.why = `${why}: ${row.why}`
+    row.result = 'could-not-run'
+  }
+  // The environment the break needs (#1327): a run anywhere else cannot show it, so a held break
+  // re-run on the host reads as unjudged, not as gone. An environment that is no image name cannot be
+  // written into the Broken cell so that RUN_IN reads it back, and would be lost to the next review.
+  unjudged(row.environment && !/^[^()\s]+$/.test(row.environment), `the agent reported the environment ${JSON.stringify(row.environment)}, which is no image name`)
+  unjudged(m.environment && row.environment !== m.environment, `the break needs ${m.environment} and ran in ${row.environment || 'the host'}`)
+  // A name of a listed stated cell (#1327), judged by its own name from the one run: absent from the
+  // run, it is could-not-run; reported red with no failing name, which name went red is unknown.
+  const own = (f) => `.${dotted(f)}`.endsWith(`.${m.test}`)
+  unjudged(m.listedIn && ((ok && got.absent) || []).some(own), `${m.test} was not in the run of ${m.listedIn}`)
+  unjudged(m.listedIn && row.result === 'reproduced' && !row.failingNames.length, `the run of ${m.listedIn} went red and named no failing test, so whether ${m.test} did is unknown`)
   // A held or candidate break the project caught through other tests, the named one not among them
   // (#684, #689): the tests that went red, which the verdict must accept before the row answers the
   // named test. A stated or nominated row the agent reported reproduced on other tests alone is
@@ -1043,7 +1128,7 @@ const mutationRow = (n, m, i, got) => {
   // A stated row has no file but a same-test candidate's, so with none, or scoped to a check, it is
   // known by the .mjs file its cell names; that makes it only a caught row, which the verdict still
   // has to answer (#1069), since only a candidate's file, not the author's cell, shows the run was it.
-  const nodeFile = /\.mjs$/.test(m.file || '') || /\.mjs$/.test((/^[^\s(]*/.exec(cell) || [''])[0])
+  const nodeFile = /\.mjs$/.test(m.file || '') || /\.mjs$/.test((/^[^\s(]*/.exec(m.listedIn || cell) || [''])[0])
   const ownPy = !m.file && (m.kind === 'stated' || m.kind === 'nominated') && m.project === cell && /^\S+\/\S+\.py$/.test(cell)
   const wholeFile = ownPy || (!!m.file && (m.project === m.file || nodeFile) && (cell === m.file || cell === m.file.split('/').pop()))
   // A nomination's cls, from a cell 'test_x (pkg.Class)', is that class when unittest printed the
@@ -1071,6 +1156,7 @@ const mutationRow = (n, m, i, got) => {
   // The verdict prompt names such a row's acceptance by its cell: on #960 a stated row read as
   // 'Caught by <its own messages>, not by <it>' was taken for no caught row, and held unaccepted.
   row.checksOnly = checksOnly
+  if (m.statedAs) row.why = `${row.why} ${m.statedAs}`.trim()
   return row
 }
 // What in the rows holds the verdict, each named. A held test the cap cut was never mutated, so the
@@ -1134,7 +1220,7 @@ const boxLines = (boxes) => (boxes.length
 const mutationLines = (mut) => [
   ...(mut.rows.length
     ? [MUTATION_HEAD, '| --- | --- | --- | --- |',
-      ...mut.rows.map((r) => `| ${[`\`${r.test}\`${r.caughtBy.length ? `${CAUGHT_BY}${r.caughtBy.join(', ')})` : ''}: ${r.broken || '-'}`,
+      ...mut.rows.map((r) => `| ${[`\`${r.test}\`${r.caughtBy.length ? `${CAUGHT_BY}${r.caughtBy.join(', ')})` : ''}: ${r.broken || '-'}${r.needs || r.environment ? ` (run in ${r.needs || r.environment})` : ''}`,
         `${r.failed} of ${r.total}${r.countsMatched === true ? ', as stated' : r.countsMatched === false ? ', not as stated' : ''}`,
         RESULT_WORDS[r.result], r.logFile].map(cell).join(' | ')} |`),
       // The why of a row that did not reproduce, which is what a reader of a hold needs (#967); a
@@ -1515,7 +1601,7 @@ const reviewOne = async (n, res, at) => {
     if (m.unnamed) return { result: 'could-not-run', why: m.why }
     try { return await run(mutatePrompt(n, inv, m, i + 1), { label: `mutate:${n}:${i + 1}`, phase: 'Mutate', schema: MUTATION }) } catch (e) { return null }
   }))
-  const rows = list.map((m, i) => mutationRow(n, m, i + 1, got && got[i]))
+  const rows = list.flatMap((m, i) => statedRows(m).map((one) => mutationRow(n, one, i + 1, got && got[i])))
   const mut = { rows, cut, outside, cleared, holds: mutationHolds(rows, cutHeld) }
   res.mutations = rows
   res.notMutated = cut
@@ -1543,9 +1629,15 @@ const reviewOne = async (n, res, at) => {
   // not say held: false counts as held.
   const unanswered = d && d.verdict === 'hold' && (!v.earlierFindings.length || v.earlierFindings.some((f) => f.answered === false && f.held !== false))
   // A caught row the verdict did not accept leaves its named test unanswered (#684, #689): it holds,
-  // and its row reads did-not-fail, so the next review mutates the test again as a held row.
+  // and its row reads did-not-fail, so the next review mutates the test again as a held row. An entry
+  // accepts a row as its test name, or as that name with the row's own kind in parentheses after it,
+  // which is how the verdict prompt's row line prints it: on #1396 a verdict returned the name that
+  // way and the pull request was held on a catch it had accepted (#1403). The entries are compared
+  // as returned, never trimmed of a parenthesis, so a name that ends in one of its own still matches
+  // and another row's kind after a name accepts nothing.
   const accepted = new Set(v.caughtAccepted || [])
-  for (const r of rows.filter((x) => x.caughtBy.length && !accepted.has(x.test))) {
+  const isAccepted = (x) => accepted.has(x.test) || accepted.has(`${x.test} (${x.kind})`)
+  for (const r of rows.filter((x) => x.caughtBy.length && !isAccepted(x))) {
     r.why = `the project went red on ${r.caughtBy.join(', ')}, a catch the verdict did not accept: ${r.why}`
     r.result = 'did-not-fail'
     r.caughtBy = []

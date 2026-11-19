@@ -9,16 +9,24 @@ and the part of the plan in `docs/plan/` it cites, before you write anything.
 
 ## Where to look
 
+**Each rule has one home; elsewhere, point to it.** This table names the homes.
+
 | You need | Read |
 | --- | --- |
 | Why your task exists: what gateway capability it is part of | `docs/roadmap.md` |
 | Architecture, gates, decisions, assumptions | `docs/plan/01-plan.md` |
 | Interfaces, schemas, the request pipeline order | `contracts/`, and `docs/plan/02-contracts.md`, the export they were written from |
 | A plan row: what, needs, done when | `docs/plan/03-workstreams-and-tasks.md` |
-| Test ids (`F-`, `N-`, `P-`, `A-`) | `docs/plan/04-tests.md`, and `contracts/test-ids.md` for ids named after the export |
+| Test ids | `docs/plan/04-tests.md`, and `contracts/test-ids.md` for ids named after the export |
 | Terraform roots, scripts, deployment, cost | `docs/plan/05-infrastructure-and-cost.md` |
-| Evidence ids (`S-`, `R-`) and the mechanism's source | `docs/plan/07-evidence.md` |
+| Evidence ids and the mechanism's source | `docs/plan/07-evidence.md` |
 | Tools, package versions, licences, open decisions | `docs/dependencies.md` |
+| Take, build, land, gates | `docs/agents/landing-work.md` |
+| Review, including who may review | `docs/agents/review.md` |
+| Paths and owners | `OWNERSHIP.md` |
+| How code is written | `CODING_STANDARDS.md` |
+| Terms, as definitions only | `GLOSSARY.md` |
+| Where a decision lives, and when one gets an ADR | `docs/adr/README.md` → "Where a decision lives" |
 | Tickets and specs on the tracker: their shape, body and comments, closing, citing, the human's account, a decision Adam gives in a foreground session, lifecycle | `docs/agents/tracker-policy.md` |
 | Launching the review-queue workflow, repairing what a review found | `docs/agents/landing-work.md` -> "Launching the review", `docs/agents/review.md` -> "Repairing findings" |
 | AWS work: the Region, IAM and spend-limit rules of the new AWS experience, before any apply or credential step | `docs/agents/aws-rules.md` |
@@ -32,7 +40,7 @@ and the part of the plan in `docs/plan/` it cites, before you write anything.
   (`tools/land.sh`, `.claude/workflows/`, the wiz scripts), answers a different question: which proof
   does this make cheaper or safer? `docs/roadmap.md` names the capability each stage of the gateway's
   ladder proves, and the plan rows that prove it.
-- **A commit that changes a steering document names its authority** in an `Authority:` trailer: `#<n>` for the ticket that asks for the change, or the URL of the comment holding a confirmed answer. `.githooks/pre-push` and CI hold a commit that names none; `docs/agents/landing-work.md` has the forms.
+- **A commit that changes a steering document names its authority** in an `Authority:` trailer. Which documents those are, the trailer's forms and the check that holds it: `docs/agents/landing-work.md` → "A commit that changes a steering document".
 - **Build against `Platform.Testing`**, not against another workstream's branch.
 - **Fill in the entry points the pipeline contract assigns to you, and add no others.** `Program.cs` calls them.
 - **A test id in your ticket's acceptance criteria, or under a plan row's "Done when", names a behaviour.** Prove it in your own test project, against the doubles. Workstream 6 proves it again in the composed suites.
@@ -44,17 +52,7 @@ and the part of the plan in `docs/plan/` it cites, before you write anything.
   and `.githooks/pre-push` checks them. How a task lands: `docs/agents/landing-work.md`.
 - **The integrator's paths are off limits**, even for a one-line fix. Need one changed (a contract, a package, a version, a project)? File a change request and stop: `docs/agents/tracker-policy.md` → "Change requests". `SpaPlatform.slnx` and `Directory.Packages.props` are the integrator's.
 
-| Owner | Paths |
-| --- | --- |
-| Integrator | Everything not listed below: root files, `.github/`, `contracts/`, `docs/adr/`, `docs/plan/`, `docs/dependencies.md`, `src/Platform.Abstractions`, `src/Platform.Testing`, `src/Gateway`, their two test projects, `tools/preflight.sh` |
-| 1 AWS and IaC | `infra/`, `tools/scripts/` |
-| 2 Hosting and registry | `src/Platform.Registry`, `src/Platform.Hosting`, `tools/spactl`, and their test projects |
-| 3 OAuth and sessions | `src/Platform.Identity`, its test project, `spikes/g0/` |
-| 4 API and security | `src/Platform.Proxy`, `src/Platform.Security`, and their test projects |
-| 5 Fixtures | `fixtures/` |
-| 6 Verification and operations | `src/Platform.Telemetry`, its test project, `tests/Gateway.*`, `tests/e2e`, `tools/bench/`, `docs/runbooks/`, `docs/gaps.md` |
-
-A component test project is `tests/<Project>.Tests` and belongs to the owner of `<Project>`.
+`OWNERSHIP.md` names the owner of every path, and `.github/path-ownership.py` reads it.
 
 ## Build and test
 
@@ -119,5 +117,5 @@ using an older snapshot to choose work.
 - **Which gate is open:** the gates table in `docs/plan/01-plan.md`, or for a gate defined after
   the export the gate register `contracts/gates.md`, read from origin/main against those tags.
 - **All three at once, per gateway capability:** read `docs/roadmap.md` from origin/main with
-  `git show origin/main:docs/roadmap.md`. `tools/roadmap.py` derives its generated block; after
-  landing a row, run that script in the landing checkout.
+  `git show origin/main:docs/roadmap.md`. `tools/roadmap.py` derives its generated block; who runs
+  it, and when: `docs/agents/landing-work.md` → "Land it".

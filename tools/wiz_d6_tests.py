@@ -72,12 +72,12 @@ TUNNEL_DOUBLE = r"""#!/bin/bash
 echo "tunnel.sh $*" >> "$WIZ_D6_CASE/calls"
 port="$2"
 if [ "$(cat "$WIZ_D6_CASE/tunnel.mode")" = "die" ]; then
-  echo "tunnel: no task of spa-poc in spa-poc can carry a session:" >&2
+  echo "tunnel: no task of bastion in spa-poc can carry a session:" >&2
   exit 1
 fi
 echo "$$" > "$WIZ_D6_CASE/tunnel.pid"
 echo "tunnel: forwarding local port ${port} to internal-x.elb.amazonaws.com:443"
-echo "tunnel: through task NEW_TASK, container gateway, of spa-poc in spa-poc"
+echo "tunnel: through task NEW_TASK, container bastion, of bastion in spa-poc"
 echo "Starting session with SessionId: botocore-session-1763251200-0a1b2c3d4e5f60789" >&2
 exec python3 -c 'import time; time.sleep(120)' ssm start-session --document-name AWS-StartPortForwardingSessionToRemoteHost \
   --parameters "{\"host\":[\"x\"],\"portNumber\":[\"443\"],\"localPortNumber\":[\"${port}\"]}"
