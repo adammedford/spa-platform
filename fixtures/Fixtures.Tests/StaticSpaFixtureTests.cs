@@ -213,9 +213,9 @@ public sealed partial class StaticSpaFixtureTests
         Assert.Equal(twoKinds, IsReserved("/fragments/f1/entry.js", ReservedPaths()));
     }
 
-    // Until #982 lands, contracts/http-contract.md has no two-kind paragraph, so every test above
-    // that reads the real file runs only the one-kind branch of ReservedPaths. These feed it #982's
-    // paragraph as that ticket's change writes it, so the two-kind branch runs today (#1379).
+    // The tests above read the real contract, so they run only the branch of ReservedPaths that matches
+    // the form contracts/http-contract.md has at the time. These feed it #982's paragraph as that
+    // ticket's change writes it, so the two-kind branch and its guard run on either form (#1379).
 
     /// <summary>
     /// #982's reserved-path paragraph, word for word from its change, item 2, followed by the 404
