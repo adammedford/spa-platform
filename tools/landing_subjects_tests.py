@@ -841,6 +841,133 @@ class SubjectForOpenBoxTests(unittest.TestCase):
         self.assertEqual(f"landing-subjects: subject: Merge task issue-{NO_SUCH_ISSUE}", last_line(done))
 
 
+# #1215's shape as it read on 2026-11-18, typed from the issue as ISSUE_62 is: no acceptance box of
+# its own, and under "## The change" a five-backtick block quoting a template whose own
+# three-backtick block holds two unticked boxes (#1402).
+ISSUE_1215 = """**Owner:** integrator
+**Touches:** `docs/agents/tracker-policy.md`, `docs/agents/review.md`
+**Raised by:** #1189
+
+## The gap
+
+Run through the shape check, the template gives:
+
+```
+ticket-shape: note: heading: `## Proposed steering changes` is outside the ticket's set
+```
+
+## The change
+
+The "Steering change template" item reads, whole:
+
+`````markdown
+- **Steering change template.** Use the template below to file an ordinary ticket.
+
+  ```markdown
+  **Touches:** <steering paths>
+
+  ## Acceptance criteria
+
+  - [ ] The applied text matches the approved quotation, including adjacent context where required.
+  - [ ] The change cites the applicable approval and records its verification in the Answer.
+  ```
+
+## Lifecycle: not labels
+`````
+
+The quotation rule before it is unchanged.
+
+```markdown
+**Review checklist for steering text.** Compare the applied text to the whole quoted replacement.
+```
+"""
+
+# A body whose only unticked boxes sit in a fenced block, by the fence that holds them. In the
+# nested one the boxes sit inside the shorter fence, where a reader that shut the longer fence on
+# the shorter one's first line would see them.
+FENCED_ONLY = {
+    "three backticks": "- [x] Done.\n\n```\n- [ ] Quoted.\n```\n",
+    "three tildes": "- [x] Done.\n\n~~~\n- [ ] Quoted.\n~~~\n",
+    "backticks with an info string": "- [x] Done.\n\n```markdown\n- [ ] Quoted.\n```\n",
+    "an indented fence": "- [x] Done.\n\n  ```\n  - [ ] Quoted.\n  ```\n",
+    "a longer fence holding a shorter one":
+        "- [x] Done.\n\n````markdown\nA template:\n```\n- [ ] Quoted.\n```\n- [ ] Quoted after.\n````\n",
+    "tildes holding backticks": "- [x] Done.\n\n~~~\n```\n- [ ] Quoted.\n```\n- [ ] Quoted after.\n~~~\n",
+    "#1215's shape": ISSUE_1215,
+}
+
+
+class FencedBoxTests(unittest.TestCase):
+    """#1402: on 2026-11-18 --subject-for printed "Merge part of task issue-1215" over a ticket with
+    no acceptance box of its own, whose two `- [ ]` lines were a template it quotes inside a fenced
+    block. A line inside a fenced block is no box of the ticket, in either mode."""
+
+    def ask(self, case: Case, id_: str, number: int) -> subprocess.CompletedProcess:
+        return case.run("--subject-for", id_, "--ticket", str(number))
+
+    def test_a_body_whose_only_open_boxes_are_fenced_lands_whole(self):
+        for fence, body in FENCED_ONLY.items():
+            with self.subTest(fence=fence):
+                case = Case(self)
+                case.issue(1215, body)
+                done = self.ask(case, "issue-1215", 1215)
+                self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+                self.assertEqual(["landing-subjects: subject: Merge task issue-1215"], done.stdout.splitlines())
+
+    def test_a_full_landing_over_a_body_whose_only_open_boxes_are_fenced_passes(self):
+        for fence, body in FENCED_ONLY.items():
+            with self.subTest(fence=fence):
+                case = Case(self)
+                case.issue(1215, body)
+                case.commit("Merge task issue-1215: the template", "Ticket: #1215")
+                done = case.run()
+                self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+                self.assertEqual("landing-subjects: pass: 1 full-landing merge from base to HEAD: 1 clear, "
+                                 "0 unchecked, 0 with no Ticket line.", last_line(done))
+
+    # A ticked box, then a fence holding two boxes, then the open box: counted among every box of
+    # the body it would be box 4, and among those a reader of the rendered ticket sees it is box 2.
+    MIXED = "- [x] The first thing.\n\n```markdown\n- [x] Quoted.\n- [ ] Quoted too.\n```\n\n- [ ] The second thing.\n"
+
+    def test_an_open_box_outside_a_fence_is_named_by_its_place_outside_fences(self):
+        case = Case(self)
+        case.issue(611, self.MIXED)
+        done = self.ask(case, "issue-611", 611)
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        self.assertEqual(["landing-subjects: open box: 2 The second thing.",
+                          "landing-subjects: subject: Merge part of task issue-611"], done.stdout.splitlines())
+
+    def test_a_full_landing_is_held_on_the_outside_box_alone_by_its_place_outside_fences(self):
+        case = Case(self)
+        case.issue(611, self.MIXED)
+        sha = case.commit("Merge task issue-611: the first thing", "Ticket: #611")
+        done = case.run()
+        self.assertEqual(1, done.returncode, done.stdout + done.stderr)
+        self.assertIn(f'landing-subjects: held: {sha} "Merge task issue-611: the first thing" lands #611 whole, '
+                      'but #611 has 1 open box: box 2 "The second thing."', done.stdout.splitlines())
+
+    def test_a_box_after_a_fence_shuts_is_a_box(self):
+        # The other direction, which would let a full landing through over a real open box: a fence
+        # is shut by a run as long as its opener or longer, with a carriage return or spaces after
+        # it, and a shorter run or the other marker inside it shuts nothing.
+        bodies = {
+            "three backticks": "```\n- [ ] Quoted.\n```\n- [ ] Open.\n",
+            "three tildes": "~~~\n- [ ] Quoted.\n~~~\n- [ ] Open.\n",
+            "a longer closing run": "```\n- [ ] Quoted.\n`````\n- [ ] Open.\n",
+            "carriage returns": "```\r\n- [ ] Quoted.\r\n```\r\n- [ ] Open.\r\n",
+            "spaces after the closing run": "```\n- [ ] Quoted.\n```  \n- [ ] Open.\n",
+            "a longer fence holding a shorter one": "````\n```\n- [ ] Quoted.\n```\n````\n- [ ] Open.\n",
+            "two blocks": "```\n- [ ] Quoted.\n```\n- [ ] Open.\n```\n- [ ] Quoted.\n```\n",
+        }
+        for fence, body in bodies.items():
+            with self.subTest(fence=fence):
+                case = Case(self)
+                case.issue(611, body)
+                done = self.ask(case, "issue-611", 611)
+                self.assertEqual(["landing-subjects: open box: 1 Open.",
+                                  "landing-subjects: subject: Merge part of task issue-611"], done.stdout.splitlines())
+
+
 STRICT = ("--base", "base", "--fail-unchecked")
 
 
