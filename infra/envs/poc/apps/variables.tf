@@ -22,9 +22,11 @@ variable "state_bucket" {
 variable "definition_dirs" {
   description = <<-EOT
     The directories whose *.json files are app definitions (contracts/app-definition.schema.json).
-    One client, one branding style and one parameter per file. The default is fixtures/apps/;
-    onboarding an app is copying its definition there (docs/plan/05-infrastructure-and-cost.md ->
-    Workstation access).
+    One client, one branding style and one parameter per file, and the same three per entry of a
+    file's fragments[] (#999). The default is fixtures/apps/; onboarding an app is copying its
+    definition there (docs/plan/05-infrastructure-and-cost.md -> Workstation access). The
+    fragment-bearing fixture definitions sit elsewhere, so no ordinary apply creates a fragment
+    client (#961, "The deployment prerequisite").
   EOT
   type        = list(string)
   default     = ["../../../../fixtures/apps"]

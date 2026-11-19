@@ -15,8 +15,17 @@ one file back.
         the scripts read it and none of them reads Terraform state, teardown.sh excepted (change
         request 1.5a, decision 2; Q49 on #129). Refused when the document is for another Region.
     cell_documents.py clients <outputs.json> <region>
-        Each app's client id from that document, one `<appId><tab><clientId>` line per app, for the
-        redaction in cell-common.sh, which elides them. Refused as field is.
+        Each app's client id from that document, one `<appId><tab><clientId>` line per app, and each
+        fragment's nested under it, one `<appId>:<fragmentId><tab><clientId>` line per fragment
+        (#999), for the redaction in cell-common.sh, which elides them. Refused as field is.
+    cell_documents.py fragments <definition.json>
+        Each fragment of an app definition, in its order, one `<appId><tab><fragmentId><tab><entry>`
+        line per fragment, the entry entry.js when the fragment names none; nothing for a definition
+        without fragments. For seed.sh's fragment step (#999). Each id and entry is checked against
+        contracts/registry.schema.json, since the seed makes paths of them.
+    cell_documents.py fragment-release <directory> <entry>
+        A release name for a fixture fragment directory, derived from its content as release's is;
+        refused when the directory has no <entry> at its root.
     cell_documents.py config <environment.tsv> <platform-config.schema.json>
         The platform configuration the gateway container runs with, in the JSON form of
         contracts/platform-config.schema.json, from its task definition's environment.
@@ -49,6 +58,7 @@ import hashlib
 import json
 import os
 import pathlib
+import re
 import sys
 import tempfile
 
@@ -170,13 +180,25 @@ def clients(path: str, region: str) -> int:
     if not isinstance(entries, dict):
         raise Refused("the outputs document has no clients")
     lines = []
-    for app, entry in entries.items():
+
+    def listed(label: str, entry) -> None:
         client = entry.get("clientId") if isinstance(entry, dict) else None
         # contracts/registry.schema.json: printable ASCII with no spaces, so no tab or newline can
         # break the line the redaction reads.
-        if not isinstance(client, str) or not client or any(not "!" <= c <= "~" for c in client + app):
+        if not isinstance(client, str) or not client or any(not "!" <= c <= "~" for c in client + label):
             raise Refused("an entry of the outputs document's clients has no printable clientId")
-        lines.append((app, client))
+        lines.append((label, client))
+
+    for app, entry in entries.items():
+        listed(app, entry)
+        # contracts/infra-outputs.schema.json: clients.{appId}.fragments.{fragmentId}, absent for an
+        # app with none. A fragment's client id is as secret-free and as elided as a shell's, so it
+        # is listed under <appId>:<fragmentId>, the two ids as the fragment's scheme name joins them.
+        fragments = entry.get("fragments", {}) if isinstance(entry, dict) else {}
+        if not isinstance(fragments, dict):
+            raise Refused("an entry of the outputs document's clients has fragments that are not an object")
+        for fragment, nested in fragments.items():
+            listed(f"{app}:{fragment}", nested)
     # The longest first: the redaction replaces them in this order, and one id inside another
     # would otherwise leave the longer one's remainder in the line.
     for app, client in sorted(lines, key=lambda line: (-len(line[1]), line[0])):
@@ -331,14 +353,15 @@ def digests(path: str, digest: str, platform: str) -> int:
 
 # --- release ---------------------------------------------------------------------------------------
 
-def release(directory: str) -> int:
+def release(directory: str, complete: str = "index.html") -> int:
     """fixture-<12 hex>: the SHA-256 of every file's relative path and bytes, in path order. A
     release prefix is written once (ADR-0009), and spactl's publish leaves identical bytes alone, so
     a name that follows the content makes a second seed of the same fixtures a no-op and a changed
-    fixture a new release, never a refused overwrite."""
+    fixture a new release, never a refused overwrite. `complete` is the file that makes the release
+    one: index.html for an app's, the entry module for a fragment's."""
     root = pathlib.Path(directory)
-    if not (root / "index.html").is_file():
-        raise Refused(f"{directory} has no index.html")
+    if not (root / complete).is_file():
+        raise Refused(f"{directory} has no {complete}")
     digest = hashlib.sha256()
     for file in sorted(p for p in root.rglob("*") if p.is_file()):
         relative = file.relative_to(root).as_posix().encode()
@@ -346,6 +369,46 @@ def release(directory: str) -> int:
         content = file.read_bytes()
         digest.update(len(content).to_bytes(8, "big") + content)
     print("fixture-" + digest.hexdigest()[:12])
+    return 0
+
+
+def fragment_release(directory: str, entry: str) -> int:
+    return release(directory, entry)
+
+
+# --- fragments -------------------------------------------------------------------------------------
+
+# The registry contract, beside this script in the tree, for the id and entry rules and the entry's
+# default: read, never copied, so a changed rule there is the rule here.
+REGISTRY_SCHEMA = pathlib.Path(__file__).resolve().parent.parent.parent / "contracts" / "registry.schema.json"
+
+
+def fragments(path: str) -> int:
+    try:
+        definition = json.loads(pathlib.Path(path).read_text())
+    except (OSError, ValueError):
+        raise Refused("the app definition is not JSON")
+    if not isinstance(definition, dict):
+        raise Refused("the app definition is not an object")
+    rules = json.loads(REGISTRY_SCHEMA.read_text())["$defs"]
+
+    def checked(value, rule: str, what: str) -> str:
+        schema = rules[rule]
+        if (not isinstance(value, str) or not re.fullmatch(schema["pattern"], value)
+                or not schema.get("minLength", 0) <= len(value) <= schema.get("maxLength", len(value))):
+            raise Refused(f"the app definition has {what} that contracts/registry.schema.json's {rule} refuses")
+        return value
+
+    app = checked(definition.get("appId"), "appId", "an appId")
+    listed = definition.get("fragments", [])
+    if not isinstance(listed, list):
+        raise Refused("the app definition's fragments is not an array")
+    for fragment in listed:
+        if not isinstance(fragment, dict):
+            raise Refused("a fragment of the app definition is not an object")
+        fragment_id = checked(fragment.get("fragmentId"), "fragmentId", "a fragmentId")
+        entry = checked(fragment.get("entry", rules["entry"]["default"]), "entry", "an entry")
+        print(f"{app}\t{fragment_id}\t{entry}")
     return 0
 
 
@@ -397,7 +460,8 @@ def requests() -> int:
     return 0
 
 
-COMMANDS = {"outputs": (outputs, 5), "field": (field, 3), "clients": (clients, 2), "config": (config, 2), "apps": (apps, 1), "revision": (revision, 1), "digests": (digests, 3), "release": (release, 1), "requests": (requests, 0)}
+COMMANDS = {"outputs": (outputs, 5), "field": (field, 3), "clients": (clients, 2), "config": (config, 2), "apps": (apps, 1), "revision": (revision, 1), "digests": (digests, 3), "release": (release, 1), "requests": (requests, 0),
+            "fragments": (fragments, 1), "fragment-release": (fragment_release, 2)}
 
 
 def main(argv: list[str]) -> int:
