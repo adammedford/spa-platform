@@ -27,6 +27,11 @@ class ClassifierTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertEqual(0, self.classify("build", [path]))
 
+    def test_the_reference_client_triggers_the_build(self):
+        # The browser client's tests will be in fixtures/Fixtures.Tests, which the build half runs
+        # (#1338). client/ is not on the tree until #1353, so this proves the pattern, not a live read.
+        self.assertEqual(0, self.classify("build", ["client/bff-client.js"]))
+
     def test_the_analyzer_configs_trigger_the_build(self):
         # The build enforces every analyzer severity, so a change to the files that set them is proved
         # by building: a ramp batch's promotion deletes pending lines from .globalconfig alone (#606).
@@ -49,6 +54,14 @@ class ClassifierTests(unittest.TestCase):
         for path in ("docs/BannedSymbols.Shipping.txt", "BannedSymbols.Shipping.txt.orig"):
             with self.subTest(path=path):
                 self.assertEqual(1, self.classify("build", [path]))
+
+    def test_the_analyzer_config_build_companion_triggers_the_build(self):
+        # The companion runs dotnet build, which only the build job can do, so a change to it alone
+        # must still run that job (#1369); a near name must not.
+        self.assertEqual(0, self.classify("build", ["tools/analyzer_configs_build_tests.py"]))
+        self.assertEqual(1, self.classify("terraform", ["tools/analyzer_configs_build_tests.py"]))
+        self.assertEqual(1, self.classify("build", ["tools/analyzer_configs_build_tests.py.orig"]))
+        self.assertEqual(1, self.classify("build", ["docs/tools/analyzer_configs_build_tests.py"]))
 
     def test_what_the_gateway_image_is_built_from_triggers_the_build(self):
         # The build half builds the gateway's image too, and .dockerignore decides its context (#210).

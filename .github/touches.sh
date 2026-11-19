@@ -24,8 +24,12 @@ case "${1:-}" in
   # .editorconfig and .globalconfig hold the analyzer options and severities the build enforces
   # (ADR-0035 decisions 5 to 8), so a change to either can turn the build red: a ramp batch's
   # promotion deletes pending lines from the root .globalconfig and nothing else (#606). The root
-  # banned-symbol lists are the same: an entry is an error the build enforces (#608).
-  build) pattern='^(src|tests|fixtures|contracts|tools/spactl)/|\.(cs|csproj|props|targets|slnx|globalconfig)$|^(global\.json|nuget\.config|\.dockerignore|\.editorconfig)$|^BannedSymbols\.[^/]*\.txt$' ;;
+  # banned-symbol lists are the same: an entry is an error the build enforces (#608). The reference
+  # client under client/ is to be tested by fixtures/Fixtures.Tests, which the half runs (#1338). The
+  # directory is not on the tree until #1353 moves it there, so until then the entry matches nothing.
+  # tools/analyzer_configs_build_tests.py builds against those configs, so only the build job, which
+  # has the SDK and the package cache, can run it (#1369).
+  build) pattern='^(src|tests|fixtures|client|contracts|tools/spactl)/|\.(cs|csproj|props|targets|slnx|globalconfig)$|^(global\.json|nuget\.config|\.dockerignore|\.editorconfig)$|^BannedSymbols\.[^/]*\.txt$|^tools/analyzer_configs_build_tests\.py$' ;;
   # Every Terraform root and module is under infra/. The floor's file and the helper that reads it
   # decide which Terraform checks them, so raising the floor runs them too (#69).
   terraform) pattern='^infra/|^\.terraform-version$|^tools/terraform-floor\.sh$' ;;

@@ -6,7 +6,9 @@ namespace Gateway.E2ETests.Stack;
 /// What a continuity row writes when it ends (#358 Q142): its attempts and wall time so far, reruns
 /// included, its verdict, what it observed and the steps it sent. A step holds a name, a client trace
 /// id, a time, a status and an exception's type; an observation holds task ids, trace ids and
-/// <c>session_ref</c>, which contracts/telemetry.md makes safe to log. When this run stopped at a
+/// <c>session_ref</c>, which contracts/telemetry.md makes safe to log. A row whose driver stopped
+/// gives as its reason the exception's type and its message through <see cref="Redacted.Text"/>
+/// (#1194), the line the row's test fails with after <c>not proved:</c>. When this run stopped at a
 /// login hold that timed out, <see cref="Page"/> is what the page showed then (#1003): its URL with no
 /// query and its visible text, and the requests and console errors the page met during the hold (#1193),
 /// all through <see cref="Redacted.Text"/>; a run that did not stop there writes
