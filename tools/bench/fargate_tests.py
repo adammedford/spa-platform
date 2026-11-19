@@ -820,6 +820,23 @@ class TheZero(CaseBase):
         self.assertEqual(2400.0, fargate.clocks(run.json["restarts"][1])["listening"])
         self.assertNoSecrets(run)
 
+    def test_a_new_task_describe_tasks_did_not_describe_still_gets_the_exec_try(self):
+        # #1378: only an answer saying Exec is off skips the session. One that describes nothing
+        # says nothing about Exec, so the session is tried: here it opens, on a pre-#787 cell, and
+        # off it, the double's refusal is the fallback with its own code, never NO_EXEC.
+        for exec_on, source in ((True, "metadata StartedAt"), (False, "pullStoppedAt")):
+            with self.subTest(gateway_exec=exec_on):
+                run = run_case(world([plan(undescribed_once_stable=True), plan(stable=False)], gateway_exec=exec_on))
+                self.assertEqual(4, run.code, run.stderr)
+                self.assertNoUnexpectedCalls(run)
+                self.assertEqual(1, len(run.aws("ecs", "execute-command")))
+                zero = run.json["restarts"][0]["zero"]
+                self.assertEqual(source, zero["source"])
+                self.assertNotEqual(fargate.NO_EXEC, zero.get("fallback"))
+                if not exec_on:
+                    self.assertIn("InvalidParameterException", zero["fallback"])
+                self.assertNoSecrets(run)
+
 
 class TheOneLiner(unittest.TestCase):
     """The exec command itself, run by the real bash against a metadata endpoint stand-in."""

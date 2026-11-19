@@ -98,6 +98,7 @@ def plan(**changes) -> dict:
         "stop": ["ServiceSchedulerInitiated", f"Task failed ELB health checks in (target-group {TG_ARN}) {FOREIGN_FORMS}"],
         "probe_lands": ["new"],                  # each probe in turn, the last repeated
         "stable": True,
+        "undescribed_once_stable": False,        # True: the first describe-tasks after the waiter describes nothing (#1378)
         "exec": "ok",
         "pull_started": 5000, "pull_stopped": 20000, "container_started": 21500, "started": 22000,
         "log": [[f"Now listening on: http://[::]:8080 {FOREIGN_FORMS}", 900], ["Registry revision 42 (\"etag\") is live with 1 app(s).", 1500],
@@ -375,6 +376,7 @@ def answer_aws(case: pathlib.Path, argv: list) -> int:
         for task in document["tasks"].values():
             if task.get("decoy") and not entry["decoy_stays"]:
                 task["desired"], task["last"] = "STOPPED", "STOPPED"
+        document["undescribed_pending"] = entry["undescribed_once_stable"]
         save(case, document)
         return 0
     elif shape == "ecs list-tasks" and options.get("cluster") == CLUSTER and options.get("service-name") == SERVICE \
@@ -409,12 +411,20 @@ def answer_aws(case: pathlib.Path, argv: list) -> int:
         out = {"tasks": [bastion_json(document, task) for task in bastions_named(options["tasks"])], "failures": []}
     elif shape == "ecs describe-tasks" and options.get("cluster") == CLUSTER and options.get("tasks"):
         named = tasks_named(options["tasks"])
-        for task in named:
-            entry = document["plans"][task["plan"]] if task.get("plan") is not None else None
-            if entry and entry["stop_at_sample"] is not None and document["samples"] >= entry["stop_at_sample"] and task["n"] == int(document["new"]):
-                task["last"], task["desired"], task["stop"] = "STOPPED", "STOPPED", entry["stop"]
-        save(case, document)
-        out = {"tasks": [task_json(document, task) for task in named], "failures": []}
+        if document.get("undescribed_pending") and [task["n"] for task in named] == [int(document["new"])]:
+            # ECS lists a task it cannot describe under failures, not tasks.
+            # https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_DescribeTasks.html
+            document["undescribed_pending"] = False
+            save(case, document)
+            out = {"tasks": [], "failures": [{"arn": task_arn(named[0]["n"]), "reason": "MISSING"}]}
+        else:
+            for task in named:
+                entry = document["plans"][task["plan"]] if task.get("plan") is not None else None
+                if entry and entry["stop_at_sample"] is not None and document["samples"] >= entry["stop_at_sample"] \
+                        and task["n"] == int(document["new"]):
+                    task["last"], task["desired"], task["stop"] = "STOPPED", "STOPPED", entry["stop"]
+            save(case, document)
+            out = {"tasks": [task_json(document, task) for task in named], "failures": []}
     elif shape == "ecs update-service" and options.get("cluster") == CLUSTER and options.get("service") == SERVICE \
             and options.get("force-new-deployment") is True and set(options) == {"cluster", "service", "force-new-deployment", "output"}:
         if document["restart"] >= len(document["plans"]):
