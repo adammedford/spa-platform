@@ -295,5 +295,304 @@ class SeedRefuses(cell.CompanionTestCase):
         self.refused(cell.default_world(), 2, "--release must be", "--release", "a/b")
 
 
+# --- #999: the fragment step -------------------------------------------------------------------------
+
+# A shell with two fragments, this companion's own (the fixture fragment definitions are another
+# ticket's): orders on the default entry, reports on a named one.
+SHELL = "shell"
+SHELL_DEFINITION = {
+    "appId": SHELL, "host": "shell.spa-poc.test:8443",
+    "oauth": {"issuer": "cognito-poc", "scopes": ["openid"], "resource": "https://orders.spa-poc.test"},
+    "session": {"lifetimeMinutes": 480},
+    "fragments": [
+        {"fragmentId": "orders", "oauth": {"issuer": "cognito-poc", "scopes": ["openid"], "resource": "https://orders.spa-poc.test"}},
+        {"fragmentId": "reports", "oauth": {"issuer": "cognito-poc", "scopes": ["openid"], "resource": "https://reports.spa-poc.test"},
+         "entry": "main.js"},
+    ],
+}
+DEFAULT_ENTRY = json.loads((cell.ROOT / "contracts" / "registry.schema.json").read_text())["$defs"]["entry"]["default"]
+
+
+def fragment_world() -> dict:
+    """The default cell after an apps-root apply that read the shell's definition too: the shell's
+    client and, nested under it, each fragment's, as the root's clients output gives them."""
+    world = cell.default_world()
+    world["roots"]["apps"]["clients"][SHELL] = {
+        "clientId": "1example23456789shellclient", "secretParameter": f"/spa-platform/poc/apps/{SHELL}/client-secret",
+        "secretVersion": 1,
+        "fragments": {f["fragmentId"]: {
+            "clientId": f"1example23456789{f['fragmentId']}fragmentclient",
+            "secretParameter": f"/spa-platform/poc/apps/{SHELL}/fragments/{f['fragmentId']}/client-secret",
+            "secretVersion": 1} for f in SHELL_DEFINITION["fragments"]}}
+    return world
+
+
+def fragment_case(test, world: dict | None = None, definition: dict | None = None) -> tuple:
+    """A case whose tree holds the shell's definition under fixtures/fragments/, each fragment's
+    release directory with its entry at the root and a chunk under assets/, and the shell's release
+    under fixtures/spa/. Returns the case and the definition's path."""
+    case = cell.Case(test, world=world or fragment_world())
+    definition = definition or SHELL_DEFINITION
+    path = case.repo / "fixtures" / "fragments" / f"{definition['appId']}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(definition, indent=2))
+    for fragment in definition.get("fragments", []):
+        root = case.repo / "fixtures" / "fragments" / definition["appId"] / fragment["fragmentId"]
+        (root / "assets").mkdir(parents=True)
+        (root / fragment.get("entry", DEFAULT_ENTRY)).write_text(f"import './assets/{fragment['fragmentId']}.js';\n")
+        (root / "assets" / f"{fragment['fragmentId']}.js").write_text(f"export const name = '{fragment['fragmentId']}';\n")
+    site = case.repo / "fixtures" / "spa" / definition["appId"]
+    site.mkdir(parents=True, exist_ok=True)
+    (site / "index.html").write_text("<!doctype html><title>shell</title>\n")
+    return case, path
+
+
+def documents(*args: str) -> tuple[int, str, str]:
+    """cell_documents.py in this tree, as the scripts run it."""
+    import subprocess
+    completed = subprocess.run([sys.executable, "-I", str(cell.SCRIPTS / "cell_documents.py"), *args],
+                               capture_output=True, text=True)
+    return completed.returncode, completed.stdout, completed.stderr
+
+
+class SeedPublishesAShellsFragmentsOnlyWhenNamed(cell.CompanionTestCase):
+    """#999: for each definition --shell names, each fragment's `fragment publish` with the
+    definition's --entry, then the shell's publish, then exactly one `app add` with the
+    --fragment-release comma list; a run naming none writes no fragment-bearing document (#961, "The
+    deployment prerequisite")."""
+
+    def seeded(self, case, *args: str):
+        result = case.run(SCRIPT, *args)
+        self.assertEqual(0, result.status, result.output)
+        self.assertNoUnexpectedCall(case)
+        return result
+
+    def test_each_fragment_then_the_shell_then_one_app_add_naming_every_fragment_release(self):
+        case, definition = fragment_case(self)
+        self.seeded(case, "--shell", str(definition))
+        calls = spactl_calls(case)
+        fragment_publishes = [c for c in calls if c[:2] == ["fragment", "publish"]]
+        # Each fragment in the definition's order, with its directory and the definition's entry: the
+        # default for orders, main.js for reports.
+        self.assertEqual([[SHELL, "orders"], [SHELL, "reports"]], [c[2:4] for c in fragment_publishes])
+        for call, fragment in zip(fragment_publishes, SHELL_DEFINITION["fragments"]):
+            self.assertEqual(str(case.repo / "fixtures" / "fragments" / SHELL / fragment["fragmentId"]), call[4])
+            self.assertEqual(fragment.get("entry", DEFAULT_ENTRY), call[call.index("--entry") + 1])
+        self.assertEqual([DEFAULT_ENTRY, "main.js"], [c[c.index("--entry") + 1] for c in fragment_publishes])
+        shell_publish = [c for c in calls if c[:3] == ["release", "publish", SHELL]]
+        adds = [c for c in calls if c[:2] == ["app", "add"] and c[2] == str(definition)]
+        self.assertEqual(1, len(shell_publish))
+        self.assertEqual(1, len(adds), "exactly one app add for the shell")
+        self.assertEqual(str(case.repo / "fixtures" / "spa" / SHELL), shell_publish[0][3])
+        # Order: every fragment publish, then the shell's publish, then its one app add.
+        self.assertLess(max(calls.index(c) for c in fragment_publishes), calls.index(shell_publish[0]))
+        self.assertLess(calls.index(shell_publish[0]), calls.index(adds[0]))
+        add = adds[0]
+        self.assertEqual(shell_publish[0][4], add[add.index("--release") + 1])
+        self.assertEqual(",".join(f"{c[3]}={c[5]}" for c in fragment_publishes), add[add.index("--fragment-release") + 1])
+        self.assertEqual(1, sum("--fragment-release" in c for c in calls))
+        entry = next(e for e in case.load()["registry"]["apps"] if e["appId"] == SHELL)
+        self.assertEqual([{"fragmentId": c[3], "release": c[5]} for c in fragment_publishes], entry["fragments"])
+        # The fixture apps are seeded as without --shell.
+        self.assertEqual(APPS + [SHELL], sorted(e["appId"] for e in case.load()["registry"]["apps"]))
+
+    def test_a_publish_writes_the_entry_last(self):
+        case, definition = fragment_case(self)
+        self.seeded(case, "--shell", str(definition))
+        for fragment in SHELL_DEFINITION["fragments"]:
+            keys = [o["Key"] for o in case.load()["objects"] if f"/fragments/{fragment['fragmentId']}/" in o["Key"]]
+            self.assertEqual(2, len(keys))
+            self.assertTrue(keys[-1].endswith("/" + fragment.get("entry", DEFAULT_ENTRY)), keys)
+
+    def test_release_names_follow_each_fragments_content_and_a_second_seed_writes_no_release_object(self):
+        case, definition = fragment_case(self)
+        self.seeded(case, "--shell", str(definition))
+        first = [c[5] for c in spactl_calls(case) if c[:2] == ["fragment", "publish"]]
+        self.assertTrue(all(n.startswith("fixture-") and len(n) == len("fixture-") + 12 for n in first), first)
+        self.assertEqual(2, len(set(first)), "two fragments with different content share a release name")
+        objects = [o for o in case.load()["objects"] if o["Key"].startswith("apps/")]
+        self.seeded(case, "--shell", str(definition))
+        self.assertEqual(first, [c[5] for c in spactl_calls(case) if c[:2] == ["fragment", "publish"]][2:])
+        self.assertEqual(objects, [o for o in case.load()["objects"] if o["Key"].startswith("apps/")])
+
+    def test_a_release_name_given_is_used_for_every_fragment_too(self):
+        case, definition = fragment_case(self)
+        self.seeded(case, "--release", "2026-11-19.1", "--shell", str(definition))
+        add = next(c for c in spactl_calls(case) if "--fragment-release" in c)
+        self.assertEqual("orders=2026-11-19.1,reports=2026-11-19.1", add[add.index("--fragment-release") + 1])
+
+    def test_the_outputs_document_carries_the_nested_clients_and_is_the_contracts(self):
+        case, definition = fragment_case(self)
+        self.seeded(case, "--shell", str(definition))
+        document = json.loads((case.repo / "infra" / "envs" / "poc" / "outputs.json").read_text())
+        self.assertEqual(fragment_world()["roots"]["apps"]["clients"][SHELL], document["clients"][SHELL])
+        self.assertEqual([], outputs_errors(document))
+
+    def test_a_failed_fragment_publish_stops_before_any_app_add_of_the_shell(self):
+        world = fragment_world()
+        world["faults"]["fragment publish reports"] = True
+        case, definition = fragment_case(self, world=world)
+        result = case.run(SCRIPT, "--shell", str(definition))
+        self.assertEqual(1, result.status, result.output)
+        self.assertIn("could not publish fragment reports", result.stderr)
+        self.assertNotIn("pass:", result.stdout)
+        calls = spactl_calls(case)
+        self.assertEqual(["orders", "reports"], [c[3] for c in calls if c[:2] == ["fragment", "publish"]])
+        self.assertEqual([], [c for c in calls if c[:2] == ["app", "add"] and c[2] == str(definition)])
+        self.assertEqual([], [c for c in calls if "--fragment-release" in c])
+        self.assertEqual([], [c for c in calls if c[:3] == ["release", "publish", SHELL]])
+        self.assertNotIn(SHELL, [e["appId"] for e in case.load()["registry"]["apps"]])
+
+    def test_a_run_naming_no_shell_publishes_no_fragment_and_names_no_fragment_release(self):
+        # The shell's definition, its fragments and its nested clients are all there; unnamed, none is
+        # seeded.
+        case, _ = fragment_case(self)
+        self.seeded(case)
+        calls = spactl_calls(case)
+        self.assertEqual([], [c for c in calls if c[:2] == ["fragment", "publish"]])
+        self.assertEqual([], [c for c in calls if "--fragment-release" in c])
+        self.assertEqual(APPS, sorted(c[2] for c in calls if c[:2] == ["release", "publish"]))
+        registry = case.load()["registry"]
+        self.assertTrue(all("fragments" not in e for e in registry["apps"]), registry)
+
+    def test_a_fragment_bearing_definition_among_the_default_ones_is_refused_before_any_publish(self):
+        case, _ = fragment_case(self)
+        (case.repo / "fixtures" / "apps" / f"{SHELL}.json").write_text(json.dumps(SHELL_DEFINITION))
+        result = case.run(SCRIPT)
+        self.assertEqual(1, result.status, result.output)
+        self.assertIn(f"fixtures/apps/{SHELL}.json has fragments", result.stderr)
+        self.assertEqual([], case.calls("dotnet"))
+
+    def test_a_named_definition_without_fragments_is_refused_before_any_publish(self):
+        case, _ = fragment_case(self)
+        plain = case.repo / "fixtures" / "fragments" / "plain.json"
+        plain.write_text(json.dumps({key: value for key, value in SHELL_DEFINITION.items() if key != "fragments"}))
+        result = case.run(SCRIPT, "--shell", str(plain))
+        self.assertEqual(2, result.status, result.output)
+        self.assertIn("has no fragments", result.stderr)
+        self.assertEqual([], case.calls("dotnet"))
+
+    def test_a_fragment_without_its_entry_file_is_refused_before_any_publish(self):
+        case, definition = fragment_case(self)
+        (case.repo / "fixtures" / "fragments" / SHELL / "reports" / "main.js").unlink()
+        result = case.run(SCRIPT, "--shell", str(definition))
+        self.assertEqual(1, result.status, result.output)
+        self.assertIn("fragment reports of shell has no main.js", result.stderr)
+        self.assertEqual([], case.calls("dotnet"))
+
+    def test_shell_needs_a_file(self):
+        case, _ = fragment_case(self)
+        for args in (["--shell"], ["--shell", str(case.repo / "fixtures" / "fragments" / "absent.json")]):
+            with self.subTest(args=args):
+                result = case.run(SCRIPT, *args)
+                self.assertEqual(2, result.status, result.output)
+        self.assertEqual([], case.calls("dotnet"))
+
+    def test_the_double_refuses_an_app_add_whose_entry_the_publish_did_not_write(self):
+        # The seed's agreement between --entry and the definition's entry is what the double's app add
+        # checks: a release published under another entry name is refused, as spactl refuses it
+        # (#993, "Completion"), so the case above passing means the two agreed.
+        case, definition = fragment_case(self)
+        case.write_outputs()
+        site = str(case.repo / "fixtures" / "fragments" / SHELL / "reports")
+        outputs = str(case.repo / "infra" / "envs" / "poc" / "outputs.json")
+        (pathlib.Path(site) / "main.js").rename(pathlib.Path(site) / "entry.js")
+        spactl = [str(case.bin / "dotnet"), "run", "--project", "x", "--"]
+        import subprocess
+        for fragment, entry in (("orders", DEFAULT_ENTRY), ("reports", "entry.js")):
+            subprocess.run([*spactl, "fragment", "publish", SHELL, fragment, site if fragment == "reports" else
+                            str(case.repo / "fixtures" / "fragments" / SHELL / "orders"), "r1", "--entry", entry,
+                            "--outputs", outputs], env=case.env(), capture_output=True, check=True)
+        config = case.dir / "config.json"
+        config.write_text("{}")
+        refused = subprocess.run([*spactl, "app", "add", str(definition), "--release", "r1", "--fragment-release",
+                                  "orders=r1,reports=r1", "--config", str(config), "--outputs", outputs],
+                                 env=case.env(), capture_output=True, text=True)
+        self.assertEqual(1, refused.returncode, refused.stderr)
+        self.assertIn("no entry file", refused.stderr)
+
+
+class CellDocumentsReadsFragments(cell.CompanionTestCase):
+    """#999: cell_documents.py clients lists each nested fragment client id, and its fragments reader
+    gives each fragment with its entry, entry.js when unnamed."""
+
+    def outputs(self, world: dict) -> pathlib.Path:
+        case = cell.Case(self, world=world, outputs=True)
+        return case.repo / "infra" / "envs" / "poc" / "outputs.json"
+
+    def test_clients_lists_each_fragment_client_id_under_app_and_fragment(self):
+        status, out, err = documents("clients", str(self.outputs(fragment_world())), cell.REGION)
+        self.assertEqual(0, status, err)
+        lines = dict(line.split("\t") for line in out.splitlines())
+        clients = fragment_world()["roots"]["apps"]["clients"]
+        for f in SHELL_DEFINITION["fragments"]:
+            self.assertEqual(clients[SHELL]["fragments"][f["fragmentId"]]["clientId"], lines[f"{SHELL}:{f['fragmentId']}"])
+        self.assertEqual(clients[SHELL]["clientId"], lines[SHELL])
+        self.assertEqual(len(APPS) + 1 + len(SHELL_DEFINITION["fragments"]), len(lines))
+        # Longest first, fragments among them, so one id inside another leaves no remainder.
+        ids = [line.split("\t")[1] for line in out.splitlines()]
+        self.assertEqual(sorted(ids, key=lambda i: -len(i)), ids)
+
+    def test_clients_refuses_a_fragment_without_a_printable_client_id(self):
+        for broken in ("", "has space", None):
+            world = fragment_world()
+            world["roots"]["apps"]["clients"][SHELL]["fragments"]["orders"]["clientId"] = broken
+            with self.subTest(clientId=broken):
+                status, _, err = documents("clients", str(self.outputs(world)), cell.REGION)
+                self.assertEqual(1, status)
+                self.assertIn("no printable clientId", err)
+        world = fragment_world()
+        world["roots"]["apps"]["clients"][SHELL]["fragments"] = ["orders"]
+        status, _, err = documents("clients", str(self.outputs(world)), cell.REGION)
+        self.assertEqual(1, status)
+        self.assertIn("fragments that are not an object", err)
+
+    def definition(self, value: dict) -> str:
+        case = cell.Case(self)
+        path = case.dir / "definition.json"
+        path.write_text(json.dumps(value))
+        return str(path)
+
+    def test_fragments_gives_each_fragment_in_order_with_its_entry(self):
+        status, out, err = documents("fragments", self.definition(SHELL_DEFINITION))
+        self.assertEqual(0, status, err)
+        self.assertEqual([f"{SHELL}\torders\t{DEFAULT_ENTRY}", f"{SHELL}\treports\tmain.js"], out.splitlines())
+        self.assertEqual("entry.js", DEFAULT_ENTRY)
+
+    def test_fragments_gives_nothing_for_a_definition_without_fragments(self):
+        for app in cell.ROOT.joinpath("fixtures", "apps").glob("*.json"):
+            with self.subTest(app=app.name):
+                status, out, err = documents("fragments", str(app))
+                self.assertEqual((0, ""), (status, out), err)
+
+    def test_fragments_refuses_an_id_or_entry_the_registry_contract_refuses(self):
+        # The seed makes paths of these, so a '/' or '..' must never reach it.
+        for where, value in (("fragmentId", "../x"), ("fragmentId", "ab"), ("entry", "a/main.js"), ("entry", "main.mjs"),
+                             ("entry", "x" * 62 + ".js"), ("appId", "Shell")):
+            broken = json.loads(json.dumps(SHELL_DEFINITION))
+            if where == "appId":
+                broken["appId"] = value
+            else:
+                broken["fragments"][1][where] = value
+            with self.subTest(where=where, value=value):
+                status, out, err = documents("fragments", self.definition(broken))
+                self.assertEqual(1, status, out)
+                self.assertIn(f"{where} refuses", err.replace("'s ", " "))
+
+    def test_fragment_release_needs_the_entry_and_follows_the_content(self):
+        case = cell.Case(self)
+        root = case.dir / "fragment"
+        root.mkdir()
+        status, _, err = documents("fragment-release", str(root), "main.js")
+        self.assertEqual(1, status)
+        self.assertIn("has no main.js", err)
+        (root / "main.js").write_text("export {};\n")
+        status, first, err = documents("fragment-release", str(root), "main.js")
+        self.assertEqual(0, status, err)
+        self.assertRegex(first.strip(), r"^fixture-[0-9a-f]{12}$")
+        (root / "main.js").write_text("export const changed = 1;\n")
+        self.assertNotEqual(first, documents("fragment-release", str(root), "main.js")[1])
+
+
 if __name__ == "__main__":
     sys.exit(cell.main("seed_tests"))

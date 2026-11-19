@@ -8,6 +8,7 @@
 #
 #   tools/scripts/seed.sh
 #   tools/scripts/seed.sh --release 2026-10-20.1    # one release name for every app
+#   tools/scripts/seed.sh --shell fixtures/fragments/shell.json   # and a shell with its fragments
 #
 # In order:
 #   1. It writes infra/envs/poc/outputs.json from the idp, apps and platform roots' outputs, which
@@ -18,10 +19,21 @@
 #   3. For each app definition in fixtures/apps/, the apps the apps root made a client for, it runs
 #      `spactl release publish <appId> fixtures/spa/<appId> <release>` and then
 #      `spactl app add fixtures/apps/<appId>.json --release <release>`. App 3 is onboarding's
-#      (fixtures/onboarding/), never the seed's.
+#      (fixtures/onboarding/), never the seed's. A definition there with fragments is refused: a
+#      fragment-bearing definition is seeded only when named, as step 4 says.
+#   4. Only for each definition --shell names, a shell with fragments (#999, part of #961), and
+#      only after every fragment's directory and entry are found: for each fragment, in the
+#      definition's order, `spactl fragment publish <appId> <fragmentId>
+#      fixtures/fragments/<appId>/<fragmentId> <release> --entry <entry>`, with <entry> the
+#      definition's (entry.js when it names none); then the shell's release from fixtures/spa/<appId>
+#      as in step 3; then one `spactl app add <definition> --release <shell release>
+#      --fragment-release <fragmentId>=<release>,...` naming every fragment's release. A failed
+#      publish stops the seed before that app add. Without --shell the seed writes no
+#      fragment-bearing document: none reaches a cell until it runs the whole fragments build, and
+#      the first such write is the G9 run's (#961, "The deployment prerequisite").
 #
 # The release is named for its content unless --release names it: fixture-<12 hex digits of the
-# fixture's SHA-256>. A release prefix is written once (ADR-0009) and spactl's publish leaves
+# fixture's SHA-256>, per app and per fragment. A release prefix is written once (ADR-0009) and spactl's publish leaves
 # identical bytes alone, so seeding again is a no-op, and a changed fixture gets a new release
 # rather than a refused overwrite.
 #
@@ -48,6 +60,7 @@ PROGRAM="seed"
 . "$(dirname -- "$0")/cell-common.sh"
 
 RELEASE=""
+SHELLS=()
 
 usage() {
   # The header above, up to the Owner line, is this script's manual.
@@ -55,8 +68,11 @@ usage() {
   cat <<EOF
 
 Options
-  --release NAME   One release name for every app, in registry.schema.json's form: 1 to 64
-                   letters, digits, dots, hyphens or underscores. Default: named for the content.
+  --release NAME   One release name for every app and fragment, in registry.schema.json's form:
+                   1 to 64 letters, digits, dots, hyphens or underscores. Default: named for the
+                   content.
+  --shell FILE     An app definition with fragments to seed as step 4 says. Repeatable. Without
+                   it no fragment is published and no fragment-bearing definition is written.
   -h, --help       This text.
 EOF
 }
@@ -66,6 +82,12 @@ while [ "$#" -gt 0 ]; do
     --release)
       [ "$#" -ge 2 ] || refuse "--release needs a value. Try --help."
       RELEASE="$2"
+      shift
+      ;;
+    --shell)
+      [ "$#" -ge 2 ] || refuse "--shell needs a definition file. Try --help."
+      [ -f "$2" ] || refuse "--shell names no file: '$2'."
+      SHELLS+=("$2")
       shift
       ;;
     -h | --help)
@@ -107,6 +129,34 @@ note "bounding the registry with the configuration of task definition $(revision
 # --- 3 ---------------------------------------------------------------------------------------------
 
 DEFINITIONS="${REPO_ROOT}/fixtures/apps"
+FRAGMENTS_DIR="${REPO_ROOT}/fixtures/fragments"
+TAB="$(printf '\t')"
+
+# Each definition's fragments, one <appId><tab><fragmentId><tab><entry> line each, into a file.
+fragments_of() {
+  documents fragments "$1" > "$2" || refuse "$(root_name "$1") is not an app definition the seed can read."
+}
+
+# Before anything is published: no default definition has fragments, and every named shell has
+# them, its release directory, and each fragment's directory with its entry at the root.
+for definition in "$DEFINITIONS"/*.json; do
+  [ -f "$definition" ] || continue
+  fragments_of "$definition" "${WORK}/fragments"
+  [ ! -s "${WORK}/fragments" ] ||
+    fail "fixtures/apps/$(basename "$definition") has fragments. A fragment-bearing definition is seeded only when --shell names it (#961, \"The deployment prerequisite\")."
+done
+SHELL_COUNT=0
+for definition in ${SHELLS[@]+"${SHELLS[@]}"}; do
+  SHELL_COUNT=$((SHELL_COUNT + 1))
+  fragments_of "$definition" "${WORK}/shell-${SHELL_COUNT}"
+  [ -s "${WORK}/shell-${SHELL_COUNT}" ] || refuse "--shell ${definition} has no fragments: its app is seeded from fixtures/apps/ or onboarded."
+  while IFS="$TAB" read -r app fragment entry <&3; do
+    [ -d "${REPO_ROOT}/fixtures/spa/${app}" ] || fail "${app} has no release directory at fixtures/spa/${app}."
+    [ -f "${FRAGMENTS_DIR}/${app}/${fragment}/${entry}" ] ||
+      fail "fragment ${fragment} of ${app} has no ${entry} at fixtures/fragments/${app}/${fragment}."
+  done 3< "${WORK}/shell-${SHELL_COUNT}"
+done
+
 SEEDED=0
 for definition in "$DEFINITIONS"/*.json; do
   [ -f "$definition" ] || continue
@@ -126,4 +176,41 @@ for definition in "$DEFINITIONS"/*.json; do
 done
 
 [ "$SEEDED" -gt 0 ] || fail "fixtures/apps/ holds no app definition."
-note "pass: ${SEEDED} apps published and in the registry. tools/scripts/deploy.sh is next."
+
+# --- 4 ---------------------------------------------------------------------------------------------
+
+SHELL_COUNT=0
+for definition in ${SHELLS[@]+"${SHELLS[@]}"}; do
+  SHELL_COUNT=$((SHELL_COUNT + 1))
+  releases=""
+  shell_app=""
+  # read empties its variables at the end of the file, so the shell's appId is kept apart.
+  while IFS="$TAB" read -r app fragment entry <&3; do
+    shell_app="$app"
+    directory="${FRAGMENTS_DIR}/${app}/${fragment}"
+    release="$RELEASE"
+    [ -n "$release" ] || release="$(documents fragment-release "$directory" "$entry")" ||
+      fail "could not name a release for fixtures/fragments/${app}/${fragment}."
+    note "publishing fixtures/fragments/${app}/${fragment} as fragment ${fragment} of ${app} release ${release}, entry ${entry}"
+    spactl_shown fragment publish "$app" "$fragment" "$directory" "$release" --entry "$entry" --outputs "$OUTPUTS_FILE" ||
+      fail "spactl could not publish fragment ${fragment} of ${app} release ${release}."
+    releases="${releases:+${releases},}${fragment}=${release}"
+  done 3< "${WORK}/shell-${SHELL_COUNT}"
+
+  app="$shell_app"
+  site="${REPO_ROOT}/fixtures/spa/${app}"
+  release="$RELEASE"
+  [ -n "$release" ] || release="$(documents release "$site")" || fail "could not name a release for fixtures/spa/${app}."
+  note "publishing fixtures/spa/${app} as ${app} release ${release}"
+  spactl_shown release publish "$app" "$site" "$release" --outputs "$OUTPUTS_FILE" ||
+    fail "spactl could not publish ${app} release ${release}."
+  note "adding ${app} to the registry at release ${release} with fragment releases ${releases}"
+  spactl_shown app add "$definition" --release "$release" --fragment-release "$releases" --config "$CONFIG" --outputs "$OUTPUTS_FILE" ||
+    fail "spactl could not add ${app} to the registry."
+done
+
+if [ "$SHELL_COUNT" -gt 0 ]; then
+  note "pass: ${SEEDED} apps and ${SHELL_COUNT} shells with their fragments published and in the registry. tools/scripts/deploy.sh is next."
+else
+  note "pass: ${SEEDED} apps published and in the registry. tools/scripts/deploy.sh is next."
+fi
