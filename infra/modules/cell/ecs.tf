@@ -1,25 +1,23 @@
-# Task 1.4a. The cell's compute: one ECS cluster, one ARM64 Fargate task, one service and one log
-# group. This is the half of plan row 1.4 that can be decided and checked without AWS.
+# The cell's compute: one ECS cluster, one ARM64 Fargate task, one service and one log group. This
+# is the half of the cell's compute that can be decided and checked without AWS.
 #
-# What this file deliberately does not claim is the row's own done-when: a steady service on a
-# healthy target. That needs credentials, an applied state bucket and the first deployment order in
-# docs/plan/05-infrastructure-and-cost.md, and it stays with row 1.4. A green plan is reviewed
-# Terraform, not a running cell.
+# What this file deliberately does not claim is a steady service on a healthy target. That needs
+# credentials, an applied state bucket and a deployment, and a green plan is reviewed Terraform, not
+# a running cell.
 #
 # The service starts on the public sample image and the health check follows the image: / for the
-# sample and /readyz for the gateway (task 1.3's health_check_path). A gateway started against an
-# empty bucket never becomes ready, which is why deploy.sh refuses to run before seed.sh.
+# sample and /readyz for the gateway (health_check_path). A gateway started against an empty bucket
+# never becomes ready, which is why deploy.sh refuses to run before seed.sh.
 
 locals {
   # contracts/infra-outputs.example.json fixes these three names: ecsCluster is spa-{cell},
-  # ecsService is gateway, and logGroup is /spa-platform/{cell}/gateway. Task 1.7 assembles
-  # outputs.json from them and the deployed tests read a run's log from the last.
+  # ecsService is gateway, and logGroup is /spa-platform/{cell}/gateway. The outputs document is
+  # assembled from them and the deployed tests read a run's log from the last.
   cluster_name   = "spa-${var.cell}"
   service_name   = "gateway"
   log_group_name = "/spa-platform/${var.cell}/gateway"
 
-  gateway_container_name  = "gateway"
-  mock_api_container_name = "mock-api"
+  gateway_container_name = "gateway"
 
   # The task volume the gateway mounts at /tmp (#787), named once for the volume and its mount point.
   gateway_tmp_volume_name = "gateway-tmp"
@@ -44,9 +42,9 @@ locals {
 resource "aws_ecs_cluster" "cell" {
   name = local.cluster_name
 
-  # Container Insights is off on purpose. It is billed per metric and the cost model in
-  # docs/plan/05-infrastructure-and-cost.md has no line for it, so a cluster that silently
-  # inherited an account-level opt-in would make the $30 a month wrong.
+  # Container Insights is off on purpose. It is billed per metric and the cell's cost model has no
+  # line for it, so a cluster that silently inherited an account-level opt-in would make the $30 a
+  # month wrong.
   setting {
     name  = "containerInsights"
     value = "disabled"
@@ -58,8 +56,8 @@ resource "aws_ecs_cluster" "cell" {
 resource "aws_cloudwatch_log_group" "gateway" {
   name = local.log_group_name
 
-  # Explicit, because the alternative is not a default but "never expires": plan row 1.4 asks for a
-  # retention so that logs neither vanish nor accumulate without a decision.
+  # Explicit, because the alternative is not a default but "never expires": a retention is set so
+  # that logs neither vanish nor accumulate without a decision.
   retention_in_days = var.log_retention_days
 
   tags = { Name = local.log_group_name }
@@ -132,24 +130,13 @@ locals {
     var.data_protection_kms_key_id != "" ? { "DataProtection__KmsKeyId" = var.data_protection_kms_key_id } : {},
   )
 
-  # Assumption A4 is one issuer per environment, and the mock API validates against one issuer
-  # (fixtures/MockApi/Program.cs). values() on a map is ordered by key, so with the single issuer
-  # the task definition's precondition requires this is deterministic.
-  mock_api_issuer_authority = length(var.issuers) > 0 ? values(var.issuers)[0].authority : ""
-
-  mock_api_configuration = {
-    "MockApi__Issuer"     = local.mock_api_issuer_authority
-    "MockApi__App1Client" = var.mock_api_app1_client_id
-    "MockApi__App2Client" = var.mock_api_app2_client_id
-  }
-
   # Not a platform setting, and deliberately not merged into platform_configuration: the
   # configuration contract's own $comment says the task environment "also carries settings that are
   # not the platform's (Logging, ASPNETCORE_*, OTEL_*)", so this belongs in the environment but not
   # in what the contract describes.
   #
   # It is here because var.gateway_port is one value in three places -- the target group sends to it
-  # (task 1.3), the container publishes it, and the process has to listen on it -- and the third did
+  # (alb.tf), the container publishes it, and the process has to listen on it -- and the third did
   # not follow the variable. src/Gateway/Dockerfile sets ASPNETCORE_HTTP_PORTS=8080, so at any other
   # value of the variable the load balancer would send to a port nothing answered on and the target
   # could never turn healthy. Setting it here makes the variable's own description true.
@@ -159,8 +146,8 @@ locals {
 
   gateway_environment = merge(local.platform_configuration, local.gateway_runtime_environment)
 
-  # One value for both containers (#786), so the two cannot drift; the comment at the gateway
-  # container's use says why each setting is there.
+  # One value for the gateway's and the bastion's containers (#786), so the two cannot drift; the
+  # comment at the gateway container's use says why each setting is there.
   #
   # add = [] is ECS's own value, spelled out (#1006). ECS returns capabilities.add as an empty list
   # when none was given, and the provider's comparison of the configured definitions with the ones
@@ -182,7 +169,7 @@ locals {
     image     = var.gateway_image
     essential = true
 
-    # Read-only (#787, P2-9). The writable root was ECS Exec's condition while this task was the
+    # Read-only (#787). The writable root was ECS Exec's condition while this task was the
     # tunnel's hop; the hop is the bastion's task now (#1167), Exec is off on this service and no
     # session agent writes here. The one writable path is /tmp, the task volume below (#780, answer
     # 3: "the safe contract and not a measured one"). Explicit rather than left to the default,
@@ -219,7 +206,7 @@ locals {
     systemControls = []
     volumesFrom    = []
 
-    # Hardening (#786, P2-9). capabilities.drop removes Linux capabilities from the default set
+    # Hardening (#786). capabilities.drop removes Linux capabilities from the default set
     # Docker grants (--cap-drop); "ALL" is one of its valid values, and on Fargate add accepts
     # SYS_PTRACE alone, so nothing here could be added back. The process needs none: it runs as the
     # image's non-root user (USER $APP_UID in src/Gateway/Dockerfile) and binds var.gateway_port,
@@ -245,7 +232,7 @@ locals {
     # promise, not every request's completion: F3b's failed or unknown write and F4's check-to-send
     # pause are its exceptions, and a loser's wait is F2's and F3's, which no number here bounds
     # (#332 F1; P2-3's second amendment, decision 2). The drain (alb.tf) promises no refresh's
-    # completion. On the gateway alone: the mock API holds no session and no lease. 30 is also
+    # completion. On the gateway alone: an extra container holds no session and no lease. 30 is also
     # Fargate's default, written down because F1 depends on it. The init process (#786, above)
     # leaves these relations as they were: ECS sends SIGTERM to the container's PID 1, now the init,
     # which "forwards signals" to its child, and stopTimeout is "time duration (in seconds) to wait
@@ -273,72 +260,27 @@ locals {
     }
   }
 
-  # The three keys fixtures/MockApi/Dockerfile declares and fixtures/MockApi/Program.cs refuses to
-  # start without. The client ids arrive as inputs: the apps root decides them, and nothing about a
-  # client id is written into this module, which is what keeps onboarding a third app out of the
-  # platform root's plan (docs/plan/05-infrastructure-and-cost.md -> Terraform boundaries, F-07).
-  mock_api_container = {
-    name      = local.mock_api_container_name
-    image     = var.mock_api_image
-    essential = true
-
-    # Read-only, as the gateway's is (#787), and with no writable path at all: #780's third answer
-    # names none for the mock API, and tools/image-check.sh starts its image on a read-only root with
-    # no tmpfs (#1169).
-    readonlyRootFilesystem = true
-
-    # The gateway's hardening (#786), for the same reasons: a non-root user (USER $APP_UID in
-    # fixtures/MockApi/Dockerfile), listeners on 5080 and 5081, above 1024, and an exec-form
-    # ENTRYPOINT, so the init forwards SIGTERM to dotnet.
-    linuxParameters = local.container_linux_parameters
-
-    # ECS's values when none is given, spelled out as on the gateway (#1006). No mount point: the
-    # gateway's /tmp volume is the gateway's alone.
-    mountPoints    = []
-    systemControls = []
-    volumesFrom    = []
-
-    # No portMappings. The two listeners are on loopback ports 5080 and 5081 and are reached from
-    # the gateway container inside the task's own network namespace, never from outside it
-    # (fixtures/MockApi/Dockerfile, contracts/platform-config.example.json -> AllowedUpstreams).
-    environment = [
-      for key in sort(keys(local.mock_api_configuration)) : {
-        name  = key
-        value = local.mock_api_configuration[key]
-      }
-    ]
-
-    logConfiguration = {
-      logDriver = "awslogs"
-      options = {
-        "awslogs-group"         = aws_cloudwatch_log_group.gateway.name
-        "awslogs-region"        = data.aws_region.current.region
-        "awslogs-stream-prefix" = local.mock_api_container_name
-      }
-    }
-  }
-
-  # concat rather than a conditional over two lists, so the two container shapes stay their own
-  # shapes: the mock API publishes no port and the gateway does.
-  containers = concat(
-    [local.gateway_container],
-    var.mock_api_image != "" ? [local.mock_api_container] : [],
-  )
+  # The gateway's first, then each extra container exactly as the root wrote it (variables.tf ->
+  # extra_containers). concat rather than a list literal, so each container keeps its own shape: an
+  # extra container need publish no port, and the gateway does. An extra container shares the task's
+  # network namespace, so the gateway reaches a listener in it on loopback, which is what an upstream
+  # such as http://127.0.0.1:5080 names (contracts/platform-config.example.json -> AllowedUpstreams).
+  containers = concat([local.gateway_container], var.extra_containers)
 }
 
 resource "aws_ecs_task_definition" "gateway" {
   family = local.name_prefix
 
-  # 0.25 vCPU and 1 GB on ARM64 (plan row 1.4). ARM Fargate is about 20% below x86, which is the
-  # $8.51 a month in docs/plan/05-infrastructure-and-cost.md; both images are built for it
-  # (src/Gateway/Dockerfile, fixtures/MockApi/Dockerfile).
+  # 0.25 vCPU and 1 GB on ARM64. ARM Fargate is about 20% below x86, which is the $8.51 a month the
+  # cell's cost model prices the task at; the gateway's image is built for it
+  # (src/Gateway/Dockerfile), and an extra container's image has to be too.
   cpu    = "256"
   memory = "1024"
 
   requires_compatibilities = ["FARGATE"]
 
   # Fargate requires awsvpc, and it is why the target group registers by address rather than by
-  # instance (task 1.3) and why the two containers reach each other over loopback.
+  # instance (alb.tf) and why the task's containers reach each other over loopback.
   network_mode = "awsvpc"
 
   runtime_platform {
@@ -363,16 +305,6 @@ resource "aws_ecs_task_definition" "gateway" {
   }
 
   tags = { Name = local.name_prefix }
-
-  lifecycle {
-    # The mock API validates against one issuer, and A4 is one issuer per environment. Without this
-    # the module would silently pick the alphabetically first of several, and the listener would
-    # refuse every token from the others.
-    precondition {
-      condition     = var.mock_api_image == "" || length(var.issuers) == 1
-      error_message = "The mock API validates against one issuer (fixtures/MockApi/Program.cs, assumption A4). Supply one issuer, or leave mock_api_image empty."
-    }
-  }
 }
 
 resource "aws_ecs_service" "gateway" {
@@ -413,9 +345,9 @@ resource "aws_ecs_service" "gateway" {
   deployment_minimum_healthy_percent = 100
   deployment_maximum_percent         = 200
 
-  # A bad image rolls back rather than retrying forever (plan row 1.4). rollback is the half that
-  # matters: docs/plan/05-infrastructure-and-cost.md names the circuit breaker beside rollback.sh as
-  # a rollback lever, which it only is if it restores the previous task definition.
+  # A bad image rolls back rather than retrying forever. rollback is the half that matters: the
+  # circuit breaker is a rollback lever beside rollback.sh only if it restores the previous task
+  # definition.
   deployment_circuit_breaker {
     enable   = true
     rollback = true
@@ -440,7 +372,7 @@ resource "aws_ecs_service" "gateway" {
     security_groups = [aws_security_group.task.id]
 
     # Phase 1's cell has no NAT gateway, so this public address is the task's only route out, to
-    # Cognito, S3, Parameter Store, ECR and logs (plan row 1.2). Nothing reaches it: the task security
+    # Cognito, S3, Parameter Store, ECR and logs (network.tf). Nothing reaches it: the task security
     # group accepts the gateway's port from the ALB security group alone (test P-06). Under
     # multi_task the tasks sit in the private subnets with no address, and go out through the NAT
     # gateway and the two gateway endpoints (network.tf); P-06's second sentence then reads as "the
@@ -480,7 +412,7 @@ resource "aws_ecs_service" "gateway" {
 locals {
   # Writable root: ECS Exec does not support a read-only one, "making the root file system read-only
   # using the readonlyRootFilesystem task definition parameter, or any other method, isn't supported"
-  # (https://docs.aws.amazon.com/AmazonECS/latest/developerguide/ecs-exec.html). P2-9's read-only
+  # (https://docs.aws.amazon.com/AmazonECS/latest/developerguide/ecs-exec.html). The read-only
   # root is the shipping task definition's, set there by #787, not the bastion's (#1167).
   #
   # No portMappings: nothing connects to the container, which only carries the session; the image's
@@ -552,7 +484,7 @@ resource "aws_ecs_service" "bastion" {
 
   # The gateway's network under either value of multi_task: its subnets, the task security group and
   # its public address or none. In that group no rule changes, so the load balancer's group still
-  # admits 443 from the task group alone (plan row 1.2, tests/network.tftest.hcl), and that is the
+  # admits 443 from the task group alone (network.tf, tests/network.tftest.hcl), and that is the
   # bastion's path to the load balancer. No load_balancer block: the bastion is in no target group.
   network_configuration {
     subnets          = local.task_subnet_ids

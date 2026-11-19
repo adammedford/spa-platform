@@ -1,5 +1,5 @@
-# Task 1.5. The platform's one private bucket, laid out as contracts/s3-layout.md
-# says, and the two image repositories.
+# The platform's one private bucket, laid out as contracts/s3-layout.md says, and
+# the image repositories: the gateway's and each one extra_repositories names.
 #
 # Two rules in that contract are enforced here and nowhere else, because the bucket
 # enforces them rather than gateway code:
@@ -29,8 +29,8 @@ locals {
 }
 
 # In the account regional namespace, so no other account can create this name between a teardown
-# and the next deployment, which task 6.9 does on purpose (change request 1.5a, decision 1). The
-# argument is what opts in: a suffixed name alone does not, and the provider refuses one in the
+# and the next deployment, which a teardown proof does on purpose (change request 1.5a, decision 1).
+# The argument is what opts in: a suffixed name alone does not, and the provider refuses one in the
 # global namespace at apply. bucket_namespace arrived in hashicorp/aws 6.37.0 (its CHANGELOG,
 # #46917), which is why versions.tf makes that release the floor.
 # https://github.com/hashicorp/terraform-provider-aws/blob/v6.68.0/website/docs/r/s3_bucket.html.markdown
@@ -244,9 +244,10 @@ resource "aws_s3_bucket_policy" "platform" {
 # --- Image repositories -----------------------------------------------------------
 
 locals {
-  # The names contracts/infra-outputs.example.json shows under ecrGateway and
-  # ecrMockApi: spa-{cell}/gateway and spa-{cell}/mock-api.
-  repositories = toset(["gateway", "mock-api"])
+  # The gateway's, spa-{cell}/gateway, which contracts/infra-outputs.example.json
+  # shows under ecrGateway, and each extra one as spa-{cell}/{name}. Each name is its
+  # for_each key, so a root that adds or keeps a name keeps that repository's address.
+  repositories = setunion(["gateway"], var.extra_repositories)
 
   # How many tagged images each repository keeps (#784). rollback.sh applies the previous task
   # definition's images and refuses one the repository no longer holds, so the running image and the
@@ -303,9 +304,8 @@ locals {
 # public or private repositories and for data transferred to the internet"
 # (https://aws.amazon.com/ecr/pricing/). Basic scanning is not one of those, so it is free; the
 # enhanced level is Amazon Inspector's and priced on its page (https://aws.amazon.com/inspector/pricing/),
-# which is why this module stays at basic. Storage is the "S3 and ECR storage" line of
-# docs/plan/05-infrastructure-and-cost.md, cents per GB and under $0.50 a month, which the lifecycle
-# policy below keeps true as deploys accumulate.
+# which is why this module stays at basic. Storage is the cell's "S3 and ECR storage" cost, cents per
+# GB and under $0.50 a month, which the lifecycle policy below keeps true as deploys accumulate.
 #
 # Encryption is ECR's default, AES256, which needs no key managed here (#779, answer 6).
 resource "aws_ecr_repository" "repository" {
@@ -337,8 +337,9 @@ resource "aws_ecr_repository" "repository" {
   tags = { Name = "spa-${var.cell}/${each.key}" }
 }
 
-# One policy for each repository: rollback.sh applies the previous gateway image and the mock API
-# image deployed with it, so both repositories keep the same images. The rules are above.
+# One policy for each repository: rollback.sh applies the previous task definition's images, the
+# gateway's and each extra container's deployed with it, so every repository keeps the same images.
+# The rules are above.
 resource "aws_ecr_lifecycle_policy" "repository" {
   for_each = local.repositories
 

@@ -1,5 +1,7 @@
 # The teardown role: the one principal the platform bucket's policy lets delete under apps/
-# (contracts/s3-layout.md, ADR-0014).
+# (ADR-0014). Its name, spa-platform-<cell>-teardown, and why the bucket policy names its role ARN
+# and never a session ARN, are in infra/modules/cell/README.md -> The bucket's name; the delete rule
+# itself is contracts/s3-layout.md's.
 #
 # It lives here because it has to outlive what it tears down: a role in the platform root would be
 # destroyed by the teardown it exists to permit. Its name is derived from the cell, so the platform

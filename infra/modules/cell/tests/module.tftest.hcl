@@ -1,19 +1,20 @@
-# Task 1.4a. Checks the cell module against a mock AWS provider: no credentials, no AWS apply
+# Checks the cell module against a mock AWS provider: no credentials, no AWS apply
 # and no network beyond `terraform init`. Permission assertions use plan; the final attachment
 # assertion uses only the mock provider's in-memory apply.
 #   terraform -chdir=infra/modules/cell init -backend=false
 #   terraform -chdir=infra/modules/cell test
 #
 # What this file proves is the configuration the module produces, which is everything about the
-# cell's ECS resources that can be decided without AWS. What it does not prove is row 1.4's own
-# done-when: a steady service, a healthy target, a successful image pull or a working tunnel. A
-# green run here is reviewed Terraform, not a running cell. Those four need the apply, and the apply
-# needs credentials, a state bucket and a human (plan row 1.4, ticket 05).
+# cell's ECS resources that can be decided without AWS. What it does not prove is a steady service,
+# a healthy target, a successful image pull or a working tunnel. A green run here is reviewed
+# Terraform, not a running cell. Those four need the apply, and the apply needs credentials, a state
+# bucket and a human.
 #
 # Expected values are read from the files the module answers to, never copied here:
 # contracts/platform-config.schema.json for the task environment, contracts/s3-layout.md for the
-# bucket prefixes the task role may read, contracts/infra-outputs.{schema,example}.json for the
-# outputs, and fixtures/MockApi/Dockerfile for the keys the mock API's process requires.
+# bucket prefixes the task role may read, and contracts/infra-outputs.{schema,example}.json for the
+# outputs. The module holds no fixture knowledge: a root that adds a container proves that
+# container in its own suite.
 #
 # Prior art for the seam: infra/modules/idp-cognito/tests/module.tftest.hcl.
 
@@ -173,7 +174,9 @@ override_resource {
   values          = { id = "nat-0" }
 }
 
-# The log group and the two repositories, which the execution role's two grants are scoped to.
+# The log group and the repositories, which the execution role's two grants are scoped to: the
+# gateway's, and the extra one the runs on extra_repositories pass. On the default inputs the extra
+# instance does not exist, and an override of an instance the plan does not hold changes nothing.
 override_resource {
   target          = aws_cloudwatch_log_group.gateway
   override_during = plan
@@ -187,9 +190,9 @@ override_resource {
 }
 
 override_resource {
-  target          = aws_ecr_repository.repository["mock-api"]
+  target          = aws_ecr_repository.repository["sidecar"]
   override_during = plan
-  values          = { arn = "arn:aws:ecr:us-east-1:111122223333:repository/spa-poc/mock-api" }
+  values          = { arn = "arn:aws:ecr:us-east-1:111122223333:repository/spa-poc/sidecar" }
 }
 
 # The two role ARNs, so the task definition can be checked to carry each in its own place rather
@@ -221,8 +224,8 @@ variables {
   certificate_domain      = "spa-poc.test"
   teardown_principal_arns = ["arn:aws:iam::111122223333:role/Admin"]
 
-  # No tag anywhere in it: deploy.sh pushes by digest and asserts the running digest afterwards
-  # (plan row 1.7), and the sample image the service starts on is passed the same way.
+  # No tag anywhere in it: deploy.sh pushes by digest and asserts the running digest afterwards,
+  # and the sample image the service starts on is passed the same way.
   gateway_image = "public.ecr.aws/nginx/nginx@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
   # Assumption A4: one issuer per environment. The value comes from the identity root's `issuer`
@@ -244,8 +247,8 @@ variables {
 # This reads the module's own source, because a plan holds no list of its resources that a test can
 # enumerate, and ADR-0016 makes plan policy an assertion on the configuration. A resource type added
 # here fails until the allowlist below is edited in the same change, which is where the author is
-# made to say what the new type is for. The platform root's tests hold the rest of P-01 (plan row
-# 1.9): how many of each type the plan holds, and that this module is the root's whole plan.
+# made to say what the new type is for. The platform root's tests hold the rest of P-01: how many of
+# each type the plan holds, and that this module is the root's whole plan.
 #
 # It holds one part of test P-01's "No NAT gateway, database or EC2 instance" statically rather than
 # only against a deployed account: no instance or database type can be declared. The two gated
@@ -254,7 +257,7 @@ variables {
 # tripwire holds both to their gates, at no instance on the default inputs. The bastion (#1167) adds
 # no type: it is a second ECS service, task definition, role and role policy behind the bastion
 # input, which P-01 admits in one gated form and holds at no instance on the default inputs, where
-# plan row 1.2's "no NAT, bastion or database" holds (#1167, the decision's reading of row 1.2).
+# the network's "no NAT, bastion or database" holds (#1167, the decision's reading of it).
 run "the_module_declares_only_the_cell_s_intended_resource_types" {
   command = plan
 
@@ -265,7 +268,7 @@ run "the_module_declares_only_the_cell_s_intended_resource_types" {
         join("\n", [for f in fileset(path.module, "*.tf") : file("${path.module}/${f}")])
       ) : m[0]
       ]) == toset([
-      # Task 1.2, network.tf
+      # network.tf
       "aws_vpc",
       "aws_internet_gateway",
       "aws_subnet",
@@ -277,11 +280,11 @@ run "the_module_declares_only_the_cell_s_intended_resource_types" {
       "aws_vpc_security_group_egress_rule",
       # The VPC's own default group, adopted so that it holds no rule (tests/network.tftest.hcl)
       "aws_default_security_group",
-      # Task 1.3, alb.tf
+      # alb.tf
       "aws_lb",
       "aws_lb_target_group",
       "aws_lb_listener",
-      # Task 1.5, storage.tf
+      # storage.tf
       "aws_s3_bucket",
       "aws_s3_bucket_versioning",
       "aws_s3_bucket_public_access_block",
@@ -291,7 +294,7 @@ run "the_module_declares_only_the_cell_s_intended_resource_types" {
       "aws_ecr_repository",
       # #784, storage.tf: each repository's lifecycle policy, which keeps rollback.sh's digests
       "aws_ecr_lifecycle_policy",
-      # Task 1.4a, ecs.tf and iam.tf
+      # ecs.tf and iam.tf
       "aws_ecs_cluster",
       "aws_ecs_task_definition",
       "aws_ecs_service",
@@ -335,7 +338,7 @@ run "the_module_declares_only_the_cell_s_intended_resource_types" {
 # --- The bucket's name and namespace (change request 1.5a) -------------------------------------
 #
 # The default is spa-platform-<cell>-<account id>-<region>-an, in S3's account regional namespace,
-# which no other account can create a bucket in (contracts/s3-layout.md). Expected names are read
+# which no other account can create a bucket in (README.md -> The bucket's name). Expected names are read
 # from the two contract examples, which render the bucket for this file's placeholders: cell poc,
 # account 111122223333 and us-east-1, the values the overrides above give the account and Region.
 
@@ -361,7 +364,7 @@ run "the_bucket_defaults_to_the_name_both_contract_examples_render" {
   }
 
   # Every consumer but infra/bootstrap, which applies first and derives the same default, reads this
-  # output rather than deriving the name (contracts/s3-layout.md), so it is the configured name,
+  # output rather than deriving the name (README.md -> The bucket's name), so it is the configured name,
   # which a plan already knows, not the id the provider sets after an apply.
   assert {
     condition     = output.bucket == jsondecode(file("../../../contracts/infra-outputs.example.json")).bucket
@@ -562,34 +565,43 @@ run "a_bucket_name_override_with_another_account_s_suffix_is_refused_at_plan" {
 # --- The image repositories' scan and lifecycle (#784) ------------------------------------------
 #
 # #779's answer 1 (https://github.com/adammedford/spa-platform/issues/779#issuecomment-6767167834):
-# both repositories scan on push at the basic level. The lifecycle policy keeps what rollback.sh
+# every repository scans on push at the basic level. These runs pass one extra repository, so the
+# settings are shown to hold of each repository the module creates and not of the gateway's alone. The lifecycle policy keeps what rollback.sh
 # may apply and expires the rest; storage.tf's comment above it gives the reasons. The expected
 # rules are written out here, not read from the module, so a changed rule fails until this file
 # says what the new one is for.
 
-run "both_repositories_scan_every_pushed_image" {
+run "every_repository_scans_every_pushed_image" {
   command = plan
 
+  variables {
+    extra_repositories = ["sidecar"]
+  }
+
   assert {
-    condition = alltrue([
-      for key in ["gateway", "mock-api"] :
-      try(one(aws_ecr_repository.repository[key].image_scanning_configuration).scan_on_push, false) == true
+    condition = toset(keys(aws_ecr_repository.repository)) == toset(["gateway", "sidecar"]) && alltrue([
+      for key, repository in aws_ecr_repository.repository :
+      try(one(repository.image_scanning_configuration).scan_on_push, false) == true
     ])
-    error_message = "Both repositories scan an image when it is pushed (#779, answer 1). With scan_on_push off, an image is scanned only when someone starts a scan by hand, and nothing in deploy.sh does."
+    error_message = "Every repository, the gateway's and the extra one, scans an image when it is pushed (#779, answer 1). With scan_on_push off, an image is scanned only when someone starts a scan by hand, and nothing in deploy.sh does."
   }
 }
 
 run "the_lifecycle_policy_keeps_the_rollback_digest_and_expires_the_rest" {
   command = plan
 
+  variables {
+    extra_repositories = ["sidecar"]
+  }
+
   assert {
-    condition     = toset(keys(aws_ecr_lifecycle_policy.repository)) == toset(["gateway", "mock-api"])
-    error_message = "Each of the two repositories has its own lifecycle policy: rollback.sh applies the previous gateway image and the mock API image deployed with it."
+    condition     = toset(keys(aws_ecr_lifecycle_policy.repository)) == toset(["gateway", "sidecar"])
+    error_message = "Each repository has its own lifecycle policy: rollback.sh applies the previous task definition's images, the gateway's and each extra container's deployed with it."
   }
 
   assert {
     condition = alltrue([
-      for key in ["gateway", "mock-api"] :
+      for key in ["gateway", "sidecar"] :
       aws_ecr_lifecycle_policy.repository[key].repository == aws_ecr_repository.repository[key].name
     ])
     error_message = "Each lifecycle policy is attached to its own repository."
@@ -600,7 +612,7 @@ run "the_lifecycle_policy_keeps_the_rollback_digest_and_expires_the_rest" {
   # deployment the circuit breaker rolled back cannot push the previous task definition's image out.
   assert {
     condition = alltrue([
-      for key in ["gateway", "mock-api"] :
+      for key in ["gateway", "sidecar"] :
       jsondecode(aws_ecr_lifecycle_policy.repository[key].policy).rules == [
         {
           rulePriority = 1
@@ -635,7 +647,7 @@ run "the_lifecycle_policy_keeps_the_rollback_digest_and_expires_the_rest" {
   # images kept.
   assert {
     condition = alltrue(flatten([
-      for key in ["gateway", "mock-api"] : [
+      for key in ["gateway", "sidecar"] : [
         for rule in jsondecode(aws_ecr_lifecycle_policy.repository[key].policy).rules :
         rule.selection.tagStatus != "any"
         && (rule.selection.tagStatus != "tagged" || (rule.selection.countType == "imageCountMoreThan" && rule.selection.countNumber >= 2))
@@ -652,7 +664,7 @@ run "the_task_is_arm64_at_a_quarter_vcpu_and_a_gigabyte" {
 
   assert {
     condition     = aws_ecs_task_definition.gateway.runtime_platform[0].cpu_architecture == "ARM64"
-    error_message = "The task must be ARM64 (plan row 1.4): ARM Fargate is about 20% below x86, which is the cost model in docs/plan/05-infrastructure-and-cost.md."
+    error_message = "The task must be ARM64: ARM Fargate is about 20% below x86, which is what the cell's cost model prices."
   }
 
   assert {
@@ -662,12 +674,12 @@ run "the_task_is_arm64_at_a_quarter_vcpu_and_a_gigabyte" {
 
   assert {
     condition     = aws_ecs_task_definition.gateway.cpu == "256" && aws_ecs_task_definition.gateway.memory == "1024"
-    error_message = "The task is 0.25 vCPU and 1 GB (plan row 1.4): 256 CPU units and 1024 MiB, which is what the $8.51 a month in the cost model is priced on."
+    error_message = "The task is 0.25 vCPU and 1 GB: 256 CPU units and 1024 MiB, which is what the $8.51 a month in the cost model is priced on."
   }
 
   assert {
     condition     = aws_ecs_task_definition.gateway.network_mode == "awsvpc"
-    error_message = "Fargate requires awsvpc, and the target group registers by address because of it (task 1.3)."
+    error_message = "Fargate requires awsvpc, and the target group registers by address because of it (alb.tf)."
   }
 
   assert {
@@ -681,7 +693,7 @@ run "the_service_registers_with_the_load_balancer_s_existing_target_group" {
 
   assert {
     condition     = one(aws_ecs_service.gateway.load_balancer).target_group_arn == aws_lb_target_group.gateway.arn
-    error_message = "The service must register in the target group task 1.3 already created, which is the target the one listener has been forwarding to with nothing behind it."
+    error_message = "The service must register in the target group alb.tf creates, the one the one listener forwards to."
   }
 
   assert {
@@ -689,15 +701,15 @@ run "the_service_registers_with_the_load_balancer_s_existing_target_group" {
       one(aws_ecs_service.gateway.load_balancer).container_name == "gateway"
       && one(aws_ecs_service.gateway.load_balancer).container_port == var.gateway_port
     )
-    error_message = "The registered target is the gateway container on the gateway's port, which is the port the target group sends to (task 1.3)."
+    error_message = "The registered target is the gateway container on the gateway's port, which is the port the target group sends to (alb.tf)."
   }
 }
 
-# var.gateway_port is one value in three places: the target group sends to it (task 1.3), the
+# var.gateway_port is one value in three places: the target group sends to it (alb.tf), the
 # container publishes it, and the process has to listen on it. The third did not follow the
 # variable -- the image's own ASPNETCORE_HTTP_PORTS=8080 decided it (src/Gateway/Dockerfile) -- so
 # at any other value the load balancer sent to a port nothing answered on and the target could
-# never turn healthy, which is row 1.4's own done-when.
+# never turn healthy.
 #
 # Run with the variable changed, because at its default the three agree by coincidence and the
 # assertion could not fail. The root's own test already exercises gateway_port = 9090.
@@ -736,12 +748,12 @@ run "the_deployment_circuit_breaker_rolls_a_bad_image_back" {
 
   assert {
     condition     = aws_ecs_service.gateway.deployment_circuit_breaker[0].enable
-    error_message = "The deployment circuit breaker must be enabled (plan row 1.4), or a bad image retries forever instead of failing."
+    error_message = "The deployment circuit breaker must be enabled, or a bad image retries forever instead of failing."
   }
 
   assert {
     condition     = aws_ecs_service.gateway.deployment_circuit_breaker[0].rollback
-    error_message = "The circuit breaker must roll back, not merely stop: docs/plan/05-infrastructure-and-cost.md names it as the rollback lever beside rollback.sh."
+    error_message = "The circuit breaker must roll back, not merely stop: it is a rollback lever beside rollback.sh only if it restores the previous task definition."
   }
 }
 
@@ -752,15 +764,10 @@ run "the_deployment_circuit_breaker_rolls_a_bad_image_back" {
 # completion, and stopTimeout covers the gateway's 25 s ShutdownTimeout (#363), which F1 sets above
 # the refresh holder's 20 s durable-write deadline (#332 F1; P2-3's second amendment, decision 2).
 # Mutations that turn this run red: deregistration_delay left to the provider's default, or 300;
-# stopTimeout 25 or absent; stopTimeout on the mock API too; minimum healthy 50.
+# stopTimeout 25 or absent; minimum healthy 50. An extra container's stopTimeout is its caller's: the
+# module adds nothing to one (the run on extra containers below).
 run "a_roll_drains_a_target_for_30_s_and_stops_the_gateway_within_30_s_with_one_task_always_serving" {
   command = plan
-
-  variables {
-    mock_api_image          = "111122223333.dkr.ecr.us-east-1.amazonaws.com/spa-poc/mock-api@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-    mock_api_app1_client_id = "app1client"
-    mock_api_app2_client_id = "app2client"
-  }
 
   # A string in the provider's schema (`terraform providers schema -json`, read for #347), so the
   # comparison is to "30": an integer here would error rather than fail.
@@ -776,15 +783,6 @@ run "a_roll_drains_a_target_for_30_s_and_stops_the_gateway_within_30_s_with_one_
     error_message = "The gateway container's stopTimeout is exactly 30 s (#332 F1): at least the gateway's 25 s ShutdownTimeout (#363), so the process finishes its shutdown before SIGKILL."
   }
 
-  # The gateway alone: the mock API holds no session and no lease, and a second number would be a
-  # second thing to keep in step with F1 for nothing.
-  assert {
-    condition = alltrue([
-      for c in jsondecode(aws_ecs_task_definition.gateway.container_definitions) : !can(c.stopTimeout) if c.name != "gateway"
-    ])
-    error_message = "stopTimeout goes on the gateway container only (#347 Q6): the mock API keeps Fargate's default."
-  }
-
   # One task always serves during a roll: the new task is started and healthy before the old one is
   # deregistered. Explicit rather than left to ECS's defaults, which are these two numbers, because
   # F1 rests on them.
@@ -794,30 +792,17 @@ run "a_roll_drains_a_target_for_30_s_and_stops_the_gateway_within_30_s_with_one_
   }
 }
 
-# #787. The shipping task is closed to a session: ECS Exec is off on the gateway's service and both
-# containers' root filesystems are read-only. The tunnel's hop is the bastion's task (#1167), so
-# nothing in this task carries a session any more, and an incident uses the logs, /readyz and the
-# bastion's network path (#780, answer 2). With the mock API image set, so that both containers are in
-# the task and either one alone left writable turns the run red; try() so a container with no
-# readonlyRootFilesystem key fails rather than errors, since ECS reads an absent key as writable.
-# Mutations that turn this run red: readonlyRootFilesystem false on the gateway only, or on the mock
-# API only; the key removed from the mock API; enable_execute_command true on the gateway's service.
-run "ecs_exec_is_off_and_both_containers_root_filesystems_are_read_only" {
+# #787. The shipping task is closed to a session: ECS Exec is off on the gateway's service and the
+# gateway's root filesystem is read-only. The tunnel's hop is the bastion's task (#1167), so nothing
+# in this task carries a session any more, and an incident uses the logs, /readyz and the bastion's
+# network path (#780, answer 2). An extra container's root is its caller's to make read-only, since
+# the module adds nothing to one; the platform root's suite holds the mock API's. try() so a
+# container with no readonlyRootFilesystem key fails rather than errors, since ECS reads an absent
+# key as writable.
+# Mutations that turn this run red: readonlyRootFilesystem false or removed on the gateway;
+# enable_execute_command true on the gateway's service.
+run "ecs_exec_is_off_and_the_gateway_s_root_filesystem_is_read_only" {
   command = plan
-
-  variables {
-    mock_api_image          = "111122223333.dkr.ecr.us-east-1.amazonaws.com/spa-poc/mock-api@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-    mock_api_app1_client_id = "app1client"
-    mock_api_app2_client_id = "app2client"
-  }
-
-  assert {
-    condition = (
-      toset([for c in jsondecode(aws_ecs_task_definition.gateway.container_definitions) : c.name])
-      == toset(["gateway", "mock-api"])
-    )
-    error_message = "Both containers are in the task, so the assertion below holds of each."
-  }
 
   assert {
     condition     = aws_ecs_service.gateway.enable_execute_command == false
@@ -825,33 +810,26 @@ run "ecs_exec_is_off_and_both_containers_root_filesystems_are_read_only" {
   }
 
   assert {
-    condition = alltrue([
-      for c in jsondecode(aws_ecs_task_definition.gateway.container_definitions) :
-      try(c.readonlyRootFilesystem == true, false)
-    ])
-    error_message = "Every container's root filesystem is read-only, explicitly (#787, P2-9): the gateway writes to its /tmp volume alone, and the mock API to nothing."
+    condition = try(
+      one([for c in jsondecode(aws_ecs_task_definition.gateway.container_definitions) : c if c.name == "gateway"]).readonlyRootFilesystem == true,
+      false
+    )
+    error_message = "The gateway's root filesystem is read-only, explicitly (#787): it writes to its /tmp volume alone."
   }
 }
 
 # #787, #780 answer 3. The one writable path in the task is the gateway's /tmp, a volume of the task's
 # own ephemeral storage: declared with a name and nothing else, so it is no host path, no Docker
-# volume and no EFS or FSx share, and it lives and dies with the task. "No other": one volume, one
-# mount point on the gateway, none on the mock API. readOnly is spelled out as the false ECS reads
+# volume and no EFS or FSx share, and it lives and dies with the task. "No other": one volume and one
+# mount point on the gateway. readOnly is spelled out as the false ECS reads
 # back, as #1006 spells out the other values ECS fills in. What this does not hold: that the image's
 # user can write there. ECS gives a task volume "0755 and the owner as root" by default
 # (https://docs.aws.amazon.com/AmazonECS/latest/developerguide/bind-mounts.html), and a write by
 # $APP_UID is seen only on a running task (#787, "Not shown by this ticket").
 # Mutations that turn this run red: the volume removed; a second volume; the volume given a host
-# path; containerPath /var/tmp; readOnly true; a second mount point on the gateway; the mount point
-# copied onto the mock API.
+# path; containerPath /var/tmp; readOnly true; a second mount point on the gateway.
 run "the_gateway_s_tmp_is_the_task_s_one_writable_path" {
   command = plan
-
-  variables {
-    mock_api_image          = "111122223333.dkr.ecr.us-east-1.amazonaws.com/spa-poc/mock-api@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-    mock_api_app1_client_id = "app1client"
-    mock_api_app2_client_id = "app2client"
-  }
 
   assert {
     condition = (
@@ -877,41 +855,24 @@ run "the_gateway_s_tmp_is_the_task_s_one_writable_path" {
     )
     error_message = "The gateway mounts the task's one volume at /tmp, writable, and nothing else (#780, answer 3)."
   }
-
-  assert {
-    condition = try(
-      one([
-        for c in jsondecode(aws_ecs_task_definition.gateway.container_definitions) : c if c.name == "mock-api"
-      ]).mountPoints == [],
-      false
-    )
-    error_message = "The mock API mounts nothing: #780's third answer names no writable path for it, so its read-only root is the whole of its filesystem."
-  }
 }
 
-# #786. Each container drops every Linux capability Docker grants by default and runs an init process
-# as PID 1, which forwards signals to the process and reaps zombies. With the mock API image set, so
-# that both containers are in the task and either one alone failing turns the run red. try() rather
-# than bare access, so a container with no linuxParameters fails the assertion instead of erroring.
-# Mutations that turn this run red: linuxParameters on the gateway only, or on the mock API only;
-# drop empty, or ["NET_RAW"]; initProcessEnabled false or absent; an add list that names anything,
-# even SYS_PTRACE. The empty add list is ECS's own value, and the run on ECS-filled values below
-# holds its presence (#1006); this one holds only that it names nothing.
-run "both_containers_drop_every_capability_and_run_an_init_process" {
+# #786. The gateway's container drops every Linux capability Docker grants by default and runs an
+# init process as PID 1, which forwards signals to the process and reaps zombies. On the default
+# inputs the task is the gateway's container alone, so each assertion over every container holds of
+# it; an extra container's hardening is its caller's, and the platform root's suite holds the mock
+# API's. try() rather than bare access, so a container with no linuxParameters fails the assertion
+# instead of erroring.
+# Mutations that turn this run red: linuxParameters removed from the gateway; drop empty, or
+# ["NET_RAW"]; initProcessEnabled false or absent; an add list that names anything, even SYS_PTRACE.
+# The empty add list is ECS's own value, and the run on ECS-filled values below holds its presence
+# (#1006); this one holds only that it names nothing.
+run "the_gateway_container_drops_every_capability_and_runs_an_init_process" {
   command = plan
 
-  variables {
-    mock_api_image          = "111122223333.dkr.ecr.us-east-1.amazonaws.com/spa-poc/mock-api@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-    mock_api_app1_client_id = "app1client"
-    mock_api_app2_client_id = "app2client"
-  }
-
   assert {
-    condition = (
-      toset([for c in jsondecode(aws_ecs_task_definition.gateway.container_definitions) : c.name])
-      == toset(["gateway", "mock-api"])
-    )
-    error_message = "Both containers are in the task, so the assertions below hold of each."
+    condition     = [for c in jsondecode(aws_ecs_task_definition.gateway.container_definitions) : c.name] == ["gateway"]
+    error_message = "The task is the gateway's container alone on the default inputs, so the assertions below hold of it."
   }
 
   assert {
@@ -919,7 +880,7 @@ run "both_containers_drop_every_capability_and_run_an_init_process" {
       for c in jsondecode(aws_ecs_task_definition.gateway.container_definitions) :
       try(c.linuxParameters.capabilities.drop == ["ALL"], false)
     ])
-    error_message = "Every container drops ALL capabilities (#786): neither process needs one, and the gateway binds a port above 1024, so not even NET_BIND_SERVICE."
+    error_message = "The gateway drops ALL capabilities (#786): the process needs none, and it binds a port above 1024, so not even NET_BIND_SERVICE."
   }
 
   assert {
@@ -927,7 +888,7 @@ run "both_containers_drop_every_capability_and_run_an_init_process" {
       for c in jsondecode(aws_ecs_task_definition.gateway.container_definitions) :
       length(try(c.linuxParameters.capabilities.add, [])) == 0
     ])
-    error_message = "No container adds a capability back (#786): Fargate allows only SYS_PTRACE, and neither process needs it."
+    error_message = "The gateway adds no capability back (#786): Fargate allows only SYS_PTRACE, and the process does not need it."
   }
 
   assert {
@@ -935,7 +896,7 @@ run "both_containers_drop_every_capability_and_run_an_init_process" {
       for c in jsondecode(aws_ecs_task_definition.gateway.container_definitions) :
       try(c.linuxParameters.initProcessEnabled == true, false)
     ])
-    error_message = "Every container runs an init process (#786), which forwards SIGTERM to the process and reaps zombies, the SSM agent's children among them."
+    error_message = "The gateway runs an init process (#786), which forwards SIGTERM to the process and reaps zombies."
   }
 }
 
@@ -944,32 +905,22 @@ run "both_containers_drop_every_capability_and_run_an_init_process" {
 # replaces nothing. Before this, every plan after an apply of the platform root replaced the task
 # definition and rolled the service (the 2026-11-04 sitting, #242). capabilities.add is the one the
 # provider's comparison does not normalize; the other four it does, and they are held anyway because
-# the sitting's diff named them and a later provider may stop. With the mock API image set, so both
-# containers are in the task; try() so a container missing a value fails rather than errors. The
-# mock API publishes no port, so hostPort is held on the gateway's one mapping alone, and the mock
-# API's absence of portMappings is held by the first assertion.
+# the sitting's diff named them and a later provider may stop. On the default inputs the task is the
+# gateway's container alone; an extra container's values are its caller's, and the platform root's
+# suite holds the mock API's. try() so a container missing a value fails rather than errors.
 # Mutations that turn this run red: add removed from the shared linuxParameters; hostPort removed,
-# or 8080 while gateway_port is 9090; mountPoints, systemControls or volumesFrom removed from either
-# container; systemControls or volumesFrom given an entry, or the mock API's mountPoints.
-run "both_containers_spell_out_the_values_ecs_fills_in" {
+# or 8080 while gateway_port is 9090; mountPoints, systemControls or volumesFrom removed from the
+# gateway; systemControls or volumesFrom given an entry.
+run "the_gateway_container_spells_out_the_values_ecs_fills_in" {
   command = plan
 
   variables {
-    gateway_port            = 9090
-    mock_api_image          = "111122223333.dkr.ecr.us-east-1.amazonaws.com/spa-poc/mock-api@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-    mock_api_app1_client_id = "app1client"
-    mock_api_app2_client_id = "app2client"
+    gateway_port = 9090
   }
 
   assert {
-    condition = (
-      toset([for c in jsondecode(aws_ecs_task_definition.gateway.container_definitions) : c.name])
-      == toset(["gateway", "mock-api"])
-      && !can(one([
-        for c in jsondecode(aws_ecs_task_definition.gateway.container_definitions) : c if c.name == "mock-api"
-      ]).portMappings)
-    )
-    error_message = "Both containers are in the task, so the assertions below hold of each, and the mock API publishes no port."
+    condition     = [for c in jsondecode(aws_ecs_task_definition.gateway.container_definitions) : c.name] == ["gateway"]
+    error_message = "The task is the gateway's container alone on the default inputs, so the assertions below hold of it."
   }
 
   assert {
@@ -977,7 +928,7 @@ run "both_containers_spell_out_the_values_ecs_fills_in" {
       for c in jsondecode(aws_ecs_task_definition.gateway.container_definitions) :
       try(c.linuxParameters.capabilities.add == [], false)
     ])
-    error_message = "Every container's linuxParameters.capabilities.add is the empty list ECS reads back (#1006): the provider does not normalize it, so leaving it out replaces the task definition on every plan after an apply."
+    error_message = "The gateway's linuxParameters.capabilities.add is the empty list ECS reads back (#1006): the provider does not normalize it, so leaving it out replaces the task definition on every plan after an apply."
   }
 
   assert {
@@ -990,24 +941,14 @@ run "both_containers_spell_out_the_values_ecs_fills_in" {
     error_message = "The gateway's port mapping spells out hostPort as var.gateway_port, the containerPort ECS fills it with under awsvpc (#1006)."
   }
 
-  # mountPoints is spelled out on both, and is the empty list on the mock API; the gateway's one
-  # entry, its /tmp volume (#787), is held by the run on the task's one writable path above.
+  # mountPoints is spelled out; its one entry, the /tmp volume (#787), is held by the run on the
+  # task's one writable path above.
   assert {
     condition = alltrue([
       for c in jsondecode(aws_ecs_task_definition.gateway.container_definitions) :
       try(can(tolist(c.mountPoints)) && c.systemControls == [] && c.volumesFrom == [], false)
     ])
-    error_message = "Every container spells out mountPoints, and systemControls and volumesFrom as the empty lists ECS reads back (#1006)."
-  }
-
-  assert {
-    condition = try(
-      one([
-        for c in jsondecode(aws_ecs_task_definition.gateway.container_definitions) : c if c.name == "mock-api"
-      ]).mountPoints == [],
-      false
-    )
-    error_message = "The mock API spells out mountPoints as the empty list ECS reads back (#1006)."
+    error_message = "The gateway spells out mountPoints, and systemControls and volumesFrom as the empty lists ECS reads back (#1006)."
   }
 }
 
@@ -1021,10 +962,11 @@ run "the_log_group_carries_the_contract_s_name_and_an_explicit_retention" {
 
   assert {
     condition     = aws_cloudwatch_log_group.gateway.retention_in_days > 0
-    error_message = "The log group needs an explicit retention (plan row 1.4), or logs accumulate for ever without a decision having been taken."
+    error_message = "The log group needs an explicit retention, or logs accumulate for ever without a decision having been taken."
   }
 
-  # Both containers log to the one group the contract has a field for, told apart by stream prefix.
+  # The gateway logs to the one group the contract has a field for, under its own stream prefix; a
+  # root's extra container may log there too, told apart by its own.
   assert {
     condition = alltrue([
       for c in jsondecode(aws_ecs_task_definition.gateway.container_definitions) : (
@@ -1040,11 +982,11 @@ run "the_log_group_carries_the_contract_s_name_and_an_explicit_retention" {
 run "the_task_takes_a_public_address_in_this_cell_s_public_subnets" {
   command = plan
 
-  # The no-NAT design (plan row 1.2): without a public address the task cannot pull an image, reach
+  # The no-NAT design (network.tf): without a public address the task cannot pull an image, reach
   # Cognito, S3, Parameter Store or logs, and a NAT gateway costs more than the rest of the cell.
   assert {
     condition     = aws_ecs_service.gateway.network_configuration[0].assign_public_ip
-    error_message = "The task needs a public address: the cell has no NAT gateway, so this is the only route out (plan row 1.2)."
+    error_message = "The task needs a public address: the cell has no NAT gateway, so this is the only route out."
   }
 
   assert {
@@ -1054,7 +996,7 @@ run "the_task_takes_a_public_address_in_this_cell_s_public_subnets" {
 
   assert {
     condition     = aws_ecs_service.gateway.network_configuration[0].security_groups == toset([aws_security_group.task.id])
-    error_message = "The task carries the task security group of task 1.2 and nothing else: that group is what accepts the gateway's port from the ALB security group alone (test P-06)."
+    error_message = "The task carries the task security group of network.tf and nothing else: that group is what accepts the gateway's port from the ALB security group alone (test P-06)."
   }
 }
 
@@ -1374,7 +1316,7 @@ run "the_task_role_holds_no_unrecognised_statement" {
       toset([for s in data.aws_iam_policy_document.task.statement : s.sid])
       == toset(["ReadRegistryAndReleases", "ReadClientSecrets"])
     )
-    error_message = "The task role holds exactly two grants, the bucket prefixes and the client-secret path plan row 1.4 names (its ssmmessages grant went with ECS Exec, #787), each with a sid this test recognises. A third is a widening and belongs in a change request."
+    error_message = "The task role holds exactly two grants, the bucket prefixes and the client-secret path the gateway reads (its ssmmessages grant went with ECS Exec, #787), each with a sid this test recognises. A third is a widening and belongs in a change request."
   }
 
   # A sid this test knows is no defence if the statement under it reaches further than its name
@@ -1474,7 +1416,7 @@ run "the_task_role_holds_no_unrecognised_statement" {
 }
 
 # P-03: "Read on this cell's bucket prefixes and client-secret parameter path, the four ssmmessages
-# permissions, and nothing else. No write to the registry." (docs/plan/04-tests.md). Since #787 the
+# permissions, and nothing else. No write to the registry." Since #787 the
 # four are the bastion role's and not the gateway's, the decision's reading of P-03 on #1167
 # (https://github.com/adammedford/spa-platform/issues/1167#issuecomment-6775499665): the gateway's
 # role holds the two reads and no ssmmessages action. The runs above hold the task role's own policy
@@ -1578,14 +1520,15 @@ run "the_execution_role_is_separate_and_holds_only_image_pull_and_log_writes" {
     error_message = "Log writes are scoped to this cell's own log group, not to every group in the account."
   }
 
-  # The pull is scoped to this cell's own two repositories, which is what the managed
-  # AmazonECSTaskExecutionRolePolicy does not do: it grants its ECR actions on "*".
+  # The pull is scoped to this cell's own repositories, which is what the managed
+  # AmazonECSTaskExecutionRolePolicy does not do: it grants its ECR actions on "*". On the default
+  # inputs that is the gateway's alone; the run on extra repositories below holds an extra one.
   assert {
     condition = (
       one([for s in data.aws_iam_policy_document.task_execution.statement : s if s.sid == "PullCellImages"]).resources
       == toset([for repository in aws_ecr_repository.repository : repository.arn])
     )
-    error_message = "The image pull names this cell's gateway and mock API repositories and no others."
+    error_message = "The image pull names every repository this cell creates and no others."
   }
 
   # CreateLogGroup is not among them: Terraform creates the group, so the agent only adds streams.
@@ -1691,90 +1634,215 @@ run "both_roles_are_assumable_only_by_ecs_tasks_in_this_account" {
   }
 }
 
-# --- The two containers ----------------------------------------------------------------------
+# --- Extra containers and repositories (#1342) --------------------------------------------------
+#
+# The module holds no fixture knowledge. A root adds a sidecar through two inputs: extra_containers,
+# appended to the task after the gateway's container exactly as written, and extra_repositories,
+# created beside the gateway's repository with its settings. These runs hold the two inputs with a
+# made-up sidecar; the platform root's suite holds the mock API it adds through them.
 
-run "the_mock_api_container_is_absent_until_its_image_is_supplied" {
+# Mutations that turn this run red: a default of either input that names anything; the gateway
+# repository dropped from the set; the extra_containers description no longer saying it holds the
+# task's role.
+run "with_no_extra_input_the_task_holds_the_gateway_alone_and_the_module_creates_its_repository_alone" {
   command = plan
 
   assert {
+    condition     = [for c in jsondecode(aws_ecs_task_definition.gateway.container_definitions) : c.name] == ["gateway"]
+    error_message = "With extra_containers at its default the task holds the gateway's container alone."
+  }
+
+  assert {
     condition = (
-      [for c in jsondecode(aws_ecs_task_definition.gateway.container_definitions) : c.name] == ["gateway"]
+      toset(keys(aws_ecr_repository.repository)) == toset(["gateway"])
+      && toset(keys(aws_ecr_lifecycle_policy.repository)) == toset(["gateway"])
+      && toset(keys(output.ecr_repositories)) == toset(["gateway"])
     )
-    error_message = "With no mock API image the task holds the gateway alone, so the service applies before that image exists (plan row 1.4)."
+    error_message = "With extra_repositories at its default the module creates the gateway repository alone, with its lifecycle policy, and outputs it alone."
+  }
+
+  assert {
+    condition = (
+      one([for s in data.aws_iam_policy_document.task_execution.statement : s if s.sid == "PullCellImages"]).resources
+      == toset(["arn:aws:ecr:us-east-1:111122223333:repository/spa-poc/gateway"])
+    )
+    error_message = "On the default inputs the execution role pulls from the gateway repository alone."
+  }
+
+  # The description is the warning an adopter reads before adding a container, so its one claim
+  # that matters is held: the task role is the task's, and a sidecar holds it.
+  assert {
+    condition = strcontains(
+      replace(one(regexall("(?ms)^variable \"extra_containers\" \\{.*?^\\}", file("${path.module}/variables.tf"))), "/\\s+/", " "),
+      "An extra container holds the task's role.",
+    )
+    error_message = "The extra_containers description says that an extra container holds the task's role: the role is the task's, so a sidecar can do whatever the gateway's role allows."
   }
 }
 
-run "the_mock_api_container_joins_with_the_client_ids_it_is_given" {
+# Mutations that turn this run red: the extra containers put before the gateway's, or dropped;
+# a key added to an extra container (a stopTimeout, a linuxParameters, a log configuration); the
+# gateway's own definition changed by the presence of an extra one; the extra repository left out of
+# the set, of the lifecycle policies, of the output or of PullCellImages.
+run "an_extra_container_and_repository_join_after_the_gateway_s_and_the_execution_role_pulls_from_it" {
   command = plan
 
   variables {
-    mock_api_image          = "111122223333.dkr.ecr.us-east-1.amazonaws.com/spa-poc/mock-api@sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
-    mock_api_app1_client_id = "1example23456789"
-    mock_api_app2_client_id = "2example23456789"
+    extra_containers = [
+      {
+        name                   = "sidecar"
+        image                  = "111122223333.dkr.ecr.us-east-1.amazonaws.com/spa-poc/sidecar@sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+        essential              = true
+        readonlyRootFilesystem = true
+        environment            = [{ name = "SIDECAR_PORT", value = "5080" }]
+      },
+    ]
+    extra_repositories = ["sidecar"]
+  }
+
+  assert {
+    condition     = [for c in jsondecode(aws_ecs_task_definition.gateway.container_definitions) : c.name] == ["gateway", "sidecar"]
+    error_message = "An extra container is in the task after the gateway's."
+  }
+
+  # Exactly as given: the module adds nothing to an extra container, so its hardening and its
+  # stopTimeout are its caller's.
+  assert {
+    condition     = jsonencode(jsondecode(aws_ecs_task_definition.gateway.container_definitions)[1]) == jsonencode(var.extra_containers[0])
+    error_message = "The extra container is the definition the root wrote, with nothing added and nothing taken away."
+  }
+
+  # And the gateway's own definition is the one the default inputs plan, byte for byte (the digest
+  # of under_memory_the_plan_is_phase_1_s_byte_for_byte below).
+  assert {
+    condition     = sha256(jsonencode([jsondecode(aws_ecs_task_definition.gateway.container_definitions)[0]])) == "9a07d99ae0a334c752920b8f77a9ce986a8c802df720c35bba6efac9db64be98"
+    error_message = "An extra container leaves the gateway's container definition as the default inputs plan it."
   }
 
   assert {
     condition = (
-      toset([for c in jsondecode(aws_ecs_task_definition.gateway.container_definitions) : c.name])
-      == toset(["gateway", "mock-api"])
+      toset(keys(aws_ecr_repository.repository)) == toset(["gateway", "sidecar"])
+      && aws_ecr_repository.repository["sidecar"].name == "spa-poc/sidecar"
+      && toset(keys(aws_ecr_lifecycle_policy.repository)) == toset(["gateway", "sidecar"])
+      && toset(keys(output.ecr_repositories)) == toset(["gateway", "sidecar"])
     )
-    error_message = "Supplying the mock API image must put its container in the task beside the gateway."
+    error_message = "An extra repository is created as spa-{cell}/{name}, with its own lifecycle policy, and the ecr_repositories output names it by its name."
   }
 
-  # The keys are read out of the image's own Dockerfile, which is where workstream 5 declares the
-  # three the process refuses to start without (fixtures/MockApi/Program.cs -> Required).
   assert {
     condition = (
-      toset(keys({
-        for e in one([
-          for c in jsondecode(aws_ecs_task_definition.gateway.container_definitions) : c if c.name == "mock-api"
-        ]).environment : e.name => e.value
-      }))
+      one([for s in data.aws_iam_policy_document.task_execution.statement : s if s.sid == "PullCellImages"]).resources
       == toset([
-        for m in regexall("(?m)^ENV (MockApi__[A-Za-z0-9]+)=", file("../../../fixtures/MockApi/Dockerfile")) : m[0]
+        "arn:aws:ecr:us-east-1:111122223333:repository/spa-poc/gateway",
+        "arn:aws:ecr:us-east-1:111122223333:repository/spa-poc/sidecar",
       ])
     )
-    error_message = "The mock API container carries exactly the environment keys fixtures/MockApi/Dockerfile declares; the process refuses to start without them."
-  }
-
-  assert {
-    condition = alltrue([
-      for key, expected in {
-        "MockApi__App1Client" = var.mock_api_app1_client_id
-        "MockApi__App2Client" = var.mock_api_app2_client_id
-        "MockApi__Issuer"     = values(var.issuers)[0].authority
-        } : one([
-          for e in one([
-            for c in jsondecode(aws_ecs_task_definition.gateway.container_definitions) : c if c.name == "mock-api"
-          ]).environment : e if e.name == key
-      ]).value == expected
-    ])
-    error_message = "Each listener's admitted client is the input it was given: the apps root decides client ids, and nothing about them is written into this module (plan row 1.4, contracts/upstream-contract.md -> One token per app)."
-  }
-
-  assert {
-    condition = (
-      one([
-        for c in jsondecode(aws_ecs_task_definition.gateway.container_definitions) : c if c.name == "mock-api"
-      ]).image == var.mock_api_image
-    )
-    error_message = "The mock API's image is the variable it was given, so a routine apply never moves it."
+    error_message = "The execution role's PullCellImages names the ARN of each repository the module creates, the extra one among them, so the agent can pull the extra container's image."
   }
 }
 
-run "a_mock_api_image_with_no_client_ids_is_refused" {
+# The target group registers the gateway's container by name, and ECS refuses two containers of one
+# name only at apply, after the roles and the bucket were created.
+run "an_extra_container_named_gateway_is_refused" {
   command = plan
 
   variables {
-    mock_api_image = "111122223333.dkr.ecr.us-east-1.amazonaws.com/spa-poc/mock-api@sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+    extra_containers = [{ name = "gateway", image = "public.ecr.aws/nginx/nginx@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" }]
   }
 
-  # fixtures/MockApi/Program.cs throws on a missing client id, so the alternative to this validation
-  # is a container that crash-loops after the apply reported success.
-  expect_failures = [var.mock_api_app1_client_id, var.mock_api_app2_client_id]
+  expect_failures = [var.extra_containers]
 }
 
-run "each_container_image_is_the_variable_it_was_given_with_no_tag_naming_default" {
+run "two_extra_containers_with_one_name_are_refused" {
+  command = plan
+
+  variables {
+    extra_containers = [
+      { name = "sidecar", image = "public.ecr.aws/nginx/nginx@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" },
+      { name = "sidecar", image = "public.ecr.aws/nginx/nginx@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" },
+    ]
+  }
+
+  expect_failures = [var.extra_containers]
+}
+
+run "an_extra_container_with_no_name_is_refused" {
+  command = plan
+
+  variables {
+    extra_containers = [{ image = "public.ecr.aws/nginx/nginx@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" }]
+  }
+
+  expect_failures = [var.extra_containers]
+}
+
+run "an_extra_repository_named_gateway_is_refused" {
+  command = plan
+
+  variables {
+    extra_repositories = ["gateway"]
+  }
+
+  expect_failures = [var.extra_repositories]
+}
+
+run "an_extra_repository_name_with_a_slash_or_a_capital_is_refused" {
+  command = plan
+
+  variables {
+    extra_repositories = ["side/car", "Sidecar"]
+  }
+
+  expect_failures = [var.extra_repositories]
+}
+
+# --- The citation rule (#1342) --------------------------------------------------------------------
+#
+# The module is what an adopter copies, so it cites what an adopter has: contracts/, the ADRs, its
+# own files and public documentation. Nothing in it names a path of this repository's fixtures, its
+# environment roots or its plan export, or a task id: a sentence that rests on the plan says what it
+# rests on in its own words. Ticket numbers, ADR ids and test ids stay, and so does a change
+# request's id, which names a file of contracts/changes/. The patterns are written so that this
+# file does not match them: a character class or a group stands where a path's slash or a word's space would, and a task
+# id is matched across a comment's line break.
+#
+# Mutations that turn this run red: the task id ecs.tf once opened with, put back; a description
+# citing the cost page of the plan export by its path; a row id in a suite's message; a cited P2 id
+# with no change request file, such as the hardening row's.
+run "no_file_of_the_module_names_a_fixture_an_environment_root_a_plan_path_or_a_task_id" {
+  command = plan
+
+  assert {
+    condition = flatten([
+      for f in concat(
+        [for f in fileset(path.module, "*.tf") : "${path.module}/${f}"],
+        [for f in fileset(path.module, "*.md") : "${path.module}/${f}"],
+        [for f in fileset(path.module, "tests/*.tftest.hcl") : "${path.module}/${f}"],
+        ) : [
+        for m in regexall("(?i)docs[/]plan[/]|fixtures[/]|infra[/]envs[/]|\\b(?:task|row)s?(?:\\s|#)+(?:P2-)?[0-9]+[.][0-9]+[a-z]?\\b|\\bplan[ ]rows?\\b|\\bticket[ ]+0[0-9]\\b|\\bworkstream[ ]+[0-9]", file(f)) : "${f}: ${m}"
+      ]
+    ]) == []
+    error_message = "A file of the module names a path of the fixtures, the environment roots or the plan export, or a task id: ${join("; ", flatten([for f in concat([for f in fileset(path.module, "*.tf") : "${path.module}/${f}"], [for f in fileset(path.module, "*.md") : "${path.module}/${f}"], [for f in fileset(path.module, "tests/*.tftest.hcl") : "${path.module}/${f}"]) : [for m in regexall("(?i)docs[/]plan[/]|fixtures[/]|infra[/]envs[/]|\\b(?:task|row)s?(?:\\s|#)+(?:P2-)?[0-9]+[.][0-9]+[a-z]?\\b|\\bplan[ ]rows?\\b|\\bticket[ ]+0[0-9]\\b|\\bworkstream[ ]+[0-9]", file(f)) : "${f}: ${m}"]]))}. Cite contracts/, an ADR or public documentation, or say what the sentence rests on in its own words."
+  }
+
+  # A P2 id is a change request's only when contracts/changes/ holds its file; otherwise it is a
+  # Phase 2 row's, which is a task id.
+  assert {
+    condition = length(setsubtract(
+      toset(flatten([
+        for f in concat(
+          [for f in fileset(path.module, "*.tf") : "${path.module}/${f}"],
+          [for f in fileset(path.module, "*.md") : "${path.module}/${f}"],
+          [for f in fileset(path.module, "tests/*.tftest.hcl") : "${path.module}/${f}"],
+        ) : [for m in regexall("\\bP2-([0-9]+)\\b", file(f)) : m[0]]
+      ])),
+      toset([for f in fileset("${path.module}/../../../contracts/changes", "*.md") : regex("^[pP]2-([0-9]+)-", f)[0] if can(regex("^[pP]2-([0-9]+)-", f))]),
+    )) == 0
+    error_message = "A file of the module cites a P2 id that names no change request in contracts/changes/, so it is a Phase 2 row's id, a task id. Say what the sentence rests on in its own words."
+  }
+}
+
+run "the_gateway_image_is_the_variable_it_was_given_with_no_tag_naming_default" {
   command = plan
 
   variables {
@@ -1791,9 +1859,8 @@ run "each_container_image_is_the_variable_it_was_given_with_no_tag_naming_defaul
   }
 
   # Read out of the declaration, because no assertion on a value can show the absence of a default.
-  # The gateway's image has no default at all; the mock API's defaults to absent, never to a tag.
-  # The match is on the argument at the block's own indent, not on the word, which appears in both
-  # descriptions.
+  # The gateway's image has no default at all. The match is on the argument at the block's own
+  # indent, not on the word.
   assert {
     condition = (
       length(regexall(
@@ -1805,15 +1872,7 @@ run "each_container_image_is_the_variable_it_was_given_with_no_tag_naming_defaul
         one(regexall("(?ms)^variable \"gateway_image\" \\{.*?^\\}", file("${path.module}/variables.tf")))
       )) == 0
     )
-    error_message = "gateway_image must declare no default: a default that names a tag would let an apply move a running image (docs/plan/05-infrastructure-and-cost.md -> What stays out of Terraform)."
-  }
-
-  assert {
-    condition = length(regexall(
-      "(?m)^  default\\s*= \"\"$",
-      one(regexall("(?ms)^variable \"mock_api_image\" \\{.*?^\\}", file("${path.module}/variables.tf")))
-    )) == 1
-    error_message = "mock_api_image defaults to absent, so the service applies before that image is built; a tag-naming default would move it instead."
+    error_message = "gateway_image must declare no default: a default that names a tag would let an apply move a running image, which is a deployment's decision and never Terraform's."
   }
 }
 
@@ -1863,61 +1922,17 @@ run "a_gateway_image_with_no_repository_is_refused" {
   expect_failures = [var.gateway_image]
 }
 
-# The client ids are given, so the image's own rule is the only one that can stop these plans.
-run "a_mock_api_image_with_an_empty_digest_is_refused" {
+# And the full form passes, in the registry the cell's sample image comes from.
+run "a_full_digest_reference_passes_for_the_gateway_image" {
   command = plan
 
   variables {
-    mock_api_image          = "111122223333.dkr.ecr.us-east-1.amazonaws.com/spa-poc/mock-api@"
-    mock_api_app1_client_id = "1example23456789"
-    mock_api_app2_client_id = "2example23456789"
-  }
-
-  expect_failures = [var.mock_api_image]
-}
-
-run "a_mock_api_image_named_by_tag_is_refused" {
-  command = plan
-
-  variables {
-    mock_api_image          = "111122223333.dkr.ecr.us-east-1.amazonaws.com/spa-poc/mock-api:latest"
-    mock_api_app1_client_id = "1example23456789"
-    mock_api_app2_client_id = "2example23456789"
-  }
-
-  expect_failures = [var.mock_api_image]
-}
-
-run "a_mock_api_image_with_a_short_digest_is_refused" {
-  command = plan
-
-  variables {
-    mock_api_image          = "111122223333.dkr.ecr.us-east-1.amazonaws.com/spa-poc/mock-api@sha256:abcdef01"
-    mock_api_app1_client_id = "1example23456789"
-    mock_api_app2_client_id = "2example23456789"
-  }
-
-  expect_failures = [var.mock_api_image]
-}
-
-# And the full form passes for both, in the two registries the cell pulls from: ECR Public for the
-# sample image, the cell's own repositories afterwards.
-run "full_digest_references_pass_for_both_images" {
-  command = plan
-
-  variables {
-    gateway_image           = "public.ecr.aws/nginx/nginx-unprivileged@sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
-    mock_api_image          = "111122223333.dkr.ecr.us-east-1.amazonaws.com/spa-poc/mock-api@sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
-    mock_api_app1_client_id = "1example23456789"
-    mock_api_app2_client_id = "2example23456789"
+    gateway_image = "public.ecr.aws/nginx/nginx-unprivileged@sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
   }
 
   assert {
-    condition = (
-      toset([for c in jsondecode(aws_ecs_task_definition.gateway.container_definitions) : c.image])
-      == toset([var.gateway_image, var.mock_api_image])
-    )
-    error_message = "A full digest reference for each image passes the plan, and each container runs the reference it was given."
+    condition     = [for c in jsondecode(aws_ecs_task_definition.gateway.container_definitions) : c.image] == [var.gateway_image]
+    error_message = "A full digest reference passes the plan, and the gateway's container runs the reference it was given."
   }
 }
 
@@ -1934,7 +1949,7 @@ run "the_new_outputs_match_the_infrastructure_outputs_contract" {
         logGroup   = output.log_group
       } : jsondecode(file("../../../contracts/infra-outputs.example.json"))[field] == expected
     ])
-    error_message = "ecs_cluster, ecs_service and log_group must be the values contracts/infra-outputs.example.json shows for this cell: task 1.7 assembles outputs.json from them."
+    error_message = "ecs_cluster, ecs_service and log_group must be the values contracts/infra-outputs.example.json shows for this cell: the outputs document is assembled from them."
   }
 
   assert {
@@ -1953,7 +1968,7 @@ run "the_new_outputs_match_the_infrastructure_outputs_contract" {
     error_message = "log_group must satisfy the contract's logGroup pattern: an absolute path of the characters CloudWatch allows."
   }
 
-  # The digest a deployment passes comes back out unchanged, so task 1.7 can assert the running
+  # The digest a deployment passes comes back out unchanged, so deploy.sh can assert the running
   # image against what it applied. The contract's gatewayImage pattern is the check.
   assert {
     condition = can(regex(
@@ -1996,8 +2011,8 @@ run "the_longest_cell_name_keeps_every_new_name_legal" {
     cell = "abcdefghijklmnopqrstuv"
   }
 
-  # The cell name's own validation allows 22 characters, and task 1.3 already found two names that
-  # do not fit at that length. These are the new ones.
+  # The cell name's own validation allows 22 characters, and the load balancer's and target group's
+  # names did not fit at that length (alb.tf). These are the compute's.
   assert {
     condition     = length(aws_ecs_cluster.cell.name) <= 255 && can(regex("^[A-Za-z0-9][A-Za-z0-9_-]*$", aws_ecs_cluster.cell.name))
     error_message = "The cluster's name must stay within what ECS accepts and what the contract's awsName allows at the cell name's maximum length."
@@ -2089,11 +2104,6 @@ run "the_attached_grants_and_trust_are_the_checked_documents" {
     target          = aws_ecr_repository.repository["gateway"]
     override_during = apply
     values          = { arn = "arn:aws:ecr:us-east-1:111122223333:repository/spa-poc/gateway" }
-  }
-  override_resource {
-    target          = aws_ecr_repository.repository["mock-api"]
-    override_during = apply
-    values          = { arn = "arn:aws:ecr:us-east-1:111122223333:repository/spa-poc/mock-api" }
   }
   override_resource {
     target          = aws_iam_role.task
@@ -2567,12 +2577,12 @@ run "under_memory_the_cell_is_phase_1_s_unchanged" {
 # hold of a one-task cell as of a two-task one (the run on the roll above). 30 is Fargate's default,
 # so a task behaves as before, but the definition's bytes changed, the next apply registers a new
 # revision and rolls the service once. Then #786 gave the container linuxParameters, dropping every
-# capability and running an init process, whichever the inputs (the run on both containers above);
+# capability and running an init process, whichever the inputs (the run on its capabilities above);
 # that too registers a new revision and rolls the service once. Then #1006 spelled out the values ECS
 # fills in, capabilities.add, hostPort and the empty mountPoints, systemControls and volumesFrom (the
 # run on ECS-filled values above), which ends the replacement #786 caused on every plan after an
 # apply; the first apply after it registers one more revision and rolls the service once. Then #787
-# made both roots read-only and gave the gateway its /tmp mount point (the runs on the read-only root
+# made the roots read-only and gave the gateway its /tmp mount point (the runs on the read-only root
 # and on the one writable path above), and took the SessionManagerMessages statement off the task
 # role, which moved the statements' digest for the first time; that apply registers one more revision
 # and rolls the service once. The digests below are the definition with all four, and the statements

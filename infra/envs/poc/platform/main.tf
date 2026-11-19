@@ -1,9 +1,12 @@
 # The platform root: the cell's runtime resources, one instance of modules/cell.
 #
 # Tasks 1.2, 1.3 and 1.5 are in place here: the network, the internal load
-# balancer with its one listener and target group, the bucket and the two image
+# balancer with its one listener and target group, the bucket and the image
 # repositories. The ECS cluster, task definition and service (task 1.4) are added to
-# the same module.
+# the same module. The mock API is this root's, not the module's (#1342): the root
+# writes its container definition and hands it to the module as an extra container,
+# with its repository as an extra repository, the two inputs an adopter uses for a
+# sidecar of its own.
 #
 # What this root never contains is a per-app resource. Cognito clients, branding
 # styles and secret parameters belong to envs/poc/apps, which is what makes
@@ -60,8 +63,8 @@ locals {
   #
   # try() absorbs a missing output, never a missing state (Q4 on #98). A state with no clients
   # output, which is what a destroyed apps root leaves, or with no entry for app 1 or app 2, gives
-  # an empty client id. That is harmless while mock_api_image is empty: the module needs a client id
-  # only once that image is supplied, and refuses the image without one. A missing state fails the
+  # an empty client id. That is harmless while mock_api_image is empty: this root needs a client id
+  # only once that image is supplied, and refuses the image without one (variables.tf). A missing state fails the
   # read above with "Unable to find remote state" before try() runs, and that hard dependency is
   # kept on purpose: the first deployment applies the apps root before this one
   # (docs/plan/05-infrastructure-and-cost.md -> First deployment, steps 2 and 3).
@@ -91,6 +94,84 @@ locals {
   teardown_principal_arns = concat([data.aws_iam_role.teardown.arn], var.additional_teardown_principal_arns)
 }
 
+# The region the provider points at, for the mock API's log configuration. A data source and not
+# var.region, so the mock API's awslogs-region is the gateway's, which the module reads the same
+# way, whatever the provider's region came from.
+data "aws_region" "current" {}
+
+# --- The mock API: this root's extra container (#1342) ------------------------------------------
+#
+# fixtures/MockApi/Dockerfile declares three keys and fixtures/MockApi/Program.cs refuses to start
+# without them. The client ids come from the apps root's state above: nothing about a client id is
+# written into this root or the module, which is what keeps onboarding a third app out of this
+# root's plan (docs/plan/05-infrastructure-and-cost.md -> Terraform boundaries, F-07).
+locals {
+  mock_api_container_name = "mock-api"
+
+  # Assumption A4 is one issuer per environment, and the mock API validates against one issuer
+  # (fixtures/MockApi/Program.cs). values() on a map is ordered by key, so with the single issuer
+  # mock_api_image's validation requires this is deterministic.
+  mock_api_issuer_authority = length(var.issuers) > 0 ? values(var.issuers)[0].authority : ""
+
+  mock_api_configuration = {
+    "MockApi__Issuer"     = local.mock_api_issuer_authority
+    "MockApi__App1Client" = local.mock_api_clients.app1
+    "MockApi__App2Client" = local.mock_api_clients.app2
+  }
+
+  # The module adds nothing to an extra container, so this definition carries what the gateway's
+  # carries in the module (modules/cell/ecs.tf), for the same reasons, and the suite holds the two
+  # in step:
+  #   - a read-only root with no writable path at all (#787): #780's third answer names none for
+  #     the mock API, and tools/image-check.sh starts its image on a read-only root with no tmpfs
+  #     (#1169);
+  #   - every capability dropped, none added and an init process (#786): a non-root user (USER
+  #     $APP_UID in fixtures/MockApi/Dockerfile), listeners on 5080 and 5081, above 1024, and an
+  #     exec-form ENTRYPOINT, so the init forwards SIGTERM to dotnet;
+  #   - ECS's own values spelled out (#1006): the empty capabilities.add, mountPoints,
+  #     systemControls and volumesFrom, so a re-plan after an apply replaces nothing.
+  # No portMappings: the two listeners are on loopback ports 5080 and 5081, reached from the gateway
+  # container inside the task's own network namespace, never from outside it
+  # (fixtures/MockApi/Dockerfile, contracts/platform-config.example.json -> AllowedUpstreams). No
+  # stopTimeout: the mock API holds no session and no lease, so it keeps Fargate's default. Its log
+  # goes to the cell's one log group under its own stream prefix.
+  mock_api_container = {
+    name      = local.mock_api_container_name
+    image     = var.mock_api_image
+    essential = true
+
+    readonlyRootFilesystem = true
+
+    linuxParameters = {
+      capabilities = {
+        add  = []
+        drop = ["ALL"]
+      }
+      initProcessEnabled = true
+    }
+
+    mountPoints    = []
+    systemControls = []
+    volumesFrom    = []
+
+    environment = [
+      for key in sort(keys(local.mock_api_configuration)) : {
+        name  = key
+        value = local.mock_api_configuration[key]
+      }
+    ]
+
+    logConfiguration = {
+      logDriver = "awslogs"
+      options = {
+        "awslogs-group"         = module.cell.log_group
+        "awslogs-region"        = data.aws_region.current.region
+        "awslogs-stream-prefix" = local.mock_api_container_name
+      }
+    }
+  }
+}
+
 module "cell" {
   source = "../../../modules/cell"
 
@@ -102,10 +183,14 @@ module "cell" {
 
   # Task 1.4a. The images, which deploy.sh passes by digest and every other apply passes back
   # unchanged from state, so a routine apply never moves a running image.
-  gateway_image           = var.gateway_image
-  mock_api_image          = var.mock_api_image
-  mock_api_app1_client_id = local.mock_api_clients.app1
-  mock_api_app2_client_id = local.mock_api_clients.app2
+  gateway_image = var.gateway_image
+
+  # #1342. The mock API joins the task once its image is supplied, and its repository is created
+  # whether or not it is: the first deployment pushes the image there before it passes it. The key
+  # stays mock-api, so the repository's address, module.cell.aws_ecr_repository.repository
+  # ["mock-api"], is the one it had when the module created it unasked.
+  extra_containers   = var.mock_api_image != "" ? [local.mock_api_container] : []
+  extra_repositories = ["mock-api"]
 
   # Task 1.4a. The platform configuration the task environment carries. These are bounds a registry
   # entry cannot widen (contracts/platform-config.schema.json), which is why they are decided here
