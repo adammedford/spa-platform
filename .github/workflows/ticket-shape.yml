@@ -2,10 +2,11 @@
 #
 # tools/ticket_shape.py holds the five rules of docs/agents/tracker-policy.md's "The shape of a
 # ticket a lane can finish" (#227), but for rule 2's last three sentences on observation boxes
-# (GLOSSARY.md), which no word or field shows. Run at the push, as A-05 is, a two-owner ticket is
-# found after a lane has built half of it; run here, it is found when the ticket is opened, edited
-# or labelled, before any lane takes it. /to-tickets is a user-level skill outside this repository
-# (#213), so this is what catches what it files.
+# (GLOSSARY.md), which no word or field shows, and rule 5's Vendor line, which tools/issue_labels.py
+# reads. Run at the push, as A-05 is, a two-owner ticket is found after a lane has built half of it;
+# run here, it is found when the ticket is opened, edited or labelled, before any lane takes it.
+# /to-tickets is a user-level skill outside this repository (#213), so this is what catches what it
+# files.
 #
 # It judges an issue carrying `ready-for-agent` only: that label is the promise that a lane can
 # finish the ticket, and a ticket still being shaped under `needs-triage` or waiting on a human
