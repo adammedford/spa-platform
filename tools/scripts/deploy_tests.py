@@ -27,6 +27,12 @@ import time
 _spec = importlib.util.spec_from_file_location("cell_doubles", pathlib.Path(__file__).resolve().parent / "cell_doubles.py")
 cell = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(cell)
+# The fields the scripts write, from the list they write them from, not from the schema's root
+# required: the contract may require fewer of every cell than this cell's scripts write (#1367).
+_fields_spec = importlib.util.spec_from_file_location("cell_documents", pathlib.Path(__file__).resolve().parent / "cell_documents.py")
+cell_documents = importlib.util.module_from_spec(_fields_spec)
+_fields_spec.loader.exec_module(cell_documents)
+WRITTEN_FIELDS = sorted(field for field, _, _ in cell_documents.FIELDS)
 
 import unittest  # noqa: E402
 
@@ -197,9 +203,8 @@ class DeployBuildsPushesAppliesAndAsserts(cell.CompanionTestCase):
     def test_it_writes_the_outputs_document_with_the_running_image(self):
         case, _ = self.deployed()
         document = json.loads((case.repo / "infra/envs/poc/outputs.json").read_text())
-        schema = json.loads((cell.ROOT / "contracts/infra-outputs.schema.json").read_text())
-        # Every required field, and the bastion's optional one, which this cell publishes (#1167).
-        self.assertEqual(sorted(schema["required"] + ["ecsBastionService"]), sorted(document))
+        # Every field the scripts write, and the bastion's optional one, which this cell publishes (#1167).
+        self.assertEqual(sorted(WRITTEN_FIELDS + ["ecsBastionService"]), sorted(document))
         self.assertEqual(cell.BASTION_SERVICE, document["ecsBastionService"])
         applied = next(c for c in case.calls("terraform") if c.get("command") == "apply")["vars"]
         self.assertEqual(applied["gateway_image"], document["gatewayImage"])
