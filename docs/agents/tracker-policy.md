@@ -195,8 +195,7 @@ of `docs/agents/issue-tracker.md` offers.
   ticket while a branch named for it, `task/issue-<n>-` or `task/<its plan row>-`, exists with its
   work not landed, and `tools/prune_branches.py` keeps a part-landed ticket's branch, so that branch
   is renamed before the rest is taken: the claims line of `tools/overnight_preflight.sh` prints the
-  rename for a ticket with open boxes whose open blockers are all met, and "leave held" for the
-  others.
+  rename.
 - **A follow-up is not a state of its origin.** It is an issue of its own, and holds the issue it
   came from open neither way ("An issue is held open by its own scope", above).
 
