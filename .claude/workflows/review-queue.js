@@ -1016,7 +1016,7 @@ const statedProse = (s, byTest) => {
 // agent that returned no result leaves the phrase, its row could-not-run already.
 const readProse = (m, got) => {
   if (!m.prose || !got) return m
-  const read = String((got && got.readAs) || '').replace(/`/g, '').trim()
+  const read = String(got.readAs || '').replace(/`/g, '').trim()
   if (!IDENTIFIER.test(read)) return { ...m, unread: read }
   return { ...m, test: read, statedAs: `(stated as ${m.prose}; read as ${read})` }
 }
@@ -1114,10 +1114,10 @@ const clearedText = (cleared) => cleared.map((c) => `${c.test} (cleared by ${c.u
 
 // One row per mutation. An agent that dies, returns nothing or returns a result that is none of the
 // three is a could-not-run row, so a dead agent never reads as a pass and the verdict still runs.
-const mutationRow = (n, stated, i, got) => {
+const mutationRow = (n, given, i, got) => {
   const ok = got && RESULTS.includes(got.result)
   // A stated phrase is judged by the test the agent read it as (#1436), from here on as if stated so.
-  const m = readProse(stated, ok && got)
+  const m = readProse(given, ok && got)
   const row = {
     test: m.test, kind: m.kind, guards: m.guards || m.why || '', mutation: m.mutation || '',
     broken: (ok && got.broken) || m.mutation || '', failed: ok && Number.isInteger(got.failed) ? got.failed : 0,

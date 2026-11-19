@@ -3237,7 +3237,7 @@ try {
       const served1435 = (test, extra = {}) => ({ 1435: pr(1435, [SPY, 'tools/scripts/seed.py'], { statedMutations: [said1435(test)], ...extra }) })
       const ran1435 = (failingNames, extra = {}) => ({ ...row('reproduced', failingNames.length, 38), failingNames, ...extra })
 
-      // Box 1: read as the test whose comment names it the refusal case, which went red.
+      // Read as the test whose comment names it the refusal case, which went red.
       env = run({ prs: [1435] }, served1435(PHRASE), { mutate: { [PHRASE]: ran1435([RED_REFUSES], { readAs: REFUSES }) } })
       result = await execute(env)
       const r = resultOf(1435, result)
@@ -3245,21 +3245,22 @@ try {
       if (m.test !== REFUSES || m.result !== 'reproduced' || r.verdict !== 'merge') fail(`#1436 the stated ${JSON.stringify(PHRASE)} read as ${REFUSES}, red on it, gives ${JSON.stringify({ test: m.test, result: m.result })}, verdict ${r.verdict}, expected ${REFUSES} reproduced and merge`)
       if (!(m.why || '').includes(`(stated as ${PHRASE}; read as ${REFUSES})`)) fail(`#1436 the row's why ${JSON.stringify(m.why)} does not say what was stated and the test it was read as`)
 
-      // Box 4: the mutation agent is asked to read the phrase as a test; the inventory is not, and
+      // The mutation agent is asked to read the phrase as a test; the inventory is not, and
       // still hands the cell over in the body's own words.
       const prompt = (env.mutations[0] || {}).prompt || ''
       if (!prompt.includes(`names the test in prose: ${JSON.stringify(PHRASE)}`) || !prompt.includes('READ AS: ') || !/readAs: /.test(prompt)) fail('#1436 the mutation prompt does not ask for the stated phrase to be read as one test before the break')
       const invPrompt = env.prompts['inventory:1435'] || ''
+      if (!prompt.includes('reproduced when the test you read the phrase as went red') || !prompt.includes('but the test you read the phrase as stayed green, the result is did-not-fail')) fail('#1436 the mutation prompt does not judge the run by the test the phrase was read as')
       if (!invPrompt.includes('the test exactly as the body writes it') || /READ AS|readAs|in prose/.test(invPrompt)) fail('#1436 the inventory prompt no longer takes the stated test in the body\'s own words, or asks for a reading')
 
-      // Box 2: read as one test, only another went red: did-not-fail, which holds.
+      // Read as one test, only another went red: did-not-fail, which holds.
       env = run({ prs: [1435] }, served1435(PHRASE), { mutate: { [PHRASE]: ran1435([RED_OTHER], { readAs: REFUSES }) } })
       result = await execute(env)
       const other = resultOf(1435, result)
       const o = (other.mutations || [])[0] || {}
       if (o.test !== REFUSES || o.result !== 'did-not-fail' || other.verdict !== 'hold') fail(`#1436 the stated ${JSON.stringify(PHRASE)} read as ${REFUSES}, red only on another test, gives ${JSON.stringify({ test: o.test, result: o.result })}, verdict ${other.verdict}, expected did-not-fail and hold`)
 
-      // Box 3: no single test answers the phrase, whatever the agent reported: could-not-run, why
+      // No single test answers the phrase, whatever the agent reported: could-not-run, why
       // naming the phrase, never did-not-fail. A reading that is no one name answers nothing either.
       for (const [readAs, got] of [['', ran1435([RED_REFUSES])], ['', ran1435([], { result: 'did-not-fail', failed: 0 })], ['', ran1435([], { result: 'could-not-run', why: 'no test is the refusal case' })], [PHRASE, ran1435([RED_REFUSES])], [`${REFUSES}, test_x`, ran1435([RED_REFUSES])], [undefined, ran1435([RED_REFUSES])]]) {
         env = run({ prs: [1435] }, served1435(PHRASE), { mutate: { [PHRASE]: { ...got, ...(readAs === undefined ? {} : { readAs }) } } })
@@ -3269,7 +3270,7 @@ try {
         if (x.result !== 'could-not-run' || u.verdict !== 'hold' || !(x.why || '').includes(JSON.stringify(PHRASE))) fail(`#1436 the stated ${JSON.stringify(PHRASE)} read as ${JSON.stringify(readAs)} after ${got.result} gives ${JSON.stringify({ result: x.result, why: x.why })}, verdict ${u.verdict}, expected could-not-run naming the phrase, and hold`)
       }
 
-      // Box 5: a name, a dotted name, a file and a list keep their reading; a readAs is ignored, and
+      // A name, a dotted name, a file and a list keep their reading; a readAs is ignored, and
       // the prompt asks for none.
       const DOTTED = `SeedWritesTheBastionServiceOnlyWhenTheRootPublishesIt.${REFUSES}`
       for (const [cell, want] of [[REFUSES, [REFUSES]], [DOTTED, [DOTTED]], [SPY, [SPY]], [`${REFUSES}, test_x`, [REFUSES, 'test_x']]]) {
@@ -3281,6 +3282,13 @@ try {
         if (JSON.stringify(rows) !== JSON.stringify(want.map((t) => [t, 'reproduced'])) || (k.mutations || []).some((x) => /read as/.test(x.why || ''))) fail(`#1436 the stated ${JSON.stringify(cell)} with a readAs gives rows ${JSON.stringify(rows)}, expected ${JSON.stringify(want)} reproduced, as before`)
         if (((env.mutations[0] || {}).prompt || '').includes('READ AS: ')) fail(`#1436 the mutation prompt for the stated ${JSON.stringify(cell)} asks for a reading`)
       }
+      // A phrase on a Node companion is not read: the companion prints no test names, only its
+      // checks' fail() messages, so its row stays the caught row the verdict answers by them (#905).
+      const CMJS = '.claude/workflows/morning_tests.mjs'
+      env = run({ prs: [1435] }, { 1435: pr(1435, [CMJS], { statedMutations: [{ ...said1435(PHRASE), project: CMJS }] }) }, { mutate: { [PHRASE]: ran1435(['the comments index counts 0'], { readAs: 'test_something_else' }) }, caught: { 1435: [PHRASE] } })
+      result = await execute(env)
+      const nm = (resultOf(1435, result).mutations || [])[0] || {}
+      if (nm.test !== PHRASE || nm.result !== 'reproduced' || !(nm.caughtBy || []).length || ((env.mutations[0] || {}).prompt || '').includes('READ AS: ')) fail(`#1436 the stated ${JSON.stringify(PHRASE)} on ${CMJS} gives ${JSON.stringify({ test: nm.test, result: nm.result, caughtBy: nm.caughtBy })}, expected the phrase kept as a caught row the verdict accepted, with no reading asked for`)
     }
 
     // Cause 3 (#1327): the environment a break needs. A stated mutation's image reaches its prompt, the
