@@ -24,7 +24,10 @@ its merge: the guide puts its tickets in the pull request description, and tools
 on the server, so that merge is never in a range this reads (#897). A "Merge part of task" subject
 is never judged: it says the row is unfinished, and tools/check.sh holds it to its Outstanding lines
 instead (#291). A full-landing subject with no Ticket line is never judged either; it is named in a
-note, since the merges from before the tracker moved to GitHub carry none.
+note, since the merges from before the tracker moved to GitHub carry none. A line inside a fenced
+block the body quotes is no box of the ticket and takes no place (#1402): on 2026-11-18
+--subject-for made #1215 a part on the two boxes of a template it quotes, and the session wrote the
+full subject by hand.
 
 A full landing is held on a second ground too (#388). On 2026-10-24 the run wrote "Merge task P2-2"
 over #340, all its boxes ticked, directly after "Merge part of task issue-338", whose ticket and
@@ -110,8 +113,19 @@ FULL_LANDING = re.compile(r"^Merge\s+tasks?\s+(.+?):", re.IGNORECASE)
 TICKET = re.compile(r"(?m)^Ticket:[ \t]*#(\d+)[ \t]*$")
 
 # Every box, ticked or not, so an open one can be named by its place: "box 2". An open box is
-# tools/ticket_shape.py's OPEN_BOX: `- [ ]` starting a line, indented or not.
-BOX = re.compile(r"(?m)^[ \t]*- \[(?P<mark>[ xX])\][ \t]*(?P<text>[^\n]*)$")
+# tools/ticket_shape.py's OPEN_BOX: `- [ ]` starting a line, indented or not. It is matched against
+# one line at a time, since open_boxes reads the body by its lines to leave out the fenced ones.
+BOX = re.compile(r"^[ \t]*- \[(?P<mark>[ xX])\][ \t]*(?P<text>[^\n]*)$")
+
+# A line that opens or shuts a fenced block, from tools/ticket_shape.py's FENCE for the reason the
+# forms below are copied, with three changes, each as CommonMark reads a fence (#1402). The whole run
+# of the marker is read, not its first three characters, so a longer fence can hold a shorter one:
+# ticket_shape.py's three-character reading shuts a five-backtick block on the three-backtick line
+# inside it, which is how #1215's body is written. A backtick run with another backtick later on its
+# line is an inline code span, "```x``` reads", and opens nothing. And only a run with nothing but
+# white space after it shuts a fence, so "```x" inside one is a quoted line. Without the last two a
+# real box after such a line was hidden, and --base passed a full landing over it.
+FENCE = re.compile(r"^[ \t]*(`{3,}|~{3,})(.*)$")
 
 # Either subject form, as tools/roadmap.py's LANDED_SUBJECT reads it; group 1 is set on a part. This
 # script runs under `python3 -I`, which leaves its own directory off sys.path, so roadmap.py's forms
@@ -358,9 +372,33 @@ def open_parts(parts: Parts, row: str, own: set[int], landed: dict[str, str]) ->
 
 
 def open_boxes(body: str) -> list[tuple[int, str]]:
-    """Each open box in `body`, as (its place among all the boxes, from 1; its text)."""
-    return [(place, box.group("text").strip())
-            for place, box in enumerate(BOX.finditer(body), start=1) if box.group("mark") == " "]
+    """Each open box in `body`, as (its place among the boxes outside fenced blocks, from 1; its
+    text). A line inside a fenced block the body quotes is no box, as tools/ticket_shape.py's
+    headings() reads a heading there as none (#1402), so "box 2" is the second box a reader of the
+    rendered ticket sees. A fence is shut by a run of its own marker at least as long as the one
+    that opened it with nothing but white space after it; a shorter run, the other marker, or a run
+    with text after it, inside it is a quoted line. A backtick run with a backtick after it on its
+    line opens no fence."""
+    found: list[tuple[int, str]] = []
+    fence = ""
+    place = 0
+    for line in body.split("\n"):
+        marked = FENCE.match(line)
+        if marked:
+            run, rest = marked.group(1), marked.group(2)
+            if not fence and not (run[0] == "`" and "`" in rest):
+                fence = run
+                continue
+            if fence:
+                if run[0] == fence[0] and len(run) >= len(fence) and not rest.strip():
+                    fence = ""
+                continue
+        box = None if fence else BOX.match(line)
+        if box:
+            place += 1
+            if box.group("mark") == " ":
+                found.append((place, box.group("text").strip()))
+    return found
 
 
 def plural(count: int, one: str, many: str) -> str:
