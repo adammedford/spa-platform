@@ -91,8 +91,8 @@ def setUpModule():
     cell.bash_banner("teardown_tests")
 
 
-def fast(case, wait: str = "2"):
-    return case.env(SPA_TEARDOWN_TAG_WAIT=wait, SPA_TEARDOWN_TAG_POLL="0")
+def fast(case, wait: str = "2", **extra: str):
+    return case.env(SPA_TEARDOWN_TAG_WAIT=wait, SPA_TEARDOWN_TAG_POLL="0", **extra)
 
 
 class TeardownEmptiesDestroysAndProvesNothingIsTagged(cell.CompanionTestCase):
@@ -192,6 +192,33 @@ class TeardownEmptiesDestroysAndProvesNothingIsTagged(cell.CompanionTestCase):
         self.assertEqual(sorted(f"{cell.FAMILY}:{n}" for n in (1, 2, 3)), sorted(deleted))
         self.assertEqual("INACTIVE", case.load()["task_definitions"]["spa-platform-poc2:1"]["status"])
 
+    def test_the_bastion_family_s_inactive_task_definitions_are_deleted_and_no_other_cell_s(self):
+        # #1168: a cell that ran the bastion leaves its family's revisions INACTIVE after the destroy.
+        # The family is deleted by its exact name, infra/modules/cell/ecs.tf's bastion_family; a
+        # family the prefix also matches is another's and is left.
+        world = deployed_world()
+        world["task_definitions"].update({
+            f"{cell.BASTION_FAMILY}:1": {"status": "INACTIVE", "containers": {}},
+            f"{cell.BASTION_FAMILY}:2": {"status": "ACTIVE", "containers": {}},
+            f"{cell.BASTION_FAMILY}2:1": {"status": "INACTIVE", "containers": {}},
+            "spa-platform-poc2_bastion:1": {"status": "INACTIVE", "containers": {}},
+        })
+        case, result = self.torn_down(world)
+        deleted = [name for call in case.aws("ecs delete-task-definitions")
+                   for name in (ref.split("/")[-1] for ref in call["options"]["task-definitions"])]
+        self.assertEqual(sorted([f"{cell.FAMILY}:{n}" for n in (1, 2, 3)] + [f"{cell.BASTION_FAMILY}:1", f"{cell.BASTION_FAMILY}:2"]),
+                         sorted(deleted))
+        left = case.load()["task_definitions"]
+        self.assertEqual("INACTIVE", left[f"{cell.BASTION_FAMILY}2:1"]["status"])
+        self.assertEqual("INACTIVE", left["spa-platform-poc2_bastion:1"]["status"])
+        self.assertIn(f"deleted 2 inactive task definitions of {cell.BASTION_FAMILY}", result.stdout)
+
+    def test_a_cell_that_never_ran_the_bastion_deletes_none_of_its_family(self):
+        case, result = self.torn_down()
+        listings = [c["options"]["family-prefix"] for c in case.aws("ecs list-task-definitions")]
+        self.assertEqual([cell.FAMILY, cell.BASTION_FAMILY], listings)
+        self.assertIn(f"deleted 0 inactive task definitions of {cell.BASTION_FAMILY}", result.stdout)
+
     def test_more_than_ten_inactive_task_definitions_go_ten_at_a_time(self):
         world = deployed_world()
         for n in range(4, 26):
@@ -260,7 +287,8 @@ class TeardownEmptiesDestroysAndProvesNothingIsTagged(cell.CompanionTestCase):
         for reader in ("IAM roles by tag", "IAM customer managed policies by tag", "the cell's roles by name",
                        f"the tag query in {REGION}"):
             self.assertTrue(any(line.startswith(f"verify-teardown: {reader}: ") for line in lines), reader)
-        self.assertEqual(sorted(f"{cell.FAMILY}-{suffix}" for suffix in ("task", "task-execution")),
+        # The bastion task's role is checked by name too, on a cell that never ran one (#1167).
+        self.assertEqual(sorted(f"{cell.FAMILY}-{suffix}" for suffix in ("task", "task-execution", "bastion_task")),
                          sorted(c["options"]["role-name"] for c in case.aws("iam get-role")
                                 if c["options"]["role-name"] != cell.TEARDOWN_ROLE))
 
@@ -411,6 +439,96 @@ class TeardownRefusesToStart(cell.CompanionTestCase):
         result = case.run(SCRIPT, "--yes", "--cell", "Poc")
         self.assertEqual(2, result.status, result.output)
         self.assertEqual([], case.calls())
+
+
+def registry_only_world() -> dict:
+    """#1248's F5 to F10: the roots hold poc and nothing is under apps/, so no teardown role is
+    assumed and nothing stopped a run for another cell before the destroys."""
+    world = deployed_world()
+    world["objects"] = [entry for entry in world["objects"] if not entry["Key"].startswith("apps/")]
+    return world
+
+
+def stateless_world() -> dict:
+    """No root has state: a cell destroyed already, or never applied. Nothing is left that a
+    destroy would remove, so there is no cell to compare with."""
+    world = deployed_world()
+    world["roots"] = {"idp": None, "apps": None, "platform": None}
+    world["objects"] = []
+    world["tagged"] = [entry for entry in world["tagged"] if entry["root"] == "bootstrap"]
+    world["roles"] = {name: role for name, role in world["roles"].items() if role.get("root") != "platform"}
+    world["parameters"] = [OTHER_RING_KEY]
+    world["task_definitions"] = {"spa-platform-poc2:1": {"status": "INACTIVE", "containers": {}}}
+    return world
+
+
+class TeardownRefusesAnotherCellsRoots(cell.CompanionTestCase):
+    """#1304: the cell teardown.sh was given and the cell its roots' state holds are compared before
+    anything is deleted. The roots are infra/envs/poc/*, whichever cell they were applied for."""
+
+    OTHER = "poc2"
+
+    def assertRefusedBeforeAnyChange(self, case, result, world: dict):
+        self.assertEqual(2, result.status, result.output)
+        self.assertIn(f"'{self.OTHER}'", result.stderr)
+        self.assertIn(f"'{CELL}'", result.stderr)
+        self.assertEqual([], [c for c in case.calls("terraform") if c.get("command") == "destroy"])
+        changes = [c for c in case.calls("aws") if "delete" in c.get("command", "") or c.get("command") == "sts assume-role"]
+        self.assertEqual([], changes)
+        left = case.load()
+        self.assertEqual(world["objects"], left["objects"])
+        self.assertEqual(world["task_definitions"], left["task_definitions"])
+        self.assertEqual(world["parameters"], left["parameters"])
+        self.assertNoUnexpectedCall(case)
+
+    def test_cell_naming_another_cell_than_the_roots_hold_exits_2_before_any_change(self):
+        world = registry_only_world()
+        case = cell.Case(self, world=world)
+        result = case.run(SCRIPT, "--yes", "--cell", self.OTHER, env=fast(case))
+        self.assertRefusedBeforeAnyChange(case, result, world)
+
+    def test_spa_cell_naming_another_cell_than_the_roots_hold_exits_2_before_any_change(self):
+        world = registry_only_world()
+        case = cell.Case(self, world=world)
+        result = case.run(SCRIPT, "--yes", env=fast(case, SPA_CELL=self.OTHER))
+        self.assertRefusedBeforeAnyChange(case, result, world)
+
+    def test_with_releases_it_is_the_guard_that_stops_it_not_a_missing_role(self):
+        world = deployed_world()
+        case = cell.Case(self, world=world)
+        result = case.run(SCRIPT, "--yes", "--cell", self.OTHER, env=fast(case))
+        self.assertRefusedBeforeAnyChange(case, result, world)
+        self.assertEqual([], case.aws("iam get-role"))
+
+    def test_the_identity_root_answers_when_the_platform_root_has_no_state(self):
+        # A teardown that stopped after the platform root's destroy leaves apps and idp standing.
+        world = registry_only_world()
+        world["roots"]["platform"] = None
+        world["objects"] = []
+        case = cell.Case(self, world=world)
+        result = case.run(SCRIPT, "--yes", "--cell", self.OTHER, env=fast(case))
+        self.assertRefusedBeforeAnyChange(case, result, world)
+
+    def test_the_cell_the_roots_hold_is_torn_down(self):
+        world = registry_only_world()
+        case = cell.Case(self, world=world)
+        result = case.run(SCRIPT, "--yes", env=fast(case, SPA_CELL=CELL))
+        self.assertEqual(0, result.status, result.output)
+        self.assertEqual(["platform", "apps", "idp"],
+                         [c["root"] for c in case.calls("terraform") if c.get("command") == "destroy"])
+
+    def test_with_no_state_in_any_root_it_goes_on_as_before(self):
+        # Nothing to compare: the destroys plan nothing, and the cell given names what is cleaned up.
+        case = cell.Case(self, world=stateless_world())
+        result = case.run(SCRIPT, "--yes", "--cell", self.OTHER, env=fast(case))
+        self.assertEqual(0, result.status, result.output)
+        self.assertEqual(["platform", "apps", "idp"],
+                         [c["root"] for c in case.calls("terraform") if c.get("command") == "destroy"])
+        self.assertEqual("DELETE_IN_PROGRESS", case.load()["task_definitions"]["spa-platform-poc2:1"]["status"])
+        self.assertEqual([f"spa-platform-{self.OTHER}", f"spa-platform-{self.OTHER}_bastion"],
+                         [c["options"]["family-prefix"] for c in case.aws("ecs list-task-definitions")])
+        self.assertTrue(result.stdout.splitlines()[-1].startswith("verify-teardown: pass:"), result.output)
+        self.assertNoUnexpectedCall(case)
 
 
 if __name__ == "__main__":

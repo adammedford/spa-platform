@@ -46,16 +46,22 @@ public sealed class ProjectGraph
     /// <c>spikes/</c> is outside the solution by design. <c>.scratch/</c> is left out because
     /// overnight runs write probes under <c>.scratch/&lt;slug&gt;/log/</c>, which git ignores: a
     /// project file there is no project of this repository's, and the main checkout keeps them
-    /// (#1274).
+    /// (#1274). <c>.claude/worktrees/</c> is left out because an agent's worktree there, which git
+    /// also ignores, holds a copy of every project (#1374).
     /// </summary>
-    public static IEnumerable<string> ProjectsATreeHolds(IEnumerable<string> projectFiles) =>
+    /// <param name="root">The tree's root. The paths are matched below it only, so a checkout that
+    /// is itself under <c>.claude/worktrees/</c> still counts its own projects.</param>
+    /// <param name="projectFiles">Absolute paths of the project files under <paramref name="root"/>.</param>
+    public static IEnumerable<string> ProjectsATreeHolds(string root, IEnumerable<string> projectFiles) =>
         projectFiles
-            .Select(path => path.Replace('\\', '/'))
+            // The leading slash lets a directory at the top of the tree, such as .scratch/, match
+            // its entry in OutsideTheSolution, which is written with slashes on both sides.
+            .Select(path => "/" + System.IO.Path.GetRelativePath(root, path).Replace('\\', '/'))
             .Where(path => !OutsideTheSolution.Any(directory => path.Contains(directory, StringComparison.Ordinal)))
             .Select(path => System.IO.Path.GetFileNameWithoutExtension(path))
             .Order(StringComparer.Ordinal);
 
-    private static readonly string[] OutsideTheSolution = ["/bin/", "/obj/", "/spikes/", "/.scratch/"];
+    private static readonly string[] OutsideTheSolution = ["/bin/", "/obj/", "/spikes/", "/.scratch/", "/.claude/worktrees/"];
 
     /// <summary>
     /// Everything a project reaches through project references, directly or not, excluding itself.

@@ -107,6 +107,18 @@ other app's session still answers and still refreshes (ADR-0017, evidence C-2.6,
 
 **fragmentId** — a fragment's identifier, 3 to 40 lowercase letters, digits or hyphens, unique within its shell. It names the fragment's scheme, S3 prefix, path namespace and log field.
 
+## The modes of using the repository
+
+**Development** — a contributor's work on a workstation with no AWS. Its loop is the tests, plus the hermetic cell run by hand, which is never evidence. _Avoid_: "local development": Local (L) is a test tier.
+
+**Proof cell** — this project's own cell and the fixtures deployed into it. It exists to prove the gateway, and an adopter takes nothing from it. A directory named `poc` holds only the proof cell's own.
+
+**Adoption** — the gateway deployed into another team's estate. An adopter takes the unit of adoption as it stands and may copy the references.
+
+**Unit of adoption** — the artefacts an adopter takes as they stand, built from one ref: the gateway image, its contracts and `spactl`. See ADR-0039.
+
+**Reference** — a part an adopter may copy and change, with no promise that it stays as it is: the cell module, the operator scripts, the runbooks and the browser client. A reference names no part of the proof cell. _Avoid_: "configuration reference" for a contract, which is a promise.
+
 ## The registry
 
 **Registry** — one JSON document at `registry/registry.json`, holding every app's routing, OAuth and
@@ -179,14 +191,18 @@ ADR-0005.
 **IdP profile** — `IIdpProfile`, the seam holding provider differences (notably Cognito's
 non-standard logout). Chosen per issuer in platform configuration, never per app. See ADR-0011.
 
-**Upstream** — an origin behind the gateway that an app's `/api/{name}/*` calls reach, named in the
-registry and bounded by `Policy:AllowedUpstreams`. Not "backend" and not "service".
+**Upstream** — an origin behind the gateway that an app's `/api/{name}/*` calls reach, or a
+fragment's `/fragments/{fragmentId}/api/{name}/*` calls, named in the registry and bounded by
+`Policy:AllowedUpstreams`. One upstream may be named by a shell and by its fragments. Not
+"backend" and not "service".
 
-**API name** — the `{name}` segment in `/api/{name}/*`, 1 to 32 lowercase letters, digits or hyphens,
-unique within an app.
+**API name** — the `{name}` segment in `/api/{name}/*` or `/fragments/{fragmentId}/api/{name}/*`,
+1 to 32 lowercase letters, digits or hyphens, unique within its app or within one of its fragments,
+each a separate namespace, so one name may appear in several.
 
 **Resource binding** — passing `resource` so the provider sets the access token's `aud` to the API's
-identifier. One audience per app in Phase 1.
+identifier. One audience per token set: in Phase 1 that is one per app, and a fragment's token set
+binds its own, which may be its shell's.
 
 **Client credential style** — how the gateway, as the confidential client, authenticates to the
 provider's backchannel endpoints: a form-body secret, a Basic header, or a client assertion. One per
@@ -541,8 +557,10 @@ and the snapshot; in a test host its stand-in does the same by the host's own ru
 the host. _Avoid_: host stub, resolver.
 
 **Hermetic (H)** — the test tier that runs in process on every change, against the test identity
-provider, an in-memory object store, the real mock API and an echo upstream. _Avoid_: analysis
-tier, which is a set of source files the analyzers hold to one profile.
+provider, an in-memory object store, the real mock API and an echo upstream. The hermetic cell is
+the in-process stand-in for a cell that this tier runs. _Avoid_: analysis
+tier, which is a set of source files the analyzers hold to one profile; "local stack" and "local
+cell" for the hermetic cell.
 
 **Deployed (D)** — the test tier that runs through the tunnel at G3 and after, against the ALB, the
 task, S3, Parameter Store and Cognito, with a real browser plus a raw HTTP client. _Avoid_:

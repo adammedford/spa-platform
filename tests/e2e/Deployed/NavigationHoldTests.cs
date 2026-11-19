@@ -215,7 +215,7 @@ public sealed class NavigationHoldTests
             Stopwatch watch = Stopwatch.StartNew();
 
             // As rows 5 and 7 reach the hold, inside Redacted.PlaywrightAsync (Profile.StopAtCallbackAsync).
-            await Assert.ThrowsAsync<HoldFailedException>(() => run.TwoTaskRowAsync("row5", new Step("control", ClientTrace.Fresh().TraceId, DateTimeOffset.UtcNow, 200), null,
+            Xunit.Sdk.FailException failed = await Assert.ThrowsAsync<Xunit.Sdk.FailException>(() => run.TwoTaskRowAsync("row5", new Step("control", ClientTrace.Fresh().TraceId, DateTimeOffset.UtcNow, 200), null,
                 async (n, _) =>
                 {
                     await Redacted.PlaywrightAsync(() => NavigationHold.HoldAsync(profile.Page, callback,
@@ -230,7 +230,9 @@ public sealed class NavigationHoldTests
             RowEvidence written = JsonSerializer.Deserialize<RowEvidence>(file)!;
             Assert.True(watch.Elapsed < AtOnce, $"the row stopped after {watch.Elapsed}");
             Assert.Equal(Verdict.NotProved, written.Verdict);
-            Assert.Equal($"the driver stopped with {nameof(HoldFailedException)}: the hold's handler met {nameof(InvalidOperationException)}", written.Reason);
+            Assert.StartsWith($"the driver stopped with {nameof(HoldFailedException)}: the hold on ", written.Reason, StringComparison.Ordinal);
+            Assert.Contains($"its handler met {nameof(InvalidOperationException)}: ", written.Reason, StringComparison.Ordinal);
+            Assert.Equal("not proved: " + written.Reason, failed.Message);
             Assert.Equal(app.Url("/healthz").ToString(), written.Page?.Url);
             foreach ((string name, string value) in new[] { ("code", Code), ("state", State) })
             {
@@ -319,7 +321,7 @@ public sealed class NavigationHoldTests
 
             // Rows 5 and 7 reach the hold through Profile.StopAtCallbackAsync, which runs it inside
             // Redacted.PlaywrightAsync: so does this one.
-            await Assert.ThrowsAsync<HoldTimeoutException>(() => run.TwoTaskRowAsync("row5", new Step("control", ClientTrace.Fresh().TraceId, DateTimeOffset.UtcNow, 200), null,
+            Xunit.Sdk.FailException failed = await Assert.ThrowsAsync<Xunit.Sdk.FailException>(() => run.TwoTaskRowAsync("row5", new Step("control", ClientTrace.Fresh().TraceId, DateTimeOffset.UtcNow, 200), null,
                 async (n, _) =>
                 {
                     await Redacted.PlaywrightAsync(() => NavigationHold.HoldAsync(profile.Page, callback.ToString(),
@@ -330,7 +332,14 @@ public sealed class NavigationHoldTests
                 Ct));
 
             string file = await File.ReadAllTextAsync(Path.Combine(directory, "row5.json"), Ct);
-            PageShown page = JsonSerializer.Deserialize<RowEvidence>(file)!.Page!;
+            RowEvidence written = JsonSerializer.Deserialize<RowEvidence>(file)!;
+
+            // The failure is the file's verdict line and nothing else (#1194), so the file's canary
+            // checks below cover the output too. The hold's message holds no query value before it
+            // reaches ContinuityRun, so StoppedWith's redaction is not tested here: ContinuityRunTests'
+            // canary test plants one where Redacted.Text looks.
+            Assert.Equal("not proved: " + written.Reason, failed.Message);
+            PageShown page = written.Page!;
             Assert.Equal(shown.GetLeftPart(UriPartial.Path), page.Url);
             Assert.Contains("Sign in with your username and password", page.Text, StringComparison.Ordinal);
             Assert.Contains($"Continue at {callback}{Environment.NewLine}", page.Text + Environment.NewLine, StringComparison.Ordinal);
@@ -376,7 +385,7 @@ public sealed class NavigationHoldTests
         try
         {
             ContinuityRun run = await RunInAsync(directory);
-            await Assert.ThrowsAsync<HoldTimeoutException>(() => run.TwoTaskRowAsync("row5", new Step("control", ClientTrace.Fresh().TraceId, DateTimeOffset.UtcNow, 200), null,
+            Xunit.Sdk.FailException failed = await Assert.ThrowsAsync<Xunit.Sdk.FailException>(() => run.TwoTaskRowAsync("row5", new Step("control", ClientTrace.Fresh().TraceId, DateTimeOffset.UtcNow, 200), null,
                 async (n, _) =>
                 {
                     await Redacted.PlaywrightAsync(() => NavigationHold.HoldAsync(profile.Page, callback.ToString(),
@@ -387,7 +396,14 @@ public sealed class NavigationHoldTests
                 Ct));
 
             string file = await File.ReadAllTextAsync(Path.Combine(directory, "row5.json"), Ct);
-            PageShown page = JsonSerializer.Deserialize<RowEvidence>(file)!.Page!;
+            RowEvidence written = JsonSerializer.Deserialize<RowEvidence>(file)!;
+
+            // The failure is the file's verdict line and nothing else (#1194), so the file's canary
+            // checks below cover the output too. The hold's message holds no query value before it
+            // reaches ContinuityRun, so StoppedWith's redaction is not tested here: ContinuityRunTests'
+            // canary test plants one where Redacted.Text looks.
+            Assert.Equal("not proved: " + written.Reason, failed.Message);
+            PageShown page = written.Page!;
             Assert.Contains($"POST {endpoint} failed: net::ERR_FAILED", page.Requests!);
             Assert.Contains($"GET {endpoint} 405", page.Requests!);
             Assert.Contains(page.Errors!, line => line.StartsWith("the session ", StringComparison.Ordinal) && line.Contains($" at {callback}", StringComparison.Ordinal));
@@ -399,6 +415,65 @@ public sealed class NavigationHoldTests
                 // Says which, never prints the file: the file is what must hold none of them.
                 Assert.False(file.Contains(value, StringComparison.Ordinal), $"the evidence file holds the {name} canary");
             }
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task A_timed_out_hold_writes_each_failed_request_and_each_console_error_however_many_came_before_the_one_that_refused_the_login()
+    {
+        await using LocalStack stack = await LocalStack.StartAsync();
+        await using Profile profile = await stack.OpenAsync();
+        HarnessApp app = stack.App("app1");
+        Uri callback = app.Url("/signin-oidc");
+
+        // A provider's page whose script meets many failures of each kind before the one that stops the
+        // login (#1292): its GETs, one after another so their order is the script's, each answered 405
+        // and each after an error it logs; then the POST whose preflight is refused, and a last error.
+        const int Before = 30;
+        Uri shown = new(ForeignSites.Elsewhere, "/login");
+        Uri endpoint = new(((IBrowserStack)stack).Sibling, "/submit");
+        stack.LoadBalancer.AnswerForeignScript(endpoint, callback);
+        string html = $$"""
+            <!doctype html><title>Signin</title>
+            <form><p>Sign in</p></form>
+            <script>
+              (async () => {
+                for (let n = 0; n < {{Before}}; n++) {
+                  console.error("before the refusal " + n);
+                  await fetch("{{endpoint}}?n=" + n).catch(() => {});
+                }
+                await fetch("{{endpoint}}", { method: "POST", headers: { "x-provider": "1" } }).catch(() => {});
+                console.error("after the refusal");
+              })();
+            </script>
+            """;
+
+        string directory = Directory.CreateTempSubdirectory("spa-e2e-hold-").FullName;
+        try
+        {
+            ContinuityRun run = await RunInAsync(directory);
+            Xunit.Sdk.FailException failed = await Assert.ThrowsAsync<Xunit.Sdk.FailException>(() => run.TwoTaskRowAsync("row5", new Step("control", ClientTrace.Fresh().TraceId, DateTimeOffset.UtcNow, 200), null,
+                async (n, _) =>
+                {
+                    await Redacted.PlaywrightAsync(() => NavigationHold.HoldAsync(profile.Page, callback.ToString(),
+                        () => profile.OpenForeignPageAsync(shown, html), TimeSpan.FromSeconds(5)));
+                    return new Attempt(n, []);
+                },
+                (_, _) => RowResult.Passed("never judged", []),
+                Ct));
+
+            RowEvidence written = JsonSerializer.Deserialize<RowEvidence>(await File.ReadAllTextAsync(Path.Combine(directory, "row5.json"), Ct))!;
+            Assert.Equal("not proved: " + written.Reason, failed.Message);
+            PageShown page = written.Page!;
+            Assert.Equal(Before, page.Requests!.Count(line => line == $"GET {endpoint} 405"));
+            Assert.Contains($"POST {endpoint} failed: net::ERR_FAILED", page.Requests!);
+            Assert.All(Enumerable.Range(0, Before), n => Assert.Contains($"before the refusal {n}", page.Errors!));
+            Assert.Contains(page.Errors!, line => line.Contains("x-provider", StringComparison.Ordinal) && line.Contains(endpoint.ToString(), StringComparison.Ordinal));
+            Assert.Contains("after the refusal", page.Errors!);
         }
         finally
         {

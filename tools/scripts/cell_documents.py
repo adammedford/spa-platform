@@ -8,7 +8,8 @@ one file back.
 
     cell_documents.py outputs <region> <idp.json> <apps.json> <platform.json> <out>
         infra/envs/poc/outputs.json, contracts/infra-outputs.schema.json's document, from the three
-        roots' `terraform output -json`. Written whole or not at all.
+        roots' `terraform output -json`. Written whole or not at all. The one optional field,
+        ecsBastionService, is copied when the platform root publishes it and left out when not.
     cell_documents.py field <outputs.json> <field> <region>
         One field of that document, for a script that reads it: the contract's own description says
         the scripts read it and none of them reads Terraform state, teardown.sh excepted (change
@@ -78,6 +79,15 @@ FIELDS = (
     ("logGroup", "platform", "log_group"),
 )
 
+# The contract's optional fields, which the document carries only when the root publishes them
+# (#1167). The platform root's ecs_bastion_service is null with its bastion input false, and
+# Terraform leaves a null output out of `terraform output -json`, so its absence, or a null, means
+# the cell declares no bastion and the document has no such key: tunnel.sh reads that before it
+# asks AWS anything.
+OPTIONAL_FIELDS = (
+    ("ecsBastionService", "platform", "ecs_bastion_service"),
+)
+
 
 def read_root(path: str, root: str) -> dict:
     try:
@@ -102,6 +112,10 @@ def outputs(region: str, idp: str, apps: str, platform: str, out: str) -> int:
         document[field] = entry["value"]
     if missing:
         raise Refused("these outputs are missing, so a root is not applied or not initialised: " + ", ".join(missing))
+    for field, root, name in OPTIONAL_FIELDS:
+        entry = roots[root].get(name)
+        if isinstance(entry, dict) and entry.get("value") is not None:
+            document[field] = entry["value"]
     # The idp root's Region and cell against the platform root's, which the document carries; the
     # apps root has no region or cell output, so there is nothing of it to compare. And then the
     # platform root's Region against the one every AWS call of the scripts names: a root applied

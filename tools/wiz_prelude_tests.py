@@ -67,10 +67,11 @@ or the record. The same sitting asked three times for alice's password and got a
 clipboard and nothing else, the clipboard is emptied after 45 seconds by a job that does not hold the
 call's output open, and a failed read touches the clipboard not at all.
 
-**Sitting D's levers and drafts (#1205).** The run of 2026-11-14 found four gaps in `d.md` by failing:
+**Sitting D's levers and drafts (#1205, #1216).** The run of 2026-11-14 found four gaps in `d.md` by failing:
 D6 gave no launch time, a driver fixed mid-run had no route, D1's `Value` reads came back elided and
 D7 asked for lines its test never prints. `SkillRunsSittingDsLeversAndDrafts` holds D6 to the driver's
-`LaunchLine` and to flags `tools/wiz_d6.sh` takes, on the file the row's run writes; each row's run to
+`LaunchLine` and to flags `tools/wiz_d6.sh` takes, on the file the row's run writes, and holds D6's run
+to the suite's console runner, which passes the driver's standard output to that file; each row's run to
 the output file `tools/wiz_row_post.py` reads; D1's `Value` reads to `--output text`, with the
 redactor's own elision of a JSON `Value` as the reason; and the worktree route to `SPA_E2E_OUTPUTS`
 as `DeployedStack.cs` names it. It holds the wording and the names, not a run: D runs on a cell.
@@ -866,6 +867,15 @@ class SkillRunsSittingDsLeversAndDrafts(unittest.TestCase):
         read = re.findall(r'--test-output "([^"]+)"', line)
         self.assertEqual(len(written), 1, "D6 should start the row once in the background, its output to a file")
         self.assertEqual(read, written)
+
+    def test_d6_runs_the_row_through_the_console_runner(self) -> None:
+        # Under `dotnet test` the testing platform keeps the driver's launch line from the output file (#1216).
+        d6 = self.d6()
+        self.assertIn('dotnet run --project tests/e2e -- -method "Gateway.E2ETests.Deployed.ContinuityTests.Row6_*"', d6)
+        self.assertRegex(d6, r'-result-junit "\$E/results-row6/[^"/]+\.junit\.xml"')
+        # The bullet still names `dotnet test`, to say why the row does not run under it.
+        self.assertNotIn("shown dotnet test", d6)
+        self.assertIn("return await ConsoleRunner.Run(args);", (ROOT / "tests" / "e2e" / "Program.cs").read_text())
 
     def test_d6s_confirm_on_launch_is_given_before_the_levers_call(self) -> None:
         rule = self.flat(self.section("**Rule 2 for D.**", "**Parts read from the tree"))

@@ -34,7 +34,10 @@ The gateway writes the data-protection key ring parameters (ADR-0025) at run tim
 `/spa-platform/<cell>/data-protection/`. No Terraform state holds them. The gateway applies all
 three tags when it creates a parameter, with `ManagedBy = gateway` as #274 decided.
 `infra/modules/cell` grants the gateway task role `ssm:AddTagsToResource` on the key ring parameters
-with exactly those three tag keys and their required values.
+with exactly those three tag keys and their required values. No destroy removes them, so
+`teardown.sh` deletes the parameters under that prefix before its proof (P2-2 decision 17). One
+that outlives teardown carries the platform tag, so `verify-teardown.sh` finds it and P-05 cannot
+pass while it stands.
 
 ## The query is an exact value match
 

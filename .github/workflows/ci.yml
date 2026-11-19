@@ -719,6 +719,15 @@ jobs:
         # Warnings are errors, set in Directory.Build.props. Package advisories warn (NU1901-NU1904).
         run: dotnet build --configuration Release
 
+      - name: A build without .editorconfig or .globalconfig stops on the error naming the missing file
+        # Directory.Build.props's _SpaRequireAnalyzerConfigs target, which #1369 added so that a
+        # build without the analyzer configs fails by a check rather than by today's source tripping
+        # a rule. The companion builds one project in a throwaway tree with both configs, then with
+        # each removed in turn. It runs here, after the build, because it needs the SDK and the
+        # analyzer packages in the cache, which the Documents job has neither of. The companion is a
+        # build input in .github/touches.sh, so a change to it alone still runs this job.
+        run: python3 -I tools/analyzer_configs_build_tests.py
+
       - name: Tests
         # Every test project in the solution: the component tests, the hermetic gateway suites and
         # the architecture tests A-01 to A-04. They are one step because the whole suite runs in

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 #
 # wiz_d6.sh -- row 6's lever in the wiz skill's sitting D: launch deploy.sh when the row's driver
-# says to, and on deploy.sh's pass line move the tunnel through a new task. Owner: integrator.
+# says to, and on deploy.sh's pass line restart the tunnel, whose hop is the cell's bastion task
+# (#1168), never a gateway task. Owner: integrator.
 #
 #   tools/wiz_d6.sh --test-pid <pid> --test-output <file> --record "$R" [--wait <seconds>]
 #                   [--local-port <port>] [--keepalive <seconds>] [--tunnel-log <file>]
@@ -23,7 +24,8 @@
 #      record, as the prelude's `shown` writes it, and through tools/wiz_redact.py --stream to the
 #      terminal. The human's confirm on launch is the skill's, given before this command runs.
 #   3. Without deploy.sh's pass line (`deploy: pass: ...`), it stops and starts no tunnel and exits
-#      with deploy.sh's own status, 0 included.
+#      with deploy.sh's own status, or 1 when that was 0 (its --help, say): the skill's D6 reads
+#      this script's exit 0 as the tunnel having moved, so no run that moved none gives it (#1284).
 #   4. On the pass line it stops every running tunnel.sh on --local-port (8443 by default): a
 #      tunnel.sh execs into `aws ssm start-session`, so it is the process whose arguments name
 #      AWS-StartPortForwardingSessionToRemoteHost with that localPortNumber. The CLI runs the
@@ -39,10 +41,11 @@
 #   5. It starts tools/scripts/tunnel.sh --local-port <port> [--keepalive <seconds>] again in the
 #      background, where it outlives this script, with its output in --tunnel-log (by default
 #      tunnel-d6-<UTC time>.out beside --test-output, in the bundle), and waits up to --tunnel-wait
-#      seconds, 60 by default, for its `through task <id>` line. With every old task stopped it
-#      takes a new one. It writes the start time and that id to the record and exits 0, or exits 1
-#      when tunnel.sh ends, or the wait runs out, before it names a task. verify-tunnel.sh /healthz
-#      is the skill's next step; this script does not run it.
+#      seconds, 60 by default, for its `through task <id>` line. The id is the bastion task's
+#      (#1168): deploy.sh rolls the gateway's service and replaces no bastion task, so it is the
+#      task the stopped tunnel went through. It writes the start time and that id to the record and
+#      exits 0, or exits 1 when tunnel.sh ends, or the wait runs out, before it names a task.
+#      verify-tunnel.sh /healthz is the skill's next step; this script does not run it.
 #
 # The record gets three lines of its own, besides deploy.sh's output:
 #   wiz_d6: tunnel stopped at <UTC time>    (or: wiz_d6: no tunnel was running on local port <port>; none was stopped)
@@ -54,9 +57,9 @@
 # plugin's SessionId lines stay in --tunnel-log, which it never prints; read that file through
 # wiz_redact.py. Its own lines name a pid, a port, a file and a task id.
 #
-# Exit status: 0 when the tunnel was started through a task after deploy.sh's pass line; deploy.sh's
-# when it printed no pass line; 1 when it launched nothing (step 1) or the tunnel named no task; 2 on
-# a usage error.
+# Exit status: 0 only when the tunnel was started through a task after deploy.sh's pass line;
+# deploy.sh's when it printed no pass line and exited non-zero; 1 when it exited 0 with no pass line,
+# when it launched nothing (step 1) or when the tunnel named no task; 2 on a usage error.
 #
 # Run its companion: python3 -I tools/wiz_d6_tests.py. Written for the bash 3.2 that ships with macOS.
 
@@ -137,9 +140,11 @@ echo "\$ tools/scripts/deploy.sh $*" >> "$RECORD"
 DEPLOYED=${PIPESTATUS[0]}
 echo "exit=$DEPLOYED" >> "$RECORD"
 
-# 3. No pass line, no tunnel.
+# 3. No pass line, no tunnel. Never exit 0 here: D6 reads the lever's 0 as the tunnel moved (#1284).
 if ! grep -q '^deploy: pass:' "$WORK/deploy.out"; then
-  CODE=$DEPLOYED fail "deploy.sh exited $DEPLOYED without its pass line; no tunnel was stopped or started"
+  CODE=$DEPLOYED
+  [ "$CODE" -ne 0 ] || CODE=1
+  fail "deploy.sh exited $DEPLOYED without its pass line; no tunnel was stopped or started"
 fi
 
 # 4. Stop the tunnel on this port: tunnel.sh has exec'd into the CLI, and the CLI's plugin child holds
@@ -162,7 +167,7 @@ else
   record "tunnel stopped at $(now)"
 fi
 
-# 5. Start it again, through a new task, and keep the id it names.
+# 5. Start it again, through the bastion's task (#1168), and keep the id it names.
 started="$(now)"
 nohup "$TUNNEL" --local-port "$PORT" ${KEEPALIVE:+--keepalive "$KEEPALIVE"} < /dev/null > "$TUNNEL_LOG" 2>&1 &
 tunnel_pid=$!

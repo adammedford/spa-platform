@@ -32,8 +32,8 @@ ongoing.
 | S2 The mechanism holds on the shipped parts | G0, tagged `g0-mechanism` | 6 of 6 | nothing |
 | S3 The identity surface is frozen | G1b, tagged `contracts-v1` | 1 of 1 | nothing |
 | S4 Feature complete, hermetically | G2, tagged `g2-local-slice` | 29 of 29 | nothing |
-| S5 The same gateway on real infrastructure | G3, tagged `g3-deployed-slice` | 2 of 9 | `6.9`; part-landed: `1.3`, `1.4`, `1.5`, `1.6b`, `1.7`, `6.5` |
-| S6 Hardened: every attempt is refused | G4, tagged `g4-negative-green` | 0 of 1 | part-landed: `6.3` |
+| S5 The same gateway on real infrastructure | G3, tagged `g3-deployed-slice` | 9 of 9 | nothing |
+| S6 Hardened: every attempt is refused | G4, tagged `g4-negative-green` | 1 of 1 | nothing |
 | S7 Operable, and accepted for Phase 1 | G5, tagged `g5-phase-1-accepted` | 0 of 1 | part-landed: `6.7` |
 | S8 Continuous: it survives its own deployment | G6, tagged `g6-continuity` | 5 of 5 | nothing |
 | S9 Portable: a second provider behind the same seam | G7, not tagged | 0 of 1 | `P2-6` |
@@ -151,8 +151,8 @@ tenant-aware client stack. That branch is still live for the Cognito items.
 
 **Plan rows.** `1.0`, `1.6a`, `1.1`, `1.8`, `5.5`, `3.0`
 
-**What it buys the gateway.** The right to write `src/Platform.Identity` at all. `AGENTS.md` forbids
-starting it before G1b, and G1b cannot close until this reports.
+**What it buys the gateway.** The right to write `src/Platform.Identity` at all. `contracts/README.md`
+→ "What G1b froze" blocks workstream 3 until G1b closes, and G1b cannot close until this reports.
 
 ### S3 The identity surface is frozen
 

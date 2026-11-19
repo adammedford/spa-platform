@@ -28,12 +28,13 @@ public sealed partial class DeployedSubsetTests
 
     /// <summary>
     /// Fails, naming each id, when a D row of the export's negative table or of the register's (#322) has
-    /// no <c>Task N</c><i>nn</i><c>_</c> test in the sources or explicitly named public continuity Fact (#657).
+    /// no <c>Task N</c><i>nn</i><c>_</c> test in the sources or explicitly named public Fact of a deployed
+    /// class (#657, #1005).
     /// </summary>
     internal static void AssertEveryDRowHasATest(string page, string register, Dictionary<string, string> sources)
     {
         string[] rows = DeployedRowIds(page, register);
-        Dictionary<string, MethodInfo> continuity = ContinuityRowTests(register);
+        Dictionary<string, MethodInfo> continuity = DeployedClassRowTests(register);
         string[] untested = [.. rows.Where(row => !continuity.ContainsKey(row) && !sources.Values.Any(source => source.Contains($"Task N{row[2..]}_", StringComparison.Ordinal)))];
         Assert.Empty(untested);
     }
@@ -241,6 +242,31 @@ public sealed partial class DeployedSubsetTests
     }
 
     /// <summary>
+    /// The deployed classes whose public Facts a registered D row may name instead of an N-prefixed test:
+    /// #358's continuity class (#657) and the fragments class (#1005), whose N-38 and N-46 rows name
+    /// <c>FragmentsTests</c> methods in contracts/test-ids.md.
+    /// </summary>
+    internal static readonly IReadOnlyList<Type> DeployedClasses = [typeof(ContinuityTests), typeof(FragmentsTests)];
+
+    /// <summary>
+    /// Every registered D row that names a Fact of one of <see cref="DeployedClasses"/>, by id. A row
+    /// credited by two classes would prove one id with two runs and is refused, naming the row.
+    /// </summary>
+    internal static Dictionary<string, MethodInfo> DeployedClassRowTests(string register)
+    {
+        Dictionary<string, MethodInfo> tests = new(StringComparer.Ordinal);
+        foreach (Type source in DeployedClasses)
+        {
+            foreach ((string id, MethodInfo method) in ContinuityRowTests(register, source))
+            {
+                Assert.True(tests.TryAdd(id, method), $"{id} names a Fact of more than one deployed class.");
+            }
+        }
+
+        return tests;
+    }
+
+    /// <summary>
     /// A registered D row may name an existing continuity Fact instead of an N-prefixed test (#657).
     /// Resolve that explicit reference to the real public method; prose naming a missing method proves nothing.
     /// </summary>
@@ -249,21 +275,25 @@ public sealed partial class DeployedSubsetTests
 
     /// <summary>
     /// <see cref="ContinuityRowTests(string)"/> over <paramref name="source"/>, the class whose public methods
-    /// a row may name, so a test can hand it methods the filter must refuse.
+    /// a row may name, so a test can hand it methods the filter must refuse; a row names it by its file,
+    /// <c>tests/e2e/Deployed/{class}.cs</c>, and the method as <c>{class}.{method}</c>.
     /// </summary>
     internal static Dictionary<string, MethodInfo> ContinuityRowTests(string register, Type source)
     {
         HashSet<string> rows = new(RegisterDeployedRows(register), StringComparer.Ordinal);
         Dictionary<string, MethodInfo> tests = new(StringComparer.Ordinal);
+        string file = $"`tests/e2e/Deployed/{source.Name}.cs`";
+        string kind = source.Name.Replace("Tests", "", StringComparison.Ordinal).ToLowerInvariant();
+        Regex reference = new($@"`{Regex.Escape(source.Name)}\.(?<method>[A-Za-z_][A-Za-z0-9_]*)`", RegexOptions.None, RegexTimeout.Span);
         foreach (string line in register.Split('\n'))
         {
             string id = line.Trim().Trim('|').Split('|')[0].Trim();
-            if (!rows.Contains(id) || !line.Contains("`tests/e2e/Deployed/ContinuityTests.cs`", StringComparison.Ordinal))
+            if (!rows.Contains(id) || !line.Contains(file, StringComparison.Ordinal))
             {
                 continue;
             }
 
-            string[] named = [.. ContinuityReference().Matches(line).Select(match => match.Groups["method"].Value).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)];
+            string[] named = [.. reference.Matches(line).Select(match => match.Groups["method"].Value).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)];
             if (named.Length == 0)
             {
                 continue;
@@ -271,7 +301,7 @@ public sealed partial class DeployedSubsetTests
 
             // One row, one Fact: crediting the first of two would leave the other unproved and unread
             // (the same refusal tools/bench/e2e_evidence.py makes), so fail the run naming the row.
-            Assert.True(named.Length == 1, $"{id} names more than one continuity Fact: {string.Join(" and ", named.Select(name => $"ContinuityTests.{name}"))}.");
+            Assert.True(named.Length == 1, $"{id} names more than one {kind} Fact: {string.Join(" and ", named.Select(name => $"{source.Name}.{name}"))}.");
 
             MethodInfo? method = source.GetMethod(named[0],
                 BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly);
@@ -282,16 +312,13 @@ public sealed partial class DeployedSubsetTests
                 // One Fact, one row: two rows crediting one Fact would prove two ids with one run (the same
                 // refusal tools/bench/e2e_evidence.py makes), so fail the run naming both rows.
                 string? other = tests.FirstOrDefault(row => row.Value == method).Key;
-                Assert.True(other is null, $"{other} and {id} both name ContinuityTests.{method.Name}.");
+                Assert.True(other is null, $"{other} and {id} both name {source.Name}.{method.Name}.");
                 tests.Add(id, method);
             }
         }
 
         return tests;
     }
-
-    [GeneratedRegex(@"`ContinuityTests\.(?<method>[A-Za-z_][A-Za-z0-9_]*)`", RegexOptions.None, RegexTimeout.Milliseconds)]
-    private static partial Regex ContinuityReference();
 
     /// <summary>The files that start a stack of their own choosing rather than the one the switch chooses.</summary>
     internal static string[] LocalOnly(Dictionary<string, string> sources) =>

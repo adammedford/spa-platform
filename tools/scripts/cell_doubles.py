@@ -80,6 +80,11 @@ GATEWAY = terraform_local(MODULE / "ecs.tf", "gateway_container_name")
 MOCK_API = terraform_local(MODULE / "ecs.tf", "mock_api_container_name")
 LOG_GROUP = terraform_local(MODULE / "ecs.tf", "log_group_name")
 FAMILY = terraform_local(MODULE / "network.tf", "name_prefix")
+# The bastion, the tunnel's hop (#1167): its service in the cluster, its one container and its task
+# definition family.
+BASTION_SERVICE = terraform_local(MODULE / "ecs.tf", "bastion_service_name")
+BASTION = terraform_local(MODULE / "ecs.tf", "bastion_container_name")
+BASTION_FAMILY = terraform_local(MODULE / "ecs.tf", "bastion_family")
 REGISTRY_HOST = f"{ACCOUNT}.dkr.ecr.{REGION}.amazonaws.com"
 # infra/modules/cell/storage.tf: spa-${var.cell}/${each.key}, over the set ["gateway", "mock-api"].
 _REPO = re.search(r'name = "(spa-\$\{var\.cell\}/)\$\{each\.key\}"', (MODULE / "storage.tf").read_text())
@@ -159,9 +164,19 @@ def task_ip(task: dict) -> str:
 
 
 def runtime_id(task: dict) -> str:
-    """The gateway container's runtime id, which names it in a session's target, made from the task's
-    id as tunnel_tests.py makes it."""
+    """The hop container's runtime id, which names it in a session's target, made from the task's id
+    as tunnel_tests.py makes it."""
     return f"{task['id']}-2222222222"
+
+
+def with_bastion(world: dict) -> dict:
+    """The cell after an apply with bastion = true (#1167): the platform root publishes the bastion
+    service, and that service runs one task, the tunnel's hop. Without this the platform root has no
+    ecs_bastion_service output, as Terraform leaves the null output out of `terraform output -json`,
+    and the bastion service has no task."""
+    world["roots"]["platform"]["ecs_bastion_service"] = BASTION_SERVICE
+    world["bastion_tasks"] = [{"id": "b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0", "lastStatus": "RUNNING"}]
+    return world
 
 
 def default_world() -> dict:
@@ -433,22 +448,37 @@ def aws_answer(world: dict, words: list[str], options: dict, case: pathlib.Path,
             return container["image"] if container else None
         return [list(pair) for pair in container["environment"]] if container else None
     if command == "ecs list-tasks":
-        if query != "taskArns" or options.get("desired-status") != "RUNNING":
+        if query != "taskArns" or options.get("desired-status") != "RUNNING" or options.get("cluster") != CLUSTER:
             raise Unexpected(f"list-tasks {options}")
-        return [f"arn:aws:ecs:{REGION}:{ACCOUNT}:task/{CLUSTER}/{task['id']}" for task in world["tasks"]]
+        # Each service's own tasks: the gateway's, and the bastion's (#1167). A service the cell does
+        # not run is ServiceNotFoundException, as ListTasks answers it.
+        services = {SERVICE: world["tasks"]}
+        if world["roots"]["platform"] and world["roots"]["platform"].get("ecs_bastion_service"):
+            services[BASTION_SERVICE] = world.get("bastion_tasks", [])
+        if options.get("service-name") not in services:
+            raise ServiceError("ServiceNotFoundException", "ListTasks")
+        return [f"arn:aws:ecs:{REGION}:{ACCOUNT}:task/{CLUSTER}/{task['id']}" for task in services[options["service-name"]]]
     if command == "ecs describe-tasks":
         expected = (f"tasks[].[taskArn, lastStatus, taskDefinitionArn, "
                     f"containers[?name=='{GATEWAY}'] | [0].imageDigest, "
                     f"containers[?name=='{GATEWAY}'] | [0].networkInterfaces[0].privateIpv4Address]")
-        # tunnel.sh's read of the same tasks, for the session's hop: ECS Exec on, the gateway
-        # container's runtime id and its Exec agent running, on every task of this world.
+        # tunnel.sh's read of the bastion's tasks, for the session's hop (#1167): ECS Exec on, the
+        # bastion container's runtime id and its Exec agent running, on every bastion task. A gateway
+        # task has no bastion container, so it answers None for both, as JMESPath does.
         session = (f"tasks[].[taskArn, lastStatus, enableExecuteCommand, "
-                   f"containers[?name=='{GATEWAY}'] | [0].runtimeId, "
-                   f"containers[?name=='{GATEWAY}'] | [0].managedAgents[?name=='ExecuteCommandAgent'] | [0].lastStatus]")
+                   f"containers[?name=='{BASTION}'] | [0].runtimeId, "
+                   f"containers[?name=='{BASTION}'] | [0].managedAgents[?name=='ExecuteCommandAgent'] | [0].lastStatus]")
         known = {f"arn:aws:ecs:{REGION}:{ACCOUNT}:task/{CLUSTER}/{task['id']}": task for task in world["tasks"]}
         if query == session:
-            return [[arn, known[arn]["lastStatus"], True, runtime_id(known[arn]), "RUNNING"]
-                    for arn in options["tasks"] if arn in known]
+            hops = {f"arn:aws:ecs:{REGION}:{ACCOUNT}:task/{CLUSTER}/{task['id']}": task
+                    for task in world.get("bastion_tasks", [])}
+            rows = []
+            for arn in options["tasks"]:
+                if arn in hops:
+                    rows.append([arn, hops[arn]["lastStatus"], True, runtime_id(hops[arn]), "RUNNING"])
+                elif arn in known:
+                    rows.append([arn, known[arn]["lastStatus"], True, None, None])
+            return rows
         if query != expected:
             raise Unexpected(f"describe-tasks --query {query!r}")
         return [[arn, known[arn]["lastStatus"], td_arn(known[arn]["taskDefinition"]), known[arn]["gatewayDigest"],
@@ -713,8 +743,9 @@ PLUGIN_LIFETIME = 150
 
 
 def start_session(world: dict, options: dict, case: pathlib.Path, record: dict) -> int:
-    """`aws ssm start-session` for tunnel.sh's port forward: a target that is a running task's gateway
-    container, the load balancer from the outputs document on 443, and a local port. As the CLI does,
+    """`aws ssm start-session` for tunnel.sh's port forward: a target that is a running bastion task's
+    bastion container (#1167), never a gateway task's, the load balancer from the outputs document on
+    443, and a local port. As the CLI does,
     it starts session-manager-plugin and waits on it, and its status is the plugin's
     (https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html).
     The call is recorded before it waits, since it ends by a signal, and it never writes the world:
@@ -725,9 +756,9 @@ def start_session(world: dict, options: dict, case: pathlib.Path, record: dict) 
         raise ServiceError("AccessDeniedException", "StartSession")
     if set(options) != {"region", "target", "document-name", "parameters"} or options["document-name"] != PORT_FORWARD:
         raise Unexpected(f"start-session {options}")
-    targets = {f"ecs:{CLUSTER}_{task['id']}_{runtime_id(task)}": task for task in world["tasks"]}
+    targets = {f"ecs:{CLUSTER}_{task['id']}_{runtime_id(task)}": task for task in world.get("bastion_tasks", [])}
     if options["target"] not in targets:
-        raise Unexpected(f"start-session --target {options['target']}: no running task's gateway container")
+        raise Unexpected(f"start-session --target {options['target']}: no running bastion task's container")
     parameters = json.loads(options["parameters"])
     alb = world["roots"]["platform"]["alb_dns_name"]
     if (set(parameters) != {"host", "portNumber", "localPortNumber"} or parameters["host"] != [alb]
@@ -927,6 +958,11 @@ def apply_platform(world: dict, variables: dict):
     # reads it is the one that catches it.
     if not world["faults"].get("output_image_stale"):
         world["roots"]["platform"]["gateway_image"] = variables["gateway_image"]
+    # "bastion_dropped": terraform.tfvars set bastion = false after the outputs document was last
+    # written, so this apply destroys the bastion and its output goes null, which -json leaves out.
+    if world["faults"].get("bastion_dropped"):
+        world["roots"]["platform"].pop("ecs_bastion_service", None)
+        world["bastion_tasks"] = []
     if not world["faults"].get("health_path_stale"):
         world["target_group"]["path"] = variables.get("health_check_path", "/")
     if world["faults"].get("circuit_breaker"):
@@ -1014,6 +1050,7 @@ def destroy_root(world: dict, root: str, stdout):
                 definition["status"] = "INACTIVE"
         world["service"] = None
         world["tasks"] = []
+        world["bastion_tasks"] = []
     world["roots"][root] = None
     # What #118 step 2 read after the platform root's destroy: the tagging index went on listing
     # ECS's INACTIVE cluster and service and EC2's deleted security groups and rules. An entry with
