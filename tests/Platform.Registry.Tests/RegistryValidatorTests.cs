@@ -89,7 +89,19 @@ public sealed class RegistryValidatorTests
     [Fact]
     public void The_schema_is_checked()
     {
-        RejectsFor(RegistryRules.Schema, "/schemaVersion", Examples.Registry(d => d["schemaVersion"] = 2), "schemaVersion 2");
+        // schemaVersion is enum [1, 2], and a document whose entries carry any fragments declares 2 (the
+        // schema's root if/then, #980). The example's app1 carries one fragment; the fragments-free
+        // documents remove it, so the 3 case fails the enum alone and not the if/then as well.
+        // Red if schemaVersion goes back to const: 1 (the first case), or the root if/then is removed (the
+        // third case).
+        Accepts(Examples.Registry(d => Examples.Entry(d, 0).Remove("fragments")), "schemaVersion 2 with no fragments");
+        RejectsFor(RegistryRules.Schema, "/schemaVersion", Examples.Registry(d =>
+        {
+            Examples.Entry(d, 0).Remove("fragments");
+            d["schemaVersion"] = 3;
+        }), "schemaVersion 3");
+        RejectsFor(RegistryRules.Schema, "/schemaVersion", Examples.Registry(d => d["schemaVersion"] = 1),
+            "a document whose entry carries fragments at schemaVersion 1");
         RejectsFor(RegistryRules.Schema, "/apps/0/hosts", Examples.RegistryEntry(e => e["hosts"] = "typo"), "an unknown property");
         RejectsFor(RegistryRules.Schema, "/apps/0/session/lifetimeMinutes",
             Examples.RegistryEntry(e => e["session"]!["lifetimeMinutes"] = 721), "a session longer than 720 minutes");

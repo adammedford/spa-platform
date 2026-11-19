@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://spa-platform.internal/contracts/app-definition.schema.json",
   "title": "App definition",
-  "description": "A registry entry without clientId, clientSecretRef and release. One file per app under fixtures/apps/. Terraform reads it to create the OAuth client; spactl app add completes it from the infrastructure outputs and applies the registry, so each app is described once. Source: docs/plan/02-contracts.md -> Registry document. Freezes at G1a, except the oauth section, which freezes at G1b. Every shared rule is a $ref into registry.schema.json, so the two cannot drift: a consumer must load both schemas into one registry.",
+  "description": "A registry entry without clientId, clientSecretRef and release, and with each fragment without clientId, clientSecretRef and release. One file per app under fixtures/apps/. Terraform reads it to create the OAuth client, and one per fragment; spactl app add completes it from the infrastructure outputs and applies the registry, so each app is described once. Source: docs/plan/02-contracts.md -> Registry document. Freezes at G1a, except the oauth section, which freezes at G1b. Every shared rule is a $ref into registry.schema.json, so the two cannot drift: a consumer must load both schemas into one registry.",
   "x-freeze": { "gate": "G1a", "status": "frozen-at-g1a" },
   "type": "object",
   "additionalProperties": false,
@@ -29,6 +29,30 @@
     },
     "apis": { "$ref": "https://spa-platform.internal/contracts/registry.schema.json#/$defs/apis" },
     "csp": { "$ref": "https://spa-platform.internal/contracts/registry.schema.json#/$defs/csp" },
-    "session": { "$ref": "https://spa-platform.internal/contracts/registry.schema.json#/$defs/session" }
+    "session": { "$ref": "https://spa-platform.internal/contracts/registry.schema.json#/$defs/session" },
+    "fragments": {
+      "title": "fragments",
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "description": "The fragments the app composes as a shell, as registry.schema.json#/$defs/fragments describes them, in the same order. Absent means none; an empty array is rejected, as it is in the registry.",
+      "items": {
+        "title": "Fragment definition",
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["fragmentId", "oauth"],
+        "description": "A registry fragment without clientId, clientSecretRef and release. Terraform creates the fragment's client from it; spactl app add adds the client fields from the infrastructure outputs' clients.{appId}.fragments.{fragmentId}, and the release from its --fragment-release list or the live entry.",
+        "properties": {
+          "fragmentId": { "$ref": "https://spa-platform.internal/contracts/registry.schema.json#/$defs/fragmentId" },
+          "oauth": {
+            "$ref": "#/properties/oauth",
+            "description": "The definition's oauth section, by reference and never forked: naming clientId or clientSecretRef is rejected, as it is for the shell."
+          },
+          "apis": { "$ref": "https://spa-platform.internal/contracts/registry.schema.json#/$defs/apis" },
+          "csp": { "$ref": "https://spa-platform.internal/contracts/registry.schema.json#/$defs/fragmentCsp" },
+          "entry": { "$ref": "https://spa-platform.internal/contracts/registry.schema.json#/$defs/entry" }
+        }
+      }
+    }
   }
 }
