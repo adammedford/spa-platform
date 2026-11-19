@@ -77,7 +77,8 @@ def terraform_local(path: pathlib.Path, name: str, cell: str = CELL) -> str:
 CLUSTER = terraform_local(MODULE / "ecs.tf", "cluster_name")
 SERVICE = terraform_local(MODULE / "ecs.tf", "service_name")
 GATEWAY = terraform_local(MODULE / "ecs.tf", "gateway_container_name")
-MOCK_API = terraform_local(MODULE / "ecs.tf", "mock_api_container_name")
+# The mock API is the proof-cell root's extra container since #1342, so its name lives in that root.
+MOCK_API = terraform_local(ROOT / "infra" / "envs" / "poc" / "platform" / "main.tf", "mock_api_container_name")
 LOG_GROUP = terraform_local(MODULE / "ecs.tf", "log_group_name")
 FAMILY = terraform_local(MODULE / "network.tf", "name_prefix")
 # The bastion, the tunnel's hop (#1167): its service in the cluster, its one container and its task
