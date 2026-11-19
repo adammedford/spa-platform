@@ -232,7 +232,8 @@ locals {
     # promise, not every request's completion: F3b's failed or unknown write and F4's check-to-send
     # pause are its exceptions, and a loser's wait is F2's and F3's, which no number here bounds
     # (#332 F1; P2-3's second amendment, decision 2). The drain (alb.tf) promises no refresh's
-    # completion. On the gateway alone: an extra container holds no session and no lease. 30 is also
+    # completion. On the gateway alone: an extra container's stopTimeout is its caller's to write
+    # (variables.tf -> extra_containers), and none of these relations is its. 30 is also
     # Fargate's default, written down because F1 depends on it. The init process (#786, above)
     # leaves these relations as they were: ECS sends SIGTERM to the container's PID 1, now the init,
     # which "forwards signals" to its child, and stopTimeout is "time duration (in seconds) to wait

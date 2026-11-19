@@ -96,7 +96,7 @@ variables {
 # (https://developer.hashicorp.com/terraform/language/syntax/configuration#identifiers), and a
 # pattern of lower case and underscores alone would miss a rule named "open-8080", with every run
 # here passing beside it.
-run "the_cell_declares_exactly_the_four_security_group_rules_plan_row_1_2_names" {
+run "the_cell_declares_exactly_the_four_security_group_rules_of_its_boundary" {
   command = plan
 
   assert {

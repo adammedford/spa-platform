@@ -1803,12 +1803,14 @@ run "an_extra_repository_name_with_a_slash_or_a_capital_is_refused" {
 # environment roots or its plan export, or a task id: a sentence that rests on the plan says what it
 # rests on in its own words. Ticket numbers, ADR ids and test ids stay, and so does a change
 # request's id, which names a file of contracts/changes/. The patterns are written so that this
-# file does not match them: a character class or a group stands where a path's slash or a word's space would, and a task
-# id is matched across a comment's line break.
+# file does not match them: a character class or a group stands where a path's slash or a word's
+# space would. A task id is matched across a comment's line break, and in a run's name, where
+# underscores stand for its spaces and its dot.
 #
 # Mutations that turn this run red: the task id ecs.tf once opened with, put back; a description
 # citing the cost page of the plan export by its path; a row id in a suite's message; a cited P2 id
-# with no change request file, such as the hardening row's.
+# with no change request file, such as the hardening row's; a run named for the row whose rules it
+# counts (network.tftest.hcl once held one).
 run "no_file_of_the_module_names_a_fixture_an_environment_root_a_plan_path_or_a_task_id" {
   command = plan
 
@@ -1819,10 +1821,10 @@ run "no_file_of_the_module_names_a_fixture_an_environment_root_a_plan_path_or_a_
         [for f in fileset(path.module, "*.md") : "${path.module}/${f}"],
         [for f in fileset(path.module, "tests/*.tftest.hcl") : "${path.module}/${f}"],
         ) : [
-        for m in regexall("(?i)docs[/]plan[/]|fixtures[/]|infra[/]envs[/]|\\b(?:task|row)s?(?:\\s|#)+(?:P2-)?[0-9]+[.][0-9]+[a-z]?\\b|\\bplan[ ]rows?\\b|\\bticket[ ]+0[0-9]\\b|\\bworkstream[ ]+[0-9]", file(f)) : "${f}: ${m}"
+        for m in regexall("(?i)docs[/]plan[/]|fixtures[/]|infra[/]envs[/]|(?:\\b|_)(?:task|row)s?(?:\\s|#|_)+(?:P2-)?[0-9]+[._][0-9]+[a-z]?(?:\\b|_)|(?:\\b|_)plan[ _]rows?(?:\\b|_)|\\bticket[ ]+0[0-9]\\b|\\bworkstream[ ]+[0-9]", file(f)) : "${f}: ${m}"
       ]
     ]) == []
-    error_message = "A file of the module names a path of the fixtures, the environment roots or the plan export, or a task id: ${join("; ", flatten([for f in concat([for f in fileset(path.module, "*.tf") : "${path.module}/${f}"], [for f in fileset(path.module, "*.md") : "${path.module}/${f}"], [for f in fileset(path.module, "tests/*.tftest.hcl") : "${path.module}/${f}"]) : [for m in regexall("(?i)docs[/]plan[/]|fixtures[/]|infra[/]envs[/]|\\b(?:task|row)s?(?:\\s|#)+(?:P2-)?[0-9]+[.][0-9]+[a-z]?\\b|\\bplan[ ]rows?\\b|\\bticket[ ]+0[0-9]\\b|\\bworkstream[ ]+[0-9]", file(f)) : "${f}: ${m}"]]))}. Cite contracts/, an ADR or public documentation, or say what the sentence rests on in its own words."
+    error_message = "A file of the module names a path of the fixtures, the environment roots or the plan export, or a task id: ${join("; ", flatten([for f in concat([for f in fileset(path.module, "*.tf") : "${path.module}/${f}"], [for f in fileset(path.module, "*.md") : "${path.module}/${f}"], [for f in fileset(path.module, "tests/*.tftest.hcl") : "${path.module}/${f}"]) : [for m in regexall("(?i)docs[/]plan[/]|fixtures[/]|infra[/]envs[/]|(?:\\b|_)(?:task|row)s?(?:\\s|#|_)+(?:P2-)?[0-9]+[._][0-9]+[a-z]?(?:\\b|_)|(?:\\b|_)plan[ _]rows?(?:\\b|_)|\\bticket[ ]+0[0-9]\\b|\\bworkstream[ ]+[0-9]", file(f)) : "${f}: ${m}"]]))}. Cite contracts/, an ADR or public documentation, or say what the sentence rests on in its own words."
   }
 
   # A P2 id is a change request's only when contracts/changes/ holds its file; otherwise it is a
