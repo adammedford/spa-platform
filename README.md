@@ -10,6 +10,8 @@ request. The Terraform, the fixtures, the test identity provider and the suites 
 something about it. `docs/roadmap.md` is the path from the mechanism that was proved on a spike to a
 release an enterprise could adopt.
 
+Licensed under the Apache License, Version 2.0: see [LICENSE](LICENSE).
+
 ## Where the gateway stands
 
 Written by `tools/roadmap.py` from `git tag`, the merge subjects that name each task and the plan's
