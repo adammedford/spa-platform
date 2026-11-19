@@ -148,7 +148,8 @@ def world(plans=None, second_task=None, **changes) -> dict:
         # True for a cell last applied before #787, whose gateway container ran the Exec agent.
         "gateway_exec": False,
         # The bastion service's tasks (#1167), each {"n", "last", "exec", "agent"}: a task's status,
-        # whether its Exec is on and its bastion container's ExecuteCommandAgent status. Each is
+        # whether its Exec is on and its bastion container's ExecuteCommandAgent status; "runtime":
+        # False leaves that container without a runtime id. Each is
         # listed as running, since list-tasks reads the desired status; empty, a service running none.
         "bastion_tasks": {str(BASTION_N): {"n": BASTION_N, "last": "RUNNING", "exec": True, "agent": "RUNNING"}},
         "bastion_gone_after": None,              # the bastion service lists no task from this restart on
@@ -219,6 +220,9 @@ def bastion_json(document: dict, task: dict) -> dict:
            "enableExecuteCommand": task["exec"], "startedBy": "ecs-svc/3000000000000000001",
            "containers": [{"name": BASTION_CONTAINER, "runtimeId": f"{task_id(task['n'])}-3333",
                            "managedAgents": [{"name": "ExecuteCommandAgent", "lastStatus": task["agent"]}]}]}
+    if task.get("runtime") is False:
+        # A container not yet started has no runtime id, whatever its agent reports.
+        del out["containers"][0]["runtimeId"]
     if str(task["n"]) in document["arn_ids"]:
         out["taskArn"] = f"arn:aws:ecs:{REGION}:{ACCOUNT}:task/{CLUSTER}/{document['arn_ids'][str(task['n'])]}"
     return out
@@ -233,7 +237,8 @@ def session_target(document: dict, target: str):
     n, suffix = str(int(match[1], 16)), match[3]
     bastion = document["bastion_tasks"].get(n)
     if bastion is not None:
-        reachable = suffix == "3333" and bastion["last"] == "RUNNING" and bastion["exec"] and bastion["agent"] == "RUNNING"
+        reachable = suffix == "3333" and bastion["last"] == "RUNNING" and bastion["exec"] and bastion["agent"] == "RUNNING" \
+            and bastion.get("runtime") is not False
         return bastion["n"] if reachable else None
     task = document["tasks"].get(n)
     if task is not None and document["gateway_exec"] and task["last"] == "RUNNING" and suffix in ("1111", "2222"):

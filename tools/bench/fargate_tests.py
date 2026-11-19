@@ -460,7 +460,7 @@ class TheHop(CaseBase):
 
     def test_a_bastion_task_no_session_can_reach_is_refused(self):
         for name, change in (("stopping", {"last": "DEACTIVATING"}), ("Exec off", {"exec": False}),
-                             ("agent not running", {"agent": "STOPPED"})):
+                             ("agent not running", {"agent": "STOPPED"}), ("no runtime id", {"runtime": False})):
             with self.subTest(name):
                 # Each is listed, since list-tasks reads the desired status, and described as it is.
                 tasks = {str(BASTION_N): dict(world()["bastion_tasks"][str(BASTION_N)], **change)}

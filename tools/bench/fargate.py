@@ -886,7 +886,7 @@ class Bench:
         final = self.describe_tasks([record["task_arn"]])
         if final:
             self.task_times(final[0], record)
-        self.read_zero(record, final[0] if final else {})
+        self.read_zero(record, final[0] if final else None)
         self.wait_for_log(record)
         record["complete"] = True
         return record
@@ -986,11 +986,12 @@ class Bench:
 
     # --- the zero ---
 
-    def read_zero(self, record: dict, task: dict) -> None:
+    def read_zero(self, record: dict, task: Optional[dict]) -> None:
         """Q1, Q11: one interactive exec session on the new task, once stable; any failure takes
         pullStoppedAt, and the reason is kept. A task run with ECS Exec off, every task of a cell
-        applied since #787, takes it without a session: none could open."""
-        if task.get("enableExecuteCommand") is not True:
+        applied since #787, takes it without a session: none could open. A task describe-tasks did
+        not describe is tried, and a failed session is the fallback as ever."""
+        if task is not None and task.get("enableExecuteCommand") is not True:
             record["zero"] = {"source": "pullStoppedAt", "ns": record.get("pull_stopped_ns"), "fallback": NO_EXEC}
             return
         try:
