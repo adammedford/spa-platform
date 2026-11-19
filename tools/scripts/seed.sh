@@ -30,12 +30,14 @@
 #      --fragment-release <fragmentId>=<release>,...` naming every fragment's release. A failed
 #      publish stops the seed before that app add. Without --shell the seed writes no
 #      fragment-bearing document: none reaches a cell until it runs the whole fragments build, and
-#      the first such write is the G9 run's (#961, "The deployment prerequisite").
+#      the first such write is the G9 run's (#961, "The deployment prerequisite"). No runbook runs
+#      step 4: docs/runbooks/deploy.md runs the seed without --shell, so steps 1 to 3 as before,
+#      and the one run of step 4 is the G9 sitting's (#1011), whose ticket names it.
 #
 # The release is named for its content unless --release names it: fixture-<12 hex digits of the
-# fixture's SHA-256>, per app and per fragment. A release prefix is written once (ADR-0009) and spactl's publish leaves
-# identical bytes alone, so seeding again is a no-op, and a changed fixture gets a new release
-# rather than a refused overwrite.
+# fixture's SHA-256>, per app and per fragment. A release prefix is written once (ADR-0009) and
+# spactl's publish leaves identical bytes alone, so seeding again is a no-op, and a changed fixture
+# gets a new release rather than a refused overwrite.
 #
 # spactl is `dotnet run --project tools/spactl`, unless SPACTL names an executable to run instead
 # (a published spactl, say).

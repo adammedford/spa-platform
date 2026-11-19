@@ -184,7 +184,9 @@ resource "aws_ssm_parameter" "client_secret" {
 # (#961, "The registry entry and the app definition"): a fragment's token set is refreshed, rotated
 # and revoked through its own client, so rotation with the 60-second grace and revocation matter as
 # much here as for the shell. The test holds every argument both blocks share to the shell's value.
-# The name joins the ids with a dot, which neither id may hold and Cognito's client name allows.
+# The name joins the ids with a dot, which neither id may hold and Cognito's client name allows
+# (ClientName's pattern, [\w\s+=,.@-]+).
+# https://docs.aws.amazon.com/cognito-user-identity-pools/latest/APIReference/API_CreateUserPoolClient.html
 resource "aws_cognito_user_pool_client" "fragment" {
   for_each = local.fragments
 
@@ -233,6 +235,7 @@ resource "aws_cognito_user_pool_client" "fragment" {
 # Each fragment client's managed-login style: the fragment fallback is an interactive managed-login
 # sign-in, which shows a client's page only when the client has a style. Each counts against
 # Cognito's 20 styles per pool, a profile fact (#961), not a contract limit.
+# https://docs.aws.amazon.com/cognito/latest/developerguide/managed-login-branding.html
 resource "aws_cognito_managed_login_branding" "fragment" {
   for_each = local.fragments
 
