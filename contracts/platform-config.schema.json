@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://spa-platform.internal/contracts/platform-config.schema.json",
   "title": "Platform configuration",
-  "description": "Settings the task environment supplies. They bound what any registry entry may say, so a registry writer cannot widen them. This schema describes the configuration in its JSON form, which is how the configuration binder sees it; the deployed form is environment variables, where a colon becomes a double underscore (Policy:AllowedUpstreams:0 is Policy__AllowedUpstreams__0) and every value arrives as a string that the binder converts. Source: docs/plan/02-contracts.md -> Platform configuration. Freezes at G1a.",
+  "description": "Settings the task environment supplies. They bound what any registry entry may say, so a registry writer cannot widen them. This schema describes the configuration in its JSON form, which is how the configuration binder sees it; the deployed form is environment variables, where a colon becomes a double underscore (Policy:AllowedUpstreams:0 is Policy__AllowedUpstreams__0) and every value arrives as a string that the binder converts. The gateway rebuilds this form from its configuration, reading each value as the type this schema gives its property, validates it at start-up, and refuses to start on a failure; `spactl` validates a configuration file the same way. Source: docs/plan/02-contracts.md -> Platform configuration. Freezes at G1a.",
   "x-freeze": { "gate": "G1a", "status": "frozen-at-g1a" },
   "type": "object",
   "additionalProperties": true,
@@ -59,8 +59,8 @@
         "properties": {
           "Authority": {
             "type": "string",
-            "pattern": "^https://[^\\s]+$",
-            "description": "The issuer the OpenID Connect handler discovers from."
+            "pattern": "^(https://[^\\s]+|http://(127\\.0\\.0\\.1|\\[::1\\])(:[0-9]+)?(/[^\\s]*)?)$",
+            "description": "The issuer the OpenID Connect handler discovers from. https, or plain http on a loopback address, which is where the hermetic tier's test provider listens; nothing off the machine is fetched without TLS."
           },
           "Profile": {
             "type": "string",
@@ -74,8 +74,8 @@
           },
           "BrowserOrigin": {
             "type": "string",
-            "pattern": "^https://[^\\s/?#]+$",
-            "description": "The origin the browser visits at the provider: scheme and authority only. It goes into form-action and is the base of Cognito's logout URL."
+            "pattern": "^(https://[^\\s/?#]+|http://(127\\.0\\.0\\.1|\\[::1\\])(:[0-9]+)?)$",
+            "description": "The origin the browser visits at the provider: scheme and authority only, https or plain http on a loopback address. It goes into form-action and is the base of Cognito's logout URL."
           }
         }
       }
