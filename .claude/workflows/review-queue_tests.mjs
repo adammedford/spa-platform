@@ -3166,7 +3166,9 @@ try {
     // one name, and runs red on exactly the stated tests, as unittest prints them, read did-not-fail.
     // Each is one mutation over its names, one row per name judged by its own name: all red is four
     // reproduced rows and merge, and a name that stayed green is did-not-fail and holds. A cell of
-    // prose, of one name, of one name under a label, or of a file keeps its reading: one row, unsplit.
+    // one name, of one name under a label, or of a file keeps its reading: one row, unsplit. A cell of
+    // prose is one row too, read as the test the mutation agent names (#1436, below); with no reading
+    // it keeps the cell as its test.
     checks++
     {
       const RPY = 'tools/roadmap_tests.py'
@@ -3215,6 +3217,69 @@ try {
         result = await execute(env)
         const k = (resultOf(1316, result).mutations || [])[0] || {}
         if (k.test !== kept) fail(`#1327 cause 2: the stated ${kept} reads as ${k.test}, expected it kept`)
+      }
+    }
+
+    // A stated test the body names in prose (#1436). On #1435 the body's 'the refusal case' was the
+    // row's test, no runner name could end in it, and a run red on the test it meant read did-not-fail.
+    // The mutation agent reads the phrase as one test at the head (readAs), and the row is judged by
+    // that name, its why saying what was stated; a phrase no single test answers is could-not-run.
+    checks++
+    {
+      const SPY = 'tools/scripts/seed_tests.py'
+      const PHRASE = 'the refusal case'
+      const REFUSES = 'test_the_checker_refuses_what_the_schema_refuses'
+      const CLS = '__main__.SeedWritesTheBastionServiceOnlyWhenTheRootPublishesIt'
+      // As mutation-1.txt of #1435's 2026-11-19 runs printed it, its subtest after it.
+      const RED_REFUSES = `${REFUSES} (${CLS}) (keys=['bucket'], value='bastion')`
+      const RED_OTHER = `test_the_checker_accepts_what_the_schema_accepts (${CLS})`
+      const said1435 = (test) => ({ test, project: SPY, mutation: 'the checker accepts a document missing a required field', environment: '', failed: -1, total: -1, quote: 'The mutation that makes the checker accept a document missing a required field fails the refusal case under both schemas' })
+      const served1435 = (test, extra = {}) => ({ 1435: pr(1435, [SPY, 'tools/scripts/seed.py'], { statedMutations: [said1435(test)], ...extra }) })
+      const ran1435 = (failingNames, extra = {}) => ({ ...row('reproduced', failingNames.length, 38), failingNames, ...extra })
+
+      // Box 1: read as the test whose comment names it the refusal case, which went red.
+      env = run({ prs: [1435] }, served1435(PHRASE), { mutate: { [PHRASE]: ran1435([RED_REFUSES], { readAs: REFUSES }) } })
+      result = await execute(env)
+      const r = resultOf(1435, result)
+      const m = (r.mutations || [])[0] || {}
+      if (m.test !== REFUSES || m.result !== 'reproduced' || r.verdict !== 'merge') fail(`#1436 the stated ${JSON.stringify(PHRASE)} read as ${REFUSES}, red on it, gives ${JSON.stringify({ test: m.test, result: m.result })}, verdict ${r.verdict}, expected ${REFUSES} reproduced and merge`)
+      if (!(m.why || '').includes(`(stated as ${PHRASE}; read as ${REFUSES})`)) fail(`#1436 the row's why ${JSON.stringify(m.why)} does not say what was stated and the test it was read as`)
+
+      // Box 4: the mutation agent is asked to read the phrase as a test; the inventory is not, and
+      // still hands the cell over in the body's own words.
+      const prompt = (env.mutations[0] || {}).prompt || ''
+      if (!prompt.includes(`names the test in prose: ${JSON.stringify(PHRASE)}`) || !prompt.includes('READ AS: ') || !/readAs: /.test(prompt)) fail('#1436 the mutation prompt does not ask for the stated phrase to be read as one test before the break')
+      const invPrompt = env.prompts['inventory:1435'] || ''
+      if (!invPrompt.includes('the test exactly as the body writes it') || /READ AS|readAs|in prose/.test(invPrompt)) fail('#1436 the inventory prompt no longer takes the stated test in the body\'s own words, or asks for a reading')
+
+      // Box 2: read as one test, only another went red: did-not-fail, which holds.
+      env = run({ prs: [1435] }, served1435(PHRASE), { mutate: { [PHRASE]: ran1435([RED_OTHER], { readAs: REFUSES }) } })
+      result = await execute(env)
+      const other = resultOf(1435, result)
+      const o = (other.mutations || [])[0] || {}
+      if (o.test !== REFUSES || o.result !== 'did-not-fail' || other.verdict !== 'hold') fail(`#1436 the stated ${JSON.stringify(PHRASE)} read as ${REFUSES}, red only on another test, gives ${JSON.stringify({ test: o.test, result: o.result })}, verdict ${other.verdict}, expected did-not-fail and hold`)
+
+      // Box 3: no single test answers the phrase, whatever the agent reported: could-not-run, why
+      // naming the phrase, never did-not-fail. A reading that is no one name answers nothing either.
+      for (const [readAs, got] of [['', ran1435([RED_REFUSES])], ['', ran1435([], { result: 'did-not-fail', failed: 0 })], ['', ran1435([], { result: 'could-not-run', why: 'no test is the refusal case' })], [PHRASE, ran1435([RED_REFUSES])], [`${REFUSES}, test_x`, ran1435([RED_REFUSES])], [undefined, ran1435([RED_REFUSES])]]) {
+        env = run({ prs: [1435] }, served1435(PHRASE), { mutate: { [PHRASE]: { ...got, ...(readAs === undefined ? {} : { readAs }) } } })
+        result = await execute(env)
+        const u = resultOf(1435, result)
+        const x = (u.mutations || [])[0] || {}
+        if (x.result !== 'could-not-run' || u.verdict !== 'hold' || !(x.why || '').includes(JSON.stringify(PHRASE))) fail(`#1436 the stated ${JSON.stringify(PHRASE)} read as ${JSON.stringify(readAs)} after ${got.result} gives ${JSON.stringify({ result: x.result, why: x.why })}, verdict ${u.verdict}, expected could-not-run naming the phrase, and hold`)
+      }
+
+      // Box 5: a name, a dotted name, a file and a list keep their reading; a readAs is ignored, and
+      // the prompt asks for none.
+      const DOTTED = `SeedWritesTheBastionServiceOnlyWhenTheRootPublishesIt.${REFUSES}`
+      for (const [cell, want] of [[REFUSES, [REFUSES]], [DOTTED, [DOTTED]], [SPY, [SPY]], [`${REFUSES}, test_x`, [REFUSES, 'test_x']]]) {
+        const red = cell === SPY ? [RED_REFUSES] : [RED_REFUSES, `test_x (${CLS})`]
+        env = run({ prs: [1435] }, served1435(cell, { description: `\`${DOTTED}\`` }), { mutate: { [cell]: ran1435(red, { readAs: 'test_something_else' }) } })
+        result = await execute(env)
+        const k = resultOf(1435, result)
+        const rows = (k.mutations || []).map((x) => [x.test, x.result])
+        if (JSON.stringify(rows) !== JSON.stringify(want.map((t) => [t, 'reproduced'])) || (k.mutations || []).some((x) => /read as/.test(x.why || ''))) fail(`#1436 the stated ${JSON.stringify(cell)} with a readAs gives rows ${JSON.stringify(rows)}, expected ${JSON.stringify(want)} reproduced, as before`)
+        if (((env.mutations[0] || {}).prompt || '').includes('READ AS: ')) fail(`#1436 the mutation prompt for the stated ${JSON.stringify(cell)} asks for a reading`)
       }
     }
 
