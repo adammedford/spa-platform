@@ -3,7 +3,7 @@ export const meta = {
   description: 'Review every open pull request into main, or a named list, on the Standards and Spec axes, and post one comment per pull request ending in its review record',
   whenToUse: 'An integrator session, in the foreground, wants the open pull requests into main, or the ones it names, to carry a review record before tools/land.sh merges them; launched by scriptPath .claude/workflows/review-queue.js with args { repo, date, wt } and an optional prs list (the header comment has the full launch)',
   phases: [
-    { title: 'Inventory', detail: 'with no list, one queue agent lists the open pull requests into main; then one agent per pull request reads head, fork point, files, owner set, CI, citations and the comments and reviews already posted, and one agent per comment or COMMENTED review from a repository account whose body the inventory flags as holding the text of a record, a record line or a sentence quoting one, returns its body, and, when the commit messages are more than the inventory returns in one piece, one agent per batch of them returns those messages; they judge nothing. When the latest record names another head, one range agent says whether it is an ancestor and what the commits since it touch, or, for a rebuilt head, which new commits have the tree of an old one' },
+    { title: 'Inventory', detail: 'with no list, one queue agent lists the open pull requests into main; then one agent per pull request reads head, fork point, files, owner set, CI, citations and the comments and reviews already posted, and one agent per comment or COMMENTED review from a repository account whose body the inventory flags as holding the text of a record, a record line or a sentence quoting one, returns its body, read again by a fresh agent, a bounded number of times, when its copy comes back short or long, and, when the commit messages are more than the inventory returns in one piece, one agent per batch of them returns those messages; they judge nothing. When the latest record names another head, one range agent says whether it is an ancestor and what the commits since it touch, or, for a rebuilt head, which new commits have the tree of an old one' },
     { title: 'Review', detail: 'two fresh agents per pull request, Standards and Spec, read the branch through origin and rebuild nothing' },
     { title: 'Mutate', detail: 'one agent per mutation, up to the cap, breaks what a test guards in a throwaway worktree, runs that test\'s project, and removes the worktree' },
     { title: 'Verdict', detail: 'one agent per pull request re-takes the severity of every finding the axes report and says merge or hold, held to the mutation rows; one comment is posted, its last line the record' },
@@ -52,9 +52,10 @@ export const meta = {
 // mutations start while another is still under review. A run starts one launch agent (#687), then at
 // most one queue agent (none with a list), then per pull request one inventory, one body agent per
 // flagged body, a comment or a COMMENTED review from an account of the repository whose body
-// RECORD_TEST flags (#1018, #1073), one range agent when an earlier head carries a record, two axes,
-// up to maxMutationsPerPr mutations, one verdict and one post: 6 + the cap + the flagged bodies each,
-// 9 + the flagged bodies with the defaults, beside the run's launch and queue agents. RECORD_TEST
+// RECORD_TEST flags (#1018, #1073), and a fresh one for each read again after a copy short or long,
+// up to BODY_READS reads of a body in all (#1423), one range agent when an earlier head carries a record, two axes,
+// up to maxMutationsPerPr mutations, one verdict and one post: 6 + the cap + the flagged bodies and their re-reads
+// each, 9 + those with the defaults, beside the run's launch and queue agents. RECORD_TEST
 // also flags a sentence quoting a record, so the flagged bodies can outnumber the records. A pull
 // request whose commit messages run past MESSAGES_AT_ONCE characters adds one message agent per
 // batch of that size ("Commit messages past one return" below); most add none. The
@@ -118,7 +119,8 @@ export const meta = {
 // mutates the test again as held. On a stated, nominated or candidate mutation it is a could-not-run.
 //
 // A stated mutation as the body states it (#1327). On #1316 three things read a sound break as not
-// reproduced. A cell listing tests in a bracket, '<file> (<label>: test_a, test_b)', is one mutation
+// reproduced. A cell listing tests in a bracket, '<file> (<label>: test_a, test_b)', or as the
+// inventory hands it over without one, '<label>: test_a, test_b' or 'test_a, test_b' (#1423), is one mutation
 // over those names: one agent and one place under the cap, and one row per name from that run, each
 // judged by its own name (statedList); a bracket of one token keeps its reading. A stated test keeps
 // the name as the body writes it: a dotted qualifier the description never writes is the inventory's
@@ -695,11 +697,13 @@ OUTPUT FILE: ${DIR(n)}/inventory.json
 8. Write the whole result as JSON to the OUTPUT FILE, then return it. error is "" when nothing stopped you.`
 
 // One flagged comment's or review's body, read whole by an agent of its own (#1018).
-const bodyPrompt = (n, e, review) => `Read one ${review ? 'review' : 'comment'} on pull request #${n} and return its body whole. Read and report; judge nothing.
+// A read after the first (k > 1) follows one whose copy ran missed characters, not the inventory's
+// count (BODY_READS below, #1423), and writes a file of its own.
+const bodyPrompt = (n, e, review, k = 1, missed = null) => `Read one ${review ? 'review' : 'comment'} on pull request #${n} and return its body whole. Read and report; judge nothing.${k > 1 ? ` This is read ${k}: the copy before it ran ${missed} characters, not ${e.length}, so read the body from gh again and copy it whole.` : ''}
 
 ${HOUSE}
 
-OUTPUT FILE: ${DIR(n)}/body-${e.id}.json
+OUTPUT FILE: ${DIR(n)}/body-${e.id}${k > 1 ? `-read-${k}` : ''}.json
 
 1. \`cd ${REPO} && gh api ${review ? `repos/{owner}/{repo}/pulls/${n}/reviews/${e.id}` : `repos/{owner}/{repo}/issues/comments/${e.id}`}\`, the ${review ? 'review' : 'comment'} at ${e.html_url}.
 2. body: the JSON's body field, its decoded value byte for byte, not --jq's printed form, which adds a newline. It runs ${e.length} characters before any whitespace at its end; copy every one, and never a summary, an elision or a stand-in: the script counts them and fails the review on a body that is short or long. If gh cannot be reached, body is "" and error says why.
@@ -948,10 +952,19 @@ const nominated = (s, byTest, i = 0) => {
 // mutation over its names (tests): one agent, one place under the cap, and one row per name from
 // that run (statedRows), each judged by its own name. A parenthesis of one token keeps its reading:
 // '(companion)', '(check: ...)', '(Assert.Null)', '(pkg.Class)' and prose are not lists.
+// The inventory need not hand the cell over as written (#1423). On #1421 it returned
+// 'test_a, test_b, test_c, test_d' for four backticked names in one cell, and
+// 'TicketStageTests: test_a, ...' for 'tools/roadmap_tests.py (TicketStageTests: test_a, ...)'
+// with its wrapper dropped; each read as one name no failing name ended in, and two rows red on
+// exactly the stated tests read did-not-fail. So a cell with no wrapper is a list on the same terms
+// (STATED_BARE_LIST): an optional `<label>:`, then two or more comma-separated identifiers. One
+// name, with or without a label, and prose, whose parts are no identifiers, keep their reading.
 const STATED_LIST = /^\S+\s*\((?:[^():,]*:)?([^()]*)\)$/
+const STATED_BARE_LIST = /^(?:[^():,]*:)?([^():]*)$/
 const IDENTIFIER = /^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*$/
 const statedList = (cell) => {
-  const [, inner] = STATED_LIST.exec(String(cell || '').trim()) || []
+  const text = String(cell || '').trim()
+  const [, inner] = STATED_LIST.exec(text) || STATED_BARE_LIST.exec(text) || []
   const names = inner === undefined ? [] : inner.split(',').map((t) => t.trim())
   return names.length >= 2 && names.every((t) => IDENTIFIER.test(t)) ? names : null
 }
@@ -1453,6 +1466,13 @@ const review = async (n) => {
 // makes it a null and drops the reason (#1076). null when every body came back whole. Both counts
 // leave out the whitespace at the body's end, which no parser reads and a returned value can lose: on 2026-11-05 one of #796's body agents
 // returned a record without its final newline, which its file kept (#1030).
+// A copy short or long is a fault in the copy, not in the body (#1423): on #1421 a 13,718-character
+// record came back as 10,587 characters in one run and 13,724 in the next, so neither got past the
+// inventory. Such a body is read again by a fresh agent, up to BODY_READS reads in all, inside its
+// own task so each read takes a slot, and the reason above is returned only when no read came back
+// whole. An agent that returns nothing or an error, or throws, is no miscopy and fails at once, as
+// before. Each read after the first has a label and OUTPUT FILE of its own, so the log keeps every copy.
+const BODY_READS = 3
 const TRAILING_SPACE = /[ \t\r\n]+$/
 const codePoints = (s) => Array.from(s.replace(TRAILING_SPACE, '')).length
 const readBodies = async (n, inv) => {
@@ -1463,15 +1483,24 @@ const readBodies = async (n, inv) => {
   for (const { e } of wanted) {
     if (!Number.isInteger(e.id) || e.id <= 0 || !Number.isInteger(e.length) || e.length < 0) return `${e.html_url} has no id or length to read its body by`
   }
+  const readOnce = async (e, review, k, missed) => {
+    const label = `inventory:${n}:body:${e.id}${k > 1 ? `:read-${k}` : ''}`
+    try { return await run(bodyPrompt(n, e, review, k, missed), { label, phase: 'Inventory', schema: BODY }) } catch (err) { return { body: '', error: `its agent threw: ${thrownReason(err)}` } }
+  }
   const got = await parallel(wanted.map(({ e, review }) => async () => {
-    try { return await run(bodyPrompt(n, e, review), { label: `inventory:${n}:body:${e.id}`, phase: 'Inventory', schema: BODY }) } catch (err) { return { body: '', error: `its agent threw: ${thrownReason(err)}` } }
+    let b = null
+    for (let k = 1; k <= BODY_READS; k++) {
+      b = await readOnce(e, review, k, b && codePoints(b.body))
+      if (!b || typeof b.body !== 'string' || b.error || codePoints(b.body) === e.length) return b
+    }
+    return b
   }))
   for (const [i, { e }] of wanted.entries()) {
     const b = got[i]
     if (!b || typeof b.body !== 'string') return `the body agent for ${e.html_url} returned nothing`
     if (b.error) return `the body of ${e.html_url} could not be read: ${b.error}`
     const length = codePoints(b.body)
-    if (length !== e.length) return `the body of ${e.html_url} came back ${length < e.length ? 'abridged' : 'altered'}: ${length} of the ${e.length} characters the inventory counted, so its record, follow-ups and mutation rows are not read from it`
+    if (length !== e.length) return `the body of ${e.html_url} did not come back whole in ${BODY_READS} reads, the last ${length < e.length ? 'abridged' : 'altered'}: ${length} of the ${e.length} characters the inventory counted, so its record, follow-ups and mutation rows are not read from it`
   }
   for (const [i, { e }] of wanted.entries()) e.body = got[i].body
   return null
