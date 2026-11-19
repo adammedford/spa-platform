@@ -2,6 +2,10 @@
 
 One owner per path. The last matching line wins, which is git's own rule.
 
+This file names owners only. Which mode a path belongs to, whether development, the proof cell, the
+unit of adoption, a reference or process, is the path table in `README.md`, which
+`tools/mode_split.py` reads.
+
 The owners are the roles in the plan (`docs/plan/03-workstreams-and-tasks.md`). They are **role
 names, not GitHub handles**: this repository has one author, so handle resolution would be theatre.
 `.github/path-ownership.py` reads the block below as text and nothing else consumes it.
