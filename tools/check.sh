@@ -485,6 +485,22 @@ else
   missing python3 "the endpoint paths"
 fi
 
+# --- the mode split ---------------------------------------------------------------------------
+#
+# What an adopter may take is answered by one table, README.md's path table, with the list in
+# contracts/README.md for the files under contracts/ (#1335). A path added with no value, or with
+# two, would leave that answer wrong without anything noticing. tools/mode_split.py gives every
+# tracked path its one value from the table and the list, and says what it reads and why (#1344). It
+# reads the tree, not the diff, so it is never skipped; its exit 2, a table or a list it could not
+# read, fails here as a finding does.
+if command -v python3 > /dev/null; then
+  python3 -I tools/mode_split.py \
+    || fail "a tracked path has no one value of README.md's path table, or breaks its clauses, or none was judged."
+  elapsed "the mode split"
+else
+  missing python3 "the mode split"
+fi
+
 # --- duplicated build artifacts ---------------------------------------------------------------
 #
 # iCloud Drive leaves files like "Platform.Abstractions 2.dll" and "project.assets 2.json" in bin/
@@ -566,7 +582,7 @@ elapsed "the file modes"
 # has none yet, and G1a's exit test, which nothing else proves. CI builds Release; this builds the
 # default Debug, as the hook always has, and smokes what it built. Last, the gateway's image, built
 # and started as the header says; it publishes in the image, so it does not use this build.
-ran="A-05, the steering documents, every ticket citation, the ticket numbers, the part-row merges, the full-landing merges, the roadmap, the analysis guard, the endpoint paths, the artifacts, the file modes"
+ran="A-05, the steering documents, every ticket citation, the ticket numbers, the part-row merges, the full-landing merges, the roadmap, the analysis guard, the endpoint paths, the mode split, the artifacts, the file modes"
 
 if touches build; then
   command -v dotnet > /dev/null || fail "dotnet is not on PATH."

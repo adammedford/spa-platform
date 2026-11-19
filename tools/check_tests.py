@@ -146,10 +146,11 @@ TEST_DIRS = ["infra/modules/m", "infra/roots/b"]
 # The hook's lines, as the hook before #68 printed them. #69 changed one on purpose: the Terraform
 # half now names the version it ran, in a line of its own and in the last line. #205 added a check,
 # the file modes, and so a name to the list of what ran; #291 added the part-row merges, and #296
-# the full-landing merges; #606 added the analysis guard, and #760 the endpoint paths.
+# the full-landing merges; #606 added the analysis guard, #760 the endpoint paths, and #1344 the mode
+# split.
 HOOK_RAN = ("A-05, the steering documents, every ticket citation, the ticket numbers, the part-row merges, "
-            "the full-landing merges, the roadmap, the analysis guard, the endpoint paths, the artifacts, "
-            "the file modes")
+            "the full-landing merges, the roadmap, the analysis guard, the endpoint paths, the mode split, "
+            "the artifacts, the file modes")
 HOOK_BUILD_SKIPPED = "pre-push: build skipped: no .NET source changed."
 HOOK_TERRAFORM_SKIPPED = "pre-push: Terraform skipped: nothing under infra/ or the floor changed."
 HOOK_FIX = "pre-push: fix it, or push with --no-verify if you mean it."
@@ -169,6 +170,8 @@ PYTHON_CHECKS = [
     ["python3", "-I", "tools/analysis_guard.py"],
     # The endpoint paths (#760) read the tree too, after the analysis guard.
     ["python3", "-I", "tools/endpoint_paths.py"],
+    # The mode split (#1344) reads the tree as well, after the endpoint paths.
+    ["python3", "-I", "tools/mode_split.py"],
 ]
 # The full check fails a full-landing merge whose ticket it could not read, where the hook passes it
 # (#894), so it alone passes the flag.
@@ -453,7 +456,7 @@ class HookTests(CheckTestCase):
         self.assertLines(["python3 double failed: -I tools/analysis_guard.py",
                           "pre-push: the analyzer configs or a suppression break ADR-0035's rules, or were not judged.",
                           HOOK_FIX], result.stderr)
-        self.assertEqual(PYTHON_CHECKS[:-1], case.calls())
+        self.assertEqual(PYTHON_CHECKS[:-2], case.calls())
 
     def test_an_endpoint_paths_check_that_fails(self):
         # #760: the endpoint paths run after the analysis guard and before the artifacts, and their
@@ -464,6 +467,18 @@ class HookTests(CheckTestCase):
         self.assertLines(["python3 double failed: -I tools/endpoint_paths.py",
                           "pre-push: a skill, a runbook or the test catalogue names a path contracts/http-contract.md "
                           "does not make known, or none was judged.",
+                          HOOK_FIX], result.stderr)
+        self.assertEqual(PYTHON_CHECKS[:-1], case.calls())
+
+    def test_a_mode_split_that_fails(self):
+        # #1344: the mode split runs after the endpoint paths and before the artifacts, and its
+        # failure stops the hook.
+        case = Case(self, change="docs/notes.md", fails_on={"python3": "tools/mode_split.py"})
+        result = case.run(hook=True)
+        self.assertEqual(1, result.status)
+        self.assertLines(["python3 double failed: -I tools/mode_split.py",
+                          "pre-push: a tracked path has no one value of README.md's path table, or breaks its "
+                          "clauses, or none was judged.",
                           HOOK_FIX], result.stderr)
         self.assertEqual(PYTHON_CHECKS, case.calls())
 
@@ -487,6 +502,7 @@ class HookTests(CheckTestCase):
             "pre-push: the roadmap not checked: python3 is not on PATH.",
             "pre-push: the analysis guard not checked: python3 is not on PATH.",
             "pre-push: the endpoint paths not checked: python3 is not on PATH.",
+            "pre-push: the mode split not checked: python3 is not on PATH.",
             "pre-push: Terraform not checked: terraform is not on PATH.",
         ], result.stderr)
         self.assertLines([HOOK_BUILD_SKIPPED, f"pre-push: {HOOK_RAN} pass."], result.stdout)
@@ -1976,7 +1992,7 @@ class CiWorkflowCompanionTests(CheckTestCase):
 
 # The steps that every run with a base executes, in order, as the elapsed lines name them (#629).
 ELAPSED_STEPS = ["A-05", "the steering check", "the part-row merges", "the full-landing merges", "the roadmap",
-                 "the analysis guard", "the endpoint paths", "the artifacts", "the file modes"]
+                 "the analysis guard", "the endpoint paths", "the mode split", "the artifacts", "the file modes"]
 # Under --full, finding which test companions the change earns is a step of its own: on 2026-10-29
 # the companions were where the integrate step's span went (#629).
 REACH = "the test companions' reach"

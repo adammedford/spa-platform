@@ -48,6 +48,40 @@ an SPA author reads. Nothing in it differs from the plan. The app definition lik
 schema file; the plan describes it inside the registry document section, as an entry without
 `clientId`, `clientSecretRef` and `release`.
 
+## The unit of adoption and the project's own
+
+Every file here is one of two kinds. The unit's are the contracts an adopter takes as they stand,
+read at the same ref as the gateway image and `spactl` are built from. The project's own describe
+how this repository is built, checked and tagged, and an adopter takes none of them. The list below
+names each file once, and `tools/mode_split.py` reads it for the value of every path under
+`contracts/`, so a file added here gets its line in the same change.
+
+Each `*.example.json` carries the proof cell's values and is read for its shape. It shows a valid
+document of its schema, and none of its values is a promise.
+
+<!-- BEGIN contracts list -->
+The unit's:
+
+- `platform-config.schema.json`, with `platform-config.example.json`
+- `registry.schema.json`, with `registry.example.json`
+- `app-definition.schema.json`, with `app-definition.example.json`
+- `infra-outputs.schema.json`, with `infra-outputs.example.json`
+- `http-contract.md`
+- `upstream-contract.md`
+- `s3-layout.md`
+- `telemetry.md`
+
+The project's own:
+
+- `README.md`
+- `pipeline.md`
+- `request-gate.md`
+- `resource-tags.md`
+- `gates.md`
+- `test-ids.md`
+- `changes/`
+<!-- END contracts list -->
+
 ## What G1b froze
 
 Task I-6 prepares these identity parts for the `contracts-v1` freeze using the G0 report and

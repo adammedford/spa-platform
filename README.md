@@ -10,8 +10,6 @@ request. The Terraform, the fixtures, the test identity provider and the suites 
 something about it. `docs/roadmap.md` is the path from the mechanism that was proved on a spike to a
 release an enterprise could adopt.
 
-Licensed under the Apache License, Version 2.0: see [LICENSE](LICENSE).
-
 ## Where the gateway stands
 
 Written by `tools/roadmap.py` from `git tag`, the merge subjects that name each task and the plan's
@@ -29,7 +27,10 @@ what landed. What opens next is the dispatch table in `docs/plan/03-workstreams-
 the package table in `docs/plan/06-phase-2-and-risks.md`, read against those tags and merges; a gate
 defined after the plan was exported is in the gate register, `contracts/gates.md`.
 
-## Get it running
+## Development
+
+The first of the repository's three modes: developing the gateway. The other two are proving it in
+this project's own cell and adopting it, and the path table below gives every tracked path its mode.
 
 ```bash
 tools/preflight.sh                    # 1. what this machine is missing
@@ -46,8 +47,58 @@ tools/smoke.sh Debug 5180                                      # starts, and 404
 tools/check.sh                                                 # the pre-push hook's checks, by hand
 ```
 
-`AGENTS.md` → "Build and test" has the rest: one test project on its own, the full check, and the
-rules the build holds a change to.
+**The tests are the development loop.** Every behaviour of the gateway is proved in the hermetic
+suites, against the test identity provider, the mock API and an in-memory bucket, and there is no
+development server to run it against instead. `AGENTS.md` → "Build and test" has the rest: one test
+project on its own, the full check, and the rules the build holds a change to.
+
+To see the hermetic cell work outside a test, from a clone and with no AWS, follow
+[`tests/e2e/README.md`](tests/e2e/README.md); a run made that way is never evidence.
+
+## Proof cell
+
+The proof cell is this project's own cell: `infra/envs/poc`, its Cognito pool and the fixtures
+deployed into it. It exists to prove the gateway on AWS, where the gates that need a real load
+balancer, bucket and identity provider are closed, and an adopter takes nothing from it.
+`docs/runbooks/README.md` lists the operations performed on it.
+
+## Adoption
+
+**An adopter takes the unit of adoption as it stands.** It is three artefacts, all built from one
+ref of an unmodified clone, never from a fork:
+
+- the gateway image, built from `src/Gateway/Dockerfile`;
+- the contracts that the list in `contracts/README.md` names as the unit's;
+- `tools/spactl`, which publishes a release and the registry.
+
+**An adopter may copy and change the references:** the cell module `infra/modules/cell`, the
+operator scripts under `tools/scripts/`, the runbooks under `docs/runbooks/`, and the browser client
+under `client/`. Nothing promises that a reference stays as it is between refs.
+
+Nothing else is taken. To see the gateway work before adopting it, without AWS, run the hermetic
+cell from a clone, as `tests/e2e/README.md` shows.
+
+Licensed under the Apache License, Version 2.0: see [LICENSE](LICENSE).
+
+## The path table
+
+The gateway image has no path of its own: it is built from `src/Gateway/Dockerfile`, and `src/`
+stays development. Every other tracked path takes one value from the table below.
+`tools/mode_split.py` reads the table and the list in `contracts/README.md`, and fails a tracked
+path that has no value or two; its docstring gives the table's format.
+
+<!-- BEGIN path values -->
+| Path | Value |
+| --- | --- |
+| `src/`, `tests/`, `spikes/`, `fixtures/`, `tools/bench/` | Development |
+| The root build files: `SpaPlatform.slnx`, `Directory.*.props`, `global.json`, `nuget.config`, `BannedSymbols.*`, `.globalconfig`, `.editorconfig`, `Brewfile`, `.dockerignore`, `.hadolint.yaml`, `.terraform-version` | Development |
+| `docs/adr/`, `docs/roadmap.md`, `docs/gaps.md`, `docs/dependencies.md`, `GLOSSARY.md`, `CODING_STANDARDS.md`, `README.md`, `LICENSE` | Development |
+| The files of `contracts/` its list names as the project's own: `README.md`, `pipeline.md`, `request-gate.md`, `resource-tags.md`, `gates.md`, `test-ids.md`, `changes/` | Development |
+| `infra/envs/poc`, `infra/bootstrap`, `infra/modules/idp-cognito`, `tools/scripts/poc/`, `docs/runbooks/poc/`, `tools/aws-project*.env` | Proof cell |
+| `tools/spactl`, and the files of `contracts/` its list names as the unit's | Unit of adoption |
+| `infra/modules/cell`, `tools/scripts/`, `docs/runbooks/`, `client/` | Reference |
+| Every other file directly in `tools/`, `.claude/`, `.githooks/`, `.github/`, `.scratch/`, `docs/agents/`, `docs/plan/`, `docs/research/`, `AGENTS.md`, `CLAUDE.md`, `OWNERSHIP.md`, `.gitignore`, `.gitattributes` | Process |
+<!-- END path values -->
 
 ## Where to read
 
@@ -62,7 +113,7 @@ rules the build holds a change to.
 | `docs/gaps.md` | The known gaps between what Phase 1 delivers and what an enterprise adoption needs |
 | `docs/runbooks/README.md` | The operations an operator performs on a cell |
 | `AGENTS.md` | The rules every coding agent works under, and who owns which path |
-| `OWNERSHIP.md` | The owner of every path, which `.githooks/pre-push` enforces as check A-05 |
+| `OWNERSHIP.md` | The owner of every path, and owners only, which `.githooks/pre-push` enforces as check A-05 |
 | `CODING_STANDARDS.md` | What a review holds a change to |
 | `docs/agents/landing-work.md` | How a task gets from the dispatch table into `main` |
 | `docs/agents/tracker-policy.md` | How tickets and specs live as GitHub issues on this repository |
