@@ -129,6 +129,7 @@ function run(scriptArgs, served, behave = {}) {
   const ids = new Map()
   const byId = new Map()
   const servedAt = new Map()   // id -> the one endpoint that serves it, as ghEndpoint below reads a prompt
+  const bodyReads = new Map()  // a body's URL -> how many body agents read it (#1423)
   const projected = (trim, at) => (e) => {
     if (!ids.has(e)) { ids.set(e, ids.size + 1); byId.set(ids.get(e), e) }
     servedAt.set(ids.get(e), `${at}/${ids.get(e)}`)
@@ -196,10 +197,14 @@ function run(scriptArgs, served, behave = {}) {
       // it, or what behave.bodies says of its URL: 'null' for an agent that dies returning nothing,
       // { throws } for one that dies throwing that value, whose message the harness wrote and so need
       // not name the URL (#1076), a function of the body for the body it returns instead, or { error }
-      // for a gh it cannot reach, with the whole body beside it when whole is true.
+      // for a gh it cannot reach, with the whole body beside it when whole is true. An array says one
+      // of those per read of that body, in the order the agents ran, its last entry for every read
+      // past its end (#1423); bodyReads counts the reads of each URL.
       const e = byId.get(Number(opts.label.split(':')[3]))
       if (!e) throw new Error(`a body agent for an id the inventory never gave: ${opts.label}`)
-      const b = (behave.bodies || {})[e.html_url]
+      bodyReads.set(e.html_url, (bodyReads.get(e.html_url) || 0) + 1)
+      const said = (behave.bodies || {})[e.html_url]
+      const b = Array.isArray(said) ? said[Math.min(bodyReads.get(e.html_url), said.length) - 1] : said
       if (b && b.throws !== undefined) throw b.throws
       if (b === 'null') return null
       // gh answers from the endpoint the prompt names (#1073), whatever the label says. An id of the
@@ -289,7 +294,7 @@ function run(scriptArgs, served, behave = {}) {
     }
     throw new Error(`unexpected agent label ${opts.label}`)
   }
-  return { repo, wt: args.wt, calls, posted, mutations, prompts, git, flight, events, batches }
+  return { repo, wt: args.wt, calls, posted, mutations, prompts, git, flight, events, batches, bodyReads }
 }
 
 // A stubbed gh shared across runs. failPost: GitHub cannot be reached at posting time. headNow: the
@@ -2614,6 +2619,51 @@ try {
     }
   }
 
+  // A copy short or long is read again by a fresh agent (#1423). On #1421 a 13,718-character record
+  // came back as 10,587 characters in one run and as 13,724 in the next, and neither run got past the
+  // inventory. A first read short, or long, and a second read whole is taken: the review is recorded,
+  // every record, follow-up row and held row read as from a first read whole, and the body read
+  // exactly twice, the second time under a label and an OUTPUT FILE of its own, the other five bodies
+  // once each. A body that never comes back whole fails at the inventory naming its URL, after
+  // exactly three reads, the bound the script sets, and never after one.
+  checks++
+  {
+    const target = RECORDS796[3].html_url
+    const short = (b) => Array.from(b).slice(0, Math.floor(Array.from(b).length * 10587 / 13718)).join('')
+    const long = (b) => `${b}xxxxxx`
+    const cases = { 'short, then whole': [short, (b) => b], 'long, then whole': [long, (b) => b] }
+    for (const [what, reads] of Object.entries(cases)) {
+      env = run({ prs: [796], maxMutationsPerPr: 20 }, SERVED796, { followUps: { 796: CARRIED796 }, bodies: { [target]: reads } })
+      result = await execute(env)
+      const r = resultOf(796, result)
+      if (r.outcome !== 'recorded') fail(`#1423 a body read ${what}: outcome ${r.outcome} at ${JSON.stringify(r.stage)}, expected recorded`)
+      if (env.bodyReads.get(target) !== 2) fail(`#1423 a body read ${what}: read ${env.bodyReads.get(target)} time(s), expected 2`)
+      const others = RECORDS796.filter((x) => x.html_url !== target).map((x) => env.bodyReads.get(x.html_url))
+      if (others.some((k) => k !== 1)) fail(`#1423 a body read ${what}: the other bodies were read ${JSON.stringify(others)} times, expected once each`)
+      if ((r.earlierRecords || []).length !== RECORDS796.length) fail(`#1423 a body read ${what}: ${(r.earlierRecords || []).length} earlier record(s) read, expected ${RECORDS796.length}`)
+      const want = CARRIED796.map((f, k) => ({ axis: f.axis, title: f.title, where: f.where, firstCarried: RECORDS796[Math.floor(k / 2)].html_url, failsOn: f.failsOn }))
+      if (JSON.stringify(r.followUps) !== JSON.stringify(want)) fail(`#1423 a body read ${what}: followUpsOf gave ${(r.followUps || []).length} row(s), expected the twelve each record carries`)
+      const mutated = env.mutations.filter((m) => m.n === 796).map((m) => m.test)
+      const missing = HELD796.filter((t) => !mutated.includes(t))
+      if (missing.length) fail(`#1423 a body read ${what}: mutationTableOf lost the held row(s) ${missing.join(', ')}`)
+      const again = env.calls.filter((c) => /^inventory:796:body:\d+:read-2$/.test(c))
+      if (again.length !== 1) fail(`#1423 a body read ${what}: second-read agents ${JSON.stringify(again)}, expected one`)
+      const id = (again[0] || '').split(':')[3]
+      const p = env.prompts[again[0]] || ''
+      if (!p.includes(`OUTPUT FILE: ${env.repo}/.scratch/review-queue/log/2026-10-21/pr-796/body-${id}-read-2.json`) || !p.includes('This is read 2')) fail(`#1423 a body read ${what}: the second read's prompt names no file of its own or does not say it is read 2`)
+    }
+    const never = { 'short every time': short, 'long every time': long, 'short, long, short': [short, long, short] }
+    for (const [what, b] of Object.entries(never)) {
+      env = run({ prs: [796], maxMutationsPerPr: 20 }, SERVED796, { followUps: { 796: CARRIED796 }, bodies: { [target]: b } })
+      result = await execute(env)
+      const r = resultOf(796, result)
+      if (r.outcome !== 'failed' || !String(r.stage).startsWith('inventory: ') || !String(r.stage).includes(target)) fail(`#1423 a body ${what}: outcome ${r.outcome} at ${JSON.stringify(r.stage)}, expected failed at the inventory naming ${target}`)
+      if (env.bodyReads.get(target) !== 3) fail(`#1423 a body ${what}: read ${env.bodyReads.get(target)} time(s) before failing, expected the bound, 3`)
+      const after = env.calls.filter((c) => !c.startsWith('inventory:') && c !== 'launch')
+      if (after.length || env.posted.length) fail(`#1423 a body ${what}: ${after.join(', ') || 'nothing'} ran after the inventory and ${env.posted.length} comment(s) were posted, expected none`)
+    }
+  }
+
   // The script's trim, and the jq on each of the inventory's two lists, strip one class of characters
   // (#1072): spaces, tabs, carriage returns and newlines, in any run, and nothing else. The tails below
   // are that class written down here, and each reaches the script as a body ending in it, so the class
@@ -3107,6 +3157,44 @@ try {
         result = await execute(env)
         const tests = (resultOf(1316, result).mutations || []).map((m) => m.test)
         if (JSON.stringify(tests) !== JSON.stringify([cell])) fail(`#1327 cause 1: the one-token bracket ${JSON.stringify(cell)} gives rows ${JSON.stringify(tests)}, expected it unsplit`)
+      }
+    }
+
+    // A listed cell as the inventory hands it over (#1423). On #1421 it returned four backticked
+    // names in one cell as 'test_a, test_b, test_c, test_d', and the cell
+    // 'tools/roadmap_tests.py (TicketStageTests: test_a, ...)' with its wrapper dropped; each read as
+    // one name, and runs red on exactly the stated tests, as unittest prints them, read did-not-fail.
+    // Each is one mutation over its names, one row per name judged by its own name: all red is four
+    // reproduced rows and merge, and a name that stayed green is did-not-fail and holds. A cell of
+    // prose, of one name, of one name under a label, or of a file keeps its reading: one row, unsplit.
+    checks++
+    {
+      const RPY = 'tools/roadmap_tests.py'
+      const NAMES = ['test_a_lettered_row_and_heading_read_as_one_stage_in_order', 'test_a_plan_rows_line_of_tickets_yields_them_in_lower_case', 'test_a_ticket_in_one_stage_is_no_coverage_problem_and_in_two_stages_is', 'test_a_tickets_merges_count_in_its_stages_block_and_the_summary']
+      const printed = (t) => `${t} (__main__.TicketStageTests)`
+      const said1421 = (test) => ({ test, project: RPY, mutation: '`STAGE` reverted to `S\\d+\\|SX`', environment: '', failed: 4, total: 33, quote: 'red: 4 TicketStageTests cases' })
+      const served1421 = (test) => ({ 1421: pr(1421, [RPY, 'tools/roadmap.py'], { statedMutations: [said1421(test)] }) })
+      for (const cell of [NAMES.join(', '), `TicketStageTests: ${NAMES.join(', ')}`]) {
+        env = run({ prs: [1421] }, served1421(cell), { mutate: { [cell]: { ...row('reproduced', 4, 33), failingNames: NAMES.map(printed) } } })
+        result = await execute(env)
+        const r = resultOf(1421, result)
+        const rows = (r.mutations || []).map((m) => [m.test, m.result, (m.logFile || '').split('/').pop()])
+        if (JSON.stringify(rows) !== JSON.stringify(NAMES.map((t) => [t, 'reproduced', 'mutation-1.txt']))) fail(`#1423 the listed cell ${JSON.stringify(cell)} red on its four names gives rows ${JSON.stringify(rows)}, expected one reproduced row per name from the one run`)
+        if (r.verdict !== 'merge') fail(`#1423 the listed cell ${JSON.stringify(cell)} red on its four names gives verdict ${r.verdict}, expected merge`)
+        if (env.mutations.length !== 1) fail(`#1423 the listed cell ${JSON.stringify(cell)} ran ${env.mutations.length} mutation agents, expected one`)
+
+        env = run({ prs: [1421] }, served1421(cell), { mutate: { [cell]: { ...row('reproduced', 3, 33), failingNames: NAMES.filter((t) => t !== NAMES[1]).map(printed) } } })
+        result = await execute(env)
+        const three = resultOf(1421, result)
+        const byName = Object.fromEntries((three.mutations || []).map((m) => [m.test, m.result]))
+        const want = Object.fromEntries(NAMES.map((t) => [t, t === NAMES[1] ? 'did-not-fail' : 'reproduced']))
+        if (JSON.stringify(byName) !== JSON.stringify(want) || three.verdict !== 'hold') fail(`#1423 the listed cell ${JSON.stringify(cell)} with ${NAMES[1]} green gives ${JSON.stringify(byName)}, verdict ${three.verdict}, expected ${NAMES[1]} did-not-fail, the rest reproduced, and hold`)
+      }
+      for (const cell of [`4 TicketStageTests cases, including ${NAMES[0]}`, NAMES[0], `TicketStageTests: ${NAMES[0]}`, RPY]) {
+        env = run({ prs: [1421] }, served1421(cell), { mutate: { [cell]: { ...row('reproduced', 4, 33), failingNames: NAMES.map(printed) } } })
+        result = await execute(env)
+        const tests = (resultOf(1421, result).mutations || []).map((m) => m.test)
+        if (JSON.stringify(tests) !== JSON.stringify([cell])) fail(`#1423 the stated cell ${JSON.stringify(cell)} gives rows ${JSON.stringify(tests)}, expected it unsplit`)
       }
     }
 
