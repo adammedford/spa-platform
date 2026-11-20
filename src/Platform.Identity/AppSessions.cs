@@ -101,6 +101,70 @@ internal sealed class AppSessions(ISessionStore store)
     }
 
     /// <summary>
+    /// Logout's gate-only entry (#995 -> "Logout", step 1): waits at most <paramref name="wait"/>, on
+    /// <paramref name="clock"/>, for the gate of one token set, the shell's when
+    /// <paramref name="fragmentId"/> is null, and holds it without reading the record. Null when the gate
+    /// was not entered in time: the waiter is withdrawn, so it neither takes the gate later nor keeps the
+    /// table's entry alive. Logout is the one caller that holds more than one gate, entered in one fixed
+    /// order (the shell's, then each fragment's in ordinal <c>fragmentId</c> order) and starting holding
+    /// none, so no two callers can wait on each other.
+    /// </summary>
+    public async Task<Hold?> TryHoldAsync(string sessionKey, string? fragmentId, TimeSpan wait, TimeProvider clock)
+    {
+        string gateKey = fragmentId is null ? sessionKey : sessionKey + ":" + fragmentId;
+        Gate gate;
+        long finished;
+        lock (gates)
+        {
+            if (!gates.TryGetValue(gateKey, out gate!))
+            {
+                gate = new Gate();
+                gates[gateKey] = gate;
+            }
+
+            gate.Users++;
+            finished = gate.Finished;
+        }
+
+        bool entered = await gate.Semaphore.WaitAsync(0, CancellationToken.None);
+        if (!entered && wait > TimeSpan.Zero)
+        {
+            using CancellationTokenSource timeout = new(wait, clock);
+            try
+            {
+                await gate.Semaphore.WaitAsync(timeout.Token);
+                entered = true;
+            }
+            catch (OperationCanceledException)
+            {
+                // Withdrawn: a cancelled wait never takes the semaphore.
+            }
+        }
+
+        if (!entered)
+        {
+            lock (gates)
+            {
+                if (--gate.Users == 0)
+                {
+                    gates.Remove(gateKey);
+                }
+            }
+
+            return null;
+        }
+
+        return new Hold(this, gateKey, gate, finished);
+    }
+
+    /// <summary>
+    /// Removes the record under gates the caller holds through <see cref="TryHoldAsync"/>, whatever it
+    /// holds: logout's removal, which is unconditional once its re-read found the record this app's
+    /// (#995 -> "Logout", step 5). Never cancelled.
+    /// </summary>
+    public Task RemoveHeldAsync(string sessionKey) => store.RemoveAsync(sessionKey, CancellationToken.None);
+
+    /// <summary>
     /// The record under the key, ungated, when it is this app's and this client's; null for an absent
     /// record and a foreign one alike, so a caller cannot tell them apart and must not try (N-02, N-22).
     /// A read changes nothing, so it takes the caller's token.
@@ -317,6 +381,27 @@ internal sealed class AppSessions(ISessionStore store)
 
         /// <summary>How the last of them ended. Written only by the holder.</summary>
         public RefreshOutcome? Last { get; set; }
+    }
+
+    /// <summary>A gate held by <see cref="TryHoldAsync"/>, with no record read under it. Disposing it lets the next waiter in.</summary>
+    internal sealed class Hold(AppSessions owner, string gateKey, Gate gate, long finishedOnArrival) : IDisposable
+    {
+        private bool released;
+
+        /// <summary>
+        /// Whether the refresh that ran while this caller waited ended its set: for the shell's gate, a
+        /// refusal that removed the record, after which logout enters no further gate (#995).
+        /// </summary>
+        public bool EndedWhileWaiting => gate.Finished != finishedOnArrival && gate.Last is RefreshOutcome.Ended;
+
+        public void Dispose()
+        {
+            if (!released)
+            {
+                released = true;
+                owner.Leave(gateKey, gate);
+            }
+        }
     }
 
     /// <summary>

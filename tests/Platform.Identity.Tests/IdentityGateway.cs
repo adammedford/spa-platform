@@ -59,7 +59,9 @@ internal sealed class IdentityGateway : IAsyncDisposable
     /// A path standing in for the proxy's token step (task 4.2): it asks <see cref="IAccessTokenSource"/>
     /// for the session's token and answers 200 with the token as the body, or the outcome's status with
     /// its code from contracts/http-contract.md -> Errors as the body: 401 <c>unauthenticated</c>, 401
-    /// <c>session_ended</c>, 503 <c>idp_unavailable</c> or 503 <c>session_store_unavailable</c>. An outcome it does not know throws, as the
+    /// <c>session_ended</c>, 401 <c>fragment_login_required</c> (#995), 503 <c>idp_unavailable</c> or 503
+    /// <c>session_store_unavailable</c>. A request sent with a fragment is pinned to it, as host resolution
+    /// pins one, so the source answers that fragment's set. An outcome it does not know throws, as the
     /// proxy's step refuses one, so no test reads an unknown outcome as a known one. It hands the source
     /// the request's own cancellation token on purpose, so a test can prove the source never lets a
     /// disconnecting browser cancel a refresh (T-B16).
@@ -123,6 +125,7 @@ internal sealed class IdentityGateway : IAsyncDisposable
                     AccessTokenResult.SessionEnded => (401, "session_ended"),
                     AccessTokenResult.ProviderUnavailable => (503, "idp_unavailable"),
                     AccessTokenResult.StoreUnavailable => (503, "session_store_unavailable"),
+                    AccessTokenResult.FragmentLoginRequired => (401, "fragment_login_required"),
                     _ => throw new InvalidOperationException($"The probe knows no outcome {result.GetType().Name}."),
                 };
                 await context.Response.WriteAsync(body, CancellationToken.None);
@@ -385,7 +388,8 @@ internal sealed class IdentityGateway : IAsyncDisposable
         string method = "GET",
         IReadOnlyDictionary<string, string>? headers = null,
         RegistrySnapshot? pinnedTo = null,
-        CancellationTokenSource? browser = null)
+        CancellationTokenSource? browser = null,
+        FragmentDefinition? fragment = null)
     {
         RegistrySnapshot snapshot = pinnedTo ?? Snapshot;
         if (!snapshot.ByHost.ContainsKey(app.Host))
@@ -396,6 +400,12 @@ internal sealed class IdentityGateway : IAsyncDisposable
         using IServiceScope scope = Services.CreateScope();
         HttpContext context = Pin(app, snapshot);
         context.RequestServices = scope.ServiceProvider;
+        if (fragment is not null)
+        {
+            // Host resolution's pinning of a request under /fragments/{fragmentId}/ (contracts/pipeline.md).
+            context.Features.Set<IFragmentFeature>(new SettableFragmentFeature(fragment));
+        }
+
         context.Request.Method = method;
         // The browser going away, when a test cancels this source: what the server's RequestAborted is.
         context.RequestAborted = browser?.Token ?? CancellationToken.None;
