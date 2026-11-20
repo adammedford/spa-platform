@@ -76,7 +76,15 @@ the output file `tools/wiz_row_post.py` reads; D1's `Value` reads to `--output t
 redactor's own elision of a JSON `Value` as the reason; and the worktree route to `SPA_E2E_OUTPUTS`
 as `DeployedStack.cs` names it. It holds the wording and the names, not a run: D runs on a cell.
 
-Checkout inputs: .claude/skills/wiz/*.md .gitignore infra/modules/idp-cognito/main.tf tests/e2e/Program.cs tests/e2e/Stack/RollingDeployLoop.cs tests/e2e/Stack/ContinuityObserver.cs tests/e2e/Stack/DeployedStack.cs tools/wiz_d6.sh tools/wiz_row_post.py tools/wiz_redact.py tests/e2e/SittingBrowser/Observations.cs tests/e2e/SittingBrowser/ObservationLine.cs tests/e2e/SittingBrowser/SittingBrowser.cs tests/e2e/SittingBrowser/SittingCommand.cs
+**D0's login kinds (#1199).** The sitting of 2026-11-13 met rows 5 and 7's hold timing out at the
+provider's form only at D5, after the cutover, and D0 read `login-prompt` and went on.
+`SkillProvesD0sLoginKinds` reads D0's `--filter-class` and holds that tests/e2e/Deployed declares the
+class with exactly the two facts D0 names, that the step sets the switch `StackSwitch.cs` reads, keeps
+its flags before any `--`, runs after D0's reads and before its post, and reads its verdict from the
+summary, since an all-skipped run exits 0; and that D0's retry is one `reload`, with the sitting
+browser's own verbs and `signed-in` token, and every failed D0 a rule 7 stop that offers D10.
+
+Checkout inputs: .claude/skills/wiz/*.md .gitignore infra/modules/idp-cognito/main.tf tests/e2e/Program.cs tests/e2e/Deployed/LoginKindsTests.cs tests/e2e/Stack/StackSwitch.cs tests/e2e/Stack/RollingDeployLoop.cs tests/e2e/Stack/ContinuityObserver.cs tests/e2e/Stack/DeployedStack.cs tools/wiz_d6.sh tools/wiz_row_post.py tools/wiz_redact.py tests/e2e/SittingBrowser/Observations.cs tests/e2e/SittingBrowser/ObservationLine.cs tests/e2e/SittingBrowser/SittingBrowser.cs tests/e2e/SittingBrowser/SittingCommand.cs
 """
 from __future__ import annotations
 
@@ -925,6 +933,84 @@ class SkillRunsSittingDsLeversAndDrafts(unittest.TestCase):
         self.assertIn(f'{variable.group(1)}="$PWD/infra/envs/poc/outputs.json"', way_out)
         self.assertIn("after row 3 passes from that worktree", way_out)
         self.assertIn("names the branch and the commit the driver came from", way_out)
+
+
+class SkillProvesD0sLoginKinds(unittest.TestCase):
+    """D0 runs each kind of login the rows use before D2, and its login verdict is a stop (#1199)."""
+
+    DEPLOYED = ROOT / "tests" / "e2e" / "Deployed"
+    STACK = ROOT / "tests" / "e2e" / "Stack"
+
+    def setUp(self) -> None:
+        found = re.search(r"\*\*D0, the fresh deploy.*?(?=\*\*D2, the cutover)", (SKILL / "d.md").read_text(), re.S)
+        self.assertIsNotNone(found, "d.md has no D0 section ending at D2")
+        self.d0 = found.group(0)
+
+    @staticmethod
+    def flat(text: str) -> str:
+        return " ".join(text.split())
+
+    def step(self) -> str:
+        """The one fenced block of D0 that runs dotnet test."""
+        blocks = [block for block in re.findall(r"^```bash\n(.*?)^```$", self.d0, re.M | re.S) if "dotnet test" in block]
+        self.assertEqual(len(blocks), 1, f"D0 should run dotnet test in one block: {blocks}")
+        return blocks[0]
+
+    def filter_class(self) -> str:
+        named = re.findall(r"--filter-class (\S+)", self.step())
+        self.assertEqual(len(named), 1, f"D0's step should name one class: {named}")
+        return named[0]
+
+    def test_the_steps_class_declares_exactly_the_two_facts_d0_names(self) -> None:
+        namespace, _, name = self.filter_class().rpartition(".")
+        declaring = [path for path in self.DEPLOYED.glob("*.cs")
+                     if f"namespace {namespace};" in path.read_text() and re.search(rf"\bclass {name}\b", path.read_text())]
+        self.assertEqual(len(declaring), 1, f"tests/e2e/Deployed should declare {namespace}.{name} once: {declaring}")
+        facts = re.findall(r"\[Fact\]\s*public \S+ (\w+)\(", declaring[0].read_text())
+        # One of each kind the rows use (#1199 Q1): a rename leaves D0 naming a fact the run does not hold.
+        self.assertEqual(len(facts), 2, f"{name} should hold the two login kinds: {facts}")
+        for fact in facts:
+            self.assertIn(f"`{fact}`", self.d0, f"D0 does not name {fact}")
+        self.assertIn(f"`total: {len(facts)}`, `succeeded: {len(facts)}`", self.flat(self.d0))
+
+    def test_the_step_sets_the_switch_deployed_stack_reads(self) -> None:
+        variable = re.search(r'public const string Variable = "([^"]+)";', (self.STACK / "StackSwitch.cs").read_text())
+        self.assertIsNotNone(variable, "StackSwitch.cs has no Variable")
+        self.assertIn(f"export {variable.group(1)}=deployed\n", self.step())
+
+    def test_the_verdict_counts_a_skip_and_zero_tests_as_a_failed_d0(self) -> None:
+        # An all-skipped run exits 0, so an exit-code verdict would pass the switch left unset.
+        text = self.flat(self.d0)
+        self.assertIn("The verdict is the run's summary, never its exit", text)
+        self.assertIn("`skipped: 0`. Anything else is a failed D0", text)
+        self.assertIn("a skip; zero tests; or an exit of 5", text)
+
+    def test_the_flags_come_before_any_double_dash(self) -> None:
+        # After `--`, dotnet test reads an existing --results-directory as the project and refuses the call.
+        line = self.flat(self.step().split("\n", 1)[1])
+        self.assertTrue(line.startswith("shown dotnet test --project tests/e2e --filter-class "), line)
+        self.assertNotIn(" -- ", line)
+
+    def test_the_step_runs_after_d0s_reads_and_before_its_post(self) -> None:
+        step = self.d0.index(self.step())
+        self.assertLess(self.d0.index("shown aws ecs describe-tasks"), step)
+        self.assertLess(step, self.d0.index("Post `## D0` on #348"))
+
+    def test_the_retry_is_one_reload_with_the_browsers_verb_and_token(self) -> None:
+        verbs = dict(re.findall(r'public const string (Login|Reload) = "([^"]+)";',
+                                (SITTING_BROWSER / "SittingCommand.cs").read_text()))
+        token = re.search(r'public const string SignedInToken = "([^"]+)";',
+                          (SITTING_BROWSER / "Observations.cs").read_text()).group(1)
+        lines = self.d0.splitlines()
+        self.assertEqual(len([line for line in lines if line.startswith(f"shown sitting_browser {verbs['Reload']} main")]), 1)
+        # A second login would refill the provider's form and hide the flake the retry tells apart (#1199 Q6).
+        self.assertEqual(len([line for line in lines if line.startswith(f"shown sitting_browser {verbs['Login']} ")]), 1)
+        text = self.flat(self.d0)
+        self.assertIn(f"A `{verbs['Login']}` line that is not `{token}` is followed by one reload", text)
+        self.assertIn(f"a second line that is not `{token}` is a failed D0", text)
+
+    def test_every_failed_d0_is_a_rule_7_stop_that_offers_d10(self) -> None:
+        self.assertIn("**Every failed D0 is a rule 7 stop that offers D10", self.d0)
 
 
 class GuardedInit(Sitting):
