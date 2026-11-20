@@ -210,6 +210,29 @@ public sealed class FragmentRouteTests
         Assert.Empty(gateway.Tokens.Calls);
     }
 
+    [Fact]
+    public async Task The_fragment_catch_all_matches_only_the_segment_of_the_pinned_fragment()
+    {
+        // A pin present but for another fragment: the catch-all compares the segment with the pin, so
+        // /fragments/frag1/api/... is not answered api.unknown on frag2's pin.
+        AppDefinition app = TestApps.Entry("app1", fragments: [
+            TestApps.Fragment("frag1", apis: [TestApps.Api("orders")]),
+            TestApps.Fragment("frag2", apis: [TestApps.Api("orders")]),
+        ]);
+        await using ProxyHost gateway = await ProxyHost.StartAsync(
+            Ct,
+            new ProxyHostOptions { Telemetry = true, FragmentPin = (a, _) => SettableFragmentFeature.For(a, "frag2") },
+            app);
+        using HttpClient client = new();
+
+        using HttpResponseMessage response = await client.SendAsync(
+            gateway.Request(HttpMethod.Get, Host, "/fragments/frag1/api/unlisted/items"), Ct);
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        Assert.Empty(await response.Content.ReadAsStringAsync(Ct));
+        Assert.Null(Assert.Single(gateway.TelemetryRules));
+    }
+
     private static async Task AssertRefusedClosedAsync(ProxyHost gateway, EchoUpstream upstream, string path)
     {
         using HttpClient client = new();
