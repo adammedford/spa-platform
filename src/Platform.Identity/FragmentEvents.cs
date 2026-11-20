@@ -58,7 +58,10 @@ internal static partial class FragmentEvents
     /// <summary>The properties of a fragment challenge for a hop that goes on with <paramref name="continuation"/>.</summary>
     public static AuthenticationProperties HopProperties(HttpContext context, AppDefinition app, string hop, ChainContinuation continuation)
     {
-        AuthenticationProperties properties = new();
+        // A redirect target of its own, never read: with none the handler takes this request's URL, a
+        // /bff/chain step's continuation among it, and logs it at Debug (OpenIdConnectHandler's
+        // PostAuthenticationLocalRedirect; contracts/telemetry.md: query strings are never logged).
+        AuthenticationProperties properties = new() { RedirectUri = "/" };
         properties.Items[HopItem] = hop;
         properties.Items[ContinuationItem] = continuation.Protect(DataProtection(context), app.AppId);
         return properties;
@@ -82,7 +85,10 @@ internal static partial class FragmentEvents
             await trimmed(context);
             HttpContext http = context.HttpContext;
             AppDefinition app = Bff.Pinned(http, "the login callback");
-            if (app.Fragments.IsEmpty || context.Principal is not { } principal)
+            // An earlier event that ended the callback or skipped it keeps it so: the stock handler signs
+            // in only when the event left neither (RemoteAuthenticationHandler.HandleRequestAsync, below).
+            if (context.Result is { Handled: true } or { Skipped: true }
+                || app.Fragments.IsEmpty || context.Principal is not { } principal)
             {
                 return;
             }
@@ -106,13 +112,17 @@ internal static partial class FragmentEvents
     }
 
     /// <summary>A fragment's callback and its failure: the merge, the mark and the next step.</summary>
-    public static void ApplyFragment(OpenIdConnectOptions options, AppDefinition built, FragmentDefinition fragment)
+    public static void ApplyFragment(OpenIdConnectOptions options, FragmentDefinition fragment)
     {
-        _ = built;
         Func<TicketReceivedContext, Task> trimmed = options.Events.OnTicketReceived;
         options.Events.OnTicketReceived = async context =>
         {
             await trimmed(context);
+            // As the shell's: an earlier event that ended or skipped the callback merges nothing.
+            if (context.Result is { Handled: true } or { Skipped: true })
+            {
+                return;
+            }
 
             // Every path below ends the response, so the stock sign-in never runs (#961).
             context.HandleResponse();

@@ -194,9 +194,20 @@ internal sealed class ScriptedSessionStore(ISessionStore inner) : ISessionStore
     /// <summary>Runs before each read.</summary>
     public Func<string, Task>? BeforeGet { get; set; }
 
+    /// <summary>Runs before each create: to fail the login callback's.</summary>
+    public Func<Task>? BeforeCreate { get; set; }
+
     public int Replaces => Volatile.Read(ref replaces);
 
-    public Task<string> CreateAsync(SessionRecord record, CancellationToken ct) => Inner.CreateAsync(record, ct);
+    public async Task<string> CreateAsync(SessionRecord record, CancellationToken ct)
+    {
+        if (BeforeCreate is { } hook)
+        {
+            await hook();
+        }
+
+        return await Inner.CreateAsync(record, ct);
+    }
 
     public async Task<SessionRecord?> GetAsync(string key, CancellationToken ct)
     {

@@ -139,7 +139,7 @@ public sealed class OidcOptionsSetup(
         }
         else
         {
-            FragmentEvents.ApplyFragment(options, app, fragment);
+            FragmentEvents.ApplyFragment(options, fragment);
         }
     }
 
