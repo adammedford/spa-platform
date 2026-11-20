@@ -179,7 +179,7 @@ internal static partial class FragmentEvents
             }
             catch (MergeFailedException e)
             {
-                Logged(http, app, fragment, hop.Kind, "store_unavailable", e.Attempts);
+                Logged(http, app, fragment, hop.Kind, "unconfirmed", e.Attempts);
                 await StoreFailure.EndAsync(http, e.Failure.Operation);
                 return;
             }
@@ -224,7 +224,7 @@ internal static partial class FragmentEvents
             }
             catch (MergeFailedException e)
             {
-                Logged(http, app, fragment, "mark", "store_unavailable", e.Attempts);
+                Logged(http, app, fragment, "mark", "unconfirmed", e.Attempts);
                 await StoreFailure.EndAsync(http, e.Failure.Operation);
                 return;
             }

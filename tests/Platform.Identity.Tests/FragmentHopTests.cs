@@ -294,7 +294,7 @@ public sealed class FragmentHopTests
         SessionRecord record = await RecordAsync(gateway);
         Assert.Equal(reads, Held.StateOf(record, Orders));
         Assert.Equal(FragmentSets.LoginRequired, Held.StateOf(record, Billing));
-        Assert.Equal([("chain", "store_unavailable", 1, "orders")], Writes(log));
+        Assert.Equal([("chain", "unconfirmed", 1, "orders")], Writes(log));
     }
 
     [Fact]
