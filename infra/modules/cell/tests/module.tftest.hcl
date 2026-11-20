@@ -2652,6 +2652,88 @@ run "a_ring_under_memory_carries_the_ring_and_no_table" {
   }
 }
 
+# --- Fragments (#961): the two optional policy values --------------------------------------------
+#
+# On the default inputs neither key is set, which under_memory_the_cell_is_phase_1_s_unchanged and
+# under_memory_the_plan_is_phase_1_s_byte_for_byte above hold with their literals unedited. These
+# runs hold the other side: set, each arrives under its contract name as its decimal string, and
+# below 1 each is refused at plan.
+
+# Each key counts only when the contract's Policy section names its leaf, so a schema that drops or
+# renames either key fails this run until the module follows. terraform test refuses an assertion
+# that reads the schema alone ("Invalid assert expression: The condition expression must refer to
+# at least one object from elsewhere in the configuration", Terraform 1.11.0), so the schema is read
+# in the same filter that finds the key in the gateway's environment.
+#
+# Mutations that turn this run red: FragmentsPerShell or MergeBudget deleted from
+# contracts/platform-config.schema.json -> Policy.properties; either key dropped from ecs.tf's
+# platform_configuration, or renamed (Policy__MergeBudgets); either value read from the other input.
+run "set_the_fragment_inputs_arrive_as_the_contract_s_policy_keys_with_their_decimal_strings" {
+  command = plan
+
+  variables {
+    fragments_per_shell = 4
+    merge_budget        = 7
+  }
+
+  assert {
+    condition = alltrue([
+      for leaf, expected in { FragmentsPerShell = "4", MergeBudget = "7" } :
+      one([
+        for e in one([
+          for c in jsondecode(aws_ecs_task_definition.gateway.container_definitions) : c if c.name == "gateway"
+        ]).environment : e.value if e.name == "Policy__${leaf}" && contains(keys(jsondecode(file("../../../contracts/platform-config.schema.json")).properties.Policy.properties), leaf)
+      ]) == expected
+    ])
+    error_message = "Set, fragments_per_shell = 4 arrives as Policy__FragmentsPerShell = \"4\" and merge_budget = 7 as Policy__MergeBudget = \"7\", each under a key the contract's Policy section names."
+  }
+}
+
+# Mutations that turn this run red: fragments_per_shell's validation made >= 0, or removed.
+run "a_fragments_per_shell_of_0_is_refused" {
+  command = plan
+
+  variables {
+    fragments_per_shell = 0
+  }
+
+  expect_failures = [var.fragments_per_shell]
+}
+
+# Mutations that turn this run red: merge_budget's validation made >= 0, or removed.
+run "a_merge_budget_of_0_is_refused" {
+  command = plan
+
+  variables {
+    merge_budget = 0
+  }
+
+  expect_failures = [var.merge_budget]
+}
+
+# The schema types both as integers, and the binder cannot read "2.5" as one.
+#
+# Mutations that turn this run red: the floor() half of either input's validation removed.
+run "a_fractional_fragments_per_shell_is_refused" {
+  command = plan
+
+  variables {
+    fragments_per_shell = 2.5
+  }
+
+  expect_failures = [var.fragments_per_shell]
+}
+
+run "a_fractional_merge_budget_is_refused" {
+  command = plan
+
+  variables {
+    merge_budget = 2.5
+  }
+
+  expect_failures = [var.merge_budget]
+}
+
 # --- Continuity (#347, #332 D6): the two-task shape, behind multi_task --------------------------
 #
 # One switch sets the whole shape (#347 Q4), so these runs hold both of its sides: on the default
