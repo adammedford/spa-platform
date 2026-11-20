@@ -159,12 +159,11 @@ the cutover replaces only the gateway's task definition, so the roll drains no h
 yet seen a session through the bastion outlast a roll of the gateway's service (#1167's decision,
 under "Not verified").
 The restart #348 Q20 set for a drained hop stays as it was: once `describe-tasks` lists a new task
-RUNNING, stop `tunnel.sh`, note the UTC time, start it again in the background (it prints `through
-task <id>`, the bastion task's id: keep it for the post; it names no gateway task, so it is not the
-id D4's `SPA_TUNNEL_TASK` asks for, which #1382 settles),
-run `verify-tunnel.sh /healthz`, and note the time it passed; the interval between the two times is
-the gap, posted as missing coverage, and any `tunnel-down` line outside it is named as further
-missing coverage. Then convergence:
+RUNNING, stop `tunnel.sh`, note the UTC time, and start it again in the background. It prints
+`through task <id>`, the bastion task’s id. Keep it for the post. Row 4 stops a gateway task and
+takes no tunnel id (#1382). Run `verify-tunnel.sh /healthz` and note the time it passed. Post the
+interval between the two times as missing coverage, and name any `tunnel-down` line outside it as
+further missing coverage. Then convergence:
 
 ```bash
 shown aws ecs wait services-stable --cluster spa-poc --services gateway
@@ -239,23 +238,23 @@ shown aws ecs describe-services --cluster spa-poc --services gateway \
   --query 'services[0].{desired:desiredCount,running:runningCount,deployments:deployments[].{status:status,rollout:rolloutState,desired:desiredCount,running:runningCount,revision:taskDefinition}}'
 ```
 
-then the `list-tasks` and `describe-tasks` lines above. More than one deployment, or a `rollout` of
-`IN_PROGRESS`, is a roll under way. One settled deployment on a new revision has finished the roll,
-and no convergence has been read. One on D0's revision is rolled back when `desired` has reached the
-cutover's 2, and is as D0 left it when `desired` is still 1. A new task is a RUNNING one on a revision
-other than D0's. The post carries these reads and says whether the tunnel restart ran, with the id it
-kept, or that it did not. Asking what next, wiz first says, from those reads: which of the four the
-cell is; that "go on" takes D1 and D3 onward to that cell and not to one D2 has read as converged, so
-a read or a row can fail for that reason alone, and a pass says nothing of convergence; and whether
-D4 has an id, which is one `tunnel.sh` printed in D2 that still names a RUNNING task. "Go on" stays
-the human's answer, and wiz holds it to no wait. On it:
+then the `list-tasks` and `describe-tasks` lines above. More than one deployment, or a `rollout`
+of `IN_PROGRESS`, is a roll under way. One settled deployment on a new revision has finished the
+roll, and no convergence has been read. One on D0’s revision is rolled back when `desired` has
+reached the cutover’s 2, and is as D0 left it when `desired` is still 1. A new task is a RUNNING
+one on a revision other than D0’s. The post carries these reads and says whether the tunnel
+restart ran, with the id it kept, or that it did not. Asking what next, wiz first says, from those
+reads: which of the four the cell is; that “go on” takes D1 and D3 onward to that cell and not to
+one D2 has read as converged, so a read or a row can fail for that reason alone, and a pass says
+nothing of convergence; and whether the gateway service has exactly two RUNNING tasks and both are
+on a revision other than D0’s, which D4 needs. “Go on” stays the human’s answer, and wiz holds it
+to no wait. On it:
 
 - **The tunnel.** If the restart has not run, or the task its id names is no longer RUNNING, and a
-  new task is RUNNING, offer it now as above (rule 1), and keep the id; its times and id go into the
-  next step's post. With no new task it is not offered: wiz says that D4 still has no id from D2,
-  and that D0's tunnel, through the bastion's task, stands as D0 left it. D0's id is not one for D4:
-  a row 4 on D0's revision says nothing of the cutover. The roll replaces no bastion task, so the
-  restart's id names the task D0's tunnel went through unless the bastion itself was replaced.
+  new task is RUNNING, offer it now as above (rule 1), and keep the id. Its times and id go into
+  the next step’s post. With no new task, wiz says that D0’s tunnel, through the bastion’s task,
+  stands as D0 left it. The roll replaces no bastion task, so the restart’s id names the task D0’s
+  tunnel went through unless the bastion itself was replaced.
 - **Each later step, D1 and D3 to D9.** Run the `describe-services` read above first, and open the
   step's post with "D2 failed" and what that read showed. A read that has since settled makes no
   row 2 pass and is no convergence: only D2's own block is that.
@@ -342,16 +341,17 @@ file and `row<n>-test.out`, the run's output as the terminal showed it, are the 
 row before asking for the approval; the three rows that mutate get it as follows, and a lever or a
 mutation the summary does not name stops the sitting:
 
-- **D4 (row 4, F2).** The class runs `aws ecs stop-task` on the task `SPA_TUNNEL_TASK` does not
-  name, with a drain, and refuses unless that variable is exactly one of the two RUNNING tasks. Set
-  `SPA_TUNNEL_TASK=<the id tunnel.sh printed in D2>` in the call, say which task will be stopped,
-  and the human's approval of the row's command is its rule-2 confirm, as C3 treats F-07. After the
-  row, the service replaces the task; read the two tasks again before D5 and name the new id. After
-  a failed D2 that kept no id, or one whose task is no longer RUNNING, run D2's restart first if a new
-  task is RUNNING, and use the id it prints; with none, say so when asking: the row then refuses and
-  stops nothing. Its evidence file then records not proved, with the refusal's type and message as its
-  reason (#1194), so post it as not proved with the refusal's line from the test's output. A refusal
-  spends no attempt.
+- **D4 (row 4, F2).** Read the gateway service’s tasks with D2’s `list-tasks` and `describe-tasks`
+  lines. Ask for approval only when exactly two report `lastStatus` of `RUNNING` and both are on a
+  revision other than D0’s. If either condition fails or the read is incomplete, report what the
+  read showed and hold D4. Name the task whose id sorts first by ordinal order as the one the row
+  will stop, and name the other as the survivor. The tunnel uses the bastion’s task (#1168), and
+  the row command takes no `SPA_TUNNEL_TASK` (#1382). The human’s approval of the row command is
+  its rule-2 confirm, as C3 treats F-07. Immediately before launch, check the count, ids, and
+  revisions again. If they differ from the approved read, stop and seek fresh approval once the
+  prerequisites hold. If the row itself refuses, post `not proved` with the refusal line from the
+  test’s output (#1194). A refusal spends no attempt. After a stop, read the service’s tasks again
+  before D5 and name the replacement id.
 - **D6 (row 6, F1; #348 Q29, #1203, #1216).** The class drives for up to 40 minutes while the operator
   deploys, and `tools/wiz_d6.sh` (#1204) is the lever: it waits for the driver's line starting
   `row6: launch deploy.sh now`, runs `deploy.sh` on the same commit as C1 runs it, and on
