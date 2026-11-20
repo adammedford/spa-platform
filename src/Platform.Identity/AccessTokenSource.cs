@@ -333,7 +333,13 @@ internal sealed partial class AccessTokenSource(
 
         if (refresh.Set.Fragment is { } fragment)
         {
-            return Finished(turn, await EndFragmentSetAsync(refresh, fragment, turn, refreshToken), new RefreshOutcome.Ended());
+            // A removal that found the record gone leaves its waiters nothing to inherit: each reads the
+            // record itself and answers unauthenticated, as this call does (the W3 "missing" row), rather
+            // than fragment_login_required for a session that no longer exists (#995 review).
+            AccessTokenResult endedSet = await EndFragmentSetAsync(refresh, fragment, turn, refreshToken);
+            return endedSet is AccessTokenResult.Unauthenticated
+                ? (endedSet, new RefreshOutcome.Ended())
+                : Finished(turn, endedSet, new RefreshOutcome.Ended());
         }
 
         // The shell's refusal ends the record, unconditionally (the W3 row).

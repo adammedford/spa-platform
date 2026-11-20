@@ -222,12 +222,14 @@ public sealed class FragmentLogoutTests
     }
 
     [Fact]
-    public async Task The_revocations_run_in_parallel_under_one_provider_deadline()
+    public async Task The_revocations_share_one_provider_deadline()
     {
-        // #995 -> "Logout", step 3: every set revoked in parallel under one ProviderDeadline (2 s here). The
-        // provider holds each revocation for 5 s, so all three end deadline_exceeded, the record is still
-        // removed, and the logout takes about one deadline, not three. Mutation: revoke the fragments' sets
-        // one after another; logout takes about 6 s, and this fails (1 test red).
+        // #995 -> "Logout", step 3: every set revoked under one ProviderDeadline (2 s here). The provider
+        // holds each revocation for 5 s, so all three end deadline_exceeded, the record is still removed,
+        // and the logout takes about one deadline, not three. Mutation: give each revocation a deadline of
+        // its own and revoke them one after another; logout takes about 6 s, and this fails (1 test red).
+        // Run one after another under the one shared deadline, the later calls start cancelled and this
+        // stays green: the next test guards the parallelism.
         CapturedLog logs = new();
         AccessTokenSourceOptions small = new() { ProviderDeadline = TimeSpan.FromSeconds(2) };
         await using IdentityGateway gateway = await IdentityGateway.StartAsync(
@@ -241,6 +243,29 @@ public sealed class FragmentLogoutTests
         elapsed.Stop();
         Assert.Equal(302, logout.Status);
         Assert.Equal(3, LogoutLines(logs).Count(l => l.EndsWith(": deadline_exceeded.", StringComparison.Ordinal)));
+        Assert.Null(await gateway.Sessions.GetAsync(key, Ct));
+        Assert.True(elapsed.Elapsed < TimeSpan.FromSeconds(4), $"logout took {elapsed.Elapsed}");
+    }
+
+    [Fact]
+    public async Task The_revocations_run_in_parallel()
+    {
+        // #995 -> "Logout", step 3: every set revoked in parallel. The provider holds each revocation for
+        // 2 s, well inside the default 10 s ProviderDeadline, so all three are revoked, and in parallel the
+        // logout takes about one hold, not three. Mutation: revoke the sets one after another under the one
+        // shared deadline; every set is still revoked but the logout takes about 6 s, and this fails (1 test
+        // red; the test above stays green under it).
+        CapturedLog logs = new();
+        await using IdentityGateway gateway = await IdentityGateway.StartAsync([Shell], s => s.AddSingleton(logs.Provider));
+        (Dictionary<string, string> jar, string key) = await FragmentRefreshTests.SignInAsync(gateway);
+        gateway.Idp.Faults.RevokeDelay = TimeSpan.FromSeconds(2);
+        Stopwatch elapsed = Stopwatch.StartNew();
+
+        IdentityGateway.Answer logout = await gateway.SendAsync(Shell, IdentityGateway.LogoutPath, jar, "POST");
+
+        elapsed.Stop();
+        Assert.Equal(302, logout.Status);
+        Assert.Equal(3, LogoutLines(logs).Count(l => l.EndsWith(": revoked.", StringComparison.Ordinal)));
         Assert.Null(await gateway.Sessions.GetAsync(key, Ct));
         Assert.True(elapsed.Elapsed < TimeSpan.FromSeconds(4), $"logout took {elapsed.Elapsed}");
     }

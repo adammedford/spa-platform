@@ -312,6 +312,39 @@ public sealed class FragmentRefreshTests
     }
 
     [Fact]
+    public async Task A_caller_queued_behind_a_fragment_refusal_that_found_the_record_gone_answers_unauthenticated()
+    {
+        // The W3 invalid_grant row with the record gone (the "missing" row; decision 5 of #995's Answer): the
+        // provider holds orders' refresh while a second orders call queues on that set's gate; the record is
+        // removed and the provider then refuses. The holder's removal finds no record and answers 401
+        // unauthenticated, and the queued call, which reads the record itself, answers the same rather than
+        // inheriting fragment_login_required for a session that no longer exists. Mutation: hand the queued
+        // call the refusal's Ended outcome on a missing record too; it answers fragment_login_required, and
+        // this fails (1 test red).
+        HeldClock hold = new();
+        await using IdentityGateway gateway = await IdentityGateway.StartAsync([Shell], idpClock: hold);
+        (Dictionary<string, string> jar, string key) = await SignInAsync(gateway, lifetimeOf: OnlyDue(Orders));
+        gateway.Idp.Faults.TokenDelay = TimeSpan.FromSeconds(1);
+        Task<IdentityGateway.Answer> holder = Task.Run(() => TokenAsync(gateway, jar, Orders), Ct);
+        await hold.Holding.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        gateway.Idp.Faults.TokenDelay = TimeSpan.Zero;
+        Task<IdentityGateway.Answer> queued = Task.Run(() => TokenAsync(gateway, jar, Orders), Ct);
+        await Task.Delay(TimeSpan.FromMilliseconds(300), Ct);
+        Assert.False(queued.IsCompleted);
+        gateway.Idp.RevokeAllForClient(Orders.OAuth.ClientId);
+        await gateway.Sessions.RemoveAsync(key, Ct);
+        hold.Release();
+
+        IdentityGateway.Answer a = await holder;
+        IdentityGateway.Answer b = await queued.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+
+        Assert.Equal((401, "unauthenticated"), (a.Status, a.Body));
+        Assert.Equal((401, "unauthenticated"), (b.Status, b.Body));
+        Assert.Equal("invalid_grant", Assert.Single(gateway.Idp.RefreshGrants).Outcome);
+        Assert.Null(await gateway.Sessions.GetAsync(key, Ct));
+    }
+
+    [Fact]
     public async Task A_fragment_set_with_no_refresh_token_does_not_end_the_record()
     {
         // #995 -> "Expiry": a due fragment set that holds no refresh token answers fragment_login_required,
