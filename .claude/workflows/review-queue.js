@@ -1201,9 +1201,13 @@ const mutationRow = (n, given, i, got) => {
   // method of it, 'test_x (pkg.Class)' or 'test_x (pkg.Class.test_x)' (#1416). On #1406 the stated
   // cell FencedBoxTests went red on all five of its methods, matched none, and read did-not-fail.
   // So a failing name unittest printed is the cell's too when its class, its dotted name less the
-  // method, ends in the cell at a dot. A name xUnit printed is matched by the rule above alone.
+  // method, ends in the cell at a dot. xUnit prints a failing name as 'Ns.Class.Method(args)', and
+  // a cell may name its class the same way (#1452): on #1451 the stated cell
+  // PolicyConfigurationTests went red on seven of its methods, matched none, and read did-not-fail.
+  // So a name xUnit printed is the cell's by that rule too. The match is at a dot, so a cell
+  // ConfigurationTests is not PolicyConfigurationTests, and an empty cell names no class.
   const classOf = (f) => dotted(f).split('.').slice(0, -1).join('.')
-  const isClass = (f) => UNITTEST_PRINTED.test(f) && `.${classOf(f)}`.endsWith(`.${m.test}`)
+  const isClass = (f) => !!m.test && `.${classOf(f)}`.endsWith(`.${m.test}`)
   const isNamed = (f) => wholeFile || `.${dotted(f)}`.endsWith(`.${nameIn(f)}`) || isClass(f)
   const caughtElsewhere = row.result === 'reproduced' && row.failingNames.length > 0 && !row.failingNames.some(isNamed)
   // A Node companion, identified by its project or by nodeFile above, prints no test names: a

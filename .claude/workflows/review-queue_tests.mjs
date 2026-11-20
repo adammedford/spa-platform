@@ -682,7 +682,10 @@ try {
     // its methods, matched none and read did-not-fail. Red only on that class's methods, in either
     // printed form or under a dotted module, it reproduces and merges; a cell naming the class with
     // its module does too. Red only on another class's methods, or on a class whose name merely ends
-    // in the cell's, it is still did-not-fail and holds. A name xUnit printed is not read this way.
+    // in the cell's, it is still did-not-fail and holds. A name xUnit printed, 'Ns.Class.Method(args)',
+    // is read the same way (#1452): on #1451 the cell PolicyConfigurationTests, red on seven of its
+    // methods, read did-not-fail. Red only on another class's methods, or on a class whose name ends
+    // in the cell's but not at a dot, it is still did-not-fail and holds.
     {
       const CLS = 'FencedBoxTests'
       const PY = 'tools/landing_subjects_tests.py'
@@ -693,7 +696,9 @@ try {
         [`__main__.${CLS}`, ['test_a (__main__.FencedBoxTests)'], 'reproduced', 'merge'],
         [CLS, ['test_a (__main__.OtherTests)', 'test_b (__main__.OtherTests.test_b)'], 'did-not-fail', 'hold'],
         [CLS, ['test_a (__main__.XFencedBoxTests)'], 'did-not-fail', 'hold'],
-        [CLS, ['Platform.Registry.Tests.FencedBoxTests.Nom'], 'did-not-fail', 'hold'],
+        ['PolicyConfigurationTests', ['Platform.Registry.Tests.PolicyConfigurationTests.Nom', 'Platform.Registry.Tests.PolicyConfigurationTests.Other(value: "a.b")'], 'reproduced', 'merge'],
+        ['PolicyConfigurationTests', ['Platform.Registry.Tests.OtherTests.Nom', 'Platform.Registry.Tests.OtherTests.Other'], 'did-not-fail', 'hold'],
+        ['ConfigurationTests', ['Platform.Registry.Tests.PolicyConfigurationTests.Nom'], 'did-not-fail', 'hold'],
       ]) {
         const SERVED = { 206: pr(206, [PY], { statedMutations: [stated(cell, names.length, 104, PY)] }) }
         env = run({ prs: [206] }, SERVED, { mutate: { [cell]: { ...row('reproduced', names.length, 104), failingNames: names } } })
