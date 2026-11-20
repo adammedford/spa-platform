@@ -56,6 +56,13 @@ public sealed class HostingHost : IAsyncDisposable
     /// <summary>The feature the terminal last saw, read when it saw it.</summary>
     public (string AppId, string AppHost, long Revision)? LastSeen => terminal.LastSeen;
 
+    /// <summary>
+    /// The <see cref="IFragmentFeature"/> the terminal last saw, null when the request carried none,
+    /// and the entry <see cref="IAppFeature"/> pinned beside it, so a test can tell the fragment came
+    /// from the same snapshot as the app.
+    /// </summary>
+    public (FragmentDefinition Fragment, AppDefinition App)? LastFragment => terminal.LastFragment;
+
     /// <summary>Runs in the terminal before it reads the feature: a swap mid-request goes here.</summary>
     public Action? DuringRequest
     {
@@ -83,14 +90,21 @@ public sealed class HostingHost : IAsyncDisposable
     /// The instance <c>/readyz</c> names, registered before <c>AddPlatformHosting</c>; null leaves the
     /// entry point's own, which off ECS is an id generated for this host.
     /// </param>
+    /// <param name="registryAs">
+    /// What the stages see as <see cref="IRegistry"/>, given the in-memory one <see cref="Registry"/>
+    /// drives; null gives them that one. A test that must tell one read of <c>Current</c> from two
+    /// wraps it here.
+    /// </param>
     public static async Task<HostingHost> StartAsync(
         RegistrySnapshot initial,
         CancellationToken ct,
         IObjectStore? store = null,
         bool telemetry = false,
-        GatewayInstance? instance = null)
+        GatewayInstance? instance = null,
+        Func<InMemoryRegistry, IRegistry>? registryAs = null)
     {
         InMemoryRegistry registry = new(initial);
+        IRegistry seen = registryAs?.Invoke(registry) ?? registry;
         Terminal terminal = new();
 
         StageHost stage = await StageHost.StartAsync(
@@ -99,7 +113,7 @@ public sealed class HostingHost : IAsyncDisposable
                 TelemetryStandIn = telemetry,
                 Services = builder =>
                 {
-                    builder.Services.AddSingleton<IRegistry>(registry);
+                    builder.Services.AddSingleton(seen);
                     if (store is not null)
                     {
                         builder.Services.AddSingleton(store);
@@ -165,6 +179,8 @@ public sealed class HostingHost : IAsyncDisposable
 
         public (string AppId, string AppHost, long Revision)? LastSeen { get; private set; }
 
+        public (FragmentDefinition Fragment, AppDefinition App)? LastFragment { get; private set; }
+
         public Action? DuringRequest { get; set; }
 
         public Task RunAsync(HttpContext context, CancellationToken ct)
@@ -173,6 +189,8 @@ public sealed class HostingHost : IAsyncDisposable
             DuringRequest?.Invoke();
             IAppFeature? feature = context.Features.Get<IAppFeature>();
             LastSeen = feature is null ? null : (feature.App.AppId, feature.App.Host, feature.Snapshot.Revision);
+            IFragmentFeature? fragment = context.Features.Get<IFragmentFeature>();
+            LastFragment = fragment is null || feature is null ? null : (fragment.Fragment, feature.App);
             return context.Response.WriteAsync(Passed, ct);
         }
     }

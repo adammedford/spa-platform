@@ -119,4 +119,105 @@ public sealed class FingerprintTests
         // Not a fingerprint of the document: the revision is outside every entry.
         Assert.Equal(before.Apps[0].Fingerprint, Only(Examples.Registry(d => d["revision"] = 99)).Fingerprint);
     }
+    /// <summary>
+    /// The whole-entry fingerprint (#992): a change to any one field of a fragment changes its entry's
+    /// fingerprint, so every scheme of that entry is evicted together. Every leaf of the example's
+    /// fragment is changed in turn, so a field the canonical form dropped would stay equal here.
+    /// </summary>
+    [Fact]
+    public void A_change_to_any_one_field_of_a_fragment_changes_the_entrys_fingerprint()
+    {
+        JsonObject entry = Examples.Entry(Examples.Registry(), 0);
+        string original = EntryFingerprint.Of(entry);
+        List<string> leaves = [];
+
+        foreach ((string path, Action<JsonObject> change) in FragmentLeaves(entry["fragments"]![0]!, "/fragments/0"))
+        {
+            JsonObject changed = entry.DeepClone().AsObject();
+            change(changed);
+            Assert.True(original != EntryFingerprint.Of(changed), $"a change at {path} left the fingerprint as it was");
+            leaves.Add(path);
+        }
+
+        // Every field of the example fragment, its apis[0] and its csp included.
+        Assert.Equal(12, leaves.Count);
+    }
+
+    [Fact]
+    public void A_fragment_change_through_the_validator_changes_its_entry_and_no_other()
+    {
+        RegistryValidation before = RegistryValidator.Validate(Examples.RegistryWithSecondEntry().ToJsonString(), Examples.Policy(), null);
+
+        foreach (Action<JsonObject> change in new Action<JsonObject>[]
+        {
+            fragment => fragment["release"] = "2026-10-13.1",
+            fragment => fragment["entry"] = "remote.js",
+            fragment => fragment["fragmentId"] = "reports-2",
+            fragment => fragment["oauth"]!["clientSecretRef"] = "ssm:/spa-platform/poc/apps/app2/fragments/reports/client-secret:2",
+            fragment => fragment["csp"] = new JsonObject { ["font-src"] = new JsonArray("https://fonts.spa-poc.test") },
+            fragment => fragment["apis"]![0]!["timeoutSeconds"] = 21,
+        })
+        {
+            RegistryValidation after = RegistryValidator.Validate(
+                Examples.RegistryWithSecondEntry(e => change(e["fragments"]![0]!.AsObject())).ToJsonString(), Examples.Policy(), null);
+            Assert.True(after.IsValid, string.Join('\n', after.Errors));
+
+            Assert.Equal(before.Apps[0].Fingerprint, after.Apps[0].Fingerprint);
+            Assert.NotEqual(before.Apps[1].Fingerprint, after.Apps[1].Fingerprint);
+        }
+    }
+
+    /// <summary>Each leaf under <paramref name="node"/>, with a change that gives it another value.</summary>
+    private static IEnumerable<(string Path, Action<JsonObject> Change)> FragmentLeaves(JsonNode node, string path)
+    {
+        switch (node)
+        {
+            case JsonObject value:
+                foreach (KeyValuePair<string, JsonNode?> member in value)
+                {
+                    foreach ((string Path, Action<JsonObject> Change) leaf in FragmentLeaves(member.Value!, $"{path}/{member.Key}"))
+                    {
+                        yield return leaf;
+                    }
+                }
+
+                break;
+            case JsonArray value when value.All(item => item is JsonValue):
+                // An array of strings is one field: its author's list.
+                yield return (path, entry => At(entry, path).AsArray().Add("changed"));
+                break;
+            case JsonArray value:
+                for (int i = 0; i < value.Count; i++)
+                {
+                    foreach ((string Path, Action<JsonObject> Change) leaf in FragmentLeaves(value[i]!, $"{path}/{i}"))
+                    {
+                        yield return leaf;
+                    }
+                }
+
+                break;
+            default:
+                string parent = path[..path.LastIndexOf('/')];
+                string name = path[(path.LastIndexOf('/') + 1)..];
+                yield return (path, entry =>
+                {
+                    JsonNode owner = At(entry, parent);
+                    owner[name] = node.GetValueKind() == System.Text.Json.JsonValueKind.Number
+                        ? node.GetValue<int>() + 1
+                        : node.GetValue<string>() + "-changed";
+                });
+                break;
+        }
+    }
+
+    private static JsonNode At(JsonNode root, string path)
+    {
+        JsonNode node = root;
+        foreach (string segment in path.Split('/', StringSplitOptions.RemoveEmptyEntries))
+        {
+            node = node is JsonArray array ? array[int.Parse(segment, System.Globalization.CultureInfo.InvariantCulture)]! : node[segment]!;
+        }
+
+        return node;
+    }
 }

@@ -44,17 +44,6 @@ internal sealed partial class Assets(ILogger logger)
     private const string RefusedShell = "shell";
     private const string RefusedAsset = "asset";
 
-    /// <summary>
-    /// The paths an SPA cannot serve (contracts/http-contract.md, Endpoints). They are matched without
-    /// regard to case, as endpoint routing and the request gate match them
-    /// (https://learn.microsoft.com/dotnet/api/microsoft.aspnetcore.http.pathstring.startswithsegments):
-    /// <c>/BFF/x</c> is the platform's path in another case, not a file the SPA may ship.
-    /// </summary>
-    private static readonly PathString[] Reserved =
-    [
-        "/bff", "/api", "/signin-oidc", "/signout-callback-oidc", "/signout-oidc", "/healthz", "/readyz",
-    ];
-
     // The framework's own extension table, so the type an object was stored with is never read
     // (s3-layout.md: content type comes from the file extension).
     private static readonly FileExtensionContentTypeProvider ContentTypes = new();
@@ -83,11 +72,35 @@ internal sealed partial class Assets(ILogger logger)
             return;
         }
 
-        if (IsReserved(request.Path))
+        // The paths reserved outright, served from no release (contracts/http-contract.md, Endpoints):
+        // PlatformPaths' list, /fragments/{seg}/api among them, matched without regard to case, as
+        // endpoint routing and the request gate match them. /BFF/x is the platform's path in another
+        // case, not a file the SPA may ship.
+        if (PlatformPaths.IsReservedOutright(request.Path))
         {
-            context.Response.Headers.CacheControl = NoStoreCacheControl;
-            await RejectAsync(context, RuleIds.PathReserved);
+            await RejectReservedAsync(context);
             return;
+        }
+
+        // /fragments/ is reserved from the shell's release on every host (#992): nothing under it is
+        // read from the shell's prefix. A host whose shell has no fragments refuses it as reserved; on
+        // one with fragments it is a fragment's namespace, served from the fragment host resolution
+        // pinned, and a segment that names none of the entry's fragments is an unknown fragmentId.
+        FragmentDefinition? fragment = null;
+        if (PlatformPaths.IsReservedFromShell(request.Path))
+        {
+            if (app.Fragments.IsEmpty)
+            {
+                await RejectReservedAsync(context);
+                return;
+            }
+
+            fragment = context.Features.Get<IFragmentFeature>()?.Fragment;
+            if (fragment is null)
+            {
+                await NotFoundAsync(context);
+                return;
+            }
         }
 
         // RawTarget is empty only when no server set it (a TestServer), and then there is nothing
@@ -102,15 +115,37 @@ internal sealed partial class Assets(ILogger logger)
             return;
         }
 
-        if (relative.Length == 0 || (!AssetPath.HasExtension(relative) && AcceptsHtml(request)))
+        string key;
+        string release;
+        if (fragment is not null)
         {
-            relative = IndexHtml;
-        }
+            // /fragments/{fragmentId}/{rest} maps to the fragment's live release plus {rest}, with no
+            // index.html fallback (contracts/s3-layout.md). The prefix comes from the pinned fragment,
+            // never from the URL's segment; {rest} is the tail of the path validated above. An empty
+            // {rest} names the release root, which is no key.
+            relative = PlatformPaths.FragmentOf(request.Path) is { } under ? AssetPath.Validate(under.Remainder.Value) : null;
+            if (string.IsNullOrEmpty(relative))
+            {
+                await NotFoundAsync(context);
+                return;
+            }
 
-        // AppId and Release are constrained by registry.schema.json to characters that cannot leave
-        // their segment, and the registry validator (task 2.1) rejects a document that breaks them,
-        // so the prefix is fixed before the request path is appended.
-        string key = $"apps/{app.AppId}/releases/{app.Release}/{relative}";
+            release = fragment.Release;
+            key = $"apps/{app.AppId}/fragments/{fragment.FragmentId}/releases/{release}/{relative}";
+        }
+        else
+        {
+            if (relative.Length == 0 || (!AssetPath.HasExtension(relative) && AcceptsHtml(request)))
+            {
+                relative = IndexHtml;
+            }
+
+            // AppId and Release are constrained by registry.schema.json to characters that cannot leave
+            // their segment, and the registry validator (task 2.1) rejects a document that breaks them,
+            // so the prefix is fixed before the request path is appended.
+            release = app.Release;
+            key = $"apps/{app.AppId}/releases/{release}/{relative}";
+        }
 
         string? ifNoneMatch = StringValues.IsNullOrEmpty(request.Headers.IfNoneMatch)
             ? null
@@ -119,7 +154,8 @@ internal sealed partial class Assets(ILogger logger)
         // The shell is the resolved key whose release-relative path is exactly index.html, compared
         // ordinally: /, /index.html and every extensionless fallback, one under /assets/ included, but
         // not /Index.html or /assets/index.html (change request issue-381-object-read-refusal, item 3).
-        bool shell = string.Equals(relative, IndexHtml, StringComparison.Ordinal);
+        // No key under a fragment is the app's document: an absent one is an absent asset, 404.
+        bool shell = fragment is null && string.Equals(relative, IndexHtml, StringComparison.Ordinal);
 
         IObjectStore store = context.RequestServices.GetRequiredService<IObjectStore>();
         StoredObject? stored;
@@ -155,7 +191,7 @@ internal sealed partial class Assets(ILogger logger)
             // a rejection, and the live snapshot is unaffected (contracts/http-contract.md -> Errors,
             // #543, #907). Not when the request's abort token is what ended the read: the client went
             // away, nobody is left to read a body, and the failure propagates as it did before.
-            await StoreUnavailableAsync(context, app, shell, failure);
+            await StoreUnavailableAsync(context, app.AppId, release, shell, failure);
             return;
         }
 
@@ -231,24 +267,18 @@ internal sealed partial class Assets(ILogger logger)
     /// One Warning naming the app and the exception's type. Never the exception itself, whose message
     /// names the key, and never the key, which holds the client's path.
     /// </summary>
-    private Task StoreUnavailableAsync(HttpContext context, AppDefinition app, bool shell, Exception failure)
+    private Task StoreUnavailableAsync(HttpContext context, string appId, string release, bool shell, Exception failure)
     {
-        LogStoreUnavailable(logger, app.AppId, app.Release, shell ? RefusedShell : RefusedAsset, failure.GetType().FullName ?? failure.GetType().Name);
+        LogStoreUnavailable(logger, appId, release, shell ? RefusedShell : RefusedAsset, failure.GetType().FullName ?? failure.GetType().Name);
         context.Response.Headers.CacheControl = NoStoreCacheControl;
         return Problems.WriteAsync(context, Problems.StoreUnavailable);
     }
 
-    private static bool IsReserved(PathString path)
+    /// <summary>404 under <c>path.reserved</c>, never cached, read before any key is.</summary>
+    private Task RejectReservedAsync(HttpContext context)
     {
-        foreach (PathString reserved in Reserved)
-        {
-            if (path.StartsWithSegments(reserved, StringComparison.OrdinalIgnoreCase))
-            {
-                return true;
-            }
-        }
-
-        return false;
+        context.Response.Headers.CacheControl = NoStoreCacheControl;
+        return RejectAsync(context, RuleIds.PathReserved);
     }
 
     /// <summary>

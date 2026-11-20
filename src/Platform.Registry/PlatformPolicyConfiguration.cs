@@ -29,7 +29,28 @@ public static class PlatformPolicyConfiguration
             Issuers: configuration.GetSection("Issuers").GetChildren()
                 .Select(section => (section.Key, Issuer: Issuer(section)))
                 .Where(issuer => issuer.Issuer is not null)
-                .ToImmutableDictionary(issuer => issuer.Key, issuer => issuer.Issuer!, StringComparer.Ordinal));
+                .ToImmutableDictionary(issuer => issuer.Key, issuer => issuer.Issuer!, StringComparer.Ordinal))
+        {
+            FragmentsPerShell = FragmentsPerShell(configuration["Policy:FragmentsPerShell"]),
+        };
+    }
+
+    /// <summary>
+    /// <c>Policy:FragmentsPerShell</c>: absent, the record's placeholder (5; platform-config.schema.json
+    /// says "absent, it is 5"); present, a non-negative integer. Anything else fails closed at 0, so an
+    /// entry with any fragment is refused under <see cref="RegistryRules.FragmentsPerShellExceeded"/>
+    /// rather than admitted under a cap nobody set (#992).
+    /// </summary>
+    private static int FragmentsPerShell(string? value)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            return new PlatformPolicy([], [], ImmutableDictionary<string, IssuerDefinition>.Empty).FragmentsPerShell;
+        }
+
+        return int.TryParse(value, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out int cap)
+            ? cap
+            : 0;
     }
 
     // GetChildren orders array indexes numerically, so the list keeps the configuration's order.

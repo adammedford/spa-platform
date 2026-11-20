@@ -35,6 +35,19 @@ public static class RegistryRules
     public const string UnknownIssuer = "unknown-issuer";
     public const string PortOutOfRange = "port-out-of-range";
 
+    /// <summary>A <c>fragmentId</c> repeated within one entry (the fragments spec, #961; #992).</summary>
+    public const string DuplicateFragmentId = "duplicate-fragment-id";
+
+    /// <summary>A fragment's <c>oauth.issuer</c> differs from its shell's: one issuer per host (#961; #992).</summary>
+    public const string FragmentIssuerMismatch = "fragment-issuer-mismatch";
+
+    /// <summary>
+    /// An entry lists more fragments than <c>Policy:FragmentsPerShell</c> allows
+    /// (<see cref="Platform.Abstractions.PlatformPolicy.FragmentsPerShell"/>). Configuration only: the
+    /// schema sets no <c>maxItems</c> (#961; #992).
+    /// </summary>
+    public const string FragmentsPerShellExceeded = "fragments-per-shell-exceeded";
+
     /// <summary>
     /// The README row "A schema-valid integer the platform cannot hold or apply": a <c>revision</c>
     /// beyond Int64; a <c>timeoutSeconds</c> above the schema's <c>maximum</c>, the longest timeout the
