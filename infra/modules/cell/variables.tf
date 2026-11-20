@@ -410,6 +410,41 @@ variable "session_max_sessions" {
   }
 }
 
+# --- Fragments (#961): the two policy values a registry entry's fragments answer to ---------------
+#
+# Both are optional in the contract, with the gateway's placeholder standing in for an absent one, so
+# both default to null here and null sets no key (ecs.tf). Each is refused below 1 when set: the
+# schema lets FragmentsPerShell be 0, but a cell that sets the cap to 0 refuses every entry that
+# lists a fragment, which is what leaving fragments out of the registry already does.
+
+variable "fragments_per_shell" {
+  description = <<-EOT
+    The most fragments one registry entry may list, or null to leave the key out and take the
+    gateway's placeholder (contracts/platform-config.schema.json -> Policy.FragmentsPerShell).
+  EOT
+  type        = number
+  default     = null
+
+  validation {
+    condition     = var.fragments_per_shell == null ? true : (var.fragments_per_shell >= 1 && floor(var.fragments_per_shell) == var.fragments_per_shell)
+    error_message = "fragments_per_shell is null, or a whole number of fragments, at least 1 (contracts/platform-config.schema.json -> Policy.FragmentsPerShell)."
+  }
+}
+
+variable "merge_budget" {
+  description = <<-EOT
+    How many attempts a fragment callback's versioned replace makes, or null to leave the key out
+    and take the gateway's placeholder (contracts/platform-config.schema.json -> Policy.MergeBudget).
+  EOT
+  type        = number
+  default     = null
+
+  validation {
+    condition     = var.merge_budget == null ? true : (var.merge_budget >= 1 && floor(var.merge_budget) == var.merge_budget)
+    error_message = "merge_budget is null, or a whole number of attempts, at least 1 (contracts/platform-config.schema.json -> Policy.MergeBudget)."
+  }
+}
+
 variable "log_retention_days" {
   description = <<-EOT
     How long the task's log group keeps a log. Explicit, because the alternative is not a default
