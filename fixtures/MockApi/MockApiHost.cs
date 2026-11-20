@@ -85,7 +85,7 @@ public sealed class MockApiHost : IAsyncDisposable
         internal static async Task<RunningListener> StartAsync(
             MockApiOptions options, ApiListenerOptions listener, CancellationToken ct)
         {
-            ClientAdmission admission = new(listener.AdmittedClients);
+            ClientAdmission admission = new(listener.AdmittedClients, listener.RouteAdmissions);
 
             WebApplicationBuilder builder = WebApplication.CreateSlimBuilder(new WebApplicationOptions
             {
@@ -130,10 +130,11 @@ public sealed class MockApiHost : IAsyncDisposable
                     // would otherwise wait out the library's five-minute default.
                     ClockSkew = TimeSpan.Zero,
 
-                    // Null means this API checks no audience, because its app passes no resource and
-                    // its tokens carry no aud at all.
-                    ValidateAudience = listener.Audience is not null,
-                    ValidAudience = listener.Audience,
+                    // None means this API checks no audience, because its app passes no resource and
+                    // its tokens carry no aud at all. More than one is an upstream a shell and its
+                    // fragments both name, each bound to its own resource (#998).
+                    ValidateAudience = !listener.ValidAudiences.IsEmpty,
+                    ValidAudiences = listener.ValidAudiences,
                 };
 
                 bearer.Events = new JwtBearerEvents

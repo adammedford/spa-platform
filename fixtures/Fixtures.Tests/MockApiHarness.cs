@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Net.Http.Headers;
 using System.Text.Json;
 using MockApi;
@@ -35,20 +36,24 @@ internal sealed class MockApiHarness : IAsyncDisposable
 
     public HttpClient Http { get; }
 
-    public static async Task<MockApiHarness> StartAsync()
+    public static Task<MockApiHarness> StartAsync() =>
+        StartAsync(
+        [
+            new ApiListenerOptions("orders", Port: 0, ScopeIdentifier: Orders, Audience: Orders,
+                AdmittedClients: [IdpHarness.Client1]),
+            new ApiListenerOptions("reports", Port: 0, ScopeIdentifier: Reports, Audience: null,
+                AdmittedClients: [IdpHarness.Client2]),
+        ]);
+
+    /// <summary>The provider and a mock API with the listeners a test names (#998's fragment cases).</summary>
+    public static async Task<MockApiHarness> StartAsync(ImmutableArray<ApiListenerOptions> listeners)
     {
         IdpHarness idp = await IdpHarness.StartAsync();
 
         MockApiHost api = await MockApiHost.StartAsync(new MockApiOptions(
             Issuer: idp.Idp.BaseUrl,
             MetadataAddress: idp.Idp.DiscoveryUri,
-            Listeners:
-            [
-                new ApiListenerOptions("orders", Port: 0, ScopeIdentifier: Orders, Audience: Orders,
-                    AdmittedClients: [IdpHarness.Client1]),
-                new ApiListenerOptions("reports", Port: 0, ScopeIdentifier: Reports, Audience: null,
-                    AdmittedClients: [IdpHarness.Client2]),
-            ]),
+            Listeners: listeners),
             TestContext.Current.CancellationToken);
 
         return new MockApiHarness(idp, api, new HttpClient());
