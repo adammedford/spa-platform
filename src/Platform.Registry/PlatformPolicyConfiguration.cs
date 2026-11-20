@@ -32,7 +32,26 @@ public static class PlatformPolicyConfiguration
                 .ToImmutableDictionary(issuer => issuer.Key, issuer => issuer.Issuer!, StringComparer.Ordinal))
         {
             FragmentsPerShell = FragmentsPerShell(configuration["Policy:FragmentsPerShell"]),
+            MergeBudget = MergeBudget(configuration["Policy:MergeBudget"]),
         };
+    }
+
+    /// <summary>
+    /// <c>Policy:MergeBudget</c>: absent, the record's placeholder (3; platform-config.schema.json says
+    /// "absent, it is 3"); present, an integer of at least 1. Anything else fails closed at 1, a single
+    /// attempt, so a budget nobody set never adds retries to a fragment callback's write (#1445).
+    /// </summary>
+    private static int MergeBudget(string? value)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            return new PlatformPolicy([], [], ImmutableDictionary<string, IssuerDefinition>.Empty).MergeBudget;
+        }
+
+        return int.TryParse(value, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out int budget)
+            && budget >= 1
+            ? budget
+            : 1;
     }
 
     /// <summary>
