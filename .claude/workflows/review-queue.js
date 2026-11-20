@@ -1197,7 +1197,14 @@ const mutationRow = (n, given, i, got) => {
   // A nomination's cls, from a cell 'test_x (pkg.Class)', is that class when unittest printed the
   // failing name, and nothing when xUnit did (#808); see nominated().
   const nameIn = (f) => (m.cls && UNITTEST_PRINTED.test(f) ? `${m.cls}.${m.test}` : m.test)
-  const isNamed = (f) => wholeFile || `.${dotted(f)}`.endsWith(`.${nameIn(f)}`)
+  // A cell may name a unittest class, which unittest never prints alone: it prints each failing
+  // method of it, 'test_x (pkg.Class)' or 'test_x (pkg.Class.test_x)' (#1416). On #1406 the stated
+  // cell FencedBoxTests went red on all five of its methods, matched none, and read did-not-fail.
+  // So a failing name unittest printed is the cell's too when its class, its dotted name less the
+  // method, ends in the cell at a dot. A name xUnit printed is matched by the rule above alone.
+  const classOf = (f) => dotted(f).split('.').slice(0, -1).join('.')
+  const isClass = (f) => UNITTEST_PRINTED.test(f) && `.${classOf(f)}`.endsWith(`.${m.test}`)
+  const isNamed = (f) => wholeFile || `.${dotted(f)}`.endsWith(`.${nameIn(f)}`) || isClass(f)
   const caughtElsewhere = row.result === 'reproduced' && row.failingNames.length > 0 && !row.failingNames.some(isNamed)
   // A Node companion, identified by its project or by nodeFile above, prints no test names: a
   // check is a block of the file, and its failures are its fail() messages, which no cell such as
