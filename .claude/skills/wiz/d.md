@@ -62,7 +62,9 @@ rev-parse HEAD`).
 fast-forward first (rule 8) and name the commit: D0 deploys the commit `main` is on, which is the
 one #348 Q34 tags, and its CI run must be green. Then N's steps 1 to 6 from the first root that is
 absent, with `terraform.tfvars` in its Phase 1 shape: N step 3's rewrite, which
-`tools/scripts/platform-tfvars.sh` (#470) does, and no G6 key. N's posts for the identity and apps
+`tools/scripts/platform-tfvars.sh --bastion` (#470, #1397) does, with `bastion = true` and
+`bastion_image` beside the Phase 1 keys, and no G6 key. Stage 0's check admits the bastion's two keys for this:
+the bastion is the tunnel's hop (#1168), and without it `deploy.sh` and `tunnel.sh` refuse the root. N's posts for the identity and apps
 roots, seed and the deploy go where N sends them; D0's own post is the one below. Once N step 6's
 tunnel, started after `deploy.sh`'s pass line, is up and `verify-tunnel.sh /healthz` passes, the
 sitting browser starts, and D0's live login is its own. In D the human opens no browser; each
@@ -145,7 +147,8 @@ cat infra/envs/poc/platform/terraform.tfvars.example      # read it to the human
 ```
 
 Show the G6 block as the example carries it, each key with the value the example documents for the
-G6 run, and on approval append exactly those lines, uncommented, to `terraform.tfvars` (a heredoc
+G6 run: the continuity keys Stage 0's check lists, never the bastion's two, which D0's file already
+sets and which a second line would set twice. On approval append exactly those lines, uncommented, to `terraform.tfvars` (a heredoc
 with `>>`, never an edit of the Phase 1 lines); then `diff "$E/terraform.tfvars.phase1"
 infra/envs/poc/platform/terraform.tfvars`, so the human sees the lines added and nothing else
 changed. The plan goes into the bundle, since it holds the cell's values, and is shown before the

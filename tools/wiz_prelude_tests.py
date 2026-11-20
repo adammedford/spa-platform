@@ -84,7 +84,15 @@ its flags before any `--`, runs after D0's reads and before its post, and reads 
 summary, since an all-skipped run exits 0; and that D0's retry is one `reload`, with the sitting
 browser's own verbs and `signed-in` token, and every failed D0 a rule 7 stop that offers D10.
 
-Checkout inputs: .claude/skills/wiz/*.md .gitignore infra/modules/idp-cognito/main.tf tests/e2e/Program.cs tests/e2e/Deployed/LoginKindsTests.cs tests/e2e/Stack/StackSwitch.cs tests/e2e/Stack/RollingDeployLoop.cs tests/e2e/Stack/ContinuityObserver.cs tests/e2e/Stack/DeployedStack.cs tools/wiz_d6.sh tools/wiz_row_post.py tools/wiz_redact.py tests/e2e/SittingBrowser/Observations.cs tests/e2e/SittingBrowser/ObservationLine.cs tests/e2e/SittingBrowser/SittingBrowser.cs tests/e2e/SittingBrowser/SittingCommand.cs
+**The bastion in sitting D and from nothing (#1395).** `deploy.sh` and `tunnel.sh` refuse a platform
+root without `bastion = true` (#1168), and Stage 0 took the bastion's keys for G6 inputs while N
+step 3 wrote neither. `SkillAdmitsTheBastionToSittingD` runs Stage 0's own check against the tree's
+example and a file holding every key `platform-tfvars.sh` writes, read from the script: it lists no G6
+key there and still lists a continuity key set beside them. It holds N step 3 to `--bastion` in both
+forms, step 4's count to the bastion's service, D0 and D2 to the bastion's two keys, and C1 to the
+bastion's task as the hop.
+
+Checkout inputs: .claude/skills/wiz/*.md .gitignore infra/envs/poc/platform/terraform.tfvars.example tools/scripts/platform-tfvars.sh infra/modules/idp-cognito/main.tf tests/e2e/Program.cs tests/e2e/Deployed/LoginKindsTests.cs tests/e2e/Stack/StackSwitch.cs tests/e2e/Stack/RollingDeployLoop.cs tests/e2e/Stack/ContinuityObserver.cs tests/e2e/Stack/DeployedStack.cs tools/wiz_d6.sh tools/wiz_row_post.py tools/wiz_redact.py tests/e2e/SittingBrowser/Observations.cs tests/e2e/SittingBrowser/ObservationLine.cs tests/e2e/SittingBrowser/SittingBrowser.cs tests/e2e/SittingBrowser/SittingCommand.cs
 """
 from __future__ import annotations
 
@@ -1011,6 +1019,116 @@ class SkillProvesD0sLoginKinds(unittest.TestCase):
 
     def test_every_failed_d0_is_a_rule_7_stop_that_offers_d10(self) -> None:
         self.assertIn("**Every failed D0 is a rule 7 stop that offers D10", self.d0)
+
+
+class SkillAdmitsTheBastionToSittingD(unittest.TestCase):
+    """N step 3 declares the bastion, and Stage 0 and D0 admit what it writes (#1395).
+
+    `deploy.sh` and `tunnel.sh` refuse a platform root without `bastion = true` (#1168). Stage 0's
+    check took every key of the example beyond the Phase 1 eight as a G6 input, so a file that set
+    the bastion held D back, and N step 3 wrote no bastion key, so D0 and sitting C from nothing
+    reached a `tunnel.sh` that refused.
+    """
+
+    PLATFORM = ROOT / "infra" / "envs" / "poc" / "platform"
+    TFVARS_SCRIPT = ROOT / "tools" / "scripts" / "platform-tfvars.sh"
+
+    @staticmethod
+    def flat(text: str) -> str:
+        return " ".join(text.split())
+
+    def stage_0_check(self) -> str:
+        """The one Python block of "Offering D" in SKILL.md, as the sitting runs it."""
+        section = re.search(r"\*\*Offering D\.\*\*.*?(?=^## )", (SKILL / "SKILL.md").read_text(), re.S | re.M)
+        self.assertIsNotNone(section, "SKILL.md has no Offering D section")
+        blocks = re.findall(r"^python3 -I - <<'EOF'\n(.*?)^EOF$", section.group(0), re.M | re.S)
+        self.assertEqual(len(blocks), 1, f"Offering D should hold one Python block: {blocks}")
+        return blocks[0]
+
+    def written_keys(self) -> set[str]:
+        """The keys platform-tfvars.sh writes with --bastion, read from the script: issuers and its scalars."""
+        keys = set(re.findall(r'set_scalar\("([a-z_]+)"', self.TFVARS_SCRIPT.read_text()))
+        self.assertIn("bastion", keys, "platform-tfvars.sh writes no bastion key")
+        return keys | {"issuers"}
+
+    def run_check(self, extra: str = "") -> list[str]:
+        """Runs the check from a root holding the tree's example and a file N step 3 with --bastion leaves."""
+        work = pathlib.Path(tempfile.mkdtemp(prefix="wiz-stage0-")).resolve()
+        self.addCleanup(shutil.rmtree, work, True)
+        root = work / "infra" / "envs" / "poc" / "platform"
+        root.mkdir(parents=True)
+        example = (self.PLATFORM / "terraform.tfvars.example").read_text()
+        shutil.copy2(self.PLATFORM / "terraform.tfvars.example", root / "terraform.tfvars.example")
+        written = self.written_keys()
+        # The example with each key the script writes uncommented, as the script leaves it, and an issuers block.
+        tfvars = re.sub(r"^#\s*([a-z_]+)(\s*=)", lambda m: m.group(1) + m.group(2) if m.group(1) in written else m.group(0),
+                        example, flags=re.M)
+        tfvars += '\nissuers = {\n  "cognito-poc" = {\n    authority = "https://example.test"\n  }\n}\n' + extra
+        (root / "terraform.tfvars").write_text(tfvars)
+        done = subprocess.run(["python3", "-I", "-"], input=self.stage_0_check(), cwd=work, capture_output=True,
+                              text=True, timeout=60, check=False)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        return done.stdout.splitlines()
+
+    def test_a_file_n_step_3_writes_with_the_bastion_sets_no_g6_key(self) -> None:
+        lines = self.run_check()
+        self.assertEqual(lines[1], "G6 keys set in terraform.tfvars: []", lines)
+
+    def test_the_bastion_keys_are_not_g6_keys_and_the_continuity_keys_are(self) -> None:
+        listed = self.run_check()[0]
+        for key in ("bastion", "bastion_image"):
+            self.assertNotIn(f"'{key}'", listed)
+        for key in ("multi_task", "session_store", "data_protection_parameter_prefix", "data_protection_kms_key_id"):
+            self.assertIn(f"'{key}'", listed)
+
+    def test_a_continuity_key_beside_the_bastion_still_holds_d_back(self) -> None:
+        lines = self.run_check("multi_task = true\n")
+        self.assertEqual(lines[1], "G6 keys set in terraform.tfvars: ['multi_task']", lines)
+
+    def test_stage_0s_bullet_and_d0_name_the_bastion_keys_as_admitted(self) -> None:
+        skill = self.flat((SKILL / "SKILL.md").read_text())
+        self.assertIn("beyond the Phase 1 eight and the bastion's two, `bastion` and `bastion_image`", skill)
+        d0 = re.search(r"\*\*D0, the fresh deploy.*?(?=\*\*D2, the cutover)", (SKILL / "d.md").read_text(), re.S)
+        self.assertIsNotNone(d0, "d.md has no D0 section ending at D2")
+        self.assertIn("with `bastion = true` and `bastion_image` beside the Phase 1 keys, and no G6 key",
+                      self.flat(d0.group(0)))
+
+    def test_d2_appends_no_bastion_key_d0s_file_already_sets(self) -> None:
+        # A key set twice in terraform.tfvars is an error at plan, so the cutover appends the continuity block alone.
+        d2 = re.search(r"\*\*D2, the cutover.*?(?=^\*\*D)", (SKILL / "d.md").read_text(), re.S | re.M)
+        self.assertIsNotNone(d2, "d.md has no D2 section")
+        self.assertIn("never the bastion's two, which D0's file already sets", self.flat(d2.group(0)))
+
+    def n_step_3(self) -> str:
+        n_section = re.search(r"\*\*N, from nothing.*?(?=\*\*C4, the gate tags\.\*\*)", SKILL_TEXT, re.S)
+        self.assertIsNotNone(n_section)
+        step = re.search(r"^3\. (.*?)(?=^4\. )", n_section.group(0), re.M | re.S)
+        self.assertIsNotNone(step)
+        return self.flat(step.group(1))
+
+    def test_n_step_3_runs_platform_tfvars_with_the_bastion_in_both_forms(self) -> None:
+        runs = re.findall(r"`shown tools/scripts/platform-tfvars\.sh([^`]*)`", self.n_step_3())
+        self.assertEqual(len(runs), 2, f"N step 3 should run the script in two forms: {runs}")
+        self.assertEqual(runs[0], " --bastion")
+        self.assertEqual(runs[1], " --bastion --sample-digest sha256:<64 hex>")
+        # The option is the script's own: a rename there has to fail here.
+        self.assertRegex(self.TFVARS_SCRIPT.read_text(), re.compile(r"^\s*--bastion\)", re.M))
+
+    def test_n_step_4_counts_the_bastions_service_beside_the_gateways(self) -> None:
+        n_section = re.search(r"\*\*N, from nothing.*?(?=\*\*C4, the gate tags\.\*\*)", SKILL_TEXT, re.S)
+        step = re.search(r"^4\. (.*?)(?=^5\. )", n_section.group(0), re.M | re.S)
+        self.assertIsNotNone(step)
+        text = self.flat(step.group(1))
+        self.assertIn("one gateway service and, under `bastion`, the bastion's one", text)
+        self.assertNotIn("one target group, one service,", text)
+
+    def test_c1_names_the_bastions_task_as_the_tunnels_hop(self) -> None:
+        c1 = re.search(r"\*\*C1, the deploy.*?(?=\*\*C2, )", (SKILL / "c.md").read_text(), re.S)
+        self.assertIsNotNone(c1, "c.md has no C1 section")
+        text = self.flat(c1.group(0))
+        self.assertIn("Its hop is the bastion's task (#1168), never a gateway task", text)
+        for stale in ("a task of the new deployment", "a task the deployment replaced"):
+            self.assertNotIn(stale, text)
 
 
 class GuardedInit(Sitting):
