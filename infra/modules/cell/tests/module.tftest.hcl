@@ -2661,7 +2661,8 @@ run "a_ring_under_memory_carries_the_ring_and_no_table" {
 
 # Each key counts only when the contract's Policy section names its leaf, so a schema that drops or
 # renames either key fails this run until the module follows. terraform test refuses an assertion
-# that reads the schema alone, as one naming no object of the configuration, so the schema is read
+# that reads the schema alone ("Invalid assert expression: The condition expression must refer to
+# at least one object from elsewhere in the configuration", Terraform 1.11.0), so the schema is read
 # in the same filter that finds the key in the gateway's environment.
 #
 # Mutations that turn this run red: FragmentsPerShell or MergeBudget deleted from
