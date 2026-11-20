@@ -137,6 +137,13 @@ FENCE = re.compile(r"^[ \t]*(`{3,}|~{3,})(.*)$")
 # end. open_boxes reads the item's content column from it, the column a fence inside it is read from.
 ITEM = re.compile(r"^[ \t]*([-+*]|\d{1,9}[.)])([ \t]+|$)")
 
+# A line that interrupts a paragraph and is no fence or item: an ATX heading, a thematic break, which
+# CommonMark reads before an item ("- - -" is a rule), or a block quote. It is never a paragraph's lazy
+# line, so it ends each item it is left of, and after a heading or a rule the next line is no lazy line
+# either (#1431's review). Read as lazy, "- item\n# H\n    ```" kept the item open, the run opened a
+# fence two columns into it, and "  - [ ] Open." after it was hidden although GitHub renders it.
+BREAK = re.compile(r"^[ \t]*(?:(?P<heading>#{1,6}(?:[ \t]|$))|(?P<rule>([-*_])[ \t]*(?:\3[ \t]*){2,}$)|>)")
+
 # Either subject form, as tools/roadmap.py's LANDED_SUBJECT reads it; group 1 is set on a part. This
 # script runs under `python3 -I`, which leaves its own directory off sys.path, so roadmap.py's forms
 # are copied here rather than imported: ID, TICKET_ID, the token split and CLOSING below are its ID,
@@ -413,7 +420,7 @@ def open_boxes(body: str) -> list[tuple[int, str]]:
     (#1431): a run four or more columns right of it opens and shuts nothing, and a fence opened
     inside an item is shut by the first line left of the item's content, which is then read as any
     line outside a fence is. An item ends on a line left of its content, except a paragraph's lazy
-    line, one that follows text and is no fence or item of its own."""
+    line, one that follows text and is no fence, item, heading, rule or block quote of its own."""
     found: list[tuple[int, str]] = []
     fence = ""
     inside = 0  # the content column of the item the fence was opened in, 0 in the body's own
@@ -432,12 +439,14 @@ def open_boxes(body: str) -> list[tuple[int, str]]:
         if not line.strip():
             text = False
             continue
-        marked, item = FENCE.match(line), ITEM.match(line)
-        if marked or item or not text:
+        marked, item, broken = FENCE.match(line), ITEM.match(line), BREAK.match(line)
+        if broken and broken.group("rule"):
+            item = None
+        if marked or item or broken or not text:
             while items and items[-1] > at:
                 items.pop()
         inside = items[-1] if items else 0
-        text = True
+        text = not (broken and (broken.group("heading") or broken.group("rule")))
         if marked and at - inside < 4 and not (marked.group(1)[0] == "`" and "`" in marked.group(2)):
             fence, text = marked.group(1), False
             continue
