@@ -180,6 +180,7 @@ module "cell" {
   teardown_principal_arns = local.teardown_principal_arns
   certificate_domain      = var.certificate_domain
   health_check_path       = var.health_check_path
+  gateway_writable_root   = var.gateway_writable_root
 
   # Task 1.4a. The images, which deploy.sh passes by digest and every other apply passes back
   # unchanged from state, so a routine apply never moves a running image.

@@ -26,6 +26,11 @@ certificate_domain = "spa-poc.test"
 # / on the sample image, /readyz once the gateway runs.
 health_check_path = "/"
 
+# true on the sample image, which writes under /tmp as uid 101 and cannot start
+# on the gateway's read-only root, whose /tmp volume is root-owned 0755 (#1380).
+# deploy.sh applies the gateway with false, and records it in images.auto.tfvars.
+gateway_writable_root = true
+
 # Deletes under apps/ are allowed to the teardown role infra/bootstrap creates,
 # spa-platform-<cell>-teardown, which this root looks up by name: nothing to set
 # here (change request 1.5, ADR-0014). Everyone else is denied, which is what

@@ -77,7 +77,8 @@ class RollbackAppliesThePreviousTaskDefinitionsImages(cell.CompanionTestCase):
 
     def test_the_previous_revision_s_gateway_and_mock_api_are_applied_and_asserted(self):
         case, result = self.rolled_back(deployed_twice())
-        self.assertEqual({"gateway_image": A, "mock_api_image": MOCK_A, "health_check_path": "/readyz"},
+        self.assertEqual({"gateway_image": A, "mock_api_image": MOCK_A, "health_check_path": "/readyz",
+                          "gateway_writable_root": "false"},
                          self.applied(case))
         self.assertEqual(1, len(case.aws("ecs wait services-stable")))
         self.assertIn("pass:", result.stdout)

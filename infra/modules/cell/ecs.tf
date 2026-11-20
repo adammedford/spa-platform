@@ -179,8 +179,10 @@ locals {
     # tunnel's hop; the hop is the bastion's task now (#1167), Exec is off on this service and no
     # session agent writes here. The one writable path is /tmp, the task volume below (#780, answer
     # 3: "the safe contract and not a measured one"). Explicit rather than left to the default,
-    # which is writable.
-    readonlyRootFilesystem = true
+    # which is writable. The one exception is the public sample image's first apply, behind
+    # gateway_writable_root (#1380, variables.tf): that image writes under /tmp as uid 101, which a
+    # root-owned 0755 volume refuses, and its entrypoint edits /etc/nginx/conf.d.
+    readonlyRootFilesystem = !var.gateway_writable_root
 
     # hostPort is the value ECS fills in under awsvpc, where it must equal containerPort, spelled out
     # with the three empty lists below so the definition is the one ECS reads back (#1006). ECS's
@@ -200,12 +202,17 @@ locals {
     # ECS gives a task volume "0755 and the owner as root" unless the image says otherwise
     # (https://docs.aws.amazon.com/AmazonECS/latest/developerguide/bind-mounts.html), and
     # src/Gateway/Dockerfile does not. That the process can write there is not shown by any test
-    # here; it is seen only on a running task (#787, "Not shown by this ticket").
-    mountPoints = [{
-      sourceVolume  = local.gateway_tmp_volume_name
-      containerPath = "/tmp"
-      readOnly      = false
-    }]
+    # here; it is seen only on a running task (#787, "Not shown by this ticket"). Under
+    # gateway_writable_root nothing is mounted (#1380): the mount would shadow the image's own /tmp,
+    # 1777 in the sample image, with the same root-owned 0755 directory on the writable root too. A
+    # for expression rather than a conditional, whose two arms would be tuples of different lengths.
+    mountPoints = [
+      for mount in [{
+        sourceVolume  = local.gateway_tmp_volume_name
+        containerPath = "/tmp"
+        readOnly      = false
+      }] : mount if !var.gateway_writable_root
+    ]
 
     # ECS's values when none is given (#1006): no other container's volumes and no namespaced kernel
     # parameters.
@@ -307,8 +314,12 @@ resource "aws_ecs_task_definition" "gateway" {
   # mount on the task's own ephemeral storage, which Fargate provides and removes with the task: no
   # host path, no Docker volume, no EFS or FSx share, and nothing outlives the task.
   # https://docs.aws.amazon.com/AmazonECS/latest/developerguide/bind-mounts.html
-  volume {
-    name = local.gateway_tmp_volume_name
+  # Absent under gateway_writable_root (#1380), where nothing mounts it.
+  dynamic "volume" {
+    for_each = var.gateway_writable_root ? [] : [local.gateway_tmp_volume_name]
+    content {
+      name = volume.value
+    }
   }
 
   tags = { Name = local.name_prefix }

@@ -460,5 +460,45 @@ class WithoutBastionNeitherKeyIsWritten(Tfvars):
         self.assertTrue(self.tfvars(case).decode().endswith("bastion = false\n"))
 
 
+# #1380: the sample image runs as uid 101 and writes under /tmp, which the gateway's read-only root
+# mounts root-owned 0755, so the sample's first apply needs gateway_writable_root = true
+# (infra/modules/cell/variables.tf). deploy.sh applies the gateway with false and records it in
+# images.auto.tfvars, which Terraform loads after this file, so this file's true never reaches it.
+class TheSampleGetsAWritableRoot(Tfvars):
+
+    def test_a_file_without_the_key_gains_it_as_true(self):
+        start = EXAMPLE.read_text().replace("gateway_writable_root = true\n", "")
+        self.assertIsNone(re.search(r"(?m)^gateway_writable_root\s*=", start), "the example sets it twice")
+        case = self.case(start)
+        result = case.run(SCRIPT)
+        self.assertEqual(0, result.status, result.output)
+        self.assertIn("\ngateway_writable_root = true\n", self.tfvars(case).decode())
+        self.assertRegex(result.stdout, r"changed: [^\n]*gateway_writable_root")
+
+    def test_a_false_left_by_hand_is_set_back_to_true_in_place(self):
+        start = operator_file().replace("gateway_writable_root = true\n", "gateway_writable_root = false # by hand\n")
+        self.assertIn("gateway_writable_root = false # by hand\n", start)
+        case = self.case(start)
+        result = case.run(SCRIPT)
+        self.assertEqual(0, result.status, result.output)
+        after = self.tfvars(case).decode()
+        self.assertIn("\ngateway_writable_root = true # by hand\n", after)
+        self.assertEqual(1, len(re.findall(r"(?m)^gateway_writable_root\s*=", after)))
+        self.assertRegex(result.stdout, r"changed: [^\n]*gateway_writable_root")
+
+    def test_the_example_already_says_true_so_it_is_named_unchanged(self):
+        case = self.case(operator_file())
+        result = case.run(SCRIPT)
+        self.assertEqual(0, result.status, result.output)
+        self.assertRegex(result.stdout, r"unchanged: [^\n]*gateway_writable_root")
+
+    def test_a_quoted_value_is_refused_and_the_file_left_as_it_was(self):
+        case = self.case(operator_file().replace("gateway_writable_root = true\n", 'gateway_writable_root = "true"\n'))
+        before = self.tfvars(case)
+        result = case.run(SCRIPT)
+        self.assertUnchanged(case, before, result, 1)
+        self.assertIn("gateway_writable_root", result.stderr)
+
+
 if __name__ == "__main__":
     sys.exit(cell.main("platform_tfvars_tests"))

@@ -857,6 +857,74 @@ run "the_gateway_s_tmp_is_the_task_s_one_writable_path" {
   }
 }
 
+# #1380. The sample image's shape. The public sample image a fresh cell's first apply runs,
+# nginx-unprivileged, runs as uid 101 and keeps its temp files under /tmp, which on the read-only
+# root is the task volume ECS gives "0755 and the owner as root": #787's Docker stand-in showed it
+# exit at start on "mkdir() /tmp/proxy_temp ... Permission denied". gateway_writable_root = true,
+# which tools/scripts/platform-tfvars.sh writes beside the sample's pin, gives the gateway's
+# container the shape it had before #787: a writable root, no /tmp volume and no mount, so /tmp is
+# the image's own directory. The capabilities and the init process (#786) and Exec off are not part
+# of it. The run on the default inputs above holds the read-only shape; this one holds the switch.
+# Mutations that turn this run red: readonlyRootFilesystem left true under the input; the /tmp
+# mount kept under it; the volume kept under it; the switch also turning Exec back on.
+run "gateway_writable_root_gives_the_sample_image_a_writable_root_and_no_tmp_volume" {
+  command = plan
+
+  variables {
+    gateway_writable_root = true
+  }
+
+  assert {
+    condition = try(
+      one([for c in jsondecode(aws_ecs_task_definition.gateway.container_definitions) : c if c.name == "gateway"]).readonlyRootFilesystem == false,
+      false
+    )
+    error_message = "Under gateway_writable_root the gateway's root is writable, explicitly (#1380): the sample image writes under /tmp and its entrypoint edits /etc/nginx/conf.d."
+  }
+
+  assert {
+    condition = try(
+      one([for c in jsondecode(aws_ecs_task_definition.gateway.container_definitions) : c if c.name == "gateway"]).mountPoints == [],
+      false
+    )
+    error_message = "Under gateway_writable_root the gateway mounts nothing at /tmp (#1380): a root-owned 0755 mount there would shadow the image's own /tmp on the writable root too."
+  }
+
+  assert {
+    condition     = length(aws_ecs_task_definition.gateway.volume) == 0
+    error_message = "Under gateway_writable_root the task declares no volume (#1380): nothing mounts one."
+  }
+
+  assert {
+    condition     = aws_ecs_service.gateway.enable_execute_command == false
+    error_message = "gateway_writable_root changes the root and /tmp alone: Exec stays off on the gateway's service (#787)."
+  }
+
+  assert {
+    condition = try(
+      one([for c in jsondecode(aws_ecs_task_definition.gateway.container_definitions) : c if c.name == "gateway"]).linuxParameters.capabilities.drop == ["ALL"],
+      false
+    )
+    error_message = "gateway_writable_root changes the root and /tmp alone: the gateway still drops every capability (#786)."
+  }
+}
+
+# #1380. The writable root is the sample's and never the gateway's: deploy.sh and rollback.sh apply
+# the gateway with health_check_path = "/readyz" and gateway_writable_root = false, and a root whose
+# terraform.tfvars still says true from the sample's first apply is refused at plan rather than
+# shipping the gateway on a writable root, should a run ever leave the switch out.
+# Mutation that turns this run red: the validation removed.
+run "a_writable_root_with_the_gateway_s_health_check_is_refused" {
+  command = plan
+
+  variables {
+    gateway_writable_root = true
+    health_check_path     = "/readyz"
+  }
+
+  expect_failures = [var.gateway_writable_root]
+}
+
 # #786. The gateway's container drops every Linux capability Docker grants by default and runs an
 # init process as PID 1, which forwards signals to the process and reaps zombies. On the default
 # inputs the task is the gateway's container alone, so each assertion over every container holds of

@@ -365,14 +365,18 @@ read_platform_config() {
 # --- apply, wait, assert ---------------------------------------------------------------------------
 
 # Plan and apply the platform root with these two images and the gateway's health path, then record
-# them for every later apply. $1 the gateway image, $2 the mock API image or "".
+# them for every later apply. $1 the gateway image, $2 the mock API image or "". The gateway runs on
+# its read-only root, gateway_writable_root = false: true is the sample image's alone, which
+# platform-tfvars.sh writes into terraform.tfvars for the first apply (#1380), and the module refuses
+# it beside /readyz.
 apply_images() {
   local gateway="$1" mock="$2" plan="${WORK}/platform.tfplan"
   note "planning $(root_name "$PLATFORM_ROOT") with the gateway at $(redact "$gateway")"
   # The plan file holds the values the apply will write, so it stays in the scratch directory and
   # never in the tree (change request 1.1).
   terraform_shown -chdir="$PLATFORM_ROOT" plan -input=false -no-color -out="$plan" \
-    -var "gateway_image=${gateway}" -var "mock_api_image=${mock}" -var "health_check_path=${READY_PATH}" ||
+    -var "gateway_image=${gateway}" -var "mock_api_image=${mock}" -var "health_check_path=${READY_PATH}" \
+    -var "gateway_writable_root=false" ||
     fail "the platform root's plan failed; nothing was applied."
   terraform_shown -chdir="$PLATFORM_ROOT" apply -input=false -no-color "$plan" ||
     fail "the platform root's apply failed. Read its output above; $(root_name "$IMAGES_TFVARS") is unchanged."
@@ -383,6 +387,7 @@ apply_images() {
     printf 'gateway_image     = "%s"\n' "$gateway"
     printf 'mock_api_image    = "%s"\n' "$mock"
     printf 'health_check_path = "%s"\n' "$READY_PATH"
+    printf 'gateway_writable_root = false\n'
   } > "$IMAGES_TFVARS"
   note "recorded the applied images in $(root_name "$IMAGES_TFVARS")"
   # The infrastructure outputs are written after every apply (contracts/infra-outputs.schema.json),

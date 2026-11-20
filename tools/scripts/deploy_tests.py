@@ -158,7 +158,10 @@ class DeployBuildsPushesAppliesAndAsserts(cell.CompanionTestCase):
         mock = f"{cell.ECR_MOCK_API}@{world['repositories'][cell.MOCK_API_REPOSITORY][mock_tag.rpartition(':')[2]]}"
         applies = [c for c in case.calls("terraform") if c.get("command") == "apply"]
         self.assertEqual(1, len(applies))
-        self.assertEqual({"gateway_image": gateway, "mock_api_image": mock, "health_check_path": "/readyz"},
+        # gateway_writable_root is the sample's (#1380): the gateway is applied on its read-only root,
+        # whatever terraform.tfvars still says from the sample's first apply.
+        self.assertEqual({"gateway_image": gateway, "mock_api_image": mock, "health_check_path": "/readyz",
+                          "gateway_writable_root": "false"},
                          applies[0]["vars"])
         self.assertEqual("platform", applies[0]["root"])
 
@@ -179,6 +182,8 @@ class DeployBuildsPushesAppliesAndAsserts(cell.CompanionTestCase):
         self.assertIn(f'gateway_image     = "{applied["gateway_image"]}"', tfvars)
         self.assertIn(f'mock_api_image    = "{applied["mock_api_image"]}"', tfvars)
         self.assertIn('health_check_path = "/readyz"', tfvars)
+        # Loaded after terraform.tfvars, so a later plain apply keeps the read-only root too (#1380).
+        self.assertIn("\ngateway_writable_root = false\n", tfvars)
 
     def test_it_waits_for_a_steady_service_after_the_apply(self):
         case, result = self.deployed()

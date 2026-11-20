@@ -187,7 +187,13 @@ deployment. **A green plan here is not a running cell.**
   task's own ephemeral storage (#780, answer 3). That the
   gateway's user can write there is not shown by a test here: ECS gives a task volume
   `0755` and the owner `root` unless the image says otherwise, and a write by
-  `$APP_UID` is seen only on a running task. The gateway's container drops every Linux
+  `$APP_UID` is seen only on a running task. The sample image a fresh cell starts on
+  cannot start on that `/tmp`: nginx-unprivileged runs as uid 101 and creates its temp
+  directories there. `gateway_writable_root = true`, which
+  `tools/scripts/platform-tfvars.sh` writes beside the sample's pin, gives the
+  gateway's container a writable root and no `/tmp` volume, the shape the sample ran
+  on before #787; `deploy.sh` and `rollback.sh` apply the gateway with `false`, and
+  the module refuses `true` beside any health check but `/` (#1380). The gateway's container drops every Linux
   capability (`capabilities.drop = ["ALL"]`) and runs an init process
   (`initProcessEnabled`), which forwards SIGTERM to `dotnet` and reaps zombies (#786);
   the process needs no capability, since it runs as its image's non-root user on a port
