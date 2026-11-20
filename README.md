@@ -18,7 +18,7 @@ own task tables, and never typed by hand.
 <!-- BEGIN GENERATED summary -->
 **Closed gates:** G1a (`skeleton-v1`), G0 (`g0-mechanism`), G1b (`contracts-v1`), G2 (`g2-local-slice`), G3 (`g3-deployed-slice`), G4 (`g4-negative-green`), G5 (`g5-phase-1-accepted`), G6 (`g6-continuity`).
 **Where the gateway is:** S8a Composed: one host, many clients, which closes at gate G9.
-**Plan rows landed:** 66 of 75, with 1 part-landed. S8a still owes `issue-993`, `issue-995`, `issue-1007`.
+**Plan rows landed:** 67 of 75, with 1 part-landed. S8a still owes `issue-993`, `issue-1007`.
 <!-- END GENERATED summary -->
 
 `docs/roadmap.md` has the same figures per stage, and what each stage still owes. For the detail

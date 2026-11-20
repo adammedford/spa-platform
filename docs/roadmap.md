@@ -37,7 +37,7 @@ merge subject names.
 | S6 Hardened: every attempt is refused | G4, tagged `g4-negative-green` | 1 of 1 | nothing |
 | S7 Operable, and accepted for Phase 1 | G5, tagged `g5-phase-1-accepted` | 0 of 1 | part-landed: `6.7` |
 | S8 Continuous: it survives its own deployment | G6, tagged `g6-continuity` | 5 of 5 | nothing |
-| S8a Composed: one host, many clients | G9, not tagged | 10 of 13 | `issue-993`, `issue-995`, `issue-1007` |
+| S8a Composed: one host, many clients | G9, not tagged | 11 of 13 | `issue-993`, `issue-1007` |
 | S9 Portable: a second provider behind the same seam | G7, not tagged | 0 of 1 | `P2-6` |
 | S10 Mature: bounded, assured and supported | G8, not tagged | 0 of 4 | `P2-7`, `P2-8`, `P2-9`, `P2-10` |
 | SX Throughout | none | ongoing | — |
