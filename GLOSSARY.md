@@ -363,7 +363,9 @@ frozen export, and a spec is one feature's working statement.
 
 **Plan row** — one row of the plan's task tables, `docs/plan/03-workstreams-and-tasks.md` or the
 Phase 2 package table (I-4, 2.1, P2-1), and the unit the roadmap counts. Not a ticket: one row may be
-built by several. _Avoid_: bare "task" where a ticket could be meant.
+built by several. A ladder stage cut after the export has no plan row, so its `**Plan rows.**` line
+names the tickets that build it instead, and the roadmap counts each of them where it would count a
+row (#990). _Avoid_: bare "task" where a ticket could be meant.
 
 **Carrier** — the one ticket whose `Plan row` line names a row that several tickets build. How its
 merge and the part tickets' merges name the row is #332 D7's rule. _Avoid_: "the row's ticket",
