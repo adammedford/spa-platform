@@ -81,8 +81,22 @@ internal static class CodeExchange
             {
                 // Provider text is untrusted and may contain a credential (N-16). The normal remote
                 // failure event owns the browser's constant failure page and auth.callback rule.
-                context.Fail("The code exchange failed.");
-                return;
+                // Thrown, as the handler's own redemption throws its protocol exception, so the handler's
+                // catch fails the request with the login's properties, which the sign-in chain reads to go
+                // on after a fragment's refused hop; context.Fail would drop them (#994). Only the error
+                // code is carried, to tell a definitive refusal from a transient one; a transport failure
+                // has none (OpenIdConnectHandler.HandleRemoteAuthenticateAsync's catch, same source as above).
+                // It is read from the body, since the library reports a refusal answered with a status other
+                // than 400, as invalid_client's 401 is (RFC 6749 section 5.2), as an HTTP error.
+                OpenIdConnectProtocolException failure = new("The code exchange failed.");
+                if (response.Json is { ValueKind: System.Text.Json.JsonValueKind.Object } body
+                    && body.TryGetProperty("error", out System.Text.Json.JsonElement error)
+                    && error.ValueKind == System.Text.Json.JsonValueKind.String)
+                {
+                    failure.Data["error"] = error.GetString();
+                }
+
+                throw failure;
             }
 
             context.HttpContext.Items[redeemed] = true;

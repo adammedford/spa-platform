@@ -25,6 +25,7 @@ internal static class Bff
         endpoints.MapGet(SessionPath, SessionAsync);
         endpoints.MapGet(LoginPath, LoginAsync);
         endpoints.MapPost(LogoutPath, LogoutAsync);
+        BffFragments.Map(endpoints);
     }
 
     /// <summary>
@@ -66,7 +67,8 @@ internal static class Bff
                 Name: user.FindFirst("name")?.Value,
                 Email: user.FindFirst("email")?.Value,
                 ExpiresAt: record.ExpiresAt,
-                CsrfToken: csrfToken),
+                CsrfToken: csrfToken,
+                Fragments: BffFragments.StatesOf(app, record)),
             context.RequestAborted);
     }
 
@@ -92,6 +94,14 @@ internal static class Bff
     {
         AppDefinition app = Pinned(context, "MapPlatformBff");
         string returnUrl = ReturnUrl.LocalOrRoot(context.Request.Query["returnUrl"]);
+
+        // ?fragment= with a session is the fallback, which discards nothing (#994); with none it is this
+        // login, chain included. A value that is not one fragment id names no fragment.
+        if (context.Request.Query.TryGetValue("fragment", out StringValues fragment)
+            && await BffFragments.FallbackAsync(context, app, fragment is { Count: 1 } one ? one[0] ?? "" : "", returnUrl))
+        {
+            return;
+        }
 
         AppSessions sessions = context.RequestServices.GetRequiredService<AppSessions>();
         AuthenticateResult session = await context.AuthenticateAsync(SchemeNames.Cookie(app.AppId));
@@ -213,7 +223,8 @@ internal static class Bff
     }
 
     /// <summary>The body of <c>GET /bff/session</c>, written in camel case by the web defaults.</summary>
-    private sealed record SessionAnswer(string Sub, string? Name, string? Email, DateTimeOffset ExpiresAt, string CsrfToken);
+    private sealed record SessionAnswer(
+        string Sub, string? Name, string? Email, DateTimeOffset ExpiresAt, string CsrfToken, IReadOnlyDictionary<string, string> Fragments);
 }
 
 /// <summary>
