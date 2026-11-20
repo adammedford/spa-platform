@@ -174,7 +174,40 @@ public sealed class ContentSecurityPolicyTests
             ContractTables.BaselineCspDirectives(),
             merged.Directives.Select(d => d.Directive));
         Assert.Empty(merged.SourcesOf("worker-src"));
-        Assert.Equal(["script-src", "style-src", "img-src", "font-src", "connect-src"], ContentSecurityPolicy.FragmentDirectives);
+    }
+
+    [Fact]
+    public void FragmentDirectives_are_the_contracts_fragment_directives_in_its_order()
+    {
+        // Mutation: change a directive in contracts/http-contract.md's "A fragment's `csp` adds sources
+        // to" sentence alone, or in FragmentDirectives alone. The contract's list is read from the file.
+        Assert.Equal(ContractTables.FragmentCspDirectives(), ContentSecurityPolicy.FragmentDirectives);
+    }
+
+    [Fact]
+    public void The_fragment_directive_sentence_is_read_up_to_only()
+    {
+        // Mutation: read past "only", and the same sentence's `script-src` and `'strict-dynamic'` join;
+        // anchor on "adds sources to" alone, and the entry sentence's `csp` is read instead.
+        string[] lines =
+        [
+            "An entry's `csp` adds sources to these ten directives and to no others, `entry`.",
+            "A fragment's `csp` adds sources to `a-src` and",
+            "`b-src` only, and its `script-src` carries no `'strict-dynamic'`.",
+        ];
+
+        Assert.Equal(["a-src", "b-src"], ContractTables.ParseFragmentCspDirectives(lines));
+    }
+
+    [Fact]
+    public void A_missing_fragment_directive_sentence_cannot_pass_as_no_directives()
+    {
+        // Mutation: drop the parser's anchor check, its closing check or its Assert.NotEmpty.
+        Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => ContractTables.ParseFragmentCspDirectives(["A fragment adds `a-src` only."]));
+        Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => ContractTables.ParseFragmentCspDirectives(
+            ["A fragment's `csp` adds sources to `a-src`."]));
+        Assert.Throws<Xunit.Sdk.NotEmptyException>(() => ContractTables.ParseFragmentCspDirectives(
+            ["A fragment's `csp` adds sources to nothing only."]));
     }
 
     private static ImmutableDictionary<string, ImmutableArray<string>> Csp(
