@@ -201,8 +201,25 @@ internal sealed class IdentityGateway : IAsyncDisposable
     public static IReadOnlySet<string> PostLogoutUrisOf(AppDefinition app) =>
         new HashSet<string>(StringComparer.Ordinal) { $"https://{app.Host}/signout-callback-oidc", $"https://{app.Host}/" };
 
-    private static void Register(TestIdentityProvider idp, AppDefinition app) =>
+    /// <summary>The secret the provider and the fake secret source agree on for a fragment's client.</summary>
+    public static string SecretOf(FragmentDefinition fragment) => "secret-" + fragment.OAuth.ClientId;
+
+    /// <summary>A fragment's redirect URI on its shell's host: <c>/signin-oidc/{fragmentId}</c> (#994).</summary>
+    public static string RedirectUriOf(AppDefinition app, FragmentDefinition fragment) =>
+        $"https://{app.Host}{PlatformPaths.FragmentCallback(fragment.FragmentId)}";
+
+    private static void Register(TestIdentityProvider idp, AppDefinition app)
+    {
         idp.AddClient(app.OAuth.ClientId, SecretOf(app), RedirectUriOf(app), PostLogoutUrisOf(app));
+        foreach (FragmentDefinition fragment in app.Fragments)
+        {
+            idp.AddClient(fragment.OAuth.ClientId, SecretOf(fragment), RedirectUriOf(app, fragment), PostLogoutUrisOf(app));
+        }
+    }
+
+    /// <summary>The secret references of an entry and of each of its fragments, with the secrets the provider holds.</summary>
+    private static IEnumerable<(string Ref, string Secret)> SecretsOf(AppDefinition app) =>
+        [(app.OAuth.ClientSecretRef, SecretOf(app)), .. app.Fragments.Select(f => (f.OAuth.ClientSecretRef, SecretOf(f)))];
 
     /// <param name="apps">The registry's entries.</param>
     /// <param name="services">Registrations made after <c>AddPlatformIdentity</c>.</param>
@@ -268,10 +285,13 @@ internal sealed class IdentityGateway : IAsyncDisposable
                 Register(idp, app);
             }
 
-            secrets[app.OAuth.ClientSecretRef] = SecretOf(app);
+            foreach ((string reference, string secret) in SecretsOf(app))
+            {
+                secrets[reference] = secret;
+            }
         }
 
-        await secrets.PreloadAsync(entries.Select(a => a.OAuth.ClientSecretRef), TestContext.Current.CancellationToken);
+        await secrets.PreloadAsync(entries.SelectMany(a => SecretsOf(a).Select(s => s.Ref)), TestContext.Current.CancellationToken);
 
         InMemoryRegistry registry = new(InMemoryRegistry.SnapshotOf(1, "\"r1\"", entries));
         StubIdpProfile profile = new(stubProfile ? issuerProfile : "stub-unused");
@@ -315,13 +335,22 @@ internal sealed class IdentityGateway : IAsyncDisposable
     /// </summary>
     public async Task<RegistrySnapshot> SwapAsync(params AppDefinition[] apps)
     {
-        foreach (AppDefinition app in apps.Where(a => !Idp.Clients.ContainsKey(a.OAuth.ClientId)))
+        foreach (AppDefinition app in apps)
         {
-            Register(Idp, app);
-            Secrets[app.OAuth.ClientSecretRef] = SecretOf(app);
+            if (!Idp.Clients.ContainsKey(app.OAuth.ClientId))
+            {
+                Idp.AddClient(app.OAuth.ClientId, SecretOf(app), RedirectUriOf(app), PostLogoutUrisOf(app));
+                Secrets[app.OAuth.ClientSecretRef] = SecretOf(app);
+            }
+
+            foreach (FragmentDefinition fragment in app.Fragments.Where(f => !Idp.Clients.ContainsKey(f.OAuth.ClientId)))
+            {
+                Idp.AddClient(fragment.OAuth.ClientId, SecretOf(fragment), RedirectUriOf(app, fragment), PostLogoutUrisOf(app));
+                Secrets[fragment.OAuth.ClientSecretRef] = SecretOf(fragment);
+            }
         }
 
-        await Secrets.PreloadAsync(apps.Select(a => a.OAuth.ClientSecretRef), TestContext.Current.CancellationToken);
+        await Secrets.PreloadAsync(apps.SelectMany(a => SecretsOf(a).Select(s => s.Ref)), TestContext.Current.CancellationToken);
 
         RegistrySnapshot previous = Registry.Current;
         Registry.Swap(InMemoryRegistry.SnapshotOf(previous.Revision + 1, $"\"r{previous.Revision + 1}\"", apps));

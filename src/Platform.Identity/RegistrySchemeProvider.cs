@@ -15,9 +15,10 @@ namespace Platform.Identity;
 /// never straddles a swap (<c>contracts/pipeline.md</c>, <c>UsePlatformHostResolution</c>).
 ///
 /// On an app's host the only schemes that exist are that app's scheme pair,
-/// <see cref="SchemeNames.Oidc"/> and <see cref="SchemeNames.Cookie"/>. Any other name resolves to
-/// nothing (S-B8, R-B6), and the only request-handling scheme is the app's own OpenID Connect scheme,
-/// so the framework's <c>AuthenticationMiddleware</c> builds one remote handler per request rather
+/// <see cref="SchemeNames.Oidc(string)"/> and <see cref="SchemeNames.Cookie"/>, and for a shell each of
+/// its fragments' <see cref="SchemeNames.Oidc(string, string)"/> (#994). Any other name resolves to
+/// nothing (S-B8, R-B6), and the only request-handling schemes are the app's own OpenID Connect
+/// schemes, so the framework's <c>AuthenticationMiddleware</c> builds one remote handler per request rather
 /// than one per app (S-A7, R-A6, S-F1; the stock provider built 303 at 303 apps). The middleware
 /// builds a handler for every scheme <see cref="GetRequestHandlerSchemesAsync"/> returns, on every
 /// request: https://github.com/dotnet/aspnetcore/blob/v10.0.0/src/Security/Authentication/Core/src/AuthenticationMiddleware.cs.
@@ -47,7 +48,7 @@ public sealed class RegistrySchemeProvider(IHttpContextAccessor accessor) : IAut
             }
 
             return cache.GetValue(pinned.Snapshot, static _ => new(StringComparer.Ordinal))
-                .GetOrAdd(pinned.App.AppId, static appId => new SchemePair(appId));
+                .GetOrAdd(pinned.App.AppId, static (_, app) => new SchemePair(app), pinned.App);
         }
     }
 
@@ -65,6 +66,7 @@ public sealed class RegistrySchemeProvider(IHttpContextAccessor accessor) : IAut
         ? None
         : string.Equals(name, pair.Cookie.Name, StringComparison.Ordinal) ? pair.CookieTask
         : string.Equals(name, pair.Oidc.Name, StringComparison.Ordinal) ? pair.OidcTask
+        : pair.Fragments.TryGetValue(name, out Task<AuthenticationScheme?>? fragment) ? fragment
         : None;
 
     public Task<IEnumerable<AuthenticationScheme>> GetRequestHandlerSchemesAsync() =>
@@ -78,18 +80,34 @@ public sealed class RegistrySchemeProvider(IHttpContextAccessor accessor) : IAut
     public void RemoveScheme(string name) =>
         throw new NotSupportedException("Schemes come from the registry only (ADR-0001).");
 
-    /// <summary>One app's scheme pair, with the completed tasks the interface returns.</summary>
+    /// <summary>
+    /// One app's scheme pair and its fragments' OpenID Connect schemes, with the completed tasks the
+    /// interface returns. The shell's scheme comes first and each fragment's follows in registry order
+    /// (#994, the fragments spec #961): the middleware hands a callback to the first handler that claims
+    /// it, and each fragment's claims only its own exact <c>/signin-oidc/{fragmentId}</c>, so the order
+    /// decides nothing but what a caller listing them sees. Built from the pinned entry, so a snapshot's
+    /// fragments are the schemes of every request pinned to it.
+    /// </summary>
     private sealed class SchemePair
     {
-        public SchemePair(string appId)
+        public SchemePair(AppDefinition app)
         {
+            string appId = app.AppId;
             Cookie = new AuthenticationScheme(SchemeNames.Cookie(appId), null, typeof(PlatformCookieHandler));
             Oidc = new AuthenticationScheme(SchemeNames.Oidc(appId), null, typeof(PlatformOidcHandler));
             CookieTask = Task.FromResult<AuthenticationScheme?>(Cookie);
             OidcTask = Task.FromResult<AuthenticationScheme?>(Oidc);
-            RequestHandlersTask = Task.FromResult<IEnumerable<AuthenticationScheme>>([Oidc]);
-            AllTask = Task.FromResult<IEnumerable<AuthenticationScheme>>([Cookie, Oidc]);
+            AuthenticationScheme[] fragments =
+            [
+                .. app.Fragments.Select(f => new AuthenticationScheme(SchemeNames.Oidc(appId, f.FragmentId), null, typeof(PlatformOidcHandler))),
+            ];
+            Fragments = fragments.ToDictionary(s => s.Name, s => Task.FromResult<AuthenticationScheme?>(s), StringComparer.Ordinal);
+            RequestHandlersTask = Task.FromResult<IEnumerable<AuthenticationScheme>>([Oidc, .. fragments]);
+            AllTask = Task.FromResult<IEnumerable<AuthenticationScheme>>([Cookie, Oidc, .. fragments]);
         }
+
+        /// <summary>Each fragment's OpenID Connect scheme, by name.</summary>
+        public Dictionary<string, Task<AuthenticationScheme?>> Fragments { get; }
 
         public AuthenticationScheme Cookie { get; }
 

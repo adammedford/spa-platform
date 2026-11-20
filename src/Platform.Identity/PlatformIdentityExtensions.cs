@@ -144,7 +144,10 @@ public static class PlatformIdentityExtensions
     /// </summary>
     public static IApplicationBuilder UsePlatformShellGate(this IApplicationBuilder app) => app.Use(ShellGate.InvokeAsync);
 
-    /// <summary><c>/bff/session</c>, <c>/bff/login</c> and <c>/bff/logout</c>. Task 3.9; see <see cref="Bff"/>.</summary>
+    /// <summary>
+    /// <c>/bff/session</c>, <c>/bff/login</c> and <c>/bff/logout</c>, task 3.9, see <see cref="Bff"/>; and
+    /// <c>/bff/chain</c> and <c>/bff/fragments</c>, #994, see <see cref="BffFragments"/>.
+    /// </summary>
     public static IEndpointRouteBuilder MapPlatformBff(this IEndpointRouteBuilder endpoints)
     {
         Bff.Map(endpoints);

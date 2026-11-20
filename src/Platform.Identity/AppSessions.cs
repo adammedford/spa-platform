@@ -49,16 +49,35 @@ internal sealed class AppSessions(ISessionStore store)
     /// up changes nothing, and the request's cancellation token must not reach the refresh (T-B15, T-B16).
     /// </summary>
     /// <param name="app">The app the caller acts for; a record that is not its and its client's is not owned.</param>
-    public async Task<Turn> EnterAsync(AppDefinition app, string sessionKey)
+    public Task<Turn> EnterAsync(AppDefinition app, string sessionKey) => EnterAsync(app, sessionKey, sessionKey);
+
+    /// <summary>
+    /// Waits for the gate of one fragment's token set in the session, then reads the record under it
+    /// (#994). Each token set has its own gate (#961 -> "Gates and leases per token set"), keyed
+    /// <c>{sessionKey}:{fragmentId}</c>, the shell's being the session key's own; the record they
+    /// share is kept consistent by the versioned replace, which <see cref="Turn.MergeAsync"/> retries.
+    /// </summary>
+    /// <remarks>
+    /// The request is referenced to the session as <see cref="ResolveAsync"/> references it: a fragment
+    /// callback reaches its handler before the cookie handler has read the session cookie, and its event
+    /// line correlates with the session it wrote.
+    /// </remarks>
+    public Task<Turn> EnterAsync(HttpContext httpContext, AppDefinition app, string sessionKey, FragmentDefinition fragment)
+    {
+        Reference(httpContext, sessionKey);
+        return EnterAsync(app, sessionKey, sessionKey + ":" + fragment.FragmentId);
+    }
+
+    private async Task<Turn> EnterAsync(AppDefinition app, string sessionKey, string gateKey)
     {
         Gate gate;
         long finished;
         lock (gates)
         {
-            if (!gates.TryGetValue(sessionKey, out gate!))
+            if (!gates.TryGetValue(gateKey, out gate!))
             {
                 gate = new Gate();
-                gates[sessionKey] = gate;
+                gates[gateKey] = gate;
             }
 
             gate.Users++;
@@ -74,11 +93,11 @@ internal sealed class AppSessions(ISessionStore store)
         }
         catch
         {
-            Leave(sessionKey, gate);
+            Leave(gateKey, gate);
             throw;
         }
 
-        return new Turn(this, app, sessionKey, gate, finished, owned);
+        return new Turn(this, app, sessionKey, gateKey, gate, finished, owned);
     }
 
     /// <summary>
@@ -100,6 +119,7 @@ internal sealed class AppSessions(ISessionStore store)
         string key = await store.CreateAsync(record, cancellationToken);
         Reference(httpContext, key);
         httpContext.Features.Set(new KeyChannel(key));
+        httpContext.Features.Set(new OpenedChannel(key));
         return key;
     }
 
@@ -151,6 +171,15 @@ internal sealed class AppSessions(ISessionStore store)
             await store.RemoveAsync(sessionKey, cancellationToken);
         }
     }
+
+    /// <summary>
+    /// The key of the session <see cref="OpenAsync"/> opened on this request, or null when it opened none:
+    /// the shell's login callback mints the chain's first continuation with it, once the cookie
+    /// handler's sign-in has stored the session (#994). The cookie handler keeps the key to itself, in
+    /// the cookie's own ticket, so the module's channel is where it is read. Read only by
+    /// <see cref="FragmentEvents"/>, and never toward a log.
+    /// </summary>
+    public string? OpenedKey(HttpContext httpContext) => httpContext.Features.Get<OpenedChannel>()?.Key;
 
     /// <summary>
     /// Records on the request that a gated end has run on <paramref name="sessionKey"/>, whether or not
@@ -255,6 +284,17 @@ internal sealed class AppSessions(ISessionStore store)
     }
 
     /// <summary>
+    /// The key of the session <see cref="OpenAsync"/> opened on this request, read only by
+    /// <see cref="OpenedKey"/>. Private to the module for <see cref="KeyChannel"/>'s reasons.
+    /// </summary>
+    private sealed class OpenedChannel(string key)
+    {
+        public string Key { get; } = key;
+
+        public override string ToString() => nameof(OpenedChannel);
+    }
+
+    /// <summary>
     /// The key of the session a gated end has run on in this request, left by <see cref="MarkEnded"/> and
     /// read only by <see cref="RemoveAsync"/>. Private to the module for <see cref="KeyChannel"/>'s reasons.
     /// </summary>
@@ -285,7 +325,8 @@ internal sealed class AppSessions(ISessionStore store)
     /// and stops no removal (T-B15, T-B16). A turn over an absent or foreign record owns nothing, and
     /// nothing under it replaces or removes.
     /// </summary>
-    internal sealed class Turn(AppSessions owner, AppDefinition app, string sessionKey, Gate gate, long finishedOnArrival, SessionRecord? owned)
+    internal sealed class Turn(
+        AppSessions owner, AppDefinition app, string sessionKey, string gateKey, Gate gate, long finishedOnArrival, SessionRecord? owned)
         : IDisposable
     {
         private bool released;
@@ -366,15 +407,99 @@ internal sealed class AppSessions(ISessionStore store)
             }
         }
 
+        /// <summary>
+        /// A bounded write of <paramref name="change"/> over the owned record (#994; #961 -> "The merge's
+        /// writes"): a versioned replace of what <paramref name="change"/> makes of the record, re-read and
+        /// re-applied on a lost replace, in at most <paramref name="budget"/> attempts, none started later
+        /// than <paramref name="deadline"/> after the first attempt's send (<c>MergeBudget</c>,
+        /// <c>StoreDeadline</c>). Each store operation keeps its own deadline, which the store holds.
+        ///
+        /// <paramref name="change"/> returns the record to write, or null to write nothing, as a mark does
+        /// over a set already signed in. A null re-read, the record removed, expired or rebound, stops the
+        /// writer and resurrects nothing. A store failure is the caller's: it leaves here as the store's
+        /// <see cref="SessionStoreUnavailableException"/>, wrapped with the attempts it had started.
+        /// </summary>
+        public async Task<MergeResult> MergeAsync(Func<SessionRecord, SessionRecord?> change, int budget, TimeSpan deadline, TimeProvider clock)
+        {
+            int attempts = 0;
+            long? firstSend = null;
+            try
+            {
+                while (true)
+                {
+                    if (Owned is not { } current)
+                    {
+                        return new MergeResult(MergeOutcome.Missing, attempts);
+                    }
+
+                    if (change(current) is not { } next)
+                    {
+                        return new MergeResult(MergeOutcome.Unchanged, attempts);
+                    }
+
+                    if (attempts >= budget
+                        || (firstSend is { } sent && clock.GetElapsedTime(sent) > deadline))
+                    {
+                        return new MergeResult(MergeOutcome.Exhausted, attempts);
+                    }
+
+                    firstSend ??= clock.GetTimestamp();
+                    attempts++;
+                    if (await ReplaceAsync(next with { Version = current.Version + 1 }))
+                    {
+                        return new MergeResult(MergeOutcome.Written, attempts);
+                    }
+
+                    await RereadAsync();
+                }
+            }
+            catch (SessionStoreUnavailableException e)
+            {
+                throw new MergeFailedException(e, attempts);
+            }
+        }
+
         public void Dispose()
         {
             if (!released)
             {
                 released = true;
-                owner.Leave(sessionKey, gate);
+                owner.Leave(gateKey, gate);
             }
         }
     }
+}
+
+/// <summary>How <see cref="AppSessions.Turn.MergeAsync"/> ended, and how many replaces it sent.</summary>
+internal sealed record MergeResult(MergeOutcome Outcome, int Attempts);
+
+/// <summary>The outcomes of a bounded write: <c>store_attempts</c>' companion on the event line (#994).</summary>
+internal enum MergeOutcome
+{
+    /// <summary>A versioned replace won.</summary>
+    Written,
+
+    /// <summary>The change asked for no write, as a mark over a signed-in set does.</summary>
+    Unchanged,
+
+    /// <summary>The record is gone, expired or rebound: nothing was written and nothing resurrected.</summary>
+    Missing,
+
+    /// <summary>Every attempt the budget allowed lost its replace, or the deadline passed: the winner's record stands.</summary>
+    Exhausted,
+}
+
+/// <summary>
+/// A store failure inside a bounded write, carrying the replaces started before it, so the event line
+/// still counts them (#994: "emit the count and outcome for the bounded write even when it exhausts
+/// its budget"). The store's own exception is its inner exception and its operation is kept.
+/// </summary>
+internal sealed class MergeFailedException(SessionStoreUnavailableException failure, int attempts)
+    : Exception(failure.Message, failure)
+{
+    public SessionStoreUnavailableException Failure { get; } = failure;
+
+    public int Attempts { get; } = attempts;
 }
 
 /// <summary>How a refresh ended, as the callers queued behind it need to know.</summary>
