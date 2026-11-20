@@ -11,8 +11,9 @@ namespace Platform.Identity;
 
 /// <summary>
 /// The gateway's half of logout (contracts/http-contract.md -> <c>POST /bff/logout</c>, ADR-0017
-/// decision 4): attempt to revoke the session's refresh token, then remove the session whatever the
-/// provider said.
+/// decision 4): attempt to revoke every token set's refresh token, then remove the session whatever the
+/// provider said. What follows was written for the shell's one set and holds for each set; the steps for
+/// several are below.
 ///
 /// Under the session's gate (<see cref="AppSessions"/>), so a refresh in flight finishes first and the
 /// token revoked is the one the record holds now, which may be newer than the one this request's ticket

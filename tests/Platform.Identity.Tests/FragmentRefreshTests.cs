@@ -95,10 +95,11 @@ public sealed class FragmentRefreshTests
     public async Task With_no_usable_fragment_set_the_answer_is_fragment_login_required_and_with_no_record_unauthenticated()
     {
         // #995 -> "Token selection and the 401": a live record without the fragment's set answers
-        // FragmentLoginRequired and writes nothing; no record at all stays Unauthenticated. Mutation:
-        // answer a missing fragment set with the shell's token (fall back to the shell); the first
-        // assertion fails (1 test red).
-        await using IdentityGateway gateway = await IdentityGateway.StartAsync([Shell]);
+        // FragmentLoginRequired, writes nothing and asks the lease table for nothing; no record at all stays
+        // Unauthenticated. Mutation: drop the absent-set check before the lease; the call takes
+        // {sessionKey}:orders' lease before answering, and this fails (1 test red).
+        KeyedLeases leases = new(new InMemoryRefreshLeases(TimeProvider.System));
+        await using IdentityGateway gateway = await IdentityGateway.StartAsync([Shell], leases: leases);
         (Dictionary<string, string> jar, string key) = await SignInAsync(gateway);
         SessionRecord before = (await gateway.Sessions.GetAsync(key, Ct))!;
         AuthenticationTicket ticket = TicketSerializer.Default.Deserialize(before.Ticket.ToArray())!;
@@ -111,6 +112,7 @@ public sealed class FragmentRefreshTests
         Assert.Equal((401, "fragment_login_required"), (orders.Status, orders.Body));
         Assert.Equal(without, await gateway.Sessions.GetAsync(key, Ct));
         Assert.Empty(gateway.Idp.RefreshGrants);
+        Assert.Empty(leases.Keys);
 
         await gateway.Sessions.RemoveAsync(key, Ct);
         IdentityGateway.Answer gone = await TokenAsync(gateway, jar, Orders);
@@ -254,6 +256,59 @@ public sealed class FragmentRefreshTests
         Assert.Equal((401, "fragment_login_required"), (orders.Status, orders.Body));
         Assert.Equal("invalid_grant", Assert.Single(gateway.Idp.RefreshGrants).Outcome);
         Assert.Equal(other, await gateway.Sessions.GetAsync(key, Ct));
+    }
+
+    [Fact]
+    public async Task A_fragments_refusal_answers_the_successors_token_when_another_writer_refreshed_the_set()
+    {
+        // The W3 invalid_grant row's first clause: the re-read finds orders' set holding a different refresh
+        // token with an access token, so another writer refreshed it in between, and its access token is the
+        // answer; nothing is removed. Mutation: skip the successor check (end the set on every refusal); the
+        // call answers 401 and the successor's set is removed, and this fails (1 test red).
+        HeldClock hold = new();
+        await using IdentityGateway gateway = await IdentityGateway.StartAsync([Shell], idpClock: hold);
+        (Dictionary<string, string> jar, string key) = await SignInAsync(gateway, lifetimeOf: OnlyDue(Orders));
+        gateway.Idp.Faults.TokenDelay = TimeSpan.FromSeconds(1);
+        Task<IdentityGateway.Answer> call = Task.Run(() => TokenAsync(gateway, jar, Orders), Ct);
+        await hold.Holding.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        gateway.Idp.Faults.TokenDelay = TimeSpan.Zero;
+        SessionRecord before = (await gateway.Sessions.GetAsync(key, Ct))!;
+        AuthenticationTicket ticket = TicketSerializer.Default.Deserialize(before.Ticket.ToArray())!;
+        ticket.Properties.Items[FragmentSets.TokenItem("refresh_token", "orders")] = "successors-refresh-token";
+        ticket.Properties.Items[FragmentSets.TokenItem("access_token", "orders")] = "successors-access-token";
+        SessionRecord successor = before with { Version = before.Version + 1, Ticket = TicketSerializer.Default.Serialize(ticket) };
+        Assert.True(await gateway.Sessions.ReplaceAsync(key, successor, before.Version, Ct));
+        gateway.Idp.RevokeAllForClient(Orders.OAuth.ClientId);
+        hold.Release();
+
+        IdentityGateway.Answer orders = await call;
+
+        Assert.Equal((200, "successors-access-token"), (orders.Status, orders.Body));
+        Assert.Equal("invalid_grant", Assert.Single(gateway.Idp.RefreshGrants).Outcome);
+        Assert.Equal(successor, await gateway.Sessions.GetAsync(key, Ct));
+    }
+
+    [Fact]
+    public async Task A_fragments_refusal_whose_removal_runs_out_of_attempts_answers_the_same_401()
+    {
+        // The W3 invalid_grant row: "same 401 if removal exhausted". Every removal replace loses to a writer
+        // that keeps the presented token, so after three attempts the set is still there, the call answers
+        // fragment_login_required, and the line counts three replaces. Mutation: answer an exhausted removal
+        // as a provider outage (503); this fails (1 test red).
+        CapturedLog logs = new();
+        ScriptedSessionStore store = new(new InMemorySessionStore());
+        await using IdentityGateway gateway = await IdentityGateway.StartAsync(
+            [Shell], s => s.AddSingleton(logs.Provider), sessions: new RecordingSessionStore(store));
+        (Dictionary<string, string> jar, string key) = await SignInAsync(gateway, lifetimeOf: OnlyDue(Orders));
+        gateway.Idp.RevokeAllForClient(Orders.OAuth.ClientId);
+        store.BeforeReplace = (k, _) => store.BumpAsync(k);
+
+        IdentityGateway.Answer orders = await TokenAsync(gateway, jar, Orders);
+
+        Assert.Equal((401, "fragment_login_required"), (orders.Status, orders.Body));
+        Assert.NotEmpty(FragmentItems(await PropertiesAsync(store, key), "orders"));
+        Assert.Contains(RefreshLeaseTests.SourceLines(logs), l => l.Contains("fragment orders", StringComparison.Ordinal)
+            && l.Contains("ended exhausted after 3 versioned replaces", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -409,8 +464,8 @@ public sealed class FragmentRefreshTests
     public async Task A_refresh_whose_record_is_gone_on_the_re_read_writes_nothing_and_answers_unauthenticated()
     {
         // The W3 "conflict, gone" row and Trace 4's stop: the replace loses and the re-read finds no
-        // record, so nothing is resurrected. Mutation: create the record again on a null re-read; the store
-        // holds a record afterwards, and this fails (1 test red).
+        // record, so nothing is resurrected and nothing more is sent. Mutation: keep re-applying on a null
+        // re-read; the call sends more replaces and answers its token, and this fails (1 test red).
         ScriptedSessionStore store = new(new InMemorySessionStore());
         await using IdentityGateway gateway = await IdentityGateway.StartAsync([Shell], sessions: new RecordingSessionStore(store));
         (Dictionary<string, string> jar, string key) = await SignInAsync(gateway, lifetimeOf: OnlyDue(Orders));

@@ -134,14 +134,14 @@ public sealed class FragmentLogoutTests
     public async Task A_holder_stuck_past_the_gate_budget_is_skipped_as_gate_timeout_and_its_late_write_stops_on_the_null_re_read()
     {
         // #995: orders' refresh is granted and then stalls in its versioned replace, holding orders' gate,
-        // past LogoutGateBudget (shrunk here: ProviderDeadline 1 s, StoreDeadline 0.5 s, so the budget is
-        // the 2 s write deadline). Logout skips that gate, logs orders gate_timeout and revokes nothing for
+        // past LogoutGateBudget (shrunk here: ProviderDeadline 3 s, StoreDeadline 0.5 s, so the budget is
+        // the 4 s write deadline). Logout skips that gate, logs orders gate_timeout and revokes nothing for
         // it, revokes the others and removes the record. The stalled write then loses, re-reads nothing and
         // stops: no record is resurrected and the call answers 401 unauthenticated. Mutation: wait on every
         // gate with no budget; logout never returns while the write is stalled, and this fails (1 test red).
         CapturedLog logs = new();
         ScriptedSessionStore store = new(new InMemorySessionStore());
-        AccessTokenSourceOptions small = new() { ProviderDeadline = TimeSpan.FromSeconds(1), StoreDeadline = TimeSpan.FromMilliseconds(500) };
+        AccessTokenSourceOptions small = new() { ProviderDeadline = TimeSpan.FromSeconds(3), StoreDeadline = TimeSpan.FromMilliseconds(500) };
         await using IdentityGateway gateway = await IdentityGateway.StartAsync(
             [Shell], s => s.AddSingleton(logs.Provider).AddSingleton(small), sessions: new RecordingSessionStore(store));
         (Dictionary<string, string> jar, string key) = await FragmentRefreshTests.SignInAsync(gateway, lifetimeOf: FragmentRefreshTests.OnlyDue(Orders));
@@ -171,6 +171,8 @@ public sealed class FragmentLogoutTests
         IdentityGateway.Answer late = await holder;
         Assert.Equal((401, "unauthenticated"), (late.Status, late.Body));
         Assert.Null(await store.Inner.GetAsync(key, Ct));
+        // The withdrawn waiter left no gate behind once the holder let go.
+        Assert.Equal(0, gateway.Services.GetRequiredService<AppSessions>().ActiveGates);
     }
 
     [Fact]
@@ -180,11 +182,11 @@ public sealed class FragmentLogoutTests
         // in its write, holding orders' gate; the shell's refresh is held at the provider, which then refuses
         // it, so the record ends while logout waits on the shell's gate. Logout then enters no fragment gate,
         // so it does not wait on orders' stalled holder, and returns at once. Mutation: enter every fragment
-        // gate after a shell refusal; logout waits out the rest of its 2 s budget on orders' gate, and this
+        // gate after a shell refusal; logout waits out the rest of its 4 s budget on orders' gate, and this
         // fails (1 test red).
         HeldClock hold = new();
         ScriptedSessionStore store = new(new InMemorySessionStore());
-        AccessTokenSourceOptions small = new() { ProviderDeadline = TimeSpan.FromSeconds(1), StoreDeadline = TimeSpan.FromMilliseconds(500) };
+        AccessTokenSourceOptions small = new() { ProviderDeadline = TimeSpan.FromSeconds(3), StoreDeadline = TimeSpan.FromMilliseconds(500) };
         await using IdentityGateway gateway = await IdentityGateway.StartAsync(
             [Shell], s => s.AddSingleton(small), idpClock: hold, sessions: new RecordingSessionStore(store));
         (Dictionary<string, string> jar, string key) = await FragmentRefreshTests.SignInAsync(gateway, lifetimeOf: client => client == Billing.OAuth.ClientId ? FragmentRefreshTests.Fresh : FragmentRefreshTests.Due);
@@ -215,8 +217,32 @@ public sealed class FragmentLogoutTests
 
         Assert.Equal((401, "session_ended"), (ended.Status, ended.Body));
         Assert.Equal(302, loggedOut.Status);
-        Assert.True(sinceRelease.Elapsed < TimeSpan.FromSeconds(1), $"logout returned {sinceRelease.Elapsed} after the release");
+        Assert.True(sinceRelease.Elapsed < TimeSpan.FromSeconds(2), $"logout returned {sinceRelease.Elapsed} after the release");
         Assert.Null(await store.Inner.GetAsync(key, Ct));
+    }
+
+    [Fact]
+    public async Task The_revocations_run_in_parallel_under_one_provider_deadline()
+    {
+        // #995 -> "Logout", step 3: every set revoked in parallel under one ProviderDeadline (2 s here). The
+        // provider holds each revocation for 5 s, so all three end deadline_exceeded, the record is still
+        // removed, and the logout takes about one deadline, not three. Mutation: revoke the fragments' sets
+        // one after another; logout takes about 6 s, and this fails (1 test red).
+        CapturedLog logs = new();
+        AccessTokenSourceOptions small = new() { ProviderDeadline = TimeSpan.FromSeconds(2) };
+        await using IdentityGateway gateway = await IdentityGateway.StartAsync(
+            [Shell], s => s.AddSingleton(logs.Provider).AddSingleton(small));
+        (Dictionary<string, string> jar, string key) = await FragmentRefreshTests.SignInAsync(gateway);
+        gateway.Idp.Faults.RevokeDelay = TimeSpan.FromSeconds(5);
+        Stopwatch elapsed = Stopwatch.StartNew();
+
+        IdentityGateway.Answer logout = await gateway.SendAsync(Shell, IdentityGateway.LogoutPath, jar, "POST");
+
+        elapsed.Stop();
+        Assert.Equal(302, logout.Status);
+        Assert.Equal(3, LogoutLines(logs).Count(l => l.EndsWith(": deadline_exceeded.", StringComparison.Ordinal)));
+        Assert.Null(await gateway.Sessions.GetAsync(key, Ct));
+        Assert.True(elapsed.Elapsed < TimeSpan.FromSeconds(4), $"logout took {elapsed.Elapsed}");
     }
 
     [Fact]

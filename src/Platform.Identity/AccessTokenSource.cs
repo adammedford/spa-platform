@@ -12,7 +12,9 @@ namespace Platform.Identity;
 
 /// <summary>
 /// The access token for this request's session, refreshed when it is within a minute of expiry
-/// (plan row 3.8, ADR-0005, ADR-0017).
+/// (plan row 3.8, ADR-0005, ADR-0017). On a fragment's route (<see cref="IFragmentFeature"/>) it is that
+/// fragment's token set's token and never the shell's; each token set has its own session gate, its own
+/// refresh lease key and its own scheme, and everything below holds per set (#995, <see cref="TokenSet"/>).
 ///
 /// The gateway owns the orchestration and the library owns the protocol. Under the session's gate this
 /// takes the session from the store, not from the ticket the request authenticated with, decides whether
@@ -165,6 +167,13 @@ internal sealed partial class AccessTokenSource(
         if (FreshAccess(record, refresh.Set) is { } access)
         {
             return new AccessTokenResult.Token(access);
+        }
+
+        if (Absent(record, refresh.Set))
+        {
+            // No set to refresh: answered before any lease is asked for, so a fragment route with no set
+            // costs the lease table nothing.
+            return new AccessTokenResult.FragmentLoginRequired();
         }
 
         if (leases is null)
@@ -418,6 +427,14 @@ internal sealed partial class AccessTokenSource(
                 ? access
                 : null;
     }
+
+    /// <summary>
+    /// Whether a fragment's set has no refresh token: a set never acquired, one ended, and one recorded to
+    /// a changed client all read so (#995). The shell's set is never absent here: a shell set with no
+    /// refresh token ends the session, as before.
+    /// </summary>
+    private static bool Absent(SessionRecord record, TokenSet set) =>
+        set.Fragment is not null && set.Token(Deserialize(record).Properties, TokenSet.RefreshTokenName) is null;
 
     /// <summary>
     /// The library's refresh call, with the set's scheme and the app's sign-in scheme and the issuer's
