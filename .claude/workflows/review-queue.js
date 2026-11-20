@@ -124,7 +124,12 @@ export const meta = {
 // over those names: one agent and one place under the cap, and one row per name from that run, each
 // judged by its own name (statedList); a bracket of one token keeps its reading. A stated test keeps
 // the name as the body writes it: a dotted qualifier the description never writes is the inventory's
-// guess, and the row reads the bare name, its why saying what was stated (statedName). And a break
+// guess, and the row reads the bare name, its why saying what was stated (statedName). A stated test
+// the body names in prose, 'the refusal case' (#1436), is read as one runner test by the mutation
+// agent, which has the head checked out, before it breaks anything (statedProse, readProse); the row
+// is judged by that name, its why reading '(stated as <phrase>; read as <test>)', and a phrase no
+// single test answers is could-not-run, never did-not-fail. The inventory still hands the cell over
+// as the body writes it. And a break
 // that fails only in one image runs there: the body's environment for a stated mutation, the Broken
 // cell's ` (run in <image>)` for a held one (RUN_IN), once, in a container of that image; the agent
 // reports where it ran, the cell records it when that was not the host, and a run anywhere else is
@@ -616,8 +621,10 @@ const MUTATION = {
     // listed mutation names that the run did not include, [] for a mutation of one test.
     environment: { type: 'string', description: 'the container image the project ran in, its name alone such as ubuntu:26.04; "" when it ran on the host' },
     absent: { type: 'array', items: { type: 'string' }, description: 'the tests TESTS lists that the run did not include; [] when the mutation names one test' },
+    // The one test a stated phrase names (#1436), "" when the test is no phrase or none answers it.
+    readAs: { type: 'string', description: 'when the prompt says the body names the test in prose, the one test the phrase names, as it is defined; "" otherwise, or when no single test answers the phrase' },
   },
-  required: ['test', 'broken', 'failed', 'total', 'failingNames', 'result', 'why', 'environment', 'absent'],
+  required: ['test', 'broken', 'failed', 'total', 'failingNames', 'result', 'why', 'environment', 'absent', 'readAs'],
 }
 const POST = {
   type: 'object',
@@ -818,7 +825,12 @@ const mutatePrompt = (n, inv, m, i) => {
   const project = m.project || 'the project that runs it alone (find it from its name)'
   // A listed stated cell names its tests, each judged by the script from failingNames and absent
   // (#1327); a mutation that names an environment runs there once and nowhere else.
-  const named = m.tests ? `any of ${m.tests.join(', ')}` : m.test
+  // A stated phrase (#1436) is read as one test before the break, so the reading cannot follow the
+  // test that happened to go red; the script judges the row by that reading.
+  const named = m.tests ? `any of ${m.tests.join(', ')}` : m.prose ? 'the test you read the phrase as' : m.test
+  const reading = m.prose
+    ? `\n\nThe body names the test in prose: ${JSON.stringify(m.prose)}. Before you make the mutation, read ${project} at the head in ${wt} (its tests' names, docstrings and comments) and find the one test the phrase names, then write \`READ AS: <that test>\`, or \`READ AS: (no single test)\`, to the OUTPUT FILE. readAs: that test's name as it is defined, its method or test name alone, with its class before it and a dot only when another test there has the same name; "" when no test, or more than one, answers the phrase, and then the result is could-not-run, with why naming the phrase, and you break and run nothing. Judge the run by that test alone, never by which test went red.`
+    : ''
   const where = m.environment
     ? ` Run only ${project} there, once, in a container of the image ${m.environment} with the worktree mounted (\`docker run --rm -v ${wt}:${wt} -w ${wt} ${m.environment} ...\`), installing inside it only what the project needs; report that run's counts alone, and never run it again in another image or on the host. When Docker is absent or the image cannot be pulled, the result is could-not-run with why.`
     : ''
@@ -834,12 +846,12 @@ The test: ${m.test}, run by ${project}.${m.tests ? ` The author's cell lists ${m
     ? `The author states this mutation; apply it exactly as stated: ${m.mutation}. The body says: ${JSON.stringify(m.quote)}${m.failed >= 0 ? ` (failed ${m.failed}${m.total >= 0 ? ` of ${m.total}` : ''})` : ''}.`
     : m.kind === 'held'
     ? `The review record ${m.heldBy} held because this test did not fail with this broken: ${m.mutation}. Apply that break again, exactly as it says, never in the test${m.cell !== m.test ? ` (the record's row named ${JSON.stringify(m.cell)}; judge ${m.test} alone)` : ''}, and see whether the test goes red now.`
-    : `${m.kind === 'nominated' ? `The Standards axis suspects it cannot fail: ${m.why}. ` : ''}It guards: ${m.guards || '(say what it guards, from reading it)'}. Break that in the source it guards (${m.breaks || 'find it'}), never in the test, with the smallest change that should turn it red.`}
+    : `${m.kind === 'nominated' ? `The Standards axis suspects it cannot fail: ${m.why}. ` : ''}It guards: ${m.guards || '(say what it guards, from reading it)'}. Break that in the source it guards (${m.breaks || 'find it'}), never in the test, with the smallest change that should turn it red.`}${reading}
 
 1. Write \`HEAD=${inv.head}\` as the OUTPUT FILE's first line. If ${wt} already exists, an earlier run left it: \`git -C ${REPO} worktree remove --force ${wt}\`, then \`git -C ${REPO} worktree prune\`.
 2. \`git -C ${REPO} worktree add --detach ${wt} ${inv.head}\`. If the worktree cannot be made, the result is could-not-run with why.
 3. Make the mutation in ${wt} only. Run only ${project} there: a .NET test project with \`dotnet test --project <it>\`, a Terraform test directory with \`terraform test\` in it, a Python companion with \`python3 -I <it>\`. Never the solution.${where} Append the runner's output to the OUTPUT FILE as it prints it; never add a credential, token, cookie, code or state value to it.
-4. failed and total: the counts the runner printed; failingNames: the tests it named as failing, each whole as the runner printed it, its namespace or module and class kept where the runner printed them. environment: the image you ran the project in, its name alone, or "" when you ran it on the host. absent: ${m.tests ? `the tests of ${m.tests.join(', ')} the run did not include, [] when it ran them all` : '[]'}. result: reproduced when ${named} went red, did-not-fail when the project passed with the mutation in place, could-not-run when it could not be judged (the project does not build at the head, a tool is absent, the test was not found, the run timed out, the worktree could not be made), with why.${m.kind === 'held' ? ` removed, for this held mutation only: the code the held break names no longer exists at the head, so there is nothing to break. Prove it before you say so: search the head for the quoted code, and \`git -C ${wt} log -S'<a distinctive string of it>' --oneline ${inv.forkPoint}..${inv.head}\` must name the commit that removed it; why names that commit and quotes what it removed. Code that moved or was renamed, a break you could not locate, or a test that fails to build is not removed: it is could-not-run.` : ''}${m.kind === 'held' || m.kind === 'candidate' ? ` When the project went red with the break in place but ${m.test} stayed green, the result is reproduced all the same: failingNames names the tests that went red, and why says the break is caught by them and not by ${m.test}.` : ` When the project went red with the break in place but ${m.tests ? 'none of them' : m.test} stayed green, the result is did-not-fail: failingNames names the tests that went red.`} broken: what you broke, in one line.
+4. failed and total: the counts the runner printed; failingNames: the tests it named as failing, each whole as the runner printed it, its namespace or module and class kept where the runner printed them. environment: the image you ran the project in, its name alone, or "" when you ran it on the host. absent: ${m.tests ? `the tests of ${m.tests.join(', ')} the run did not include, [] when it ran them all` : '[]'}. result: reproduced when ${named} went red, did-not-fail when the project passed with the mutation in place, could-not-run when it could not be judged (the project does not build at the head, a tool is absent, the test was not found, the run timed out, the worktree could not be made), with why.${m.kind === 'held' ? ` removed, for this held mutation only: the code the held break names no longer exists at the head, so there is nothing to break. Prove it before you say so: search the head for the quoted code, and \`git -C ${wt} log -S'<a distinctive string of it>' --oneline ${inv.forkPoint}..${inv.head}\` must name the commit that removed it; why names that commit and quotes what it removed. Code that moved or was renamed, a break you could not locate, or a test that fails to build is not removed: it is could-not-run.` : ''}${m.kind === 'held' || m.kind === 'candidate' ? ` When the project went red with the break in place but ${m.test} stayed green, the result is reproduced all the same: failingNames names the tests that went red, and why says the break is caught by them and not by ${m.test}.` : ` When the project went red with the break in place but ${m.tests ? 'none of them' : m.prose ? 'the test you read the phrase as' : m.test} stayed green, the result is did-not-fail: failingNames names the tests that went red.`} broken: what you broke, in one line.${m.prose ? '' : ' readAs: "".'}
 5. Always, whatever happened above: \`git -C ${REPO} worktree remove --force ${wt}\` and \`git -C ${REPO} worktree prune\`.
 6. Write \`RESULT: <result>\` as the OUTPUT FILE's last line, then return the result.`
 }
@@ -958,7 +970,9 @@ const nominated = (s, byTest, i = 0) => {
 // with its wrapper dropped; each read as one name no failing name ended in, and two rows red on
 // exactly the stated tests read did-not-fail. So a cell with no wrapper is a list on the same terms
 // (STATED_BARE_LIST): an optional `<label>:`, then two or more comma-separated identifiers. One
-// name, with or without a label, and prose, whose parts are no identifiers, keep their reading.
+// name is no list and keeps its reading. One name under a label is no list either, and since its text
+// before any '(' holds a space, statedProse below reads it as prose, as it does any cell whose parts
+// are no identifiers (#1436).
 const STATED_LIST = /^\S+\s*\((?:[^():,]*:)?([^()]*)\)$/
 const STATED_BARE_LIST = /^(?:[^():,]*:)?([^():]*)$/
 const IDENTIFIER = /^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*$/
@@ -981,6 +995,32 @@ const statedName = (s, description) => {
   const qualifier = cell.slice(0, at)
   if (new RegExp(`(?<!\\w)${qualifier.replace(/\./g, '\\.')}(?!\\w)`).test(description)) return s
   return { ...s, test: cell.slice(at + 1), statedAs: `(stated as ${cell}; the description names no ${qualifier})` }
+}
+// A stated test the body names in prose (#1436). On #1435 the cell was 'the refusal case', which no
+// runner name can end in, so a run red on the test the body meant read did-not-fail and held. A cell
+// is prose as a nomination is (nominated() above): with its backticks dropped, its text before any
+// '(' holds a space. It is not
+// prose when it lists tests (statedList), is itself a candidate's test, or starts with a candidate's
+// test or a file, as 'x_tests.mjs `#1327 cause 3` checks' or 'x.py (companion)' does: those keep their
+// reading. A Node companion prints no test names, so a phrase on an .mjs project stays the caught row
+// the verdict answers by its checks' messages (#905). The mutation agent reads the phrase, since it
+// has the head checked out and runs the test, and the inventory judges nothing; readProse in
+// mutationRow judges the row by its reading.
+const statedProse = (s, byTest) => {
+  const cell = String(s.test || '').replace(/`/g, '').trim()
+  const first = (/^[^\s(]*/.exec(cell) || [''])[0]
+  if (!/\s/.test(cell.split('(')[0].trim()) || statedList(cell) || byTest.has(cell) || byTest.has(first)) return null
+  if (first.includes('/') || FILE_CELL.test(first) || /\.mjs$/.test(s.project || '')) return null
+  return cell
+}
+// The test a stated phrase was read as, from the agent's readAs: one bare or dotted name. Anything
+// else, "" included, is a phrase no single test answers, which mutationRow makes could-not-run. An
+// agent that returned no result leaves the phrase, its row could-not-run already.
+const readProse = (m, got) => {
+  if (!m.prose || !got) return m
+  const read = String(got.readAs || '').replace(/`/g, '').trim()
+  if (!IDENTIFIER.test(read)) return { ...m, unread: read }
+  return { ...m, test: read, statedAs: `(stated as ${m.prose}; read as ${read})` }
 }
 // The rows one mutation gives: one per name of a listed stated cell, each carrying the cell it was
 // listed in, or the mutation itself.
@@ -1043,7 +1083,8 @@ const mutationList = (inv, standards, d, prior = { held: null, clearers: [] }) =
     ...held,
     ...(inv.statedMutations || []).map((s) => {
       const tests = statedList(s.test)
-      const read = tests ? { ...s, tests } : statedName(s, inv.description)
+      const prose = !tests && statedProse(s, byTest)
+      const read = tests ? { ...s, tests } : prose ? { ...s, prose } : statedName(s, inv.description)
       return borrowed({ ...(byTest.get(read.test) || byTest.get(s.test)), ...read, environment: s.environment || '', kind: 'stated' })
     }),
     ...((standards && standards.nominations) || []).map((s, i) => borrowed(nominated(s, byTest, i))), // empty-ok: a null Standards axis fails the pull request before mutationList runs, so standards is never null here
@@ -1075,8 +1116,10 @@ const clearedText = (cleared) => cleared.map((c) => `${c.test} (cleared by ${c.u
 
 // One row per mutation. An agent that dies, returns nothing or returns a result that is none of the
 // three is a could-not-run row, so a dead agent never reads as a pass and the verdict still runs.
-const mutationRow = (n, m, i, got) => {
+const mutationRow = (n, given, i, got) => {
   const ok = got && RESULTS.includes(got.result)
+  // A stated phrase is judged by the test the agent read it as (#1436), from here on as if stated so.
+  const m = readProse(given, ok && got)
   const row = {
     test: m.test, kind: m.kind, guards: m.guards || m.why || '', mutation: m.mutation || '',
     broken: (ok && got.broken) || m.mutation || '', failed: ok && Number.isInteger(got.failed) ? got.failed : 0,
@@ -1102,6 +1145,13 @@ const mutationRow = (n, m, i, got) => {
   // written into the Broken cell so that RUN_IN reads it back, and would be lost to the next review.
   unjudged(row.environment && !/^[^()\s]+$/.test(row.environment), `the agent reported the environment ${JSON.stringify(row.environment)}, which is no image name`)
   unjudged(m.environment && row.environment !== m.environment, `the break needs ${m.environment} and ran in ${row.environment || 'the host'}`)
+  // A stated phrase no single test answers (#1436): no run can show a test nobody named green, so the
+  // row is could-not-run whatever the agent reported, and why names the phrase. Before the catch
+  // below, so a red run on other tests never makes it did-not-fail.
+  if (m.prose && m.unread !== undefined) {
+    row.why = `no single test answers the stated phrase ${JSON.stringify(m.prose)}${m.unread ? `; the agent read it as ${JSON.stringify(m.unread)}, which is no one test` : ''}: ${row.why}`.replace(/: $/, '')
+    row.result = 'could-not-run'
+  }
   // A name of a listed stated cell (#1327), judged by its own name from the one run: absent from the
   // run, it is could-not-run; reported red with no failing name, which name went red is unknown.
   const own = (f) => `.${dotted(f)}`.endsWith(`.${m.test}`)
