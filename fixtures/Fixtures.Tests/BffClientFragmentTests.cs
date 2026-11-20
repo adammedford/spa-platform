@@ -154,6 +154,23 @@ public sealed partial class BffClientTests
     }
 
     [Fact]
+    public async Task A_401_with_a_body_that_is_not_json_resolves_untouched_and_starts_no_login()
+    {
+        // A 401 whose body has no code, as a HEAD call's 401 has none: the client still resolves the
+        // Response to its caller, as "resolves to the upstream's Response, whatever its status" asks,
+        // and starts nothing. Mutation: dropping codeOf's rejection handler turns this red, since
+        // the failed parse then rejects the caller's promise.
+        await using BffClientPage harness = await BffClientPage.OpenAsync(headless.Browser, "/orders/42");
+        harness.Api = _ => new StubAnswer(401);
+
+        JsonElement status = await harness.CallAsync($"BffClient.api('{FragmentApi}/whoami').then(r => r.status, e => e.name)");
+        await harness.CallAsync("BffClient.api('/api/orders/whoami').then(r => r.status, e => e.name)");
+
+        Assert.Equal(401, status.GetInt32());
+        Assert.Empty(harness.RequestsTo("/bff/login"));
+    }
+
+    [Fact]
     public async Task Session_returns_the_fragments_map_and_never_the_token()
     {
         // GET /bff/session -> fragments: every fragment of the current entry, by state. The client
