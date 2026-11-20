@@ -26,7 +26,7 @@ decision made or revised after the 11 October 2026 export belongs in `docs/adr/`
 | Request gate | [`request-gate.md`](request-gate.md) | G1a, with the browser contract | Workstream 4, and workstream 6's negative suite |
 | Upstream contract | [`upstream-contract.md`](upstream-contract.md) | G1a | Workstream 4 and the mock API |
 | S3 layout | [`s3-layout.md`](s3-layout.md) | G1a | Workstreams 1 and 2 |
-| Infrastructure outputs | [`infra-outputs.schema.json`](infra-outputs.schema.json), [`infra-outputs.example.json`](infra-outputs.example.json) | G1a | Workstream 1, the scripts, workstream 6 |
+| Infrastructure outputs | [`infra-outputs.schema.json`](infra-outputs.schema.json), [`infra-outputs.example.json`](infra-outputs.example.json) | G1a | `spactl`, workstream 1, the scripts, workstream 6 |
 | Resource tags | [`resource-tags.md`](resource-tags.md) | G1a | Workstream 1, `teardown.sh`, workstream 6 |
 | Telemetry | [`telemetry.md`](telemetry.md) | G1a | Everyone |
 | Records and interfaces | `src/Platform.Abstractions` (task I-3) | G1a, except the identity interfaces at G1b | Workstreams 2, 3, 4, 6 |
