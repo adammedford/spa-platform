@@ -3,8 +3,9 @@
 The vocabulary of the Enterprise SPA Platform. Use these terms in issue titles, test names, commit
 messages and code. Where a term has a tempting synonym, the entry says which word to avoid.
 
-Definitions are drawn from `docs/plan/` and the decisions in `docs/adr/`. The plan is the frozen
-export; a term that changes meaning should be changed here and in the ADR that moved it.
+Definitions are drawn from `docs/plan/`, the frozen export, and from the decisions made since, which
+`docs/adr/README.md` → "Where a decision lives" places. A term that changes meaning is changed here,
+by a merge that cites the decision that moved it.
 
 ## The unit of deployment and the unit of tenancy
 
@@ -20,11 +21,12 @@ unreadable under another. In Phase 1 each task has a ring of its own, the "key d
 closes. See ADR-0025.
 _Avoid_: "keys" alone, which also means client secrets and KMS keys.
 
-**Instance** — one running copy of the gateway with its own live snapshot: in a cell, one ECS task of
-the service; in the hermetic tier, one harness host. `/readyz` names the instance that answered, and
-a wait for a revision covers every instance a cell runs (change request P2-5).
-_Avoid_: "instance" for an EC2 instance or for a copy of a Terraform module; "process", which is
-not the unit when two hosts share one test process.
+**Instance** — one running copy of the gateway with its own live snapshot: in a cell, one ECS task
+of the service; in the hermetic tier, one harness host. `/readyz` names the instance that answered,
+and a wait for a revision covers every instance a cell runs (change request
+p2-5-readiness-reports-registry-revision).
+_Avoid_: "instance" for an EC2 instance or for a copy of a Terraform module; "process", which is not
+the unit when two hosts share one test process.
 
 **Platform project** — the AWS project the platform is built in: the one whose account
 `tools/preflight.sh` checks against the git-ignored pin. A profile name does not identify it; the
@@ -354,8 +356,7 @@ lifecycle and decision form: `docs/agents/tracker-policy.md` → "Change request
 prose, "proposal", "change-request file" for a new one.
 
 **Ticket** — one unit of work with its acceptance criteria, held as an issue on this repository and
-cited as `#NNN`, and closed when its work lands. The tickets of one feature are sub-issues of its
-spec.
+cited as `#NNN`. The tickets of one feature are sub-issues of its spec.
 
 **Spec** — the statement of a feature's problem, solution and acceptance that its tickets are cut
 from, held the same way and closed when the feature lands. Not "the plan": `docs/plan/` is the
@@ -419,16 +420,17 @@ work only the human can steer or approve as it happens. _Avoid_: "interactive se
 "foreground" for where a file lives.
 
 **Scripted session** — an agent session a workflow script launches: a lane's implementer, a
-reviewer, a griller, the report writer. It drafts and never commits an ADR or a frozen contract's
-sentence (ADR-0021 decision 4). _Avoid_: "background agent", "subagent", for this.
+reviewer, a griller, the report writer. See ADR-0021.
+_Avoid_: "background agent", "subagent", for this.
 
 **Pre-accepted answer** — an answer written under a standing answer: the recommendation, taken on
-the night. Provisional until confirmed: a lane's code may rest on it until the human lands, but no
-steering document, ticket body or new ticket does. Not "accepted".
+the night. Provisional until confirmed: a lane's code may rest on it until the human lands. Not
+"accepted". See ADR-0021.
 
 **Confirmed answer** — an answer the human wrote, or a pre-accepted answer the human confirmed on
-the run's `Overnight <date>` issue. The only answer a session applies to a steering document, a
-ticket body or a new ticket.
+the run's `Overnight <date>` issue. What a session may apply one to: `docs/agents/landing-work.md` →
+"A commit that changes a steering document", and `docs/agents/tracker-policy.md` for a ticket's
+body. See ADR-0021.
 
 **Decision comment** — the human's comment on a change request that decides it: accept, accept with
 changes or decline, and whether the decision gets an ADR. It is the confirmed answer that the edit
@@ -490,9 +492,9 @@ own in a comment or a review submitted as a comment. What it covers, which recor
 writes one: `docs/agents/review.md` → "The review record". _Avoid_: review-evidence line, review
 disposition, approval.
 
-**Open review** — the state of a pull request whose head no review record yet clears: a review
-running or holding, commits pushed after the last reviewed head, or a merge made without a review.
-It closes when a record names that head with a merge verdict and the findings it raised have landed.
+**Open review** — the state of a pull request whose review is not finished: no review record clears
+its current head, or a clearing record's findings are not yet resolved. What resolves a finding, and
+what waits on an open review: `docs/agents/landing-work.md` → "Gates".
 
 **Hand-over** — the morning's closing statement, on the `Overnight <date>` issue and the console:
 what the human runs next (the landing command, the issues to close, the worktrees to remove) and
