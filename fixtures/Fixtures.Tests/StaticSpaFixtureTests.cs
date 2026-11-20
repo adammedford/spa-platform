@@ -22,6 +22,8 @@ public sealed partial class StaticSpaFixtureTests
     public void There_is_one_spa_per_app_definition()
     {
         // App 3 is published during F-07, so its release exists before its definition reaches the apps root.
+        // The fixture shell's release is here too, and its definition with its fragments under
+        // fixtures/fragments/ (#998), as the seed's --shell step reads them.
         Assert.Equal(
             FixtureFiles.AllDefinitions.Select(Path.GetFileNameWithoutExtension),
             Directory.EnumerateDirectories(FixtureFiles.Path("fixtures", "spa")).Select(Path.GetFileName).Order(StringComparer.Ordinal));

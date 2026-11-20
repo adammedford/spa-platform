@@ -72,6 +72,38 @@ public sealed record ApiListenerOptions(
     string? Audience,
     ImmutableArray<string> AdmittedClients)
 {
+    private readonly ImmutableArray<string> validAudiences = [];
+
+    /// <summary>
+    /// The audiences a token may be bound to, any one of which is enough; empty means this API checks
+    /// no audience. <see cref="Audience"/>, when set, is always one of them, so the options a listener
+    /// had before #998 keep their meaning. More than one is for an upstream that a shell and its
+    /// fragments both name: a fragment may set its own <c>resource</c>, and Cognito puts the
+    /// <c>resource</c> in the access token's <c>aud</c>. That proves resource binding only; which
+    /// client may call is <see cref="AdmittedClients"/> and <see cref="RouteAdmissions"/> (#961,
+    /// "Fragment routes at the proxy").
+    /// </summary>
+    public ImmutableArray<string> ValidAudiences
+    {
+        get => Audience is null || validAudiences.Contains(Audience, StringComparer.Ordinal)
+            ? validAudiences
+            : [Audience, .. validAudiences];
+
+        // A default array (a with-expression from a zeroed struct, say) reads as none.
+        init => validAudiences = value.IsDefault ? [] : value;
+    }
+
+    /// <summary>
+    /// The clients admitted on one of this API's own routes (<c>/whoami</c>, <c>/echo</c>,
+    /// <c>/admin</c>), in place of <see cref="AdmittedClients"/> on that route; a route not listed
+    /// admits <see cref="AdmittedClients"/>. The gateway removes its prefix from a shell's route and a
+    /// fragment's alike, so the upstream sees the same path from both and tells them apart only by
+    /// <c>client_id</c> (contracts/upstream-contract.md -> "Fragment routes"): one listener can then
+    /// admit the shell's client on one route and a fragment's on another (#998).
+    /// </summary>
+    public ImmutableDictionary<string, ImmutableArray<string>> RouteAdmissions { get; init; } =
+        ImmutableDictionary<string, ImmutableArray<string>>.Empty;
+
     /// <summary>The scope <c>/whoami</c> and <c>/echo</c> need.</summary>
     public string ReadScope => ScopeIdentifier + "/read";
 
