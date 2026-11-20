@@ -131,12 +131,13 @@ public sealed partial class BffClientTests(HeadlessBrowser headless) : IClassFix
     }
 
     [Theory]
-    [MemberData(nameof(UnauthorizedCodes))]
+    [MemberData(nameof(LoginCodes))]
     public async Task A_401_from_the_api_logs_in_again_and_comes_back_here(string code)
     {
         // Both 401s mean the same thing to the page, "no session": unauthenticated never had one, and
         // session_ended had its refresh token refused. Either way the way back is a fresh login that
-        // returns to where the user was.
+        // returns to where the user was. The codes are the Errors table's 401s whose session is not
+        // kept; fragment_login_required keeps it and is the other test's (#998).
         await using BffClientPage harness = await BffClientPage.OpenAsync(headless.Browser, "/orders/42?tab=lines");
         harness.Api = _ => StubAnswer.Problem(401, code);
 
@@ -212,7 +213,7 @@ public sealed partial class BffClientTests(HeadlessBrowser headless) : IClassFix
         Assert.DoesNotContain(Token, exposed, StringComparison.Ordinal);
     }
 
-    public static TheoryData<string> UnauthorizedCodes() => [.. Contract.UnauthorizedCodes];
+    public static TheoryData<string> LoginCodes() => [.. Contract.LoginCodes];
 
     private static void AssertLogin(IRequest login, string returnUrl)
     {
@@ -258,13 +259,25 @@ public sealed partial class BffClientTests(HeadlessBrowser headless) : IClassFix
         public static IReadOnlyList<string> UnauthorizedCodes =>
             [.. UnauthorizedRow().Matches(Text).Select(m => m.Groups[1].Value)];
 
+        /// <summary>
+        /// The 401 codes whose row says "the session is kept": a fragment's token set is missing, and
+        /// the shell's session stands, so nothing logs in again (#961, "The session record").
+        /// </summary>
+        public static IReadOnlyList<string> SessionKeptCodes =>
+            [.. UnauthorizedRow().Matches(Text)
+                .Where(m => m.Groups["meaning"].Value.Contains("the session is kept", StringComparison.Ordinal))
+                .Select(m => m.Groups[1].Value)];
+
+        /// <summary>The 401 codes that mean there is no session now, so the client logs in again.</summary>
+        public static IReadOnlyList<string> LoginCodes => [.. UnauthorizedCodes.Except(SessionKeptCodes, StringComparer.Ordinal)];
+
         private static Match Require(Match match, string what) =>
             match.Success ? match : throw new InvalidOperationException($"contracts/http-contract.md: {what}.");
 
         [GeneratedRegex(@"^\| `(?<header>X-[A-Za-z-]+)` \| (?<on>[^|]+) \| [^|]*`(?<field>[A-Za-z]+)` in the `GET /bff/session` response", RegexOptions.Multiline, RegexTimeout.Milliseconds)]
         private static partial Regex HeaderRowPattern();
 
-        [GeneratedRegex(@"^\| 401 \| `([a-z_]+)` \|", RegexOptions.Multiline, RegexTimeout.Milliseconds)]
+        [GeneratedRegex(@"^\| 401 \| `([a-z_]+)` \|(?<meaning>[^\n]*)", RegexOptions.Multiline, RegexTimeout.Milliseconds)]
         private static partial Regex UnauthorizedRow();
     }
 }

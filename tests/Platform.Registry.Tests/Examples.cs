@@ -34,7 +34,9 @@ internal static class Examples
 
     /// <summary>
     /// The example registry with a second entry: the first one copied under another appId, host and
-    /// client id, so that it is valid on its own. <paramref name="change"/> then breaks the second.
+    /// client id, its fragment's client id included, so that it is valid on its own (a fragment's
+    /// clientId is unique across every shell and every fragment). <paramref name="change"/> then
+    /// breaks the second.
     /// </summary>
     public static JsonObject RegistryWithSecondEntry(Action<JsonObject>? change = null) =>
         Registry(document =>
@@ -44,6 +46,16 @@ internal static class Examples
             second["host"] = "app2.spa-poc.test:8443";
             second["oauth"]!["clientId"] = "2example23456789";
             second["oauth"]!["clientSecretRef"] = "ssm:/spa-platform/poc/apps/app2/client-secret:1";
+            if (second["fragments"] is JsonArray fragments)
+            {
+                foreach (JsonNode? fragment in fragments)
+                {
+                    string id = fragment!["fragmentId"]!.GetValue<string>();
+                    fragment["oauth"]!["clientId"] = "3example-" + id;
+                    fragment["oauth"]!["clientSecretRef"] = $"ssm:/spa-platform/poc/apps/app2/fragments/{id}/client-secret:1";
+                }
+            }
+
             change?.Invoke(second);
             document["apps"]!.AsArray().Add(second);
         });

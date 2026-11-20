@@ -39,7 +39,7 @@ internal sealed class BffClientPage : IAsyncDisposable
     /// <summary>What <c>GET /bff/session</c> answers.</summary>
     public StubAnswer Session { get; set; } = StubAnswer.Problem(401, "unauthenticated");
 
-    /// <summary>What any request under <c>/api/</c> answers.</summary>
+    /// <summary>What any request under <c>/api/</c> or <c>/fragments/</c> answers.</summary>
     public Func<IRequest, StubAnswer> Api { get; set; } = _ => StubAnswer.Ok(new { ok = true });
 
     public IReadOnlyList<IRequest> Requests => [.. requests];
@@ -98,6 +98,10 @@ internal sealed class BffClientPage : IAsyncDisposable
                 Body = "<!doctype html><title>provider</title>",
             }),
             string path when path.StartsWith("/api/", StringComparison.Ordinal) => Fulfil(route, Api(route.Request)),
+
+            // A fragment's API (#998): the same stub, since what differs is the token the gateway
+            // forwards, which a page never sees.
+            string path when path.StartsWith("/fragments/", StringComparison.Ordinal) => Fulfil(route, Api(route.Request)),
             _ => route.FulfillAsync(new()
             {
                 Status = 200,

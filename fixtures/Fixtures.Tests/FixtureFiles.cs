@@ -47,8 +47,33 @@ internal static class FixtureFiles
     /// <summary>App 3, which stays out of the apps root until F-07 onboards it.</summary>
     internal static IEnumerable<string> OnboardingDefinitions => Definitions("onboarding");
 
+    /// <summary>
+    /// The shells with fragments (#998), beside their fragments' content under
+    /// <c>fixtures/fragments/</c> and out of the directories the apps root and the seed read by
+    /// default: no fragment-bearing registry write reaches a cell before it runs the whole fragments
+    /// build (#961, "The deployment prerequisite").
+    /// </summary>
+    internal static IEnumerable<string> FragmentDefinitions => Definitions("fragments");
+
     /// <summary>Every app definition, wherever it waits.</summary>
-    internal static IEnumerable<string> AllDefinitions => AppDefinitions.Concat(OnboardingDefinitions);
+    internal static IEnumerable<string> AllDefinitions =>
+        AppDefinitions.Concat(OnboardingDefinitions).Concat(FragmentDefinitions);
+
+    /// <summary>
+    /// The definition's own <c>oauth</c> block and each fragment's, since each is one client the
+    /// apps root creates and one token set the gateway holds.
+    /// </summary>
+    internal static IEnumerable<JsonNode> OAuthBlocks(JsonNode definition) =>
+        [definition["oauth"]!, .. Fragments(definition).Select(fragment => fragment["oauth"]!)];
+
+    /// <summary>Every <c>apis</c> entry of a definition, the shell's and each fragment's.</summary>
+    internal static IEnumerable<JsonNode> Apis(JsonNode definition) =>
+        [.. (definition["apis"]?.AsArray() ?? []).Select(api => api!),
+         .. Fragments(definition).SelectMany(fragment => (fragment["apis"]?.AsArray() ?? []).Select(api => api!))];
+
+    /// <summary>A definition's fragments, none when it lists none.</summary>
+    internal static IEnumerable<JsonNode> Fragments(JsonNode definition) =>
+        (definition["fragments"]?.AsArray() ?? []).Select(fragment => fragment!);
 
     /// <summary>The user pool's resource servers and test users.</summary>
     internal static JsonNode CognitoPool => Read(Path("fixtures", "cognito", "pool.json"));

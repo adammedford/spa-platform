@@ -894,6 +894,43 @@ FENCED_ONLY = {
         "- [x] Done.\n\n````markdown\nA template:\n```\n- [ ] Quoted.\n```\n- [ ] Quoted after.\n````\n",
     "tildes holding backticks": "- [x] Done.\n\n~~~\n```\n- [ ] Quoted.\n```\n- [ ] Quoted after.\n~~~\n",
     "#1215's shape": ISSUE_1215,
+    # #1431: a fence opened inside a list item holds what is indented to the item's content, a
+    # blank line among it included, and a fence may sit up to three columns further in.
+    "a fence inside a list item": "- [x] Done.\n  ```\n  - [ ] Quoted.\n  ```\n",
+    "a fence indented under a list item": "- [x] Done.\n    ```\n    - [ ] Quoted.\n    ```\n",
+    "a fence in a list item holding a blank line": "- [x] Done.\n  ```\n\n  - [ ] Quoted.\n  ```\n",
+    "a fence in an ordered item": "- [x] Done.\n1. Steps:\n   ```\n   - [ ] Quoted.\n   ```\n",
+    "a tab-indented fence under a list item": "- [x] Done.\n\t```\n\t- [ ] Quoted.\n\t```\n",
+    "a fence indented three spaces": "Intro.\n\n   ```\n- [ ] Quoted.\n   ```\n",
+    "a fence one space in, never shut": "- [x] Done.\n\n ```\n- [ ] Quoted.\n",
+    # A paragraph after a blank line ends the item, so the fence after it is the body's own and a
+    # line left of the item's content does not shut it.
+    "a fence after the item has ended": "- [x] Done.\n\nIntro.\n  ```\n- [ ] Quoted.\n",
+    # #1431's review: a heading or a rule at the item's content column is the item's own, so the
+    # fence after it is still read from that column.
+    "a fence after a heading inside a list item": "- [x] Done.\n  # H\n  ```\n  - [ ] Quoted.\n  ```\n",
+    "a fence after a rule inside a list item": "- [x] Done.\n  ***\n  ```\n  - [ ] Quoted.\n  ```\n",
+}
+
+# #1431's review record (https://github.com/adammedford/spa-platform/pull/1406#issuecomment-6999030449):
+# GitHub renders the box in each, and open_boxes read none.
+FENCE_NEVER_SHUT = {
+    "a run indented four spaces": "    ```\n- [ ] Open.\n",
+    "a fence opened inside a list item": "- item\n  ```\n  code\n- [ ] Open.\n",
+}
+
+# #1431's review: a heading, a rule or a block quote is no paragraph's lazy line, so it ends the item
+# it is left of, and the run four columns in after it is indented code or the quote's text. GitHub
+# renders the box in each, checked with `gh api markdown`; read as lazy, the item stayed open, the run
+# opened a fence two columns into it, and the box was hidden. "- - -" is a rule, not an item.
+ENDED_BY_A_BREAK = {
+    "an item ended by a heading": "- item\n# H\n    ```\n  - [ ] Open.\n",
+    "an item ended by a rule": "- item\n***\n    ```\n  - [ ] Open.\n",
+    "an item ended by a dash rule": "- item\n---\n    ```\n  - [ ] Open.\n",
+    "an item ended by a block quote": "- item\n> q\n    ```\n  - [ ] Open.\n",
+    "a spaced dash rule": "- - -\n    ```\n  - [ ] Open.\n",
+    "a spaced star rule": "* * *\n    ```\n  - [ ] Open.\n",
+    "no lazy line after a heading": "- item\n  # H\nfoo\n    ```\n  - [ ] Open.\n",
 }
 
 
@@ -963,6 +1000,23 @@ class FencedBoxTests(unittest.TestCase):
             "a run with text after it inside a fence": "```\n```x\n```\n- [ ] Open.\n",
             "a line that starts with an inline code span": "```inline``` is how a span reads\n- [ ] Open.\n",
             "a tilde fence whose info string holds a backtick": "~~~ `x`\n- [ ] Quoted.\n~~~\n- [ ] Open.\n",
+            # #1431: four columns in is indented code, not a fence, and a fence opened inside a list
+            # item shuts with the item, on the first line left of the item's content.
+            **FENCE_NEVER_SHUT,
+            **ENDED_BY_A_BREAK,
+            "a run indented by a tab": "\t```\n- [ ] Open.\n",
+            "a fence under an ordered item": "1. item\n   ```\n   code\n- [ ] Open.\n",
+            "a fence under a star item": "* item\n  ```\n  code\n- [ ] Open.\n",
+            "a nested item's fence shuts at its parent's content": "- item\n  - nested\n    ```\n    code\n  - [ ] Open.\n",
+            "the line that shuts an item's fence opens a fence of its own":
+                "- item\n  ```\n  code\n```\n- [ ] Quoted.\n```\n- [ ] Open.\n",
+            "an item's content past a wider gap": "-   item\n    ```\n    code\n  - [ ] Open.\n",
+            "a gap of five columns starts the content one past the marker":
+                "-     code\n  ```\n  code\n - [ ] Open.\n",
+            "a lazy line keeps the item open": "- item\ntext\n  ```\n- [ ] Open.\n",
+            "a closing run indented four spaces shuts nothing": "```\n    ```\n- [ ] Quoted.\n```\n- [ ] Open.\n",
+            "a closing run four past the item's content shuts nothing":
+                "- item\n  ```\n      ```\n  - [ ] Quoted.\n  ```\n- [ ] Open.\n",
         }
         for fence, body in bodies.items():
             with self.subTest(fence=fence):
@@ -971,6 +1025,18 @@ class FencedBoxTests(unittest.TestCase):
                 done = self.ask(case, "issue-611", 611)
                 self.assertEqual(["landing-subjects: open box: 1 Open.",
                                   "landing-subjects: subject: Merge part of task issue-611"], done.stdout.splitlines())
+
+    def test_a_full_landing_is_held_on_a_box_after_a_fence_that_never_opened_or_shut_with_its_item(self):
+        # #1431: on each body --base passed "Merge task" although GitHub renders the open box.
+        for fence, body in {**FENCE_NEVER_SHUT, **ENDED_BY_A_BREAK}.items():
+            with self.subTest(fence=fence):
+                case = Case(self)
+                case.issue(1431, body)
+                sha = case.commit("Merge task issue-1431: the fences", "Ticket: #1431")
+                done = case.run()
+                self.assertEqual(1, done.returncode, done.stdout + done.stderr)
+                self.assertIn(f'landing-subjects: held: {sha} "Merge task issue-1431: the fences" lands #1431 '
+                              'whole, but #1431 has 1 open box: box 1 "Open."', done.stdout.splitlines())
 
 
 STRICT = ("--base", "base", "--fail-unchecked")

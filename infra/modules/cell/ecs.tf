@@ -112,6 +112,12 @@ locals {
     # upstreams it may name.
     { for index, suffix in var.allowed_host_suffixes : "Policy__AllowedHostSuffixes__${index}" => suffix },
     { for index, upstream in var.allowed_upstreams : "Policy__AllowedUpstreams__${index}" => upstream },
+    # Fragments (#961). The schema marks both optional, and the gateway supplies its own placeholder
+    # for an absent one (contracts/platform-config.schema.json -> Policy.FragmentsPerShell,
+    # Policy.MergeBudget), so each is present only behind its input and the default inputs add no
+    # key: a Phase 1 task definition is unchanged.
+    var.fragments_per_shell != null ? { "Policy__FragmentsPerShell" = tostring(var.fragments_per_shell) } : {},
+    var.merge_budget != null ? { "Policy__MergeBudget" = tostring(var.merge_budget) } : {},
     # UsePlatformForwardedHeaders trusts X-Forwarded-Proto and X-Forwarded-For from these addresses
     # and from nowhere else (contracts/pipeline.md, UsePlatformForwardedHeaders; N-09). The contract
     # names the value itself -- "The ALB subnets, in CIDR form"
