@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Primitives;
 using Platform.Abstractions;
 using Yarp.ReverseProxy.Configuration;
@@ -9,7 +10,8 @@ namespace Platform.Proxy;
 /// <summary>
 /// The routes and clusters one registry snapshot produces: task 4.1, and ADR-0006's decision in
 /// code. One route per app and API, matched on the app's host and <c>/api/{name}/**</c>, with the
-/// prefix removed, to the one upstream the entry names.
+/// prefix removed, to the one upstream the entry names; and one per fragment and fragment API, on
+/// <c>/fragments/{fragmentId}/api/{name}/**</c> the same way (#996).
 ///
 /// Nothing here reads the request. A destination comes from the snapshot or from nowhere, which is
 /// what makes threat T5, a steerable proxy, unreachable.
@@ -47,26 +49,19 @@ public sealed class RegistryProxyConfig : IProxyConfig
         {
             foreach (ApiDefinition api in app.Apis)
             {
-                string id = RouteId(app.AppId, api.Name);
+                Add(routes, clusters, app, fragmentId: null, api, new PathString(ShellApi));
+            }
 
-                routes.Add(new RouteConfig
+            // A fragment's names are its own namespace, so the same name and the same upstream under
+            // the shell and a fragment are two routes, each with its own id and, through the token
+            // step's cross-check, its own client's token (contracts/upstream-contract.md -> Fragment
+            // routes).
+            foreach (FragmentDefinition fragment in app.Fragments)
+            {
+                foreach (ApiDefinition api in fragment.Apis)
                 {
-                    RouteId = id,
-                    ClusterId = id,
-                    Match = new RouteMatch { Hosts = [app.Host], Path = PathFor(api.Name) },
-                }.WithTransformPathRemovePrefix(PrefixFor(api.Name)));
-                clusters.Add(new ClusterConfig
-                {
-                    ClusterId = id,
-                    Destinations = new Dictionary<string, DestinationConfig>(StringComparer.Ordinal)
-                    {
-                        [OnlyDestination] = new DestinationConfig { Address = api.Upstream.AbsoluteUri },
-                    },
-
-                    // An idle limit: YARP restarts it on the response headers and on every body read
-                    // or write, so it bounds silence rather than the whole exchange (T-C17, T-C18).
-                    HttpRequest = new ForwarderRequestConfig { ActivityTimeout = api.Timeout },
-                });
+                    Add(routes, clusters, app, fragment.FragmentId, api, PlatformPaths.FragmentApi(fragment.FragmentId));
+                }
             }
         }
 
@@ -79,12 +74,66 @@ public sealed class RegistryProxyConfig : IProxyConfig
     /// </summary>
     internal void Revoke() => revoked.Cancel();
 
-    /// <summary>An app and one of its API names. Unique, because both parts are.</summary>
-    private static string RouteId(string appId, string apiName) => appId + "/" + apiName;
+    /// <summary>
+    /// The route metadata key naming the app a route belongs to, which the token step compares with
+    /// <see cref="IAppFeature"/>.
+    /// </summary>
+    internal const string AppIdKey = "platform.appId";
 
-    /// <summary>The prefix the browser contract puts an API behind, and the proxy removes.</summary>
-    private static string PrefixFor(string apiName) => "/api/" + apiName;
+    /// <summary>
+    /// The route metadata key naming the fragment a fragment's route belongs to, absent on a shell's
+    /// route, which the token step compares with <see cref="IFragmentFeature"/>
+    /// (contracts/pipeline.md -> Which token set a request uses).
+    /// </summary>
+    internal const string FragmentIdKey = "platform.fragmentId";
 
-    /// <summary>Everything under the prefix, forwarded as it came.</summary>
-    private static string PathFor(string apiName) => PrefixFor(apiName) + "/{**rest}";
+    /// <summary>The prefix the browser contract puts a shell's API behind.</summary>
+    private const string ShellApi = "/api";
+
+    private static void Add(
+        List<RouteConfig> routes,
+        List<ClusterConfig> clusters,
+        AppDefinition app,
+        string? fragmentId,
+        ApiDefinition api,
+        PathString apiPrefix)
+    {
+        string id = RouteId(app.AppId, fragmentId, api.Name);
+        string prefix = apiPrefix.Add("/" + api.Name).Value!;
+
+        Dictionary<string, string> metadata = new(StringComparer.Ordinal) { [AppIdKey] = app.AppId };
+        if (fragmentId is not null)
+        {
+            metadata[FragmentIdKey] = fragmentId;
+        }
+
+        routes.Add(new RouteConfig
+        {
+            RouteId = id,
+            ClusterId = id,
+            Match = new RouteMatch { Hosts = [app.Host], Path = prefix + "/{**rest}" },
+            Metadata = metadata,
+        }.WithTransformPathRemovePrefix(prefix));
+        clusters.Add(new ClusterConfig
+        {
+            ClusterId = id,
+            Destinations = new Dictionary<string, DestinationConfig>(StringComparer.Ordinal)
+            {
+                [OnlyDestination] = new DestinationConfig { Address = api.Upstream.AbsoluteUri },
+            },
+
+            // An idle limit: YARP restarts it on the response headers and on every body read
+            // or write, so it bounds silence rather than the whole exchange (T-C17, T-C18).
+            HttpRequest = new ForwarderRequestConfig { ActivityTimeout = api.Timeout },
+        });
+    }
+
+    /// <summary>
+    /// <c>{appId}/{name}</c> for a shell's API, <c>{appId}/fragments/{fragmentId}/{name}</c> for a
+    /// fragment's. Unique, because an app id, a fragment id within its app and a name within its
+    /// namespace each are, and a shell's id has no <c>fragments/</c> segment where an API name could
+    /// collide with one (an API name holds no <c>/</c>).
+    /// </summary>
+    private static string RouteId(string appId, string? fragmentId, string apiName) =>
+        fragmentId is null ? appId + "/" + apiName : appId + "/fragments/" + fragmentId + "/" + apiName;
 }
