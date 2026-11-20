@@ -173,29 +173,31 @@ public sealed class ImportMapTests : IDisposable
         Assert.Contains("not exactly", Error, StringComparison.Ordinal);
     }
 
-    [Fact]
-    public async Task A_script_tag_inside_a_comment_does_not_hide_the_map_after_it()
+    [Theory]
+    [InlineData("<!-- <script> -->")]
+    [InlineData("<!-- <script> --!>")]
+    public async Task A_script_tag_inside_a_comment_does_not_hide_the_map_after_it(string comment)
     {
         // A comment's text is never a tag (https://html.spec.whatwg.org/multipage/parsing.html#comment-state),
-        // so the map after it is the document's, and it is checked.
+        // so the map after it is the document's, and it is checked. A comment ended late would reach the
+        // map and be refused as a comment naming importmap instead.
         string map = FragmentWorld.Map("m3");
 
-        Assert.Equal(1, await Validate(Html("<!-- <script> -->" + FragmentWorld.ImportMapTag(map)), FragmentWorld.HashSource(Map)));
+        Assert.Equal(1, await Validate(Html(comment + FragmentWorld.ImportMapTag(map)), FragmentWorld.HashSource(Map)));
         Assert.Contains($"Add {FragmentWorld.HashSource(map)} to", Error, StringComparison.Ordinal);
     }
 
     [Theory]
     [InlineData("<!-- {0} -->")]
-    [InlineData("<!-- {0} --!>")]
-    public async Task A_map_inside_a_comment_is_not_read_and_the_map_after_the_comment_is(string comment)
+    [InlineData("<style>a::before {{ content: \"<!--\" }}</style>{0}")]
+    public async Task Text_the_scan_skips_as_a_comment_is_refused_when_it_names_importmap(string around)
     {
-        // The commented map is admitted and the real one is not, so reading the first as a map refuses
-        // "more than one", and ending the comment late hides the second and passes.
-        string commented = string.Format(System.Globalization.CultureInfo.InvariantCulture, comment, FragmentWorld.ImportMapTag(Map));
-        string map = FragmentWorld.Map("m3");
+        // A browser reads no "<!--" inside a <style> as a comment, so there the map is live; the scan
+        // cannot tell the two apart, and refuses both rather than skip a map.
+        string html = Html(string.Format(System.Globalization.CultureInfo.InvariantCulture, around, FragmentWorld.ImportMapTag(Map)));
 
-        Assert.Equal(1, await Validate(Html(commented + FragmentWorld.ImportMapTag(map)), FragmentWorld.HashSource(Map)));
-        Assert.Contains($"Add {FragmentWorld.HashSource(map)} to", Error, StringComparison.Ordinal);
+        Assert.Equal(1, await Validate(html, FragmentWorld.HashSource(Map)));
+        Assert.Contains("a comment names importmap", Error, StringComparison.Ordinal);
     }
 
     [Theory]

@@ -41,8 +41,22 @@ internal static class ImportMap
         bool cspMeta = CarriesCspMeta(html);
         string? map = null;
         int at = 0;
-        while (NextScriptTag(html, at) is int start)
+        while (true)
         {
+            int? next = NextScriptTag(html, at, out bool commentNamesMap);
+            if (commentNamesMap)
+            {
+                // The scan ends a comment where the tokenizer would, but it cannot tell a comment from
+                // "<!--" in the text of a <style> or a <title>, so text it skips as a comment must not
+                // hold a map a browser could run.
+                return Scan.Refused("a comment names importmap, and the scan cannot tell whether a browser reads it as one.", cspMeta);
+            }
+
+            if (next is not int start)
+            {
+                break;
+            }
+
             int close = TagEnd(html, start);
             if (close < 0)
             {
@@ -168,9 +182,12 @@ internal static class ImportMap
     /// outside a comment: a comment's text is never a tag, so a <c>&lt;script</c> in one must not make the
     /// scan skip a real map after it as script data
     /// (https://html.spec.whatwg.org/multipage/parsing.html#comment-start-state).
+    /// <paramref name="commentNamesMap"/> is set, and the search stops, at a skipped comment whose text
+    /// names importmap.
     /// </summary>
-    private static int? NextScriptTag(string html, int from)
+    private static int? NextScriptTag(string html, int from, out bool commentNamesMap)
     {
+        commentNamesMap = false;
         int index = from;
         while (html.IndexOf(ScriptOpen, index, StringComparison.OrdinalIgnoreCase) is var script and >= 0)
         {
@@ -178,6 +195,12 @@ internal static class ImportMap
             if (comment >= 0 && comment < script)
             {
                 index = CommentEnd(html, comment);
+                if (html.AsSpan(comment, index - comment).Contains("importmap", StringComparison.OrdinalIgnoreCase))
+                {
+                    commentNamesMap = true;
+                    return null;
+                }
+
                 continue;
             }
 
