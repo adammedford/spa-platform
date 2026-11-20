@@ -7,8 +7,9 @@ Owner: integrator.
     tools/prune_branches.py --delete --verbose   and list each kept branch, not only a count
     tools/prune_branches.py --delete --only <branch>...   delete the named branches alone
 
-docs/agents/landing-work.md makes a task's branch its claim and says the claim is deleted when the
-task is done, and nothing deleted it (#71). On 17 October 2026 this repository held 44 `task/*`
+docs/agents/landing-work.md makes the branch the claim for a plan row that no issue carries, and
+says the claim branch is deleted when the row has landed; before this script nothing deleted it
+(#71). On 17 October 2026 this repository held 44 `task/*`
 branches, 19 of them not ancestors of main; five tickets that night needed dated branch names
 because older branches of the same names sat at stale heads; and `overnight/2026-10-16` looked
 unmerged though every commit on it was on main in equivalent form.

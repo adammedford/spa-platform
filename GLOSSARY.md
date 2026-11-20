@@ -439,8 +439,7 @@ meant, and "decision" for a draft.
 **Decision given in a session** — Adam's answer to an open question that no grill numbered, given in
 a foreground session and posted by that session on the issue the question belongs to, ending with
 the line that says so. On a change request it is the decision comment; on any other issue it is a
-confirmed answer the ticket's work may rest on, and it authorises no steering change the ticket's
-acceptance criteria do not ask for. Its form and what it covers:
+confirmed answer to the question it names. Its form, what it covers and what it authorises:
 `docs/agents/tracker-policy.md` → "A decision Adam gives in a session". _Avoid_: "decision comment"
 for one on a ticket, "verbal decision", and "in-session decision" where the gateway's session could
 be read.
@@ -530,10 +529,11 @@ exit test. Other tags are not gates. When one is made, and what it waits on:
 `docs/agents/landing-work.md` → "Gates".
 _Avoid_: release tag, and "the tag" where another tag could be meant.
 
-**Gate register** — the live list of gates defined after the frozen export, each with what it
-proves, its exit test, what it unblocks and the decision that recorded it. Kept by the integrator;
-a gate is added or changed by deciding a request. It names ids that the export or the test id
-register defines, and defines none. _Avoid_: gates table, which is the export's.
+**Gate register** — the live list of gates defined after the frozen export, `contracts/gates.md`,
+each with what it proves, its exit test, what it unblocks and the decision that recorded it. It
+names ids that the export or the test id register defines, and defines none. Who keeps it, and how
+a gate is added or changed: `contracts/gates.md` → "How a gate is added". _Avoid_: gates table,
+which is the export's.
 
 **Check** — a mechanical guard the pre-push hook, CI or `tools/land.sh` runs when applicable:
 ownership, steering, the roadmap, the build, Terraform's format and validate, the review record at
@@ -548,8 +548,8 @@ ends on a one-line verdict. _Avoid_: gate, and "the hook" for the checks themsel
 
 **Terraform floor** — the oldest Terraform the repository supports, named in `.terraform-version`.
 CI installs exactly it, every root's `required_version` asks for at least it, and the local check
-runs it when the machine has it, naming the version it ran either way. Raising it is a one-line
-change to that file plus each root's constraint. _Avoid_: the pinned version, the minimum, for this.
+runs it when the machine has it, naming the version it ran either way. How it is raised:
+`docs/dependencies.md` → "The Terraform floor". _Avoid_: the pinned version, the minimum, for this.
 
 **Test companion** — the tests that sit beside a check or a script, in a file named for it, and
 prove what it does by running the real thing on throwaway inputs built to trip each rule; never a
@@ -647,8 +647,8 @@ harness (G0 items 4 and 5), `C-` the Cognito run (G0 items 2 and 3). `S-`, `R-` 
 
 **Gap register** — the live list of known gaps between what Phase 1 delivers and what an enterprise
 adoption would need, `docs/gaps.md`: one numbered entry (`GAP-n`) per gap, saying what is missing,
-where it was found and what closes it. Kept by workstream 6 from findings (plan row 6.8); a finding
-adds an entry, and an entry closes when the row or ticket it names lands. The plan's own table of
+where it was found and what closes it. Who keeps it, what adds an entry and when one closes:
+`docs/gaps.md` → "The enterprise gap register", its opening paragraph. The plan's own table of
 enterprise gaps, `docs/plan/06-phase-2-and-risks.md` → "Enterprise gaps", is the frozen export's
 statement of such gaps at export time and does not change; the register is where they are kept
 current. _Avoid_: bare "register" where the test id register or the gate register could be meant;
