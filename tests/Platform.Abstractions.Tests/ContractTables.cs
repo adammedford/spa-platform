@@ -10,7 +10,10 @@ namespace Platform.Abstractions.Tests;
 ///
 /// Each parser reads one section, stops at the next "## " heading, skips the header and rule rows,
 /// and refuses an empty table, so that a renamed heading cannot pass as an empty contract.
-/// <c>RuleIdsTests</c> is the prior art.
+/// <c>RuleIdsTests</c> is the prior art. A list the contract writes as one prose sentence, the
+/// reserved paths and the fragment directives (#1432), is read instead between the sentence's fixed
+/// opening and closing, and refuses a missing opening, a missing closing or an empty list for the
+/// same reason.
 /// </summary>
 internal static class ContractTables
 {
