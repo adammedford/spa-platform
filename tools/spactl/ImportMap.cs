@@ -20,6 +20,7 @@ internal static class ImportMap
 
     private const string ScriptOpen = "<script";
     private const string ScriptClose = "</script";
+    private const string CommentOpen = "<!--";
 
     /// <summary>The three hash algorithms CSP's hash-source grammar names, by their source prefix.</summary>
     private static readonly ImmutableArray<(string Prefix, Func<byte[], byte[]> Hash)> Algorithms =
@@ -42,7 +43,7 @@ internal static class ImportMap
         int at = 0;
         while (NextScriptTag(html, at) is int start)
         {
-            int close = html.IndexOf('>', start);
+            int close = TagEnd(html, start);
             if (close < 0)
             {
                 return Scan.Refused("a <script tag is never closed with '>'.", cspMeta);
@@ -162,22 +163,104 @@ internal static class ImportMap
             : null;
     }
 
-    /// <summary>The next <c>&lt;script</c> start tag at or after <paramref name="from"/>, matched as a tag name.</summary>
+    /// <summary>
+    /// The next <c>&lt;script</c> start tag at or after <paramref name="from"/>, matched as a tag name and
+    /// outside a comment: a comment's text is never a tag, so a <c>&lt;script</c> in one must not make the
+    /// scan skip a real map after it as script data
+    /// (https://html.spec.whatwg.org/multipage/parsing.html#comment-start-state).
+    /// </summary>
     private static int? NextScriptTag(string html, int from)
     {
         int index = from;
-        while ((index = html.IndexOf(ScriptOpen, index, StringComparison.OrdinalIgnoreCase)) >= 0)
+        while (html.IndexOf(ScriptOpen, index, StringComparison.OrdinalIgnoreCase) is var script and >= 0)
         {
-            int after = index + ScriptOpen.Length;
+            int comment = html.IndexOf(CommentOpen, index, StringComparison.Ordinal);
+            if (comment >= 0 && comment < script)
+            {
+                index = CommentEnd(html, comment);
+                continue;
+            }
+
+            int after = script + ScriptOpen.Length;
             if (after >= html.Length || html[after] is ' ' or '\t' or '\n' or '\f' or '\r' or '/' or '>')
             {
-                return index;
+                return script;
             }
 
             index = after;
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Where the comment opened at <paramref name="open"/> ends, as the tokenizer ends it: <c>&lt;!--&gt;</c>
+    /// and <c>&lt;!---&gt;</c> close at once, otherwise the first <c>--&gt;</c> or <c>--!&gt;</c>, and a
+    /// comment never closed runs to the end of the document
+    /// (https://html.spec.whatwg.org/multipage/parsing.html#comment-start-state).
+    /// </summary>
+    private static int CommentEnd(string html, int open)
+    {
+        int text = open + CommentOpen.Length;
+        if (html.AsSpan(text).StartsWith(">", StringComparison.Ordinal))
+        {
+            return text + 1;
+        }
+
+        if (html.AsSpan(text).StartsWith("->", StringComparison.Ordinal))
+        {
+            return text + 2;
+        }
+
+        int dashes = html.IndexOf("-->", text, StringComparison.Ordinal);
+        int bang = html.IndexOf("--!>", text, StringComparison.Ordinal);
+        return (dashes, bang) switch
+        {
+            ( < 0, < 0) => html.Length,
+            ( >= 0, < 0) => dashes + 3,
+            ( < 0, >= 0) => bang + 4,
+            _ => dashes < bang ? dashes + 3 : bang + 4,
+        };
+    }
+
+    /// <summary>
+    /// The index of the <c>&gt;</c> that ends the start tag at <paramref name="start"/>, or -1 when none
+    /// does: a <c>&gt;</c> inside a quoted attribute value does not end it, so
+    /// <c>&lt;script data-x="&gt;" type="importmap"&gt;</c> is one tag that names importmap
+    /// (https://html.spec.whatwg.org/multipage/parsing.html#before-attribute-value-state).
+    /// </summary>
+    private static int TagEnd(string html, int start)
+    {
+        bool afterEquals = false;
+        for (int index = start + ScriptOpen.Length; index < html.Length; index++)
+        {
+            char c = html[index];
+            if (c == '>')
+            {
+                return index;
+            }
+
+            if (afterEquals && c is '"' or '\'')
+            {
+                index = html.IndexOf(c, index + 1);
+                if (index < 0)
+                {
+                    return -1;
+                }
+
+                afterEquals = false;
+            }
+            else if (c == '=')
+            {
+                afterEquals = true;
+            }
+            else if (c is not (' ' or '\t' or '\n' or '\f' or '\r'))
+            {
+                afterEquals = false;
+            }
+        }
+
+        return -1;
     }
 
     /// <summary>

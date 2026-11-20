@@ -164,6 +164,52 @@ public sealed class ImportMapTests : IDisposable
     }
 
     [Fact]
+    public async Task A_greater_than_inside_a_quoted_attribute_value_does_not_end_the_tag()
+    {
+        // The tokenizer ends a start tag at a '>' outside a quoted attribute value
+        // (https://html.spec.whatwg.org/multipage/parsing.html#attribute-value-(double-quoted)-state), so
+        // this tag names importmap; ending it at the first '>' would read the map as script data.
+        Assert.Equal(1, await Validate(Html("<script data-x=\">\" type=\"importmap\">" + Map + "</script>"), FragmentWorld.HashSource(Map)));
+        Assert.Contains("not exactly", Error, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_script_tag_inside_a_comment_does_not_hide_the_map_after_it()
+    {
+        // A comment's text is never a tag (https://html.spec.whatwg.org/multipage/parsing.html#comment-state),
+        // so the map after it is the document's, and it is checked.
+        string map = FragmentWorld.Map("m3");
+
+        Assert.Equal(1, await Validate(Html("<!-- <script> -->" + FragmentWorld.ImportMapTag(map)), FragmentWorld.HashSource(Map)));
+        Assert.Contains($"Add {FragmentWorld.HashSource(map)} to", Error, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("<!-- {0} -->")]
+    [InlineData("<!-- {0} --!>")]
+    public async Task A_map_inside_a_comment_is_not_read_and_the_map_after_the_comment_is(string comment)
+    {
+        // The commented map is admitted and the real one is not, so reading the first as a map refuses
+        // "more than one", and ending the comment late hides the second and passes.
+        string commented = string.Format(System.Globalization.CultureInfo.InvariantCulture, comment, FragmentWorld.ImportMapTag(Map));
+        string map = FragmentWorld.Map("m3");
+
+        Assert.Equal(1, await Validate(Html(commented + FragmentWorld.ImportMapTag(map)), FragmentWorld.HashSource(Map)));
+        Assert.Contains($"Add {FragmentWorld.HashSource(map)} to", Error, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("<!-->")]
+    [InlineData("<!--->")]
+    public async Task An_abruptly_closed_comment_ends_where_a_browser_ends_it(string comment)
+    {
+        string map = FragmentWorld.Map("m3");
+
+        Assert.Equal(1, await Validate(Html(comment + FragmentWorld.ImportMapTag(map) + "-->"), FragmentWorld.HashSource(Map)));
+        Assert.Contains($"Add {FragmentWorld.HashSource(map)} to", Error, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task A_csp_meta_warns_and_does_not_refuse()
     {
         string head = "<meta http-equiv=\"Content-Security-Policy\" content=\"script-src 'self'\">" + FragmentWorld.ImportMapTag(Map);

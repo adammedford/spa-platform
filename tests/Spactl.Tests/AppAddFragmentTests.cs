@@ -198,4 +198,32 @@ public sealed class AppAddFragmentTests : IDisposable
         Assert.Equal(0, await Spactl.Run("app", "remove", FragmentWorld.AppId));
         Assert.Equal(2, (await Spactl.LiveRegistry())["schemaVersion"]!.GetValue<int>());
     }
+
+    [Fact]
+    public async Task A_raw_apply_that_would_lower_the_schema_version_is_refused_and_writes_nothing()
+    {
+        // registry.schema.json#/properties/schemaVersion: "spactl writes 2 on a document's first fragment
+        // and never lowers it". apply writes the operator's file as written, so it refuses rather than
+        // rewrites a file that declares less than the live document.
+        await world.PublishShell("r1");
+        await world.PublishFragment("f1");
+        Assert.Equal(0, await Spactl.Run("app", "add", world.Definition(), "--release", "r1", "--fragment-release", $"{FragmentId}=f1"));
+        JsonObject live = await Spactl.LiveRegistry();
+        Assert.Equal(2, live["schemaVersion"]!.GetValue<int>());
+
+        JsonObject lowered = live.DeepClone().AsObject();
+        lowered["schemaVersion"] = 1;
+        lowered["revision"] = live["revision"]!.GetValue<long>() + 1;
+        lowered["apps"]![0]!.AsObject().Remove("fragments");
+        int written = Spactl.Store.Written.Count;
+
+        Assert.Equal(1, await Spactl.Run("registry", "apply", Spactl.WriteFile("lowered.json", lowered.ToJsonString())));
+
+        Assert.Contains("schemaVersion 1", Spactl.Error.ToString(), StringComparison.Ordinal);
+        Assert.Equal(written, Spactl.Store.Written.Count);
+        Assert.Equal(2, (await Spactl.LiveRegistry())["schemaVersion"]!.GetValue<int>());
+
+        lowered["schemaVersion"] = 2;
+        Assert.Equal(0, await Spactl.Run("registry", "apply", Spactl.WriteFile("kept.json", lowered.ToJsonString())));
+    }
 }

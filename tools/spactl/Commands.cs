@@ -598,7 +598,20 @@ internal sealed class Commands(Arguments arguments, SpactlEnvironment environmen
     private async Task<int> CheckAndWriteAsync(string document, LiveDocument live, PlatformPolicy policy, bool write, CancellationToken ct)
     {
         RegistryValidation validation = Validate(document, policy, live.Revision);
-        JsonArray entries = JsonNode.Parse(document)!["apps"]!.AsArray();
+        JsonObject proposed = JsonNode.Parse(document)!.AsObject();
+        JsonArray entries = proposed["apps"]!.AsArray();
+
+        // registry.schema.json#/properties/schemaVersion: "spactl writes 2 on a document's first fragment
+        // and never lowers it". Every command that builds a document keeps it (KeepSchemaVersion);
+        // registry apply writes the operator's file as written, so a file that declares less is refused
+        // rather than rewritten.
+        if (live.Document is { } current && SchemaVersionOf(proposed) < SchemaVersionOf(current))
+        {
+            throw new RefusedException(
+                $"Refused: the document declares schemaVersion {SchemaVersionOf(proposed)}, below the live registry's " +
+                $"{SchemaVersionOf(current)}, and spactl never lowers it (registry.schema.json#/properties/schemaVersion). " +
+                "Nothing was written.");
+        }
 
         IObjectStore objects = Store();
         List<string> missing = [];
