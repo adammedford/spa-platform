@@ -19,9 +19,10 @@ background (it builds both images for ARM64, pushes by digest, applies, waits fo
 asserts the running digest, then waits for each new task to report the registry revision on
 `/readyz`), and start no tunnel while it runs: its readiness wait opens a tunnel of its own and
 closes it when the wait ends (#1008). Once `deploy.sh` prints its pass line, start `tunnel.sh` in
-the background, so its hop goes through a task of the new deployment, for `verify-tunnel.sh
-/healthz` and, at the screen, the human's browser; a `tunnel.sh` still running from before is stopped first, since
-its hop was a task the deployment replaced:
+the background, for `verify-tunnel.sh /healthz` and, at the screen, the human's browser. Its hop is
+the bastion's task (#1168), never a gateway task, and the deployment replaces no bastion task: a
+`tunnel.sh` still running from before goes through the same task and is left running, not started
+a second time, since a second one refuses the local port the first holds:
 
 ```bash
 shown tools/scripts/deploy.sh                    # in the background; no tunnel while it runs
@@ -372,17 +373,21 @@ read the file in the ssh login the route names, and then removes it.
    shape before it goes.
 3. `infra/envs/poc/platform/terraform.tfvars` (git-ignored: on a fresh checkout copy
    `terraform.tfvars.example` to it first): back it up first (`cp -p` to `terraform.tfvars.bak`),
-   then `shown tools/scripts/platform-tfvars.sh` (#470), which rewrites `issuers` from the identity
-   root's outputs and pins `gateway_image` to the sample image by its current digest, with
-   `health_check_path = "/"`, and leaves the file as it was unless every value is well formed. Show
-   its output: it names which keys changed and prints no value but the digest. When it exits 1 on
-   the digest lookup (ECR Public can answer 429, and an empty digest was written once by hand), run
-   it again as `shown tools/scripts/platform-tfvars.sh --sample-digest sha256:<64 hex>` with the
-   digest the human supplies. `images.auto.tfvars` must be absent (`teardown.sh` removes it; a
+   then `shown tools/scripts/platform-tfvars.sh --bastion` (#470, #1397), which rewrites `issuers`
+   from the identity root's outputs and pins `gateway_image` to the sample image by its current
+   digest, with `health_check_path = "/"`, sets `bastion = true` and pins `bastion_image` by the
+   same digest, and leaves the file as it was unless every value is well formed. The bastion is the
+   tunnel's hop (#1168): without it `deploy.sh` and `tunnel.sh` refuse the root, so the root's first
+   apply declares it, in sitting C and in D0 alike, and it runs, and is billed, until T tears the
+   cell down. Show its output: it names which keys changed and prints no value but the digest. When
+   it exits 1 on the digest lookup (ECR Public can answer 429, and an empty digest was written once
+   by hand), run it again as `shown tools/scripts/platform-tfvars.sh --bastion --sample-digest
+   sha256:<64 hex>` with the digest the human supplies. `images.auto.tfvars` must be absent (`teardown.sh` removes it; a
    plain `terraform destroy` leaves it, and it overrides the sample image).
 4. The platform root on the sample image, by N's saved plan, its plan read for the certificate
    found, no per-app resource, and P-01's counts (one load balancer, one listener, one target group,
-   one service, one bucket; no NAT gateway, database or instance); then `aws ecs wait
+   one gateway service and, under `bastion`, the bastion's one, one bucket; no NAT gateway, database
+   or instance); then `aws ecs wait
    services-stable`. `infra/envs/poc/outputs.json` is now stale, or absent: a `tunnel.sh` run
    before step 5 answers "no such host", because it reads the cell's names from that file, and
    `seed.sh` is what rewrites it.
