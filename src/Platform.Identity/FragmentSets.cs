@@ -112,6 +112,62 @@ internal static class FragmentSets
         return true;
     }
 
+    /// <summary>
+    /// The fragment's token <paramref name="name"/>, or null when the set holds none, or when the set was
+    /// recorded to a client other than the fragment's current one, which reads as absent (#995).
+    /// </summary>
+    public static string? Token(AuthenticationProperties properties, FragmentDefinition fragment, string name)
+    {
+        ArgumentNullException.ThrowIfNull(properties);
+        return properties.Items.TryGetValue(ClientPrefix + fragment.FragmentId, out string? client)
+            && string.Equals(client, fragment.OAuth.ClientId, StringComparison.Ordinal)
+            && properties.Items.TryGetValue(TokenItem(name, fragment.FragmentId), out string? value)
+            && !string.IsNullOrEmpty(value)
+                ? value
+                : null;
+    }
+
+    /// <summary>
+    /// Writes one token into the fragment's set, which keeps its other tokens and its recorded client: a
+    /// refresh's write (#995). The ID token is never kept for a fragment.
+    /// </summary>
+    public static void SetToken(AuthenticationProperties properties, FragmentDefinition fragment, string name, string value)
+    {
+        ArgumentNullException.ThrowIfNull(properties);
+        if (!string.Equals(name, IdToken, StringComparison.Ordinal))
+        {
+            properties.Items[TokenItem(name, fragment.FragmentId)] = value;
+        }
+    }
+
+    /// <summary>Removes the fragment's set, its recorded client and any mark: a refusal's end of that set alone (#995).</summary>
+    public static void Remove(AuthenticationProperties properties, string fragmentId)
+    {
+        ArgumentNullException.ThrowIfNull(properties);
+        Clear(properties, fragmentId);
+    }
+
+    /// <summary>
+    /// The fragments the ticket records a set or a mark for, with the client each was recorded to, in
+    /// ordinal order of <c>fragmentId</c>: what logout finds in a record, a fragment the entry no longer
+    /// lists included (#995).
+    /// </summary>
+    public static IReadOnlyList<(string FragmentId, string ClientId)> Recorded(AuthenticationProperties properties)
+    {
+        ArgumentNullException.ThrowIfNull(properties);
+        return [.. properties.Items
+            .Where(i => i.Key.StartsWith(ClientPrefix, StringComparison.Ordinal) && i.Value is not null)
+            .Select(i => (i.Key[ClientPrefix.Length..], i.Value!))
+            .OrderBy(i => i.Item1, StringComparer.Ordinal)];
+    }
+
+    /// <summary>The token <paramref name="name"/> recorded for <paramref name="fragmentId"/>, whatever client it was recorded to.</summary>
+    public static string? RecordedToken(AuthenticationProperties properties, string fragmentId, string name)
+    {
+        ArgumentNullException.ThrowIfNull(properties);
+        return properties.Items.TryGetValue(TokenItem(name, fragmentId), out string? value) && !string.IsNullOrEmpty(value) ? value : null;
+    }
+
     /// <summary>The names of the fragment's saved tokens, for a test or a reader that needs them all.</summary>
     public static IEnumerable<string> TokenNames(AuthenticationProperties properties, string fragmentId)
     {
