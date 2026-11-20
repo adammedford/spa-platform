@@ -24,6 +24,7 @@
     ["tests/Spactl.Tests/", "product"],
     ["tests/Contracts.Tests/", "product"],
     ["contracts/", "product"],
+    ["client/", "product"],
     ["contracts/test-ids.md", "verification"],
     ["contracts/gates.md", "verification"],
     ["contracts/infra-outputs.schema.json", "deployment"],
