@@ -27,7 +27,9 @@ instead (#291). A full-landing subject with no Ticket line is never judged eithe
 note, since the merges from before the tracker moved to GitHub carry none. A line inside a fenced
 block the body quotes is no box of the ticket and takes no place (#1402): on 2026-11-18
 --subject-for made #1215 a part on the two boxes of a template it quotes, and the session wrote the
-full subject by hand.
+full subject by hand. A fence is read where CommonMark reads one, within its list item (#1431): a run
+indented four spaces opened a fence that never shut, as did a fence under "- item" past the item's
+end, and a real box after either was hidden, so --base would have passed a full landing over it.
 
 A full landing is held on a second ground too (#388). On 2026-10-24 the run wrote "Merge task P2-2"
 over #340, all its boxes ticked, directly after "Merge part of task issue-338", whose ticket and
@@ -124,8 +126,23 @@ BOX = re.compile(r"^[ \t]*- \[(?P<mark>[ xX])\][ \t]*(?P<text>[^\n]*)$")
 # inside it, which is how #1215's body is written. A backtick run with another backtick later on its
 # line is an inline code span, "```x``` reads", and opens nothing. And only a run with nothing but
 # white space after it shuts a fence, so "```x" inside one is a quoted line. Without the last two a
-# real box after such a line was hidden, and --base passed a full landing over it.
+# real box after such a line was hidden, and --base passed a full landing over it. open_boxes reads
+# two more rules of CommonMark's around it (#1431): a run four columns or more right of the content
+# it sits in is indented code or a paragraph's text, so it neither opens nor shuts a fence; and a
+# fence opened inside a list item ends with the item, on the first line left of the item's content.
+# Without them "    ```" or a fence under "- item" never shut, and every real box after it was hidden.
 FENCE = re.compile(r"^[ \t]*(`{3,}|~{3,})(.*)$")
+
+# A list item's marker, CommonMark's bullet or ordered one, followed by white space or the line's
+# end. open_boxes reads the item's content column from it, the column a fence inside it is read from.
+ITEM = re.compile(r"^[ \t]*([-+*]|\d{1,9}[.)])([ \t]+|$)")
+
+# A line that interrupts a paragraph and is no fence or item: an ATX heading, a thematic break, which
+# CommonMark reads before an item ("- - -" is a rule), or a block quote. It is never a paragraph's lazy
+# line, so it ends each item it is left of, and after a heading or a rule the next line is no lazy line
+# either (#1431's review). Read as lazy, "- item\n# H\n    ```" kept the item open, the run opened a
+# fence two columns into it, and "  - [ ] Open." after it was hidden although GitHub renders it.
+BREAK = re.compile(r"^[ \t]*(?:(?P<heading>#{1,6}(?:[ \t]|$))|(?P<rule>([-*_])[ \t]*(?:\3[ \t]*){2,}$)|>)")
 
 # Either subject form, as tools/roadmap.py's LANDED_SUBJECT reads it; group 1 is set on a part. This
 # script runs under `python3 -I`, which leaves its own directory off sys.path, so roadmap.py's forms
@@ -371,6 +388,25 @@ def open_parts(parts: Parts, row: str, own: set[int], landed: dict[str, str]) ->
             if number not in own and landed.get(f"issue-{number}") != "landed"]
 
 
+def indent(line: str) -> int:
+    """The columns of white space `line` starts with, a tab reaching the next multiple of four."""
+    return len(line[:len(line) - len(line.lstrip(" \t"))].expandtabs(4))
+
+
+def shuts(marked: re.Match[str], fence: str, columns: int) -> bool:
+    """Whether a FENCE line `columns` right of its content shuts the fence `fence` opened."""
+    run, rest = marked.group(1), marked.group(2)
+    return run[0] == fence[0] and len(run) >= len(fence) and not rest.strip() and columns < 4
+
+
+def content_column(line: str, item: re.Match[str]) -> int:
+    """The column an item's content starts at: past its marker and the white space after it, or one
+    past the marker when that white space is wider than four columns or the line holds nothing else."""
+    marker = len(line[:item.end(1)].expandtabs(4))
+    gap = len(line[:item.end()].expandtabs(4)) - marker
+    return marker + 1 if gap > 4 or not line[item.end():].strip() else marker + gap
+
+
 def open_boxes(body: str) -> list[tuple[int, str]]:
     """Each open box in `body`, as (its place among the boxes outside fenced blocks, from 1; its
     text). A line inside a fenced block the body quotes is no box, as tools/ticket_shape.py's
@@ -378,22 +414,45 @@ def open_boxes(body: str) -> list[tuple[int, str]]:
     rendered ticket sees. A fence is shut by a run of its own marker at least as long as the one
     that opened it with nothing but white space after it; a shorter run, the other marker, or a run
     with text after it, inside it is a quoted line. A backtick run with a backtick after it on its
-    line opens no fence."""
+    line opens no fence.
+
+    Columns are read from the content a run sits in, the innermost open list item's or the body's
+    (#1431): a run four or more columns right of it opens and shuts nothing, and a fence opened
+    inside an item is shut by the first line left of the item's content, which is then read as any
+    line outside a fence is. An item ends on a line left of its content, except a paragraph's lazy
+    line, one that follows text and is no fence, item, heading, rule or block quote of its own."""
     found: list[tuple[int, str]] = []
     fence = ""
+    inside = 0  # the content column of the item the fence was opened in, 0 in the body's own
+    items: list[int] = []  # the content columns of the open list items, the innermost last
+    text = False  # the line before was a paragraph's, so this one may be its lazy line
     place = 0
     for line in body.split("\n"):
-        marked = FENCE.match(line)
-        if marked:
-            run, rest = marked.group(1), marked.group(2)
-            if not fence and not (run[0] == "`" and "`" in rest):
-                fence = run
-                continue
-            if fence:
-                if run[0] == fence[0] and len(run) >= len(fence) and not rest.strip():
+        at = indent(line)
+        if fence:
+            if not line.strip() or at >= inside:
+                marked = FENCE.match(line)
+                if marked and shuts(marked, fence, at - inside):
                     fence = ""
                 continue
-        box = None if fence else BOX.match(line)
+            fence = ""
+        if not line.strip():
+            text = False
+            continue
+        marked, item, broken = FENCE.match(line), ITEM.match(line), BREAK.match(line)
+        if broken and broken.group("rule"):
+            item = None
+        if marked or item or broken or not text:
+            while items and items[-1] > at:
+                items.pop()
+        inside = items[-1] if items else 0
+        text = not (broken and (broken.group("heading") or broken.group("rule")))
+        if marked and at - inside < 4 and not (marked.group(1)[0] == "`" and "`" in marked.group(2)):
+            fence, text = marked.group(1), False
+            continue
+        if item and at - inside < 4:
+            items.append(content_column(line, item))
+        box = BOX.match(line)
         if box:
             place += 1
             if box.group("mark") == " ":
