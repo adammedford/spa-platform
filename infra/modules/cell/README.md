@@ -305,7 +305,8 @@ at one ECS service. The task definition's family and the role carry an underscor
 which no cell name holds, so neither can be another cell's. On and applied, the task
 runs, and is billed, until an apply turns it off. Since #787 it is the cell's only
 task with ECS Exec on: the gateway's service has it off, its task role holds no
-`ssmmessages` permission and its containers' roots are read-only.
+`ssmmessages` permission and its containers' roots are read-only, except the gateway
+container's while `gateway_writable_root` runs the sample image (#1380).
 
 ## Plan policy
 

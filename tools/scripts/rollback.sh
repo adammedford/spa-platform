@@ -28,8 +28,9 @@
 #
 # It refuses a revision whose gateway image is not a build in the cell's gateway repository: the
 # sample image of the first apply answers / and not /readyz, so going back to it is a platform-root
-# apply with health_check_path = "/", not a rollback. It refuses an image the repository no longer
-# holds, since the task could not pull it.
+# apply with health_check_path = "/" and gateway_writable_root = true (#1380: images.auto.tfvars
+# records false, a read-only root the sample cannot start on), not a rollback. It refuses an image
+# the repository no longer holds, since the task could not pull it.
 #
 # Then it does what deploy.sh does after its push: it plans and applies infra/envs/poc/platform with
 # both images and the health check on /readyz, records them in images.auto.tfvars there, writes
@@ -159,7 +160,7 @@ fi
 # restore.
 case "$TARGET_IMAGE" in
   "${ECR_GATEWAY}"@sha256:*) ;;
-  *) fail "${FAMILY}:${TARGET} runs $(redact "$TARGET_IMAGE"), not a gateway build from $(redact "$ECR_GATEWAY"). Going back to the sample image is a platform-root apply with health_check_path = \"/\", not a rollback." ;;
+  *) fail "${FAMILY}:${TARGET} runs $(redact "$TARGET_IMAGE"), not a gateway build from $(redact "$ECR_GATEWAY"). Going back to the sample image is a platform-root apply with health_check_path = \"/\" and gateway_writable_root = true, not a rollback." ;;
 esac
 aws_call ecr describe-images --repository-name "${ECR_GATEWAY#*/}" --image-ids "imageDigest=${TARGET_IMAGE##*@}" \
   --query 'imageDetails[0].imageDigest'
