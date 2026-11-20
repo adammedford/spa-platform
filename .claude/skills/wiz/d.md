@@ -119,12 +119,14 @@ shown dotnet test --project tests/e2e --filter-class Gateway.E2ETests.Deployed.L
 ```
 
 The verdict is the run's summary, never its exit: a run whose facts all report skipped, the class's
-answer to the switch unset, exits 0 under the summary `Zero tests ran`. The step passes only on
+answer to the switch unset, exits 0 under the summary `Zero tests ran` (SDK 10.0.401 on the testing
+platform `global.json` names, run by #1199's review off the cell). The step passes only on
 `total: 2`, `succeeded: 2`, `failed: 0` and `skipped: 0`. Anything else is a failed D0: a failed
 fact, whose message names the step it stopped at and prints the page's URL redacted (#1199 Q10); a
 skip; zero tests; or an exit of 5, a bad flag as in C2 (#1199 Q5). The flags stay before any `--`:
 after one, `dotnet test` reads a results directory that already exists, as a rerun's does, as the
-project and refuses the call.
+project and refuses the call, exiting 1 with "Specifying a directory for 'dotnet test' should be
+via '--project' or '--solution'." (SDK 10.0.401, reproduced by #1199's review).
 
 Post `## D0` on #348 (#348 Q34, #361 Q9): the deployed commit, its CI run's URL and conclusion, both
 image digests (the same ones `deploy.sh`'s pass line names), the task id, the task definition
