@@ -29,7 +29,7 @@ public sealed class ReleaseCommandTests : IDisposable
 
         Assert.Equal(
             App1Files.Select(file => "apps/app1/releases/r1/" + file).Order(StringComparer.Ordinal),
-            spactl.Store.Written.Order(StringComparer.Ordinal));
+            spactl.Store.Written.Where(key => key.StartsWith("apps/app1/releases/", StringComparison.Ordinal)).Order(StringComparer.Ordinal));
         Assert.Equal("apps/app1/releases/r1/index.html", spactl.Store.Written[^1]);
         Assert.Contains(App1Files, file => file.StartsWith("assets/", StringComparison.Ordinal));
         Assert.Equal(

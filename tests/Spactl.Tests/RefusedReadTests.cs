@@ -76,7 +76,15 @@ public sealed class RefusedReadTests : IDisposable
             .Order(StringComparer.Ordinal)
             .First();
         string key = "apps/app1/releases/r1/" + first;
-        await spactl.Store.SeedAsync(key, await File.ReadAllTextAsync(Path.Combine(spa, first), TestContext.Current.CancellationToken));
+        byte[] bytes = await File.ReadAllBytesAsync(Path.Combine(spa, first), TestContext.Current.CancellationToken);
+        await spactl.Store.SeedAsync(key, System.Text.Encoding.UTF8.GetString(bytes));
+
+        // The earlier run claimed the file before it wrote it (contracts/s3-layout.md), so the resumed
+        // run's claim meets the same digest and goes on to the byte comparison.
+        Assert.StartsWith("assets/", first, StringComparison.Ordinal);
+        await spactl.Store.SeedAsync(
+            "apps/app1/claims/" + first,
+            "{\"sha256\":\"" + Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(bytes)) + "\",\"release\":\"r1\"}");
         int written = spactl.Store.Written.Count;
         spactl.StoreOverride = new RefusingStore(spactl.Store, key);
 
