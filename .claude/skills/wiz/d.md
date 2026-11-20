@@ -79,9 +79,20 @@ shown sitting_browser login main --app app1                    # keep profile ma
 shown sitting_browser marker main
 ```
 
-A ready line that does not say `stack=deployed`, or a login line that is not `signed-in`, is a
-failed D0: the switch unset starts the local stack, and that login would prove nothing about the
-cell. Then:
+**Every failed D0 is a rule 7 stop that offers D10 (#1199 Q7)**, its reason posted under `## D0` on
+#348, and D does not go on; after `start` it first closes the sitting browser, as "Failure, and the
+way out" says. A ready line that does not say `stack=deployed` is a failed D0, with no retry: the
+switch unset starts the local stack, and a login there would prove nothing about the cell. A
+`login` line that is not `signed-in` is followed by one reload of the same profile, and no second
+`login` (#1199 Q6):
+
+```bash
+shown sitting_browser reload main                              # once, only after a login line that is not signed-in
+```
+
+A `reload` fills no provider form, so it rescues only a callback that landed late; a second line
+that is not `signed-in` is a failed D0. On 2026-11-13 D0 read `login-prompt` here and went on,
+because the verdict was not called a stop (#1199). Then:
 
 ```bash
 git rev-parse HEAD
@@ -91,11 +102,39 @@ shown aws ecs describe-tasks --cluster spa-poc --tasks "$TASK" \
   --query 'tasks[0].{revision:taskDefinitionArn,zone:availabilityZone,containers:containers[].{name:name,digest:imageDigest}}'
 ```
 
+**D0's login kinds (#1199, #1305).** Last before the post, on the Phase 1 cell and before D2's copy
+of `terraform.tfvars`, the first G6 change: one login of each kind the rows use, alone on app1 with
+no row set up, through `DeployedStack`. `A_sign_in_reaches_the_shell` is a sign-in
+(`Profile.SignInAsync`), as rows 3, 8 and 9 start; `A_login_held_at_the_callback_reaches_the_shell`
+is a login held at the callback (`ContinuityDriver.LoginAsync`), as rows 5 and 7 drive it. On
+2026-11-13 that hold timed out at the provider's form only at D5, after the cutover had been applied
+and four rows run. App3's hold is row 7's own: app3 does not exist before D2, and its hold is the
+same code under another client (#1199 Q9). The class needs no platform configuration, evidence
+directory or AWS runner, so the step sets the switch alone:
+
+```bash
+export SPA_E2E_STACK=deployed
+shown dotnet test --project tests/e2e --filter-class Gateway.E2ETests.Deployed.LoginKindsTests \
+  --report-xunit-junit --results-directory "$E/results-d0-logins" | tee "$E/d0-logins-test.out"
+```
+
+The verdict is the run's summary, never its exit: a run whose facts all report skipped, the class's
+answer to the switch unset, exits 0 under the summary `Zero tests ran` (SDK 10.0.401 on the testing
+platform `global.json` names, run by #1199's review off the cell). The step passes only on
+`total: 2`, `succeeded: 2`, `failed: 0` and `skipped: 0`. Anything else is a failed D0: a failed
+fact, whose message names the step it stopped at and prints the page's URL redacted (#1199 Q10); a
+skip; zero tests; or an exit of 5, a bad flag as in C2 (#1199 Q5). The flags stay before any `--`:
+after one, `dotnet test` reads a results directory that already exists, as a rerun's does, as the
+project and refuses the call, exiting 1 with "Specifying a directory for 'dotnet test' should be
+via '--project' or '--solution'." (SDK 10.0.401, reproduced by #1199's review).
+
 Post `## D0` on #348 (#348 Q34, #361 Q9): the deployed commit, its CI run's URL and conclusion, both
 image digests (the same ones `deploy.sh`'s pass line names), the task id, the task definition
-revision, and the `signed-in` and `marker` lines as what the page showed. A CI run that is not
-green, a digest that differs from `deploy.sh`'s pass line, or a `signed-in` line whose `instance=`
-is not the one task's id, is a failed D0, and D does not go on.
+revision, the `signed-in` and `marker` lines as what the page showed (with the first `login` line
+and the `reload` line when the reload ran), and the login kinds' command, summary lines and each
+fact's result, with the junit file and `d0-logins-test.out` by SHA-256; a failed fact is posted by
+its name and its message. A CI run that is not green, a digest that differs from `deploy.sh`'s pass
+line, or a `signed-in` line whose `instance=` is not the one task's id is a failed D0.
 
 **D2, the cutover (row 2, F14; #348 Q32, #361 Q7 and Q11).** First the copy D10 restores, in the
 bundle, then the block:
