@@ -19,7 +19,10 @@ namespace Platform.Security;
 /// It runs before authentication because no rule here needs the user. Two rows of the contract's
 /// table are finished by later stages and are not checked here: the session that "everything else"
 /// needs is <c>UsePlatformShellGate</c>'s (workstream 3), and the <c>X-CSRF-TOKEN</c> on unsafe
-/// <c>/api</c> methods is <c>UsePlatformAntiforgery</c>'s (task 4.4), because both need the user.
+/// <c>/api</c> methods, a fragment's included, is <c>UsePlatformAntiforgery</c>'s (task 4.4), because
+/// both need the user. The fragments spec's rows are #996's: a fragment's API as <c>/api</c>,
+/// <c>/bff/fragments</c> as <c>/bff/session</c>, a fragment's callback as <c>/signin-oidc</c>, and
+/// <c>/bff/chain</c> (ADR-0040).
 ///
 /// The checks run in this order: the path's form, the cookie names, then the path's own row. Within a
 /// row the origin checks come before the method, so a cross-site caller learns nothing about which
@@ -36,7 +39,9 @@ internal sealed partial class RequestGate(ILogger logger)
     {
         Api,
         BffSession,
+        BffFragments,
         BffLogin,
+        BffChain,
         BffLogout,
         Callback,
         Reserved,
@@ -47,10 +52,11 @@ internal sealed partial class RequestGate(ILogger logger)
     // OpenID Connect handler's path checks do. A case-sensitive match here would let /BFF/session
     // reach the session endpoint as an "everything else" request, past the Sec-Fetch-Site check.
     // https://learn.microsoft.com/dotnet/api/microsoft.aspnetcore.http.pathstring.startswithsegments
-    private static readonly PathString Api = "/api";
     private static readonly PathString Bff = "/bff";
     private static readonly PathString BffSession = "/bff/session";
+    private static readonly PathString BffFragments = "/bff/fragments";
     private static readonly PathString BffLogin = "/bff/login";
+    private static readonly PathString BffChain = "/bff/chain";
     private static readonly PathString BffLogout = "/bff/logout";
     private static readonly PathString SignInCallback = "/signin-oidc";
     private static readonly PathString SignOutCallback = "/signout-callback-oidc";
@@ -92,9 +98,22 @@ internal sealed partial class RequestGate(ILogger logger)
                 return MethodIs(context, HttpMethods.Get) || MethodIs(context, HttpMethods.Head)
                     ? next(context)
                     : RejectMethodAsync(context, HttpMethods.Get, HttpMethods.Head);
+
+            // A sign-in chain step reads no Sec-Fetch-Site and no Origin: Fetch Metadata computes the
+            // site over the whole redirect chain, so a step after the provider's redirect is
+            // cross-site or same-site at every hop. Mode and destination survive redirects, so the row
+            // requires a document navigation; the continuation is the step's protection, workstream
+            // 3's (ADR-0040; contracts/request-gate.md -> Rules by path). Method first, as for login.
+            case Row.BffChain:
+                if (!MethodIs(context, HttpMethods.Get))
+                {
+                    return RejectMethodAsync(context, HttpMethods.Get);
+                }
+
+                return IsDocumentNavigation(request.Headers) ? next(context) : RejectAsync(context, RuleIds.GateNavigation);
         }
 
-        // /api and /bff: same-origin browser requests only.
+        // /api, a fragment's /api and /bff: same-origin browser requests only.
         if (!FetchSiteAllowed(request.Headers["Sec-Fetch-Site"], allowNone: row == Row.BffLogin))
         {
             return RejectAsync(context, RuleIds.GateFetchSite);
@@ -108,6 +127,7 @@ internal sealed partial class RequestGate(ILogger logger)
         switch (row)
         {
             case Row.BffSession when !MethodIs(context, HttpMethods.Get):
+            case Row.BffFragments when !MethodIs(context, HttpMethods.Get):
             case Row.BffLogin when !MethodIs(context, HttpMethods.Get):
                 return RejectMethodAsync(context, HttpMethods.Get);
 
@@ -124,7 +144,8 @@ internal sealed partial class RequestGate(ILogger logger)
 
     private static Row Classify(PathString path)
     {
-        if (path.StartsWithSegments(Api))
+        // /api/** and a fragment's /fragments/{seg}/api/**, by shape, the antiforgery stage's own test.
+        if (ApiPaths.IsApi(path))
         {
             return Row.Api;
         }
@@ -136,9 +157,19 @@ internal sealed partial class RequestGate(ILogger logger)
                 return Row.BffSession;
             }
 
+            if (path.StartsWithSegments(BffFragments))
+            {
+                return Row.BffFragments;
+            }
+
             if (path.StartsWithSegments(BffLogin))
             {
                 return Row.BffLogin;
+            }
+
+            if (path.StartsWithSegments(BffChain))
+            {
+                return Row.BffChain;
             }
 
             return path.StartsWithSegments(BffLogout) ? Row.BffLogout : Row.Reserved;
@@ -149,6 +180,8 @@ internal sealed partial class RequestGate(ILogger logger)
             return Row.Reserved;
         }
 
+        // /signin-oidc/{fragmentId} is under /signin-oidc by segment, so a fragment's callback takes the
+        // callback row, as contracts/request-gate.md puts the two in one row.
         return path.StartsWithSegments(SignInCallback) || path.StartsWithSegments(SignOutCallback)
             ? Row.Callback
             : Row.Asset;
@@ -311,7 +344,7 @@ internal sealed partial class RequestGate(ILogger logger)
     /// </summary>
     private static string AppOrigin(HttpRequest request, AppDefinition app) => request.Scheme + "://" + app.Host;
 
-    /// <summary>Rule <c>gate.navigation</c>: <c>/bff/login</c> is a top-level navigation.</summary>
+    /// <summary>Rule <c>gate.navigation</c>: <c>/bff/login</c> and <c>/bff/chain</c> are top-level navigations.</summary>
     private static bool IsDocumentNavigation(IHeaderDictionary headers) =>
         headers["Sec-Fetch-Mode"] is { Count: 1 } mode && string.Equals(mode[0], "navigate", StringComparison.Ordinal)
         && headers["Sec-Fetch-Dest"] is { Count: 1 } dest && string.Equals(dest[0], "document", StringComparison.Ordinal);
