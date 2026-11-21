@@ -44,8 +44,9 @@ public static class ProxyLimits
     /// </para>
     ///
     /// <para>
-    /// The number is a starting point that nobody has measured against the task's 0.25 vCPU and
-    /// 1 GB (plan row 1.4); GAP-29 records that the measurement is P2-10's.
+    /// The number was chosen as a starting point, not from a measurement. #738 assigns its measurement
+    /// against the task's 0.25 vCPU and 1 GB (plan row 1.4) to P2-10's load test; GAP-29 records the
+    /// HTTP/2 case, which that measurement also covers.
     /// </para>
     /// </summary>
     public const int MaxHttp11ConnectionsPerApi = 64;
