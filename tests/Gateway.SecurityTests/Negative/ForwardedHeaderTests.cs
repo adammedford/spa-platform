@@ -2,7 +2,11 @@ using System.Collections.Immutable;
 using System.Security.Claims;
 using Gateway.TestHarness;
 using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Configuration;
 using Platform.Abstractions;
+using Platform.Security;
 using Platform.Testing;
 using TestIdp;
 
@@ -48,6 +52,11 @@ namespace Gateway.SecurityTests.Negative;
 /// rather than on a test server. The stand-in load balancer the test browser uses would overwrite
 /// <c>X-Forwarded-Proto</c> and append to <c>X-Forwarded-For</c>, as the ALB does, so it cannot send
 /// the row's request either.</para>
+///
+/// <para><b>The one row without a composed gateway.</b> A cell with no trusted network at all cannot
+/// start, because the start-up validation refuses an empty <c>ForwardedHeaders:TrustedNetworks</c>
+/// (ADR-0042), so <see cref="A_cell_with_no_trusted_network_reads_no_forwarded_header_at_all"/> runs
+/// its pair on stage hosts composing AddPlatformSecurity and UsePlatformForwardedHeaders alone.</para>
 /// </summary>
 public sealed class ForwardedHeaderTests
 {
@@ -141,16 +150,61 @@ public sealed class ForwardedHeaderTests
         // The configuration an operator is most likely to get wrong, and the one where the
         // framework's own default is "no restriction" rather than "trust nobody": with both known
         // lists empty the middleware would trust every sender, so the platform switches the headers
-        // off instead (src/Platform.Security/PlatformForwardedHeaders.cs). Proven here as a client
-        // sees it, because the failure mode is a cell that silently trusts the internet.
-        await using GatewayHarness harness = await Suite.StartAsync(
-            new GatewayHarnessOptions { TrustedNetworks = [] }, Suite.Ct);
+        // off instead (src/Platform.Security/PlatformForwardedHeaders.cs). The failure mode is a
+        // cell that silently trusts the internet.
+        //
+        // Not on a composed gateway: ADR-0042's start-up validation refuses a whole gateway whose
+        // ForwardedHeaders:TrustedNetworks is empty (contracts/platform-config.schema.json gives it
+        // minItems 1), so no cell can start on it (#1454). The guard is still the platform's last
+        // line if that validation is ever bypassed, so it is proven on the two entry points
+        // src/Gateway/Program.cs calls for it, AddPlatformSecurity and UsePlatformForwardedHeaders,
+        // composed on a stage host, read as the stages after them would read the request.
+        //
+        // As the other rows do, "ignored" is read as a difference: the same request on a stage host
+        // that trusts the loopback sender is believed, so the empty one cannot pass by the request
+        // carrying nothing a stage could apply.
+        Assert.Equal(
+            $"https|{ClaimedAddress}",
+            await SchemeAndClientSeenAfterForwardedHeadersAsync([SocketAddress + "/32"]));
 
-        int before = await Observed.SettledCountAsync(harness, Suite.Ct);
-        RawResponse refused = await Call(harness, "https");
+        Assert.Equal(
+            $"http|{SocketAddress}",
+            await SchemeAndClientSeenAfterForwardedHeadersAsync([]));
+    }
 
-        Assert.Equal(Contract.Error("origin_rejected").Status, refused.StatusCode);
-        Assert.Equal(RuleIds.GateOrigin, await Observed.RuleOfOneRequestAsync(harness, before, Suite.Ct));
+    /// <summary>
+    /// The scheme and client address the stages after UsePlatformForwardedHeaders see, as
+    /// <c>scheme|address</c>, for one raw-socket request from loopback claiming <c>https</c> and
+    /// <see cref="ClaimedAddress"/>, on a stage host whose <c>ForwardedHeaders:TrustedNetworks</c> is
+    /// <paramref name="trustedNetworks"/>, with no key at all when it is empty.
+    /// </summary>
+    private static async Task<string> SchemeAndClientSeenAfterForwardedHeadersAsync(string[] trustedNetworks)
+    {
+        await using StageHost stage = await StageHost.StartAsync(new StageHostOptions
+        {
+            Services = builder =>
+            {
+                builder.Configuration.AddInMemoryCollection(trustedNetworks.Select(
+                    (cidr, i) => new KeyValuePair<string, string?>($"ForwardedHeaders:TrustedNetworks:{i}", cidr)));
+                builder.AddPlatformSecurity();
+            },
+            Pipeline = web =>
+            {
+                web.UsePlatformForwardedHeaders();
+                web.Run(context => context.Response.WriteAsync(
+                    $"{context.Request.Scheme}|{context.Connection.RemoteIpAddress}", context.RequestAborted));
+            },
+        }, Suite.Ct);
+
+        RawResponse seen = await stage.RawAsync(
+            "GET",
+            "/",
+            stage.BaseAddress.Authority,
+            [("X-Forwarded-Proto", "https"), ("X-Forwarded-For", ClaimedAddress)],
+            Suite.Ct);
+
+        Assert.Equal(200, seen.StatusCode);
+        return seen.BodyText;
     }
 
     /// <summary>
