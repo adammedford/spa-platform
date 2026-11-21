@@ -375,8 +375,10 @@ read the file in the ssh login the route names, and then removes it.
    `terraform.tfvars.example` to it first): back it up first (`cp -p` to `terraform.tfvars.bak`),
    then `shown tools/scripts/platform-tfvars.sh --bastion` (#470, #1397), which rewrites `issuers`
    from the identity root's outputs and pins `gateway_image` to the sample image by its current
-   digest, with `health_check_path = "/"`, sets `bastion = true` and pins `bastion_image` by the
-   same digest, and leaves the file as it was unless every value is well formed. The bastion is the
+   digest, with `health_check_path = "/"` and `gateway_writable_root = true` (#1380: the sample
+   image cannot start on the gateway's read-only root), sets `bastion = true` and pins
+   `bastion_image` by the same digest, and leaves the file as it was unless every value is well
+   formed. The bastion is the
    tunnel's hop (#1168): without it `deploy.sh` and `tunnel.sh` refuse the root, so the root's first
    apply declares it, in sitting C and in D0 alike, and it runs, and is billed, until T tears the
    cell down. Show its output: it names which keys changed and prints no value but the digest. When
