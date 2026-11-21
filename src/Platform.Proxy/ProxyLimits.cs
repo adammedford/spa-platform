@@ -28,7 +28,7 @@ public static class ProxyLimits
     /// <c>HttpConnectionPool.Http1.cs</c>. HTTP/2's, in <c>HttpConnectionPool.Http2.cs</c>, consults no
     /// such cap, and YARP sets <c>EnableMultipleHttp2Connections</c> true unless a cluster says
     /// otherwise (the same <c>ConfigureHandler</c>). So an upstream that negotiates HTTP/2 is bounded by
-    /// this number neither in connections nor in concurrent requests, until P2-10 measures that case.
+    /// this number neither in connections nor in concurrent requests: docs/gaps.md GAP-29.
     /// A cleartext upstream stays on HTTP/1.1: <c>RequestVersionOrLower</c>, YARP's default policy,
     /// does not attempt h2c.
     /// </para>
@@ -44,8 +44,8 @@ public static class ProxyLimits
     /// </para>
     ///
     /// <para>
-    /// The number is a starting point that nobody has measured. P2-10's load test is where it is
-    /// measured against the task's 0.25 vCPU and 1 GB (plan row 1.4).
+    /// The number is a starting point that nobody has measured against the task's 0.25 vCPU and
+    /// 1 GB (plan row 1.4); GAP-29 records that the measurement is P2-10's.
     /// </para>
     /// </summary>
     public const int MaxHttp11ConnectionsPerApi = 64;
