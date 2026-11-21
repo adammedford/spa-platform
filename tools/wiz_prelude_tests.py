@@ -1051,14 +1051,14 @@ class SkillAdmitsTheBastionToSittingD(unittest.TestCase):
         self.assertIn("bastion", keys, "platform-tfvars.sh writes no bastion key")
         return keys | {"issuers"}
 
-    def run_check(self, extra: str = "") -> list[str]:
+    def run_check(self, extra: str = "", example_extra: str = "") -> list[str]:
         """Runs the check from a root holding the tree's example and a file N step 3 with --bastion leaves."""
         work = pathlib.Path(tempfile.mkdtemp(prefix="wiz-stage0-")).resolve()
         self.addCleanup(shutil.rmtree, work, True)
         root = work / "infra" / "envs" / "poc" / "platform"
         root.mkdir(parents=True)
-        example = (self.PLATFORM / "terraform.tfvars.example").read_text()
-        shutil.copy2(self.PLATFORM / "terraform.tfvars.example", root / "terraform.tfvars.example")
+        example = (self.PLATFORM / "terraform.tfvars.example").read_text() + example_extra
+        (root / "terraform.tfvars.example").write_text(example)
         written = self.written_keys()
         # The example with each key the script writes uncommented, as the script leaves it, and an issuers block.
         tfvars = re.sub(r"^#\s*([a-z_]+)(\s*=)", lambda m: m.group(1) + m.group(2) if m.group(1) in written else m.group(0),
@@ -1081,13 +1081,26 @@ class SkillAdmitsTheBastionToSittingD(unittest.TestCase):
         for key in ("multi_task", "session_store", "data_protection_parameter_prefix", "data_protection_kms_key_id"):
             self.assertIn(f"'{key}'", listed)
 
+    def test_the_gateways_writable_root_is_a_phase_1_key_not_a_g6_key(self) -> None:
+        # #1380's example names the key uncommented beside health_check_path, and N step 3 writes it on every
+        # run (#1441): the example here names it as #1380's does, so the check meets it whether or not the
+        # tree's example carries it yet.
+        lines = self.run_check("gateway_writable_root = true\n",
+                               example_extra='\ngateway_writable_root = true\n')
+        self.assertNotIn("'gateway_writable_root'", lines[0], lines)
+        self.assertEqual(lines[1], "G6 keys set in terraform.tfvars: []", lines)
+
+    def test_n_step_3_names_the_writable_root_platform_tfvars_writes(self) -> None:
+        self.assertIn('with `health_check_path = "/"` and `gateway_writable_root = true` (#1380: the sample image '
+                      "cannot start on the gateway's read-only root)", self.n_step_3())
+
     def test_a_continuity_key_beside_the_bastion_still_holds_d_back(self) -> None:
         lines = self.run_check("multi_task = true\n")
         self.assertEqual(lines[1], "G6 keys set in terraform.tfvars: ['multi_task']", lines)
 
     def test_stage_0s_bullet_and_d0_name_the_bastion_keys_as_admitted(self) -> None:
         skill = self.flat((SKILL / "SKILL.md").read_text())
-        self.assertIn("beyond the Phase 1 eight and the bastion's two, `bastion` and `bastion_image`", skill)
+        self.assertIn("beyond the Phase 1 nine and the bastion's two, `bastion` and `bastion_image`", skill)
         d0 = re.search(r"\*\*D0, the fresh deploy.*?(?=\*\*D2, the cutover)", (SKILL / "d.md").read_text(), re.S)
         self.assertIsNotNone(d0, "d.md has no D0 section ending at D2")
         self.assertIn("with `bastion = true` and `bastion_image` beside the Phase 1 keys, and no G6 key",
