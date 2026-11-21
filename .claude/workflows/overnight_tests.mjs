@@ -63,7 +63,8 @@
 // that died fails closed. One more has the subject selector refuse a merge (#1052), and checks that the ticket fails at
 // integrate as neither a conflict nor a red gate. Short runs on two or three tickets prove the path-wait release
 // (#1385): a predecessor's disjoint committed implement diff releases its edge before it settles, while a true overlap,
-// a missing, empty or blank file list, a waiter or a predecessor with no readable Touches path, and a forecast that
+// a missing or empty file list, one holding an entry git --name-only never prints (blank, non-string, absolute,
+// quoted, or with a . or .. segment), a waiter or a predecessor with no readable Touches path, and a forecast that
 // did not run keep the edge until settle; a release before the lane is free costs no wait; and two predecessors are
 // judged edge by edge, the waiter starting at its last release or settle, reported per predecessor, its wait clocked to
 // that point and its fork the last verified tip. Every house-rules prompt sends docker to ~/.docker/bin before an agent may call it
@@ -2388,7 +2389,8 @@ const forkOf = (prompt) => (/Otherwise fork from [^:]+: forkSha = (\S+?)\. Take 
 // 49. A path wait releases on its predecessor's committed implement diff (#1385; #1419 Q1 to Q8). An edge ends before
 //     its predecessor settles once that predecessor's implement resolves with a readable, nonempty changedFiles list
 //     none of whose files overlaps the waiter's Touches paths; it stays until settle on a true overlap, a missing,
-//     empty or blank list, a waiter or a predecessor with no readable Touches path, and a forecast that did not run.
+//     empty list, one holding an entry git --name-only never prints (blank, non-string, absolute, quoted, or with a .
+//     or .. segment), a waiter or a predecessor with no readable Touches path, and a forecast that did not run.
 //     #1292's night is the disjoint case: its predecessor named the directory tests/e2e/Stack and changed one other
 //     file under it. Each predecessor's review is slow, so a wait that releases is told from one that settles by
 //     whether the waiter started its implement before the predecessor's tail ended (ordered by seq, not by tick).

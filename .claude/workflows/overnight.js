@@ -1009,9 +1009,9 @@ log(forecastFailed ? `forecast: did not run: ${forecastFailed}`
 // until its predecessor settles on a true file overlap and on anything unread, since a check fails closed: a
 // forecast that did not run, a waiter or a predecessor with no readable Touches path, a file list missing, empty or
 // holding an entry that is no repo-relative path as git prints one, and a predecessor the resume probe found on the
-// run branch, which has no
-// implement diff (#712). A released waiter forks from the last verified tip as any ticket does (#1419 Q7), which may
-// not hold its predecessor yet: #279's file locks and the back-to-lane resolve hold any overlap the diff did not show.
+// run branch, which has no implement diff (#712). A released waiter forks from the last verified tip as any ticket
+// does (#1419 Q7), which may not hold its predecessor yet: #279's file locks and the back-to-lane resolve hold any
+// overlap the diff did not show.
 const laneT = Object.values(lanes).flat()
 const pathsOf = (t) => (Array.isArray(t.touches) ? t.touches : [])
   .map((p) => String(p).trim().replace(/^\.\//, '').replace(/^\/+|\/+$/g, '')).filter(Boolean)
