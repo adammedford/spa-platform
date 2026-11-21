@@ -95,9 +95,10 @@ public sealed class SharedOidc
             MaxResponseContentBufferSize = 10 * 1024 * 1024,
         };
 
-        // Platform configuration admits only an https authority (platform-config.schema.json). The one
-        // exception here is plain HTTP to a loopback address, which is where the hermetic tier's test
-        // provider listens; nothing off the machine is ever fetched without TLS.
+        // Platform configuration admits an https authority, or plain http on 127.0.0.1 or [::1]
+        // (platform-config.schema.json, ADR-0042 decision 3). The exception here is the wider one: plain
+        // http to any loopback address, which is where the hermetic tier's test provider listens; nothing
+        // off the machine is ever fetched without TLS.
         bool loopbackHttp = authority.Scheme == Uri.UriSchemeHttp && IPAddress.TryParse(authority.Host, out IPAddress? address)
             && IPAddress.IsLoopback(address);
 

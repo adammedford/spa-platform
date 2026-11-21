@@ -3,29 +3,33 @@ using System.Text.Json.Nodes;
 namespace Contracts.Tests;
 
 /// <summary>
-/// infra/envs/poc/outputs.json. The scripts and the deployed tests read it, and none of them reads
-/// Terraform state, so a missing key has to fail here rather than at the point of use.
+/// spactl checks an outputs document against this schema. The other readers refuse a missing field
+/// when they read it.
 /// </summary>
 public sealed class InfrastructureOutputsTests
 {
     [Theory]
     [InlineData("region")]
-    [InlineData("cell")]
     [InlineData("bucket")]
-    [InlineData("albDnsName")]
-    [InlineData("ecsCluster")]
-    [InlineData("ecsService")]
-    [InlineData("ecrGateway")]
-    [InlineData("ecrMockApi")]
-    [InlineData("gatewayImage")]
-    [InlineData("issuer")]
-    [InlineData("cognitoDomain")]
     [InlineData("clients")]
-    [InlineData("testUsers")]
-    [InlineData("logGroup")]
-    public void Every_output_but_the_bastion_service_is_required(string key)
+    public void Region_bucket_and_clients_are_required(string key)
     {
         Schemas.RejectsInfraOutputs(Documents.InfraOutputs(o => o.Remove(key)), $"outputs with no {key}");
+    }
+
+    [Fact]
+    public void An_outputs_document_with_only_region_bucket_and_clients_is_valid()
+    {
+        Schemas.AcceptsInfraOutputs(Documents.InfraOutputs(outputs =>
+        {
+            foreach (string key in outputs.Select(property => property.Key).ToArray())
+            {
+                if (key is not ("region" or "bucket" or "clients"))
+                {
+                    outputs.Remove(key);
+                }
+            }
+        }), "outputs with only region, bucket and clients");
     }
 
     [Fact]

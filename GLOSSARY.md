@@ -3,8 +3,9 @@
 The vocabulary of the Enterprise SPA Platform. Use these terms in issue titles, test names, commit
 messages and code. Where a term has a tempting synonym, the entry says which word to avoid.
 
-Definitions are drawn from `docs/plan/` and the decisions in `docs/adr/`. The plan is the frozen
-export; a term that changes meaning should be changed here and in the ADR that moved it.
+Definitions are drawn from `docs/plan/`, the frozen export, and from the decisions made since, which
+`docs/adr/README.md` → "Where a decision lives" places. A term that changes meaning is changed here,
+by a merge that cites the decision that moved it.
 
 ## The unit of deployment and the unit of tenancy
 
@@ -20,11 +21,12 @@ unreadable under another. In Phase 1 each task has a ring of its own, the "key d
 closes. See ADR-0025.
 _Avoid_: "keys" alone, which also means client secrets and KMS keys.
 
-**Instance** — one running copy of the gateway with its own live snapshot: in a cell, one ECS task of
-the service; in the hermetic tier, one harness host. `/readyz` names the instance that answered, and
-a wait for a revision covers every instance a cell runs (change request P2-5).
-_Avoid_: "instance" for an EC2 instance or for a copy of a Terraform module; "process", which is
-not the unit when two hosts share one test process.
+**Instance** — one running copy of the gateway with its own live snapshot: in a cell, one ECS task
+of the service; in the hermetic tier, one harness host. `/readyz` names the instance that answered,
+and a wait for a revision covers every instance a cell runs (change request
+p2-5-readiness-reports-registry-revision).
+_Avoid_: "instance" for an EC2 instance or for a copy of a Terraform module; "process", which is not
+the unit when two hosts share one test process.
 
 **Platform project** — the AWS project the platform is built in: the one whose account
 `tools/preflight.sh` checks against the git-ignored pin. A profile name does not identify it; the
@@ -354,8 +356,7 @@ lifecycle and decision form: `docs/agents/tracker-policy.md` → "Change request
 prose, "proposal", "change-request file" for a new one.
 
 **Ticket** — one unit of work with its acceptance criteria, held as an issue on this repository and
-cited as `#NNN`, and closed when its work lands. The tickets of one feature are sub-issues of its
-spec.
+cited as `#NNN`. The tickets of one feature are sub-issues of its spec.
 
 **Spec** — the statement of a feature's problem, solution and acceptance that its tickets are cut
 from, held the same way and closed when the feature lands. Not "the plan": `docs/plan/` is the
@@ -419,16 +420,17 @@ work only the human can steer or approve as it happens. _Avoid_: "interactive se
 "foreground" for where a file lives.
 
 **Scripted session** — an agent session a workflow script launches: a lane's implementer, a
-reviewer, a griller, the report writer. It drafts and never commits an ADR or a frozen contract's
-sentence (ADR-0021 decision 4). _Avoid_: "background agent", "subagent", for this.
+reviewer, a griller, the report writer. See ADR-0021.
+_Avoid_: "background agent", "subagent", for this.
 
 **Pre-accepted answer** — an answer written under a standing answer: the recommendation, taken on
-the night. Provisional until confirmed: a lane's code may rest on it until the human lands, but no
-steering document, ticket body or new ticket does. Not "accepted".
+the night. Provisional until confirmed: a lane's code may rest on it until the human lands. Not
+"accepted". See ADR-0021.
 
 **Confirmed answer** — an answer the human wrote, or a pre-accepted answer the human confirmed on
-the run's `Overnight <date>` issue. The only answer a session applies to a steering document, a
-ticket body or a new ticket.
+the run's `Overnight <date>` issue. What a session may apply one to: `docs/agents/landing-work.md` →
+"A commit that changes a steering document", and `docs/agents/tracker-policy.md` for a ticket's
+body. See ADR-0021.
 
 **Decision comment** — the human's comment on a change request that decides it: accept, accept with
 changes or decline, and whether the decision gets an ADR. It is the confirmed answer that the edit
@@ -437,10 +439,9 @@ drafted. _Avoid_: "approval", "Status" for this, "decision" alone where an ADR's
 meant, and "decision" for a draft.
 
 **Decision given in a session** — Adam's answer to an open question that no grill numbered, given in
-a foreground session and posted by that session on the issue the question belongs to, ending with
-the line that says so. On a change request it is the decision comment; on any other issue it is a
-confirmed answer the ticket's work may rest on, and it authorises no steering change the ticket's
-acceptance criteria do not ask for. Its form and what it covers:
+a foreground session and posted by that session on the issue the question belongs to. On a change
+request it is the decision comment; on any other issue it is the comment headed
+`## Decided in a session: <what>`. Its form, and what it authorises and does not:
 `docs/agents/tracker-policy.md` → "A decision Adam gives in a session". _Avoid_: "decision comment"
 for one on a ticket, "verbal decision", and "in-session decision" where the gateway's session could
 be read.
@@ -491,9 +492,9 @@ own in a comment or a review submitted as a comment. What it covers, which recor
 writes one: `docs/agents/review.md` → "The review record". _Avoid_: review-evidence line, review
 disposition, approval.
 
-**Open review** — the state of a pull request whose head no review record yet clears: a review
-running or holding, commits pushed after the last reviewed head, or a merge made without a review.
-It closes when a record names that head with a merge verdict and the findings it raised have landed.
+**Open review** — the state of a pull request whose review is not finished: no review record clears
+its current head, or a clearing record's findings are not yet resolved. What resolves a finding, and
+what waits on an open review: `docs/agents/landing-work.md` → "Gates".
 
 **Hand-over** — the morning's closing statement, on the `Overnight <date>` issue and the console:
 what the human runs next (the landing command, the issues to close, the worktrees to remove) and
@@ -530,10 +531,10 @@ exit test. Other tags are not gates. When one is made, and what it waits on:
 `docs/agents/landing-work.md` → "Gates".
 _Avoid_: release tag, and "the tag" where another tag could be meant.
 
-**Gate register** — the live list of gates defined after the frozen export, each with what it
-proves, its exit test, what it unblocks and the decision that recorded it. Kept by the integrator;
-a gate is added or changed by deciding a request. It names ids that the export or the test id
-register defines, and defines none. _Avoid_: gates table, which is the export's.
+**Gate register** — the live list of gates defined after the frozen export, `contracts/gates.md`:
+each with what it proves, its exit test, what it unblocks and the decision that recorded it. It
+names ids that the export or the test id register defines, and defines none. How a gate is added or
+changed: `contracts/gates.md` → "How a gate is added". _Avoid_: gates table, which is the export's.
 
 **Check** — a mechanical guard the pre-push hook, CI or `tools/land.sh` runs when applicable:
 ownership, steering, the roadmap, the build, Terraform's format and validate, the review record at
@@ -548,8 +549,8 @@ ends on a one-line verdict. _Avoid_: gate, and "the hook" for the checks themsel
 
 **Terraform floor** — the oldest Terraform the repository supports, named in `.terraform-version`.
 CI installs exactly it, every root's `required_version` asks for at least it, and the local check
-runs it when the machine has it, naming the version it ran either way. Raising it is a one-line
-change to that file plus each root's constraint. _Avoid_: the pinned version, the minimum, for this.
+runs it when the machine has it, naming the version it ran either way. How it is raised:
+`docs/dependencies.md` → "The Terraform floor". _Avoid_: the pinned version, the minimum, for this.
 
 **Test companion** — the tests that sit beside a check or a script, in a file named for it, and
 prove what it does by running the real thing on throwaway inputs built to trip each rule; never a
@@ -647,11 +648,10 @@ harness (G0 items 4 and 5), `C-` the Cognito run (G0 items 2 and 3). `S-`, `R-` 
 
 **Gap register** — the live list of known gaps between what Phase 1 delivers and what an enterprise
 adoption would need, `docs/gaps.md`: one numbered entry (`GAP-n`) per gap, saying what is missing,
-where it was found and what closes it. Kept by workstream 6 from findings (plan row 6.8); a finding
-adds an entry, and an entry closes when the row or ticket it names lands. The plan's own table of
-enterprise gaps, `docs/plan/06-phase-2-and-risks.md` → "Enterprise gaps", is the frozen export's
-statement of such gaps at export time and does not change; the register is where they are kept
-current. _Avoid_: bare "register" where the test id register or the gate register could be meant;
+where it was found and what closes it. Who keeps it, and when an entry is added or closed:
+`docs/gaps.md`'s opening paragraph. The plan's own table of enterprise gaps,
+`docs/plan/06-phase-2-and-risks.md` → "Enterprise gaps", is the frozen export's statement of such
+gaps at export time and does not change; the register is where they are kept current. _Avoid_: bare "register" where the test id register or the gate register could be meant;
 "enterprise gaps table" for the register, which is the plan's.
 
 **Stand-in run** — the first feasibility run, using a stand-in for `OpenIdConnectHandler` because the

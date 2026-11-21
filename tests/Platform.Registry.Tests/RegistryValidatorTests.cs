@@ -219,7 +219,8 @@ public sealed class RegistryValidatorTests
     [Fact]
     public void A_default_port_matches_the_same_origin_without_it()
     {
-        PlatformPolicy policy = Examples.Policy(p => p with { AllowedUpstreams = ["https://orders.internal"] });
+        // The example's fragment keeps its own upstream, which the policy still allows.
+        PlatformPolicy policy = Examples.Policy(p => p with { AllowedUpstreams = ["https://orders.internal", "http://127.0.0.1:5081"] });
 
         Accepts(Examples.RegistryEntry(e => e["apis"]![0]!["upstream"] = "https://orders.internal:443"), "the default https port spelled out", policy);
         RejectsFor(RegistryRules.UpstreamNotAllowed, "/apps/0/apis/0/upstream",
@@ -240,7 +241,7 @@ public sealed class RegistryValidatorTests
         PlatformPolicy policy = Examples.Policy(p => p with
         {
             AllowedHostSuffixes = [".spa-poc.test:65535", ".spa-poc.test:65536"],
-            AllowedUpstreams = ["http://127.0.0.1:5080", "http://127.0.0.1:65535", "http://127.0.0.1:65536"],
+            AllowedUpstreams = ["http://127.0.0.1:5080", "http://127.0.0.1:5081", "http://127.0.0.1:65535", "http://127.0.0.1:65536"],
         });
 
         Accepts(Examples.RegistryEntry(e => e["host"] = "app1.spa-poc.test:65535"), "host port 65535", policy);
@@ -413,9 +414,14 @@ public sealed class RegistryValidatorTests
             e["apis"]![0]!["upstream"] = "http://127.0.0.1:5082";
         }), "three broken rules in one entry", liveRevision: 50);
 
-        // A set: completeness is the contract, the order the rules run in is not.
+        // A set: completeness is the contract, the order the rules run in is not. The second entry's
+        // fragment keeps cognito-poc, which is no longer its shell's issuer.
         Assert.Equal(
-            new[] { RegistryRules.RevisionNotGreater, RegistryRules.DuplicateHost, RegistryRules.UnknownIssuer, RegistryRules.UpstreamNotAllowed }
+            new[]
+            {
+                RegistryRules.RevisionNotGreater, RegistryRules.DuplicateHost, RegistryRules.UnknownIssuer,
+                RegistryRules.UpstreamNotAllowed, RegistryRules.FragmentIssuerMismatch,
+            }
                 .Order(StringComparer.Ordinal),
             result.Errors.Select(error => error.Rule).Order(StringComparer.Ordinal));
     }

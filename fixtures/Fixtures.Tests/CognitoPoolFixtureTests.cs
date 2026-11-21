@@ -67,9 +67,11 @@ public sealed class CognitoPoolFixtureTests
             server["scopes"]!.AsArray().Select(scope =>
                 $"{server["identifier"]!.GetValue<string>()}/{scope!["name"]!.GetValue<string>()}"))];
 
-        foreach (string path in FixtureFiles.AllDefinitions)
+        // Each fragment's client asks for its own scopes, so its oauth block is read too (#998).
+        // Mutation: one fragment asking for reports' write scope turns this red.
+        foreach (JsonNode oauth in FixtureFiles.AllDefinitions.Select(FixtureFiles.Read).SelectMany(FixtureFiles.OAuthBlocks))
         {
-            IEnumerable<string> requested = FixtureFiles.Read(path)["oauth"]!["scopes"]!
+            IEnumerable<string> requested = oauth["scopes"]!
                 .AsArray()
                 .Select(scope => scope!.GetValue<string>())
                 // openid and profile are the provider's own, not a resource server's.
@@ -89,9 +91,9 @@ public sealed class CognitoPoolFixtureTests
         // resource server would bind the token to an audience the API never checks for.
         HashSet<string> identifiers = [.. ResourceServers.Select(server => server["identifier"]!.GetValue<string>())];
 
-        foreach (string path in FixtureFiles.AllDefinitions)
+        foreach (JsonNode oauth in FixtureFiles.AllDefinitions.Select(FixtureFiles.Read).SelectMany(FixtureFiles.OAuthBlocks))
         {
-            if (FixtureFiles.Read(path)["oauth"]!["resource"] is { } resource)
+            if (oauth["resource"] is { } resource)
             {
                 Assert.Contains(resource.GetValue<string>(), identifiers);
             }

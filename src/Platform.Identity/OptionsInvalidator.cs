@@ -74,6 +74,15 @@ public sealed partial class OptionsInvalidator : IDisposable
             cookies.TryRemove(SchemeNames.Cookie(appId));
             oidc.TryRemove(SchemeNames.Oidc(appId));
 
+            // Every fragment scheme of the entry before and after: the whole-entry fingerprint decides,
+            // and per-scheme eviction is not adopted (#994). A fragment whose client changed is rebuilt
+            // as the new client; its set in a session reads as absent, so no session is purged for it.
+            foreach (string fragmentId in (before?.Fragments ?? []).Concat(after?.Fragments ?? [])
+                .Select(f => f.FragmentId).Distinct(StringComparer.Ordinal))
+            {
+                oidc.TryRemove(SchemeNames.Oidc(appId, fragmentId));
+            }
+
             string? reason = before is null ? null
                 : after is null ? "removed"
                 : !string.Equals(before.OAuth.ClientId, after.OAuth.ClientId, StringComparison.Ordinal) ? "new client"

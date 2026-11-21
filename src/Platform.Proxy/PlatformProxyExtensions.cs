@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.AspNetCore.Routing.Patterns;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Platform.Abstractions;
@@ -8,7 +9,8 @@ using Yarp.ReverseProxy.Configuration;
 namespace Platform.Proxy;
 
 /// <summary>
-/// Workstream 4's proxy entry points: the YARP registration, and <c>/api/{name}/{rest}</c> at
+/// Workstream 4's proxy entry points: the YARP registration, and <c>/api/{name}/{rest}</c> and a
+/// fragment's <c>/fragments/{fragmentId}/api/{name}/{rest}</c> at
 /// <c>MapPlatformProxy</c>, among the endpoints that end <c>contracts/pipeline.md</c>.
 ///
 /// The configuration provider and the route are task 4.1's. The token step ahead of the forwarder
@@ -36,7 +38,8 @@ public static class PlatformProxyExtensions
     }
 
     /// <summary>
-    /// <c>/api/{name}/{rest}</c> through YARP, and the catch-all behind it. An API name the app does
+    /// <c>/api/{name}/{rest}</c> and <c>/fragments/{fragmentId}/api/{name}/{rest}</c> through YARP, and
+    /// the catch-all behind each. An API name the app does
     /// not list matches no generated route, so it lands on the catch-all and is refused there with
     /// 404 <c>unknown_api</c> rather than falling through to an asset (findings T-C9, T-C10).
     /// </summary>
@@ -50,6 +53,17 @@ public static class PlatformProxyExtensions
             UpstreamFailure.Use(proxy);
         });
         endpoints.Map("/api/{**rest}", UnknownApi.WriteAsync);
+
+        // The same catch-all under a fragment's namespace, matched only for the fragment host resolution
+        // pinned: a fragmentId the app does not list is not routed here, and is answered by what
+        // follows, as any path under /fragments/ the app does not serve is (#996;
+        // contracts/http-contract.md -> Endpoints).
+        endpoints.Map(
+            RoutePatternFactory.Parse(
+                PlatformPaths.Fragments + "/{" + PinnedFragment.Parameter + "}/api/{**rest}",
+                defaults: null,
+                parameterPolicies: new RouteValueDictionary { [PinnedFragment.Parameter] = new PinnedFragment() }),
+            UnknownApi.WriteAsync);
 
         return endpoints;
     }

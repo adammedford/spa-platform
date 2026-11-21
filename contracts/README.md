@@ -26,7 +26,7 @@ decision made or revised after the 11 October 2026 export belongs in `docs/adr/`
 | Request gate | [`request-gate.md`](request-gate.md) | G1a, with the browser contract | Workstream 4, and workstream 6's negative suite |
 | Upstream contract | [`upstream-contract.md`](upstream-contract.md) | G1a | Workstream 4 and the mock API |
 | S3 layout | [`s3-layout.md`](s3-layout.md) | G1a | Workstreams 1 and 2 |
-| Infrastructure outputs | [`infra-outputs.schema.json`](infra-outputs.schema.json), [`infra-outputs.example.json`](infra-outputs.example.json) | G1a | Workstream 1, the scripts, workstream 6 |
+| Infrastructure outputs | [`infra-outputs.schema.json`](infra-outputs.schema.json), [`infra-outputs.example.json`](infra-outputs.example.json) | G1a | `spactl`, workstream 1, the scripts, workstream 6 |
 | Resource tags | [`resource-tags.md`](resource-tags.md) | G1a | Workstream 1, `teardown.sh`, workstream 6 |
 | Telemetry | [`telemetry.md`](telemetry.md) | G1a | Everyone |
 | Records and interfaces | `src/Platform.Abstractions` (task I-3) | G1a, except the identity interfaces at G1b | Workstreams 2, 3, 4, 6 |
@@ -145,13 +145,16 @@ recorded here only.
 | `revision` must be greater than the live one | Compares two documents | Task 2.1, against the live snapshot |
 | `appId` unique in the registry | Cross-entry uniqueness of one property. `uniqueItems` compares whole entries only. | Task 2.1 |
 | `host` unique in the registry | The same | Task 2.1 |
-| `oauth.clientId` unique across apps | The same | Task 2.1 |
-| `apis[].name` unique within the app | The same, one level down | Task 2.1 |
+| `oauth.clientId` unique across apps and fragments | The same, across every shell's and every fragment's `oauth`. A fragment that repeats a shell's id is reported at `fragments[i]/oauth/clientId`, whichever entry comes first. | Task 2.1 |
+| `apis[].name` unique within the app, and within each fragment | The same, one level down. A shell's names and each fragment's are separate namespaces. | Task 2.1 |
+| `fragmentId` unique within its entry | The same, one level down. Reported as `duplicate-fragment-id`. | Task 2.1 (#992) |
+| A fragment's `oauth.issuer` equals its shell's | Compares two values in one entry: one issuer per host. Reported as `fragment-issuer-mismatch`. | Task 2.1 (#992) |
+| At most `Policy:FragmentsPerShell` fragments per entry | The limit comes from platform configuration. The registry schema has no `maxItems`. If the setting is absent, the provisional default is 5, pending G9’s sitting. The validator reports `fragments-per-shell-exceeded`. | Task 2.1 (#992) |
 | `host` ends with an allowed suffix | Policy-bounded: the suffixes are in `Policy:AllowedHostSuffixes`, which the schema cannot see | Task 2.1 |
-| `apis[].upstream` matches upstream policy | Policy-bounded, as above, for `Policy:AllowedUpstreams`. The schema still rejects a path, query, fragment or credentials in it. | Task 2.1 |
+| `apis[].upstream` matches upstream policy | Policy-bounded, as above, for `Policy:AllowedUpstreams`, on a shell's and on every fragment's `apis`. The schema still rejects a path, query, fragment or credentials in it. | Task 2.1 |
 | `oauth.issuer` names an issuer in platform configuration | Policy-bounded, as above, for `Issuers:{name}` | Task 2.1 |
 | `clientSecretRef` resolves to a readable parameter | Needs I/O. A snapshot that cannot read one is rejected and the live snapshot stays; at a cold start the affected apps are left out and reported, and the rest go live. | Tasks 2.2 and 2.5 |
-| More than one upstream origin on an entry | A warning, and a schema has no notion of one. Task 2.1 keeps errors and warnings apart. | Task 2.1 |
+| More than one upstream origin on one token set | A warning, and a schema has no notion of one. Counted once over the shell's `apis` and once over each fragment's, so one upstream shared by a shell and a fragment does not warn. Task 2.1 keeps errors and warnings apart. | Task 2.1 |
 | The `release` prefix exists in S3 | Needs I/O, and only `spactl` does it; the gateway does not | Task 2.6 |
 | A port above 65535 | The pattern bounds the port's shape, not its value | Task 2.1 |
 | A schema-valid integer the platform cannot hold or apply | Draft 2020-12 reads `30`, `30.0` and `3e1` all as integers. `revision` has no schema maximum; G2 bounds `apis[].timeoutSeconds` to 2147483. The limits are the runtime's, not the document format's: a `revision` beyond Int64, and a `timeoutSeconds` the proxy cannot apply exactly. Reported as `integer-out-of-range`. | Task 2.1 |

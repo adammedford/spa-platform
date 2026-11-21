@@ -29,7 +29,47 @@ public static class PlatformPolicyConfiguration
             Issuers: configuration.GetSection("Issuers").GetChildren()
                 .Select(section => (section.Key, Issuer: Issuer(section)))
                 .Where(issuer => issuer.Issuer is not null)
-                .ToImmutableDictionary(issuer => issuer.Key, issuer => issuer.Issuer!, StringComparer.Ordinal));
+                .ToImmutableDictionary(issuer => issuer.Key, issuer => issuer.Issuer!, StringComparer.Ordinal))
+        {
+            FragmentsPerShell = FragmentsPerShell(configuration["Policy:FragmentsPerShell"]),
+            MergeBudget = MergeBudget(configuration["Policy:MergeBudget"]),
+        };
+    }
+
+    /// <summary>
+    /// <c>Policy:MergeBudget</c>: absent, the record's placeholder (3; platform-config.schema.json says
+    /// "absent, it is 3"); present, an integer of at least 1. Anything else fails closed at 1, a single
+    /// attempt, so a budget nobody set never adds retries to a fragment callback's write (#1445).
+    /// </summary>
+    private static int MergeBudget(string? value)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            return new PlatformPolicy([], [], ImmutableDictionary<string, IssuerDefinition>.Empty).MergeBudget;
+        }
+
+        return int.TryParse(value, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out int budget)
+            && budget >= 1
+            ? budget
+            : 1;
+    }
+
+    /// <summary>
+    /// <c>Policy:FragmentsPerShell</c>: absent, the record's placeholder (5; platform-config.schema.json
+    /// says "absent, it is 5"); present, a non-negative integer. Anything else fails closed at 0, so an
+    /// entry with any fragment is refused under <see cref="RegistryRules.FragmentsPerShellExceeded"/>
+    /// rather than admitted under a cap nobody set (#992).
+    /// </summary>
+    private static int FragmentsPerShell(string? value)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            return new PlatformPolicy([], [], ImmutableDictionary<string, IssuerDefinition>.Empty).FragmentsPerShell;
+        }
+
+        return int.TryParse(value, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out int cap)
+            ? cap
+            : 0;
     }
 
     // GetChildren orders array indexes numerically, so the list keeps the configuration's order.

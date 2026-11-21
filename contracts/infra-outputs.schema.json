@@ -2,75 +2,66 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://spa-platform.internal/contracts/infra-outputs.schema.json",
   "title": "Infrastructure outputs",
-  "description": "infra/envs/poc/outputs.json, written by workstream 1 after every apply. The deployed tests and the scripts read it. Three scripts read a root's outputs from Terraform state instead: `teardown.sh` (change request 1.5a, decision 2), whose destroy needs the platform root's state anyway; `tools/scripts/verify-release-immutability.sh` (#122), which first runs after a storage-only apply of the platform root that writes no outputs.json; and `tools/scripts/platform-tfvars.sh` (#470), which reads the identity root's outputs to write the platform root's terraform.tfvars before that root's first apply, so before seed.sh has written outputs.json for the cell. Workstream 1 proposes this contract; the integrator writes it. Source: docs/plan/02-contracts.md -> Infrastructure outputs. Freezes at G1a.",
+  "description": "A cell's resource names, in one document, written after every apply by whatever applies the cell. spactl reads region, bucket and clients, which every document carries. Every other field is optional: the reference scripts read some and this repository's deployed tests others, and a cell that does not use a field omits it. The document is closed, so a field it does not list is refused rather than ignored. Freezes at G1a.",
   "x-freeze": { "gate": "G1a", "status": "frozen-at-g1a" },
   "type": "object",
   "additionalProperties": false,
-  "required": [
-    "region",
-    "cell",
-    "bucket",
-    "albDnsName",
-    "ecsCluster",
-    "ecsService",
-    "ecrGateway",
-    "ecrMockApi",
-    "gatewayImage",
-    "issuer",
-    "cognitoDomain",
-    "clients",
-    "testUsers",
-    "logGroup"
-  ],
+  "required": ["region", "bucket", "clients"],
   "properties": {
     "region": {
       "type": "string",
       "pattern": "^[a-z]{2}(-[a-z]+)+-[1-9][0-9]*$",
-      "description": "The AWS region. Every price in the cost model is for us-east-1."
+      "description": "The AWS Region the cell runs in. Read by spactl."
     },
     "cell": {
       "$ref": "https://spa-platform.internal/contracts/registry.schema.json#/$defs/appId",
-      "description": "The cell name, the same value as Platform:Cell. It is part of every resource name and of the data-protection application name, so it takes the same lexical form as an appId."
+      "description": "Optional. The cell name, the same value as Platform:Cell. It is part of every resource name and of the data-protection application name, so it takes the same lexical form as an appId."
     },
     "bucket": {
       "$ref": "#/$defs/bucketName",
-      "description": "The one private bucket: the registry and every release."
+      "description": "The one private bucket: the registry and every release. Read by spactl."
     },
     "albDnsName": {
       "$ref": "#/$defs/dnsName",
-      "description": "The internal load balancer's DNS name. The tunnel forwards to it."
+      "description": "Optional. The internal load balancer's DNS name, which the reference tunnel forwards to. Read by the reference scripts; a cell that does not use them omits the field."
     },
-    "ecsCluster": { "$ref": "#/$defs/awsName" },
-    "ecsService": { "$ref": "#/$defs/awsName" },
+    "ecsCluster": {
+      "$ref": "#/$defs/awsName",
+      "description": "Optional. The ECS cluster the gateway's service runs in. Read by the reference scripts; a cell that does not use them omits the field."
+    },
+    "ecsService": {
+      "$ref": "#/$defs/awsName",
+      "description": "Optional. The gateway's ECS service. Read by the reference scripts; a cell that does not use them omits the field."
+    },
     "ecsBastionService": {
       "$ref": "#/$defs/awsName",
-      "description": "The bastion service's name. Present only when the cell declares a bastion. The tunnel lists its tasks for its hop."
+      "description": "Optional. The bastion service's name, present only when the cell declares a bastion. Read by the reference tunnel, which lists its tasks for its hop; a cell with no bastion omits the field."
     },
     "ecrGateway": {
       "$ref": "#/$defs/repositoryUri",
-      "description": "The gateway image repository, with immutable tags."
+      "description": "Optional. The gateway image repository, with immutable tags. Read by the reference scripts; a cell that does not use them omits the field."
     },
     "ecrMockApi": {
       "$ref": "#/$defs/repositoryUri",
-      "description": "The mock API image repository, with immutable tags."
+      "description": "Optional. The mock API image repository, with immutable tags. Read by this repository's own deployment of the mock API its deployed tests call; a cell with no mock API omits it."
     },
     "gatewayImage": {
       "type": "string",
       "pattern": "^[a-z0-9][a-z0-9.-]*(:[1-9][0-9]*)?/[a-z0-9][a-z0-9._/-]*@sha256:[0-9a-f]{8,64}$",
-      "description": "The running gateway image, pinned by digest. Deployment pushes by digest and then asserts the running one, so a tag never decides what runs. The digest in the example document is abbreviated to eight hex characters; a real one has sixty-four."
+      "description": "Optional. The running gateway image, pinned by digest. Deployment pushes by digest and then asserts the running one, so a tag never decides what runs. Read by the reference scripts; a cell that does not use them omits the field. The digest in the example document is abbreviated to eight hex characters; a real one has sixty-four."
     },
     "issuer": {
       "type": "string",
       "pattern": "^https://[^\\s]+$",
-      "description": "The identity provider's issuer, the value behind Issuers:{name}:Authority."
+      "description": "Optional. One identity provider's issuer, where a cell has one. spactl does not read it: the gateway's issuers are Issuers:{name}:Authority in the platform configuration."
     },
     "cognitoDomain": {
       "$ref": "#/$defs/dnsName",
-      "description": "The managed-login prefix domain, host only and no scheme. Issuers:{name}:BrowserOrigin is https:// plus this value."
+      "description": "Optional. The managed-login prefix domain, host only and no scheme. Issuers:{name}:BrowserOrigin is https:// plus this value. Read by this repository's deployed tests; a cell with another identity provider omits it."
     },
     "clients": {
       "type": "object",
-      "description": "One entry per app that has an OAuth client, keyed by appId, and under it one per fragment of that app, keyed by fragmentId, mirroring the registry's nesting. spactl app add reads it to complete an app definition and each of its fragments.",
+      "description": "One entry per app that has an OAuth client, keyed by appId, and under it one per fragment of that app, keyed by fragmentId, mirroring the registry's nesting. Read by spactl: app add reads it to complete an app definition and each of its fragments.",
       "propertyNames": { "$ref": "https://spa-platform.internal/contracts/registry.schema.json#/$defs/appId" },
       "additionalProperties": {
         "type": "object",
@@ -80,7 +71,7 @@
           "clientId": { "$ref": "https://spa-platform.internal/contracts/registry.schema.json#/$defs/clientId" },
           "secretParameter": {
             "$ref": "#/$defs/parameterName",
-            "description": "The Parameter Store name holding the client secret. Never the value: this file is written to the repository's working tree and read by scripts."
+            "description": "The Parameter Store name holding the client secret. Never the value: the document is a file on the operator's disk, read by tools."
           },
           "secretVersion": {
             "type": "integer",
@@ -114,7 +105,7 @@
     },
     "testUsers": {
       "type": "object",
-      "description": "The pool's test users, keyed by user name. Each names the parameter its generated password lives in, never the password.",
+      "description": "Optional. The user pool's test users, keyed by user name. Each names the parameter its generated password lives in, never the password. Read by this repository's deployed tests; a cell with another identity provider omits it.",
       "propertyNames": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-z0-9]([a-z0-9._-]*[a-z0-9])?$" },
       "additionalProperties": {
         "type": "object",
@@ -130,7 +121,7 @@
       "minLength": 1,
       "maxLength": 512,
       "pattern": "^/[A-Za-z0-9._/#-]+$",
-      "description": "The task's CloudWatch log group. The deployed tests read the gateway log for a run from here."
+      "description": "Optional. The task's CloudWatch log group. Read by the reference scripts, and by this repository's deployed tests for a run's gateway log; a cell that does not use them omits the field."
     }
   },
   "$defs": {

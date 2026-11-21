@@ -105,7 +105,20 @@ public sealed class ProxyHost : IAsyncDisposable
                     {
                         if (registry.Current.ByHost.TryGetValue(context.Request.Host.Host, out AppDefinition? app))
                         {
-                            context.Features.Set<IAppFeature>(SettableAppFeature.For(app));
+                            context.Features.Set<IAppFeature>(SettableAppFeature.For(options.AppPin?.Invoke(app) ?? app));
+
+                            // And the fragment the path names, when the app lists it, beside the app
+                            // and from the same snapshot, as the real stage pins it (#996).
+                            FragmentDefinition? named = PlatformPaths.FragmentOf(context.Request.Path) is { } of
+                                ? app.Fragments.FirstOrDefault(f => string.Equals(f.FragmentId, of.FragmentId, StringComparison.Ordinal))
+                                : null;
+                            IFragmentFeature? pin = options.FragmentPin is { } custom
+                                ? custom(app, named)
+                                : named is null ? null : new SettableFragmentFeature(named);
+                            if (pin is not null)
+                            {
+                                context.Features.Set(pin);
+                            }
                         }
 
                         return next(context);

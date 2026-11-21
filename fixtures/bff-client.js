@@ -13,9 +13,12 @@
   // login and expects nothing token-shaped.
   var csrfToken = null;
 
-  // GET /bff/session: "200 with sub, name, email, expiresAt and csrfToken. 401 when there is no
-  // session." Fetched, never navigated to. Resolves to the user without the token, or to null when
-  // there is no session; the caller decides whether that means logging in.
+  // GET /bff/session: "200 with sub, name, email, expiresAt, csrfToken and fragments. 401 when
+  // there is no session." Fetched, never navigated to. Resolves to the user and the fragments map
+  // without the token, or to null when there is no session; the caller decides whether that means
+  // logging in. fragments maps each fragmentId of the app's entry to signedIn, unavailable or
+  // loginRequired, and is {} for an app with none (#998): what the shell does with a fragment that
+  // is not signedIn is its own, on a user's gesture (fragmentLogin below).
   function session() {
     return fetch("/bff/session", {
       credentials: "same-origin",
@@ -30,7 +33,13 @@
       }
       return response.json().then(function (body) {
         csrfToken = body.csrfToken;
-        return { sub: body.sub, name: body.name, email: body.email, expiresAt: body.expiresAt };
+        return {
+          sub: body.sub,
+          name: body.name,
+          email: body.email,
+          expiresAt: body.expiresAt,
+          fragments: Object.assign({}, body.fragments),
+        };
       });
     });
   }
@@ -39,15 +48,41 @@
   // the token.
   var SAFE_METHODS = ["GET", "HEAD", "OPTIONS"];
 
-  // Any method on /api/{name}/{rest}, fetched. The path is resolved the way the browser will send
-  // it, so "/api/../bff/logout" or "//elsewhere/api/x" is seen for what it is and refused before a
-  // request exists: the token travels to /api/** on this origin and nowhere else.
+  // registry.schema.json's fragmentId: 3 to 40 lowercase letters, digits or hyphens. A segment
+  // outside it names no fragment the registry could hold.
+  var FRAGMENT_ID = /^[a-z0-9-]{3,40}$/;
+
+  // /fragments/{fragmentId}/api/ and what follows it, with the id captured.
+  var FRAGMENT_API = /^\/fragments\/([^/]*)\/api\//;
+
+  // Any method on /api/{name}/{rest}, or on a fragment's /fragments/{fragmentId}/api/{name}/{rest}
+  // (#998), fetched. The path is resolved the way the browser will send it, so "/api/../bff/logout",
+  // "/fragments/a/api/../../bff/logout" or "//elsewhere/api/x" is seen for what it is and refused
+  // before a request exists: the token travels to those two prefixes on this origin and nowhere else.
   function apiUrl(path) {
     var url = new URL(String(path), window.location.origin);
-    if (url.origin !== window.location.origin || url.pathname.indexOf("/api/") !== 0) {
-      throw new TypeError("BffClient.api only calls /api/** on this origin");
+    var fragment = FRAGMENT_API.exec(url.pathname);
+    var allowed = url.pathname.indexOf("/api/") === 0 || (fragment !== null && FRAGMENT_ID.test(fragment[1]));
+    if (url.origin !== window.location.origin || !allowed) {
+      throw new TypeError("BffClient.api only calls /api/** or /fragments/{fragmentId}/api/** on this origin");
     }
     return url.pathname + url.search;
+  }
+
+  // The 401 codes that mean there is no session now (Errors): unauthenticated never had one, and
+  // session_ended had its refresh token refused. fragment_login_required is not one of them: the
+  // fragment has no usable token set and the shell's session stands, so nothing navigates and the
+  // token is kept. A code the client does not know starts nothing either.
+  var LOGIN_CODES = ["unauthenticated", "session_ended"];
+
+  // The problem body's code, read from a copy so the caller still receives a Response whose body it
+  // can read. A body that is not JSON has no code.
+  function codeOf(response) {
+    return response.clone().json().then(function (body) {
+      return body && typeof body.code === "string" ? body.code : null;
+    }, function () {
+      return null;
+    });
   }
 
   // Resolves to the token, reading the session first when none has been read yet.
@@ -60,7 +95,7 @@
     });
   }
 
-  // fetch() for /api/**, with the same arguments. An unsafe method carries X-CSRF-TOKEN, and the
+  // fetch() for /api/** and /fragments/{fragmentId}/api/**, with the same arguments. An unsafe method carries X-CSRF-TOKEN, and the
   // token travels in that header and nowhere else (never a form field: the gateway does not read
   // a body it is about to proxy). Resolves to the upstream's Response, whatever its status.
   function api(path, init) {
@@ -88,14 +123,19 @@
       options.headers = headers;
       return fetch(target, options);
     }).then(function (response) {
-      // 401 is unauthenticated or session_ended (Errors). Both mean there is no session now, and
-      // /api never answers with a redirect, so the client starts the login itself and comes back
-      // to this page. The response still resolves, so the caller can stop what it was doing.
-      if (response.status === 401) {
-        csrfToken = null;
-        login();
+      if (response.status !== 401) {
+        return response;
       }
-      return response;
+      // A 401 that means there is no session: /api never answers with a redirect, so the client
+      // starts the login itself and comes back to this page. The response still resolves either
+      // way, so the caller can stop what it was doing.
+      return codeOf(response).then(function (code) {
+        if (LOGIN_CODES.indexOf(code) !== -1) {
+          csrfToken = null;
+          login();
+        }
+        return response;
+      });
     });
   }
 
@@ -121,6 +161,23 @@
     window.location.assign("/bff/login?returnUrl=" + encodeURIComponent(localPath(back)));
   }
 
+  // GET /bff/login?fragment={fragmentId}&returnUrl=/path, a navigation, for one fragment the session
+  // reports as loginRequired or unavailable. For a user's gesture only: the shell renders a control
+  // ("Sign in to {fragment}", "Unavailable; try again") and calls this when it is used, and nothing
+  // in this client calls it, because the fallback is user-initiated and nothing escalates
+  // login_required by itself (#961, "The fallback is user-initiated"). An id outside the fragmentId
+  // rule is refused before anything navigates; returnUrl is held to a local path as login()'s is.
+  function fragmentLogin(fragmentId, returnUrl) {
+    if (typeof fragmentId !== "string" || !FRAGMENT_ID.test(fragmentId)) {
+      throw new TypeError("BffClient.fragmentLogin needs a fragmentId: 3 to 40 of [a-z0-9-]");
+    }
+    var back = returnUrl === undefined
+      ? window.location.pathname + window.location.search + window.location.hash
+      : returnUrl;
+    window.location.assign("/bff/login?fragment=" + encodeURIComponent(fragmentId) +
+      "&returnUrl=" + encodeURIComponent(localPath(back)));
+  }
+
   // POST /bff/logout, made as a form navigation so the browser follows the redirects through the
   // provider's logout and back to /. The form has no fields: the antiforgery token is never a form
   // field (Request headers the SPA sends), and the form-action 'self' in the baseline policy allows
@@ -139,6 +196,7 @@
     session: session,
     api: api,
     login: login,
+    fragmentLogin: fragmentLogin,
     logout: logout,
   });
 })();

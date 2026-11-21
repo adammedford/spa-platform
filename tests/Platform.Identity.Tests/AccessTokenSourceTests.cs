@@ -110,7 +110,7 @@ public sealed class AccessTokenSourceTests
         Assert.Equal(200, refreshed.Status);
         Assert.Equal(SessionRef.Of(key), refreshed.SessionRef);
         Assert.Equal(SessionRef.Of(key), shell.SessionRef);
-        string refresh = Assert.Single(logs.Lines, l => l.Category == typeof(AccessTokenSource).FullName).Message;
+        string refresh = Assert.Single(logs.Lines, l => l.Category == typeof(AccessTokenSource).FullName && l.Message.StartsWith("Refreshed", StringComparison.Ordinal)).Message;
         Assert.Contains(SessionRef.Of(key), refresh, StringComparison.Ordinal);
         Assert.All(logs.Lines, line => Assert.DoesNotContain(key, line.Text, StringComparison.Ordinal));
     }
@@ -301,14 +301,14 @@ public sealed class AccessTokenSourceTests
     }
 
     [Fact]
-    public async Task A_refresh_that_loses_the_race_to_a_record_with_no_access_token_fails_the_call_and_keeps_that_record()
+    public async Task A_refresh_that_loses_to_a_writer_that_left_its_refresh_token_re_applies_its_set_onto_the_winner()
     {
-        // T-D2's other branch: while the provider holds this call's refresh, another writer rewrites the
-        // session with no access token. The versioned winner holds no token, and this call's own was never
-        // persisted, so the call has no token it may hand back. It fails with ProviderUnavailable, the
-        // winner stays as it was written, and the source's warning names the session by reference.
-        // Mutation: treat a winner with no token as ended (end the turn and answer SessionEnded); the
-        // session is removed, and this fails.
+        // #995's W3 conflict row: while the provider holds this call's refresh, another writer rewrites the
+        // record and leaves the shell's set holding the refresh token this call presented (here it drops
+        // the access token, as a writer of another set's tokens may rewrite the ticket). The set is still
+        // this refresh's to write, so it is re-applied onto the winner: two replaces, the second wins, and
+        // the call answers the token it stored. Mutation: treat every lost replace as superseded (drop the
+        // re-apply); the call answers 503, the record keeps no token, and this fails (1 test red).
         CapturedLog logs = new();
         HeldClock hold = new();
         await using IdentityGateway gateway = await IdentityGateway.StartAsync(
@@ -320,13 +320,44 @@ public sealed class AccessTokenSourceTests
         IdentityGateway.Answer answer = await WhileTheProviderHoldsTheRefreshAsync(
             gateway, hold, jar, async () => winner = await RemoveTokenElsewhereAsync(gateway, key, "access_token"));
 
+        TokenGrant grant = Assert.Single(gateway.Idp.RefreshGrants);
+        Assert.Equal((200, grant.AccessToken), (answer.Status, answer.Body));
+        Assert.Equal(grant.AccessToken, await StoredTokenAsync(gateway, "access_token", key));
+        SessionRecord stored = Assert.IsType<SessionRecord>(await gateway.Sessions.GetAsync(key, TestContext.Current.CancellationToken));
+        Assert.Equal(winner!.Version + 1, stored.Version);
+        string line = Assert.Single(SourceLines(logs), l => l.StartsWith("Refresh write", StringComparison.Ordinal));
+        Assert.Contains("ended written after 2 versioned replaces", line, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_refresh_superseded_by_a_winner_with_no_fresh_token_fails_the_call_and_keeps_that_record()
+    {
+        // #995's W3 conflict row, the shell's "changed" branch: while the provider holds this call's
+        // refresh, another writer refreshes the shell's set (rotating its refresh token) and leaves no
+        // access token. The refresh is superseded: it drops its tokens, writes nothing more, and with no
+        // fresh winner's token to hand back fails with ProviderUnavailable, the winner kept as written, and
+        // the warning names the session by reference. Mutation: re-apply whatever the winner holds; the
+        // winner is overwritten, and this fails (1 test red).
+        CapturedLog logs = new();
+        HeldClock hold = new();
+        await using IdentityGateway gateway = await IdentityGateway.StartAsync(
+            [App1], services => services.AddSingleton(logs.Provider), idpClock: hold);
+        Dictionary<string, string> jar = await LoginDueAsync(gateway, App1);
+        (string key, _) = await gateway.Sessions.SingleAsync();
+        SessionRecord? winner = null;
+
+        IdentityGateway.Answer answer = await WhileTheProviderHoldsTheRefreshAsync(gateway, hold, jar, async () =>
+        {
+            await RefreshElsewhereAsync(gateway, App1, key);
+            winner = await RemoveTokenElsewhereAsync(gateway, key, "access_token");
+        });
+
         Assert.Equal((503, "idp_unavailable"), (answer.Status, answer.Body));
-        Assert.True(Assert.Single(gateway.Idp.RefreshGrants).Ok);
-        Assert.NotNull(winner);
         Assert.Equal(winner, await gateway.Sessions.GetAsync(key, TestContext.Current.CancellationToken));
         string warning = Assert.Single(SourceLines(logs), line => line.Contains("no access token", StringComparison.Ordinal));
         Assert.Contains(SessionRef.Of(key), warning, StringComparison.Ordinal);
         Assert.DoesNotContain(key, warning, StringComparison.Ordinal);
+        Assert.Contains(SourceLines(logs), l => l.Contains("ended superseded after 1 versioned replaces", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -593,6 +624,9 @@ public sealed class AccessTokenSourceTests
 
         ticket.Properties.UpdateTokenValue("access_token", body.RootElement.GetProperty("access_token").GetString()!);
         ticket.Properties.UpdateTokenValue("refresh_token", body.RootElement.GetProperty("refresh_token").GetString()!);
+        // The expiry the other task's library would have written beside the token (T-B10).
+        ticket.Properties.UpdateTokenValue("expires_at", DateTimeOffset.UtcNow
+            .AddSeconds(body.RootElement.GetProperty("expires_in").GetInt32()).ToString("o", System.Globalization.CultureInfo.InvariantCulture));
         Assert.True(await gateway.Sessions.ReplaceAsync(
             key, record with { Version = record.Version + 1, Ticket = TicketSerializer.Default.Serialize(ticket) }, record.Version, ct));
     }
