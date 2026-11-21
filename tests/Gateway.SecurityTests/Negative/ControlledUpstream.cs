@@ -2,14 +2,8 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
 using System.Net;
-using Microsoft.AspNetCore.Builder;
-using Microsoft.AspNetCore.Connections;
-using Microsoft.AspNetCore.Hosting;
-using Microsoft.AspNetCore.Hosting.Server;
-using Microsoft.AspNetCore.Hosting.Server.Features;
-using Microsoft.AspNetCore.Http;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
+using System.Net.Sockets;
+using System.Text;
 
 namespace Gateway.SecurityTests.Negative;
 
@@ -22,13 +16,14 @@ internal enum UpstreamBehaviour
     /// </summary>
     Refuse,
 
-    /// <summary>Accepts the connection, reads the request, and sends nothing at all (N-34).</summary>
+    /// <summary>Accepts the connection, reads the request head, and sends nothing at all (N-34).</summary>
     Silent,
 
     /// <summary>
-    /// Answers 200 with <see cref="ControlledUpstream.MarkerHeader"/> at once, then one flushed body
-    /// byte every <see cref="ControlledUpstream.Beat"/> until <see cref="ControlledUpstream.Release"/>,
-    /// when it ends with <see cref="ControlledUpstream.EndOfBody"/> (N-35).
+    /// Answers 200 with <see cref="ControlledUpstream.MarkerHeader"/> and a chunked body at once, then
+    /// one flushed one-byte chunk every <see cref="ControlledUpstream.Beat"/> until
+    /// <see cref="ControlledUpstream.Release"/>, when it writes <see cref="ControlledUpstream.EndOfBody"/>,
+    /// the terminating chunk, and closes (N-35).
     /// </summary>
     Trickle,
 }
@@ -40,18 +35,28 @@ internal enum UpstreamBehaviour
 /// <see cref="Gateway.TestHarness.GatewayHarness.UpdateRegistryAsync"/>, so <c>fixtures/</c> is not
 /// changed.
 ///
+/// <para><b>Why a bare socket.</b> Adam's Confirm of 2026-11-04 on #799 (Q13, #741's Q2) chose a
+/// suite-local concurrent bare-socket double: each accepted socket is one connection, counted where it
+/// is accepted and closed, and the bytes written are the bytes on the wire, as
+/// <see cref="HostileUpstream"/> writes its own. It speaks only HTTP/1.1, the protocol the bound is
+/// scoped to (#733, #738). Unlike <see cref="HostileUpstream"/> it serves connections concurrently,
+/// because N-35 holds the bound's number of them open at once.</para>
+///
 /// <para><b>Why trickle rather than stay silent for the bound.</b> The entry's <c>timeoutSeconds</c> is an
 /// idle limit the proxy restarts on every body read (<c>contracts/upstream-contract.md</c> -> Timeouts
 /// and failures; T-C17), so a held call that fell silent would time out and free its connection, and
-/// the bound would never be reached. Workstream 4's <c>HoldingUpstream</c> holds its calls the same
-/// way; this is this owner's copy, because a test project references no other test project.</para>
+/// the bound would never be reached. Each chunk is flushed, because a scheduled write is not activity
+/// the proxy saw (Confirm Q6, Q16).</para>
 ///
-/// <para><b>What it records, and what it never does.</b> Connections are counted in Kestrel's
-/// connection middleware, below HTTP, so a connection the proxy's pool opens is counted whether or not
-/// a call arrives on it. Every open, close, arrival and end is kept with its connection id, path and
-/// protocol, for <see cref="Describe"/> to print in a failure message. No header is recorded: the
-/// forwarded call carries the session's access token, and nothing here may put it in a message
-/// (N-16).</para>
+/// <para><b>What it records, and what it never does.</b> Every accept, close, arrival and end is kept
+/// with its connection id, path and protocol, for <see cref="Describe"/> to print in a failure
+/// message, with the body bytes it wrote to each path. No header is kept: the forwarded call carries
+/// the session's access token, and nothing here may put it in a message (N-16). The direct control
+/// test plants canary header values and asserts the record lacks them.</para>
+///
+/// <para>Every operation is bounded: reading a request head by <see cref="HeadBudget"/>, each write by
+/// <see cref="WriteBudget"/>, and disposal by <see cref="StopBudget"/>. A handler that fails other
+/// than by its connection closing faults its task, and <see cref="HandlersFinished"/> surfaces it.</para>
 /// </summary>
 internal sealed class ControlledUpstream : IAsyncDisposable
 {
@@ -70,15 +75,25 @@ internal sealed class ControlledUpstream : IAsyncDisposable
     /// <summary>How often a held call is sent a body byte: eight beats in a two-second idle limit.</summary>
     public static readonly TimeSpan Beat = TimeSpan.FromMilliseconds(250);
 
-    /// <summary>How long disposal waits for the host to stop, so a stuck handler cannot hold a test's clean-up.</summary>
+    /// <summary>How long a connection may take to send its request head.</summary>
+    private static readonly TimeSpan HeadBudget = TimeSpan.FromSeconds(10);
+
+    /// <summary>How long one write to the proxy may take.</summary>
+    private static readonly TimeSpan WriteBudget = TimeSpan.FromSeconds(10);
+
+    /// <summary>How long disposal waits for the accept loop and the handlers, so a stuck one cannot hold a test's clean-up.</summary>
     private static readonly TimeSpan StopBudget = TimeSpan.FromSeconds(10);
 
     private readonly TaskCompletionSource released = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly CancellationTokenSource stopping = new();
     private readonly Stopwatch clock = Stopwatch.StartNew();
     private readonly ConcurrentQueue<Event> timeline = new();
     private readonly ConcurrentDictionary<string, string> active = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, string> written = new(StringComparer.Ordinal);
     private readonly ConcurrentQueue<Task> handlers = new();
-    private WebApplication? app;
+    private TcpListener? listener;
+    private Task accepting = Task.CompletedTask;
+    private int connections;
     private int open;
     private int peak;
 
@@ -99,7 +114,7 @@ internal sealed class ControlledUpstream : IAsyncDisposable
         /// <summary>A held call ended after <see cref="Release"/>, its body whole.</summary>
         Ended,
 
-        /// <summary>A held call ended before <see cref="Release"/>: aborted, or its write failed.</summary>
+        /// <summary>A held call ended before <see cref="Release"/>: its peer closed, or a write failed.</summary>
         EndedEarly,
     }
 
@@ -109,7 +124,7 @@ internal sealed class ControlledUpstream : IAsyncDisposable
     public UpstreamBehaviour Behaviour { get; }
 
     /// <summary>Where it listens, scheme and authority only, as a registry <c>upstream</c> names it.</summary>
-    public string Origin { get; private set; } = "http://127.0.0.1:1";
+    public string Origin { get; private set; } = $"http://127.0.0.1:{RefusedPort}";
 
     /// <summary>The connections open to this upstream now.</summary>
     public int OpenConnections => Volatile.Read(ref open);
@@ -126,8 +141,12 @@ internal sealed class ControlledUpstream : IAsyncDisposable
     /// <summary>Whether any held call ended before <see cref="Release"/>.</summary>
     public bool AnyEndedEarly => timeline.Any(e => e.Kind == Kind.EndedEarly);
 
-    public static async Task<ControlledUpstream> StartAsync(UpstreamBehaviour behaviour, CancellationToken ct)
+    /// <summary>Whether any connection to this upstream has closed, read from the retained timeline.</summary>
+    public bool AnyClosed => timeline.Any(e => e.Kind == Kind.Closed);
+
+    public static Task<ControlledUpstream> StartAsync(UpstreamBehaviour behaviour, CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
         ControlledUpstream upstream = new(behaviour);
         if (behaviour == UpstreamBehaviour.Refuse)
         {
@@ -135,37 +154,17 @@ internal sealed class ControlledUpstream : IAsyncDisposable
             // no unprivileged test can bind, so a connect is refused at once. Two alternatives were
             // tried or weighed and fail: a socket bound and never listening is not refused on macOS (the
             // connect times out, observed 2026-11-21), and a listener started and stopped frees an
-            // ephemeral port another test may take. The guard test connects to it directly.
-            upstream.Origin = $"http://127.0.0.1:{RefusedPort}";
-            return upstream;
+            // ephemeral port another test may take. N-33 checks the refusal itself before it asserts
+            // the gateway's answer (Confirm Q14).
+            return Task.FromResult(upstream);
         }
 
-        WebApplicationBuilder builder = WebApplication.CreateSlimBuilder();
-        builder.Logging.ClearProviders();
-        builder.WebHost.ConfigureKestrel(kestrel =>
-        {
-            // A beat is one byte, far under Kestrel's minimum response rate; the rate is not this
-            // double's subject.
-            kestrel.Limits.MinResponseDataRate = null;
-            kestrel.Listen(IPAddress.Loopback, 0, listen => listen.Use(upstream.Count));
-        });
-
-        WebApplication web = builder.Build();
-        web.Run(context =>
-        {
-            Task handler = upstream.AnswerAsync(context);
-            upstream.handlers.Enqueue(handler);
-            return handler;
-        });
-        upstream.app = web;
-
-        await web.StartAsync(ct);
-        string address = web.Services.GetRequiredService<IServer>().Features
-            .Get<IServerAddressesFeature>()?.Addresses.FirstOrDefault()
-            ?? throw new InvalidOperationException("the controlled upstream started without an address.");
-        upstream.Origin = new Uri(address).GetLeftPart(UriPartial.Authority);
-
-        return upstream;
+        TcpListener listening = new(IPAddress.Loopback, 0);
+        listening.Start();
+        upstream.listener = listening;
+        upstream.Origin = $"http://127.0.0.1:{((IPEndPoint)listening.LocalEndpoint).Port}";
+        upstream.accepting = upstream.AcceptAsync(listening);
+        return Task.FromResult(upstream);
     }
 
     /// <summary>
@@ -190,7 +189,10 @@ internal sealed class ControlledUpstream : IAsyncDisposable
         }
     }
 
-    /// <summary>Completes when every call this upstream accepted has finished its handler.</summary>
+    /// <summary>The body this upstream wrote to the call for <paramref name="path"/>, once that call has ended; null before.</summary>
+    public string? WrittenBody(string path) => written.TryGetValue(path, out string? body) ? body : null;
+
+    /// <summary>Completes when every connection this upstream accepted has finished its handler, and faults if one failed.</summary>
     public Task HandlersFinished() => Task.WhenAll(handlers);
 
     /// <summary>Ends every held response, and every one that arrives from now on, with its body whole.</summary>
@@ -206,88 +208,200 @@ internal sealed class ControlledUpstream : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         Release();
-        if (app is not null)
+        await stopping.CancelAsync();
+        listener?.Stop();
+
+        // Clean-up throws nothing, so a test's own failure is the one reported; a handler's fault is
+        // surfaced by the test that awaits HandlersFinished, not here.
+        using CancellationTokenSource budget = new(StopBudget);
+        try
         {
-            using CancellationTokenSource stop = new(StopBudget);
-            await app.StopAsync(stop.Token);
-            await app.DisposeAsync();
+            await Task.WhenAll(accepting, HandlersFinished()).WaitAsync(budget.Token);
+        }
+        catch (Exception e) when (e is OperationCanceledException or IOException or SocketException or ObjectDisposedException)
+        {
+        }
+
+        stopping.Dispose();
+    }
+
+    private async Task AcceptAsync(TcpListener listening)
+    {
+        while (!stopping.IsCancellationRequested)
+        {
+            TcpClient client;
+            try
+            {
+                client = await listening.AcceptTcpClientAsync(stopping.Token);
+            }
+            catch (Exception e) when (e is OperationCanceledException or SocketException or ObjectDisposedException)
+            {
+                return;
+            }
+
+            string id = "c" + Interlocked.Increment(ref connections).ToString(CultureInfo.InvariantCulture);
+            int now = Interlocked.Increment(ref open);
+            int before;
+            do
+            {
+                before = Volatile.Read(ref peak);
+            }
+            while (now > before && Interlocked.CompareExchange(ref peak, now, before) != before);
+
+            Record(Kind.Opened, id);
+            handlers.Enqueue(Task.Run(() => ServeAsync(client, id)));
         }
     }
 
-    private ConnectionDelegate Count(ConnectionDelegate next) => async connection =>
+    private async Task ServeAsync(TcpClient client, string id)
     {
-        int now = Interlocked.Increment(ref open);
-        int before;
-        do
-        {
-            before = Volatile.Read(ref peak);
-        }
-        while (now > before && Interlocked.CompareExchange(ref peak, now, before) != before);
-
-        Record(Kind.Opened, connection.ConnectionId);
         try
         {
-            await next(connection);
+            using (client)
+            {
+                NetworkStream stream = client.GetStream();
+                (string path, string protocol)? call = await ReadHeadAsync(stream);
+                if (call is not { } arrived)
+                {
+                    return;
+                }
+
+                Record(Kind.Arrived, id, arrived.path, arrived.protocol);
+                if (Behaviour == UpstreamBehaviour.Silent)
+                {
+                    // Nothing at all, until the proxy gives up on the call and closes, or the double stops.
+                    await PeerClosedAsync(stream);
+                    return;
+                }
+
+                await TrickleAsync(stream, id, arrived.path);
+            }
         }
         finally
         {
             _ = Interlocked.Decrement(ref open);
-            Record(Kind.Closed, connection.ConnectionId);
+            Record(Kind.Closed, id);
         }
-    };
+    }
 
-    private async Task AnswerAsync(HttpContext context)
+    /// <summary>The request line's path and protocol, or null when the connection closed first. No header is kept.</summary>
+    private async Task<(string Path, string Protocol)?> ReadHeadAsync(NetworkStream stream)
     {
-        string path = context.Request.Path.Value ?? string.Empty;
-        string connectionId = context.Connection.Id;
-        CancellationToken aborted = context.RequestAborted;
-        Record(Kind.Arrived, connectionId, path, context.Request.Protocol);
-
-        if (Behaviour == UpstreamBehaviour.Silent)
+        using CancellationTokenSource budget = CancellationTokenSource.CreateLinkedTokenSource(stopping.Token);
+        budget.CancelAfter(HeadBudget);
+        byte[] buffer = new byte[16384];
+        int read = 0;
+        int end;
+        while ((end = buffer.AsSpan(0, read).IndexOf("\r\n\r\n"u8)) < 0)
         {
-            // Nothing at all, until the proxy gives up on the call or the host stops.
+            if (read == buffer.Length)
+            {
+                throw new InvalidOperationException("the controlled upstream was sent a request head over 16 KB.");
+            }
+
+            int got;
             try
             {
-                await Task.Delay(Timeout.InfiniteTimeSpan, aborted);
+                got = await stream.ReadAsync(buffer.AsMemory(read), budget.Token);
             }
-            catch (OperationCanceledException)
+            catch (IOException)
             {
+                // The peer reset the connection before its head was whole: no call arrived.
+                return null;
+            }
+            catch (OperationCanceledException) when (stopping.IsCancellationRequested)
+            {
+                return null;
             }
 
-            return;
+            if (got == 0)
+            {
+                return null;
+            }
+
+            read += got;
         }
 
-        active[path] = connectionId;
+        // The head ends with an empty line, so its first line break is always found.
+        int eol = buffer.AsSpan(0, end + 2).IndexOf("\r\n"u8);
+        string line = Encoding.ASCII.GetString(buffer, 0, eol);
+        string[] parts = line.Split(' ');
+        if (parts.Length != 3)
+        {
+            throw new InvalidOperationException("the controlled upstream was sent a request line it cannot read.");
+        }
+
+        return (parts[1], parts[2]);
+    }
+
+    /// <summary>Completes when the peer closes the connection or the double stops; the proxy sends nothing more on a connection awaiting its answer.</summary>
+    private async Task PeerClosedAsync(NetworkStream stream)
+    {
+        byte[] probe = new byte[1];
         try
         {
-            context.Response.StatusCode = StatusCodes.Status200OK;
-            context.Response.ContentType = "text/plain";
-            context.Response.Headers[MarkerHeader] = "1";
-            await context.Response.StartAsync(aborted);
-            await context.Response.Body.FlushAsync(aborted);
+            while (await stream.ReadAsync(probe, stopping.Token) > 0)
+            {
+            }
+        }
+        catch (Exception e) when (e is IOException or OperationCanceledException or ObjectDisposedException)
+        {
+        }
+    }
 
+    private async Task TrickleAsync(NetworkStream stream, string id, string path)
+    {
+        active[path] = id;
+        StringBuilder body = new();
+        try
+        {
+            await WriteAsync(
+                stream,
+                "HTTP/1.1 200 OK\r\n" +
+                "Content-Type: text/plain\r\n" +
+                "Transfer-Encoding: chunked\r\n" +
+                $"{MarkerHeader}: 1\r\n" +
+                "Connection: close\r\n\r\n");
+
+            Task peerClosed = PeerClosedAsync(stream);
             while (!released.Task.IsCompleted)
             {
-                await context.Response.WriteAsync(BeatByte, aborted);
-                await context.Response.Body.FlushAsync(aborted);
-                _ = await Task.WhenAny(released.Task, Task.Delay(Beat, aborted));
-                aborted.ThrowIfCancellationRequested();
+                await WriteAsync(stream, Chunk(BeatByte));
+                _ = body.Append(BeatByte[0]);
+                _ = await Task.WhenAny(released.Task, peerClosed, Task.Delay(Beat, stopping.Token));
+                if (peerClosed.IsCompleted && !released.Task.IsCompleted)
+                {
+                    throw new IOException("the proxy closed a held connection.");
+                }
             }
 
-            await context.Response.WriteAsync(EndOfBody, aborted);
-            Record(Kind.Ended, connectionId, path);
+            await WriteAsync(stream, Chunk(EndOfBody) + "0\r\n\r\n");
+            _ = body.Append(EndOfBody);
+            written[path] = body.ToString();
+            Record(Kind.Ended, id, path);
         }
-        catch (Exception e) when (e is OperationCanceledException or IOException)
+        catch (Exception e) when (e is OperationCanceledException or IOException or SocketException or ObjectDisposedException)
         {
-            // An abort, or a write to a connection the proxy closed: an early end, which a test fails
-            // on while it still expects the call held.
-            Record(released.Task.IsCompleted ? Kind.Ended : Kind.EndedEarly, connectionId, path);
+            // A peer that closed, a write to a connection the proxy closed, or the double stopping: an
+            // early end, which a test fails on while it still expects the call held.
+            Record(released.Task.IsCompleted ? Kind.Ended : Kind.EndedEarly, id, path);
         }
         finally
         {
             _ = active.TryRemove(path, out _);
         }
     }
+
+    private async Task WriteAsync(NetworkStream stream, string text)
+    {
+        using CancellationTokenSource budget = CancellationTokenSource.CreateLinkedTokenSource(stopping.Token);
+        budget.CancelAfter(WriteBudget);
+        await stream.WriteAsync(Encoding.ASCII.GetBytes(text), budget.Token);
+        await stream.FlushAsync(budget.Token);
+    }
+
+    private static string Chunk(string data) =>
+        string.Create(CultureInfo.InvariantCulture, $"{data.Length:x}\r\n{data}\r\n");
 
     private void Record(Kind kind, string connectionId, string? path = null, string? protocol = null) =>
         timeline.Enqueue(new Event(clock.Elapsed, kind, connectionId, path, protocol));

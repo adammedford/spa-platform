@@ -69,9 +69,12 @@ full: each of its areas has an entry, or names the entry that carries it, in GAP
   carry as many concurrent calls, as its traffic asks for, so the bound gives no protection to the
   task or to the upstream in that case.
 - **Found.** #715 Q5, which kept YARP's HTTP/2 default and sent this gap here; #738 Q1 named the
-  constant for what it bounds; #741 added this entry.
-- **Closes with.** P2-10's measurement (`docs/plan/06-phase-2-and-risks.md`). Open. P2-10 has not
-  landed.
+  constant for what it bounds; #741 added this entry. Related: GAP-6 (MR-4), the roadmap's row for
+  the upstream timeout and the per-app bound, which this entry leaves as it is.
+- **Closes with.** P2-10's measurement (`docs/plan/06-phase-2-and-risks.md`), and then either a
+  demonstrated mitigation with its exit evidence or a written acceptance of the measured residual
+  risk, as P2-10's "Findings closed or accepted in writing" asks; a measurement alone sets no limit
+  (#799, Confirm Q22). Open. P2-10 has not landed.
 
 ## What a mature release still needs (GAP-3 to GAP-12)
 
