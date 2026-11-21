@@ -111,7 +111,7 @@ internal sealed class ControlledUpstream : IAsyncDisposable
         /// <summary>A call arrived.</summary>
         Arrived,
 
-        /// <summary>A held call ended after <see cref="Release"/>: its body whole, or cut by its peer closing after the release, which a proof tells apart by the body written.</summary>
+        /// <summary>A held call ended after <see cref="Release"/>: its body whole, or cut after the release by its peer closing, a failed write or the double stopping, which a proof tells apart by the body written.</summary>
         Ended,
 
         /// <summary>A held call ended before <see cref="Release"/>: its peer closed, or a write failed.</summary>
@@ -384,8 +384,9 @@ internal sealed class ControlledUpstream : IAsyncDisposable
         }
         catch (Exception e) when (e is OperationCanceledException or IOException or SocketException or ObjectDisposedException)
         {
-            // A peer that closed, a write to a connection the proxy closed, or the double stopping: an
-            // early end, which a test fails on while it still expects the call held.
+            // A peer that closed, a write to a connection the proxy closed, or the double stopping:
+            // before Release an early end, which a test fails on while it still expects the call held;
+            // after it a cut end, with no body written.
             Record(released.Task.IsCompleted ? Kind.Ended : Kind.EndedEarly, id, path);
         }
         finally

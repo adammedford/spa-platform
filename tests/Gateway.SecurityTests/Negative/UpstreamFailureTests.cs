@@ -47,7 +47,7 @@ public sealed class UpstreamFailureTests
     /// </summary>
     private static readonly TimeSpan Deadline = TimeSpan.FromSeconds(120);
 
-    /// <summary>How long N-35 may take to reach its N held calls open at the upstream (#741 Q5).</summary>
+    /// <summary>How long N-35 may take to reach its N held calls open at the upstream (Confirm Q16).</summary>
     private static readonly TimeSpan HeldBudget = TimeSpan.FromSeconds(30);
 
     /// <summary>How long N-33's refusal precondition may take: a refusal on loopback is immediate.</summary>
