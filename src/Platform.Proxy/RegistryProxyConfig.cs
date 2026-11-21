@@ -125,6 +125,10 @@ public sealed class RegistryProxyConfig : IProxyConfig
             // An idle limit: YARP restarts it on the response headers and on every body read
             // or write, so it bounds silence rather than the whole exchange (T-C17, T-C18).
             HttpRequest = new ForwarderRequestConfig { ActivityTimeout = api.Timeout },
+
+            // The HTTP/1.1 connection bound for this one API, a constant so that YARP keeps the
+            // cluster's handler, and its pool, across a registry swap (ProxyLimits; #738).
+            HttpClient = new HttpClientConfig { MaxConnectionsPerServer = ProxyLimits.MaxConnectionsPerApi },
         });
     }
 

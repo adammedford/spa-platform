@@ -75,6 +75,23 @@ public sealed class RegistryProxyConfigTests
         Assert.Equal(TimeSpan.FromSeconds(7), cluster.HttpRequest!.ActivityTimeout);
     }
 
+    [Fact]
+    public void Every_cluster_a_shell_or_a_fragment_api_produces_carries_the_connection_bound()
+    {
+        // A shell's API and a fragment's, so a bound set on one path through From and not the other
+        // fails here (#738). What the bound does on the wire is ConnectionBoundTests'.
+        AppDefinition app = TestApps.Entry(
+            "app1",
+            apis: [TestApps.Api("orders"), TestApps.Api("reports")],
+            fragments: [TestApps.Fragment("frag1", apis: [TestApps.Api("orders")])]);
+
+        IReadOnlyList<ClusterConfig> clusters = RegistryProxyConfig.From(SnapshotOf(app)).Clusters;
+
+        Assert.Equal(3, clusters.Count);
+        Assert.All(clusters, cluster =>
+            Assert.Equal(ProxyLimits.MaxConnectionsPerApi, cluster.HttpClient?.MaxConnectionsPerServer));
+    }
+
     // ---- Fragment routes (#996; contracts/upstream-contract.md -> Fragment routes) ----
 
     [Fact]
