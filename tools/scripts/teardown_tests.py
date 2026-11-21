@@ -8,6 +8,11 @@ verify-teardown.sh's readers, which teardown.sh ends by running; verify_teardown
 readers, and these cases that teardown.sh ends on them and takes their verdict. The doubles, the world they share and the
 universal every run holds (no output names the account id) are tools/scripts/cell_doubles.py's.
 
+The proof cell's entry file sets every case's entry values (#1348), so a change to it runs this
+companion.
+
+Checkout inputs: infra/envs/poc/cell.env infra/envs/poc/outputs-fields.json
+
 Run: python3 -I tools/scripts/teardown_tests.py
 """
 
@@ -529,6 +534,117 @@ class TeardownRefusesAnotherCellsRoots(cell.CompanionTestCase):
                          [c["options"]["family-prefix"] for c in case.aws("ecs list-task-definitions")])
         self.assertTrue(result.stdout.splitlines()[-1].startswith("verify-teardown: pass:"), result.output)
         self.assertNoUnexpectedCall(case)
+
+
+# The proof cell's three roots, as its entry file names them, by directory.
+POC_ROOTS = cell.ENTRY["SPA_ROOTS"].split(":")
+
+
+def by_name(name: str) -> str:
+    """The proof cell's root directory whose last segment is `name`."""
+    return next(directory for directory in POC_ROOTS if directory.rsplit("/", 1)[-1] == name)
+
+
+class TeardownTakesItsRootsAndCellFromTheEntryValues(cell.CompanionTestCase):
+    """#1348: the roots, the platform root and the cell come from the entry values, with no default;
+    the roots are destroyed in the reverse of SPA_ROOTS's order."""
+
+    def destroys(self, case) -> list[str]:
+        return [c["root"] for c in case.calls("terraform") if c.get("command") == "destroy"]
+
+    def test_each_entry_value_it_reads_unset_exits_2_naming_it_before_any_call(self):
+        for name in ("SPA_ROOTS", "SPA_PLATFORM_ROOT"):
+            for value in (None, ""):
+                with self.subTest(name=name, value=value):
+                    case = cell.Case(self, world=deployed_world())
+                    result = case.run(SCRIPT, "--yes", env=fast(case, **{name: value}))
+                    self.assertEqual(2, result.status, result.output)
+                    self.assertIn(f"{name} is not set", result.stderr)
+                    self.assertEqual([], case.calls())
+
+    def test_no_cell_flag_and_no_cell_variable_exits_2_naming_the_variable(self):
+        for value in (None, ""):
+            with self.subTest(value=value):
+                case = cell.Case(self, world=deployed_world())
+                result = case.run(SCRIPT, "--yes", env=fast(case, SPA_CELL=value))
+                self.assertEqual(2, result.status, result.output)
+                self.assertIn("SPA_CELL is not set and no --cell was given", result.stderr)
+                self.assertEqual([], case.calls())
+
+    def test_the_cell_flag_serves_with_no_cell_variable(self):
+        case = cell.Case(self, world=registry_only_world())
+        result = case.run(SCRIPT, "--yes", "--cell", CELL, env=fast(case, SPA_CELL=None))
+        self.assertEqual(0, result.status, result.output)
+        self.assertEqual(["platform", "apps", "idp"], self.destroys(case))
+
+    def test_help_names_no_poc_and_no_profile_and_reads_no_entry_value(self):
+        case = cell.Case(self)
+        result = case.run(SCRIPT, "--help", env=case.env(**{name: None for name in cell.ENTRY_NAMES}))
+        self.assertEqual(0, result.status, result.output)
+        self.assertNotRegex(result.stdout, r"\bpoc\b")
+        self.assertNotIn("the spa-platform profile", result.stdout)
+        self.assertNotIn("tools/aws-project.env", result.stdout)
+        for name in ("SPA_ROOTS", "SPA_PLATFORM_ROOT", "SPA_CELL"):
+            self.assertIn(name, result.stdout)
+        self.assertEqual([], case.calls())
+
+    def test_a_list_of_three_is_destroyed_in_reverse_whatever_its_order(self):
+        # The proof cell's own order, and two others: the destroy order is the list's, reversed.
+        for order in (("idp", "apps", "platform"), ("apps", "idp", "platform"), ("platform", "idp", "apps")):
+            with self.subTest(order=order):
+                case = cell.Case(self, world=deployed_world())
+                (case.repo / "infra/envs/poc/platform/images.auto.tfvars").write_text('gateway_image = "x"\n')
+                roots = ":".join(by_name(name) for name in order)
+                result = case.run(SCRIPT, "--yes", env=fast(case, SPA_ROOTS=roots))
+                self.assertEqual(0, result.status, result.output)
+                self.assertEqual(list(reversed(order)), self.destroys(case))
+                # The platform root, wherever it stands, is destroyed with its gateway image passed
+                # back, after the bucket is empty, and its images file goes with it.
+                calls = case.calls()
+                platform = next(c for c in calls if c.get("command") == "destroy" and c.get("root") == "platform")
+                self.assertEqual(cell.digest_of("gateway-a"), platform["vars"]["gateway_image"].split("@")[1])
+                last_delete = max(i for i, c in enumerate(calls) if c.get("command") == "s3api delete-object")
+                self.assertLess(last_delete, calls.index(platform))
+                self.assertFalse((case.repo / "infra/envs/poc/platform/images.auto.tfvars").exists())
+                self.assertNoUnexpectedCall(case)
+
+    def test_a_list_of_two_destroys_those_two_and_no_other(self):
+        case = cell.Case(self, world=deployed_world())
+        roots = ":".join(by_name(name) for name in ("idp", "platform"))
+        result = case.run(SCRIPT, "--yes", env=fast(case, SPA_ROOTS=roots))
+        self.assertEqual(["platform", "idp"], self.destroys(case))
+        self.assertIsNotNone(case.load()["roots"]["apps"])
+        self.assertNoUnexpectedCall(case)
+        del result
+
+    def test_a_platform_root_that_is_not_on_the_list_exits_2_before_any_change(self):
+        case = cell.Case(self, world=deployed_world())
+        roots = ":".join(by_name(name) for name in ("idp", "apps"))
+        result = case.run(SCRIPT, "--yes", env=fast(case, SPA_ROOTS=roots))
+        self.assertEqual(2, result.status, result.output)
+        self.assertIn("SPA_PLATFORM_ROOT", result.stderr)
+        self.assertIn("is not one of SPA_ROOTS's roots", result.stderr)
+        self.assertEqual([], case.calls())
+
+    def test_two_roots_of_one_name_exit_2_before_any_change(self):
+        case = cell.Case(self, world=deployed_world())
+        roots = ":".join((by_name("idp"), "elsewhere/idp", by_name("platform")))
+        result = case.run(SCRIPT, "--yes", env=fast(case, SPA_ROOTS=roots))
+        self.assertEqual(2, result.status, result.output)
+        self.assertIn("names two roots idp", result.stderr)
+        self.assertEqual([], case.calls())
+
+    def test_any_root_holding_another_cell_is_refused_before_any_change(self):
+        # Whichever root it is: the apps root has no cell output in the proof cell, and is given
+        # one here, so that the check is shown to read every root on the list.
+        world = registry_only_world()
+        world["roots"]["apps"]["cell"] = "poc2"
+        case = cell.Case(self, world=world)
+        result = case.run(SCRIPT, "--yes", env=fast(case))
+        self.assertEqual(2, result.status, result.output)
+        self.assertIn(f"the root {by_name('apps')} holds the cell 'poc2'", result.stderr)
+        self.assertEqual([], self.destroys(case))
+        self.assertEqual(world["objects"], case.load()["objects"])
 
 
 if __name__ == "__main__":

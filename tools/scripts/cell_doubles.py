@@ -62,6 +62,33 @@ REGION = "us-east-2"
 CELL = "poc"
 PASSWORD = "ecr-login-password-0123456789"
 
+# The proof cell's entry file and the field map it names (#1348): every case's environment carries
+# the file's values, as an operator's session that sourced it does, and a case that tests one unset
+# leaves it out. The scripts read a relative value from their checkout's root, which is the case's.
+CELL_ENV = ROOT / "infra" / "envs" / "poc" / "cell.env"
+
+
+def entry_values(path: pathlib.Path = CELL_ENV) -> dict[str, str]:
+    """The KEY=value lines of an entry file, comments and blank lines left out."""
+    values = {}
+    for line in path.read_text().splitlines():
+        if line.strip() and not line.lstrip().startswith("#"):
+            name, _, value = line.partition("=")
+            values[name.strip()] = value.strip()
+    return values
+
+
+ENTRY = entry_values()
+
+
+def field_map() -> dict:
+    """The proof cell's field map, the file its entry file names."""
+    return json.loads((ROOT / ENTRY["SPA_FIELD_MAP"]).read_text())
+
+# The entry values each reference script reads, which its companion holds one at a time unset.
+ENTRY_NAMES = ("SPA_CELL", "SPA_CERT_DOMAIN", "SPA_PLATFORM_ROOT", "SPA_ROOTS", "SPA_OUTPUTS_FILE", "SPA_FIELD_MAP")
+assert set(ENTRY) == set(ENTRY_NAMES), f"{CELL_ENV.name} sets {sorted(ENTRY)}"
+
 # The real tools the scripts use. Everything else is absent.
 TOOLS = ("awk", "sed", "tr", "cat", "mktemp", "rm", "dirname", "basename", "python3", "sleep", "date")
 
@@ -1442,6 +1469,9 @@ class Case:
                             ignore=shutil.ignore_patterns("__pycache__", "*_tests.py", "cell_doubles.py"))
         for relative in ROOT_NAMES:
             (self.repo / relative).mkdir(parents=True, exist_ok=True)
+        # The entry file and the field map, beside the roots as in the checkout.
+        for relative in (CELL_ENV.relative_to(ROOT), pathlib.Path(ENTRY["SPA_FIELD_MAP"])):
+            shutil.copyfile(ROOT / relative, self.repo / relative)
         (self.dir / "repo-root").write_text(str(self.repo))
         for tool in TOOLS:
             found = shutil.which(tool)
@@ -1458,22 +1488,29 @@ class Case:
             self.write_outputs()
 
     def write_outputs(self):
-        """infra/envs/poc/outputs.json as seed.sh leaves it, from the world's roots, by the real
-        assembler in cell_documents.py: deploy.sh and rollback.sh read the cell's names from it and
-        never from state (contracts/infra-outputs.schema.json). Nothing is written while a root has
-        no state, as seed.sh could not have written it then."""
+        """The outputs document as seed.sh leaves it, from the world's roots on the entry file's
+        roots list, through its field map, by the real assembler in cell_documents.py: deploy.sh and
+        rollback.sh read the cell's names from it and never from state
+        (contracts/infra-outputs.schema.json). Nothing is written while a root has no state, as
+        seed.sh could not have written it then."""
         roots = self.world["roots"]
-        if not all(roots.get(name) for name in ("idp", "apps", "platform")):
+        names = [directory.rstrip("/").rsplit("/", 1)[-1] for directory in ENTRY["SPA_ROOTS"].split(":")]
+        if not all(roots.get(name) for name in names):
             return
         spec = importlib.util.spec_from_file_location("cell_documents", SCRIPTS / "cell_documents.py")
         documents = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(documents)
-        paths = []
-        for name in ("idp", "apps", "platform"):
+        pairs = []
+        for name in names:
             path = self.dir / f"{name}-outputs.json"
             path.write_text(json.dumps({key: {"value": value} for key, value in roots[name].items()}))
-            paths.append(str(path))
-        documents.outputs(self.world["region"], *paths, str(self.repo / "infra/envs/poc/outputs.json"))
+            pairs += [name, str(path)]
+        documents.outputs(self.world["region"], str(self.repo / ENTRY["SPA_FIELD_MAP"]),
+                          str(self.outputs_path()), *pairs)
+
+    def outputs_path(self) -> pathlib.Path:
+        """Where the entry file puts the outputs document, in the case's repository."""
+        return self.repo / ENTRY["SPA_OUTPUTS_FILE"]
 
     def write_executable(self, name: str, content: str):
         path = self.bin / name
@@ -1506,7 +1543,7 @@ class Case:
 
     def env(self, **extra: str | None) -> dict[str, str]:
         env = {"PATH": str(self.bin), "HOME": str(self.home), "LC_ALL": "C",
-               "AWS_PROFILE": "spa-platform", "AWS_REGION": REGION, "TMPDIR": str(self.dir)}
+               "AWS_PROFILE": "spa-platform", "AWS_REGION": REGION, "TMPDIR": str(self.dir), **ENTRY}
         env.update(extra)
         return {name: value for name, value in env.items() if value is not None}
 

@@ -6,6 +6,11 @@ registry, applies, waits for steady state, then asserts the running digest." The
 they share and the universal every run holds (no output names the account id) are
 tools/scripts/cell_doubles.py's; its docstring says what a case can and cannot show.
 
+The proof cell's entry file sets every case's entry values (#1348), so a change to it runs this
+companion.
+
+Checkout inputs: infra/envs/poc/cell.env infra/envs/poc/outputs-fields.json
+
 Run: python3 -I tools/scripts/deploy_tests.py
 """
 
@@ -27,12 +32,10 @@ import time
 _spec = importlib.util.spec_from_file_location("cell_doubles", pathlib.Path(__file__).resolve().parent / "cell_doubles.py")
 cell = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(cell)
-# The fields the scripts write, from the list they write them from, not from the schema's root
-# required: the contract may require fewer of every cell than this cell's scripts write (#1367).
-_documents_spec = importlib.util.spec_from_file_location("cell_documents", pathlib.Path(__file__).resolve().parent / "cell_documents.py")
-cell_documents = importlib.util.module_from_spec(_documents_spec)
-_documents_spec.loader.exec_module(cell_documents)
-WRITTEN_FIELDS = sorted(field for field, _, _ in cell_documents.FIELDS)
+# The fields the scripts write, from the field map they write them from (the proof cell's, which
+# its entry file names; #1348), not from the schema's root required: the contract may require fewer
+# of every cell than this cell's scripts write (#1367). The optional ones are left out.
+WRITTEN_FIELDS = sorted(entry["field"] for entry in cell.field_map()["fields"] if not entry.get("optional"))
 
 import unittest  # noqa: E402
 
@@ -872,6 +875,47 @@ class TheDoublesWorldIsReplacedWholeByRename(unittest.TestCase):
             self.assertEqual(new, json.loads((case / "world.json").read_text()))
             self.assertEqual(["world.json"], sorted(path.name for path in case.iterdir()),
                              "a staged world was left beside world.json")
+
+
+class DeployTakesTheCellFromTheEntryValues(cell.CompanionTestCase):
+    """#1348: the platform root, the roots, the field map, the outputs document and, without --url,
+    the certificate's domain are entry values with no default, each refused by name before anything
+    is built."""
+
+    READS = ("SPA_PLATFORM_ROOT", "SPA_ROOTS", "SPA_FIELD_MAP", "SPA_OUTPUTS_FILE", "SPA_CERT_DOMAIN")
+
+    def test_each_entry_value_it_reads_unset_exits_2_naming_it_before_any_call(self):
+        for name in self.READS:
+            for value in (None, ""):
+                with self.subTest(name=name, value=value):
+                    case = cell.Case(self, outputs=True, world=seeded_world())
+                    result = case.run(SCRIPT, env=case.env(**{name: value}))
+                    self.assertEqual(2, result.status, result.output)
+                    self.assertIn(f"{name} is not set", result.stderr)
+                    self.assertEqual([], case.calls())
+
+    def test_with_url_the_domain_is_not_read(self):
+        with listening() as port:
+            case = cell.Case(self, outputs=True, world=seeded_world())
+            result = case.run(SCRIPT, "--url", f"https://app2.spa-poc.test:{port}", env=case.env(SPA_CERT_DOMAIN=None))
+        self.assertEqual(0, result.status, result.output)
+
+    def test_the_wait_reads_through_the_domain_the_entry_value_names(self):
+        case = cell.Case(self, outputs=True, world=seeded_world())
+        result = case.run(SCRIPT, env=case.env(SPA_CERT_DOMAIN="cells.example.test"))
+        self.assertEqual(0, result.status, result.output)
+        wait = next(c["spactl"] for c in case.calls("dotnet") if c["spactl"][:1] == ["wait"])
+        self.assertTrue(wait[wait.index("--url") + 1].startswith("https://app1.cells.example.test:"), wait)
+
+    def test_help_reads_no_entry_value_and_names_no_profile(self):
+        case = cell.Case(self)
+        result = case.run(SCRIPT, "--help", env=case.env(**{name: None for name in cell.ENTRY_NAMES}))
+        self.assertEqual(0, result.status, result.output)
+        self.assertNotIn("the spa-platform profile", result.stdout)
+        self.assertNotIn("tools/aws-project.env", result.stdout)
+        self.assertNotIn("infra/envs/", result.stdout)
+        for name in self.READS:
+            self.assertIn(name, result.stdout)
 
 
 if __name__ == "__main__":

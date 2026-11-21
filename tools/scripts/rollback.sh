@@ -31,21 +31,24 @@
 # apply with health_check_path = "/", not a rollback. It refuses an image the repository no longer
 # holds, since the task could not pull it.
 #
-# Then it does what deploy.sh does after its push: it plans and applies infra/envs/poc/platform with
-# both images and the health check on /readyz, records them in images.auto.tfvars there, writes
-# infra/envs/poc/outputs.json, waits for a stable service, and asserts the running digest and the
+# Then it does what deploy.sh does after its push: it plans and applies the platform root,
+# $SPA_PLATFORM_ROOT, with both images and the health check on /readyz, records them in
+# images.auto.tfvars there, writes the outputs document from the roots on $SPA_ROOTS through the
+# field map $SPA_FIELD_MAP, waits for a stable service, and asserts the running digest and the
 # targets' health as deploy.sh's step 5 does, tolerating the previous task's draining target.
 #
-# The cell's names come from infra/envs/poc/outputs.json, which seed.sh wrote, and never from
-# Terraform state (contracts/infra-outputs.schema.json).
+# The cell's names come from the outputs document, $SPA_OUTPUTS_FILE, which seed.sh wrote, and never
+# from Terraform state (contracts/infra-outputs.schema.json).
 #
-# Run it as the operator's own session: the spa-platform profile, with tools/aws-project.env
-# sourced. It needs the AWS CLI, Terraform and python3.
+# Run it as the operator's own session, with credentials for the account the cell is in and
+# AWS_REGION set to the cell's Region. It reads the entry values SPA_PLATFORM_ROOT, SPA_ROOTS,
+# SPA_FIELD_MAP and SPA_OUTPUTS_FILE, which have no default (cell-common.sh's header), and refuses,
+# exit 2, when one is unset. It needs the AWS CLI, Terraform and python3.
 #
 # It redacts two kinds of value, and Terraform's output passes through the filter that does it
 # (cell-common.sh's redact_stream):
 #   - the account id, which the repositories, the bucket and every ARN carry, becomes <account>;
-#   - each app's client id that infra/envs/poc/outputs.json lists becomes <client-id:appId>. The
+#   - each app's client id that the outputs document lists becomes <client-id:appId>. The
 #     plan shows the mock API's environment, MockApi__App1Client and MockApi__App2Client among it
 #     (#251). The list is the outputs document's as this run starts: a client id the apps root
 #     changed after seed.sh last wrote that document is not on it. Run seed.sh after any apply of the
@@ -63,6 +66,10 @@ umask 077
 PROGRAM="rollback"
 # shellcheck source=tools/scripts/cell-common.sh
 . "$(dirname -- "$0")/cell-common.sh"
+
+# The mock API's container in the proof cell's task. Its own copy until rollback moves the gateway
+# image only (#1335): cell-common.sh names no container but the gateway and the bastion.
+MOCK_API_CONTAINER="mock-api"
 
 TO_REVISION=""
 # How far back it looks for a different image. A revision is one apply, and twenty applies with one
@@ -101,6 +108,8 @@ if [ -n "$TO_REVISION" ]; then
     '' | *[!0-9]* | 0*) refuse "--to-revision must be a revision number: got '${TO_REVISION}'" ;;
   esac
 fi
+
+need_entry SPA_PLATFORM_ROOT SPA_ROOTS SPA_FIELD_MAP SPA_OUTPUTS_FILE
 
 trap cell_cleanup EXIT
 trap 'exit 130' INT TERM

@@ -60,6 +60,11 @@ the script's copy forks names.
 **A universal held on every run:** nothing either script prints names the account id. Task ARNs
 carry it, and the output of a sitting is posted to a public repository (#122's rule).
 
+The proof cell's entry file sets every case's entry values (#1348), so a change to it runs this
+companion.
+
+Checkout inputs: infra/envs/poc/cell.env infra/envs/poc/outputs-fields.json
+
 Run: python3 -I tools/scripts/tunnel_tests.py
 """
 
@@ -76,7 +81,14 @@ TUNNEL = ROOT / "tools" / "scripts" / "tunnel.sh"
 VERIFY = ROOT / "tools" / "scripts" / "verify-tunnel.sh"
 ECS_TF = ROOT / "infra" / "modules" / "cell" / "ecs.tf"
 EXAMPLE_OUTPUTS = ROOT / "contracts" / "infra-outputs.example.json"
-OUTPUTS = pathlib.Path("infra") / "envs" / "poc" / "outputs.json"
+# The proof cell's entry file (#1348): each case's environment carries its values, as an operator's
+# session that sourced it does, and the outputs document is where it puts it, read from the copy's
+# root. A case that holds an entry value unset leaves it out.
+CELL_ENV = ROOT / "infra" / "envs" / "poc" / "cell.env"
+ENTRY = {name.strip(): value.strip() for name, _, value in
+         (line.partition("=") for line in CELL_ENV.read_text().splitlines()
+          if line.strip() and not line.lstrip().startswith("#"))}
+OUTPUTS = pathlib.Path(ENTRY["SPA_OUTPUTS_FILE"])
 # What a case copies into its own repository tree: tunnel.sh, what it sources and reads with, and
 # verify-tunnel.sh beside it.
 SCRIPT_FILES = ("tunnel.sh", "verify-tunnel.sh", "cell-common.sh", "cell_documents.py")
@@ -481,7 +493,7 @@ class Case:
 
     def env(self, **extra: str | None) -> dict[str, str]:
         env = {"PATH": str(self.bin), "HOME": str(self.home), "LC_ALL": "C",
-               "AWS_PROFILE": "spa-platform", "AWS_REGION": REGION, "TMPDIR": str(self.dir)}
+               "AWS_PROFILE": "spa-platform", "AWS_REGION": REGION, "TMPDIR": str(self.dir), **ENTRY}
         env.update(extra)
         return {name: value for name, value in env.items() if value is not None}
 
@@ -960,7 +972,9 @@ class TunnelReadsItsNamesFromTheOutputsDocument(CompanionTestCase):
         case = Case(self)
         result = case.run(TUNNEL, "--help")
         self.assertEqual(0, result.status, result.output)
-        self.assertIn(str(OUTPUTS), result.stdout)
+        # The document by the entry value that names it, never by the proof cell's path (#1348).
+        self.assertIn("$SPA_OUTPUTS_FILE", result.stdout)
+        self.assertNotIn("infra/envs/", result.stdout)
         for name in ("ecsCluster", "ecsBastionService", "albDnsName"):
             self.assertIn(name, result.stdout)
         self.assertEqual([], case.aws_calls())
@@ -1098,7 +1112,8 @@ class TunnelRefusesBeforeASession(CompanionTestCase):
 
 # --- verify-tunnel.sh ------------------------------------------------------------------------------
 
-DOMAIN = "spa-poc.test"
+# The certificate's domain, as the entry file every case's environment carries names it.
+DOMAIN = ENTRY["SPA_CERT_DOMAIN"]
 HOST = f"app1.{DOMAIN}"
 
 
@@ -1313,6 +1328,59 @@ def main() -> int:
             return 1
     program = unittest.main(exit=False)
     return 0 if program.result.wasSuccessful() else 1
+
+
+class TheTunnelScriptsTakeTheCellFromTheEntryValues(unittest.TestCase):
+    """#1348: tunnel.sh reads SPA_OUTPUTS_FILE, and SPA_CERT_DOMAIN with --keepalive; verify-tunnel.sh
+    reads SPA_CERT_DOMAIN. None has a default, and each is refused by name before any call."""
+
+    def test_tunnel_with_no_outputs_document_variable_exits_2_naming_it_before_any_call(self):
+        for value in (None, ""):
+            with self.subTest(value=value):
+                case = Case(self)
+                result = case.run(TUNNEL, "--local-port", str(free_port()), env=case.env(SPA_OUTPUTS_FILE=value))
+                self.assertEqual(2, result.status, result.output)
+                self.assertIn("SPA_OUTPUTS_FILE is not set", result.stderr)
+                self.assertEqual([], case.aws_calls())
+
+    def test_tunnel_with_keepalive_and_no_domain_exits_2_naming_it_before_any_call(self):
+        case = Case(self)
+        result = case.run(TUNNEL, "--local-port", str(free_port()), "--keepalive", "1",
+                          env=case.env(SPA_CERT_DOMAIN=None))
+        self.assertEqual(2, result.status, result.output)
+        self.assertIn("SPA_CERT_DOMAIN is not set", result.stderr)
+        self.assertEqual([], case.aws_calls())
+
+    def test_tunnel_without_keepalive_reads_no_domain(self):
+        case = Case(self)
+        others = {name: None for name in ENTRY if name != "SPA_OUTPUTS_FILE"}
+        result = case.run(TUNNEL, "--local-port", str(free_port()), env=case.env(**others))
+        self.assertEqual(0, result.status, result.output)
+
+    def test_verify_tunnel_with_no_domain_exits_2_naming_it_before_any_request(self):
+        for value in (None, ""):
+            with self.subTest(value=value):
+                case = Case(self)
+                result = case.run(VERIFY, "/healthz", env=case.env(SPA_CERT_DOMAIN=value))
+                self.assertEqual(2, result.status, result.output)
+                self.assertIn("SPA_CERT_DOMAIN is not set", result.stderr)
+                self.assertEqual([], case.curl_calls())
+
+    def test_verify_tunnel_asks_the_host_under_the_domain_the_entry_value_names(self):
+        case = Case(self)
+        result = case.run(VERIFY, "/healthz", env=case.env(SPA_CERT_DOMAIN="cells.example.test"))
+        self.assertEqual(0, result.status, result.output)
+        self.assertEqual("https://app1.cells.example.test:8443/healthz", case.curl_calls()[0]["argv"][-1])
+
+    def test_neither_help_names_the_proof_cells_domain_or_the_profile(self):
+        for script in (TUNNEL, VERIFY):
+            with self.subTest(script.name):
+                case = Case(self)
+                result = case.run(script, "--help", env=case.env(**{name: None for name in ENTRY}))
+                self.assertEqual(0, result.status, result.output)
+                self.assertNotIn(DOMAIN, result.stdout)
+                self.assertNotIn("the spa-platform profile", result.stdout)
+                self.assertNotIn("tools/aws-project.env", result.stdout)
 
 
 if __name__ == "__main__":

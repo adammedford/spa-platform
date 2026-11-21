@@ -6,6 +6,11 @@ Task 1.7 (#58): "rollback.sh applies the digest of the previous task definition"
 share and the universal every run holds (no output names the account id) are
 tools/scripts/cell_doubles.py's.
 
+The proof cell's entry file sets every case's entry values (#1348), so a change to it runs this
+companion.
+
+Checkout inputs: infra/envs/poc/cell.env infra/envs/poc/outputs-fields.json
+
 Run: python3 -I tools/scripts/rollback_tests.py
 """
 
@@ -193,6 +198,35 @@ class RollbackRefuses(cell.CompanionTestCase):
 
     def test_a_revision_that_is_not_a_number(self):
         self.refused(deployed_twice(), "must be a revision number", "--to-revision", "x2", status=2)
+
+
+class RollbackTakesTheCellFromTheEntryValues(cell.CompanionTestCase):
+    """#1348: the four entry values it reads, each refused by name before any call."""
+
+    READS = ("SPA_PLATFORM_ROOT", "SPA_ROOTS", "SPA_FIELD_MAP", "SPA_OUTPUTS_FILE")
+
+    def test_each_entry_value_it_reads_unset_exits_2_naming_it_before_any_call(self):
+        for name in self.READS:
+            for value in (None, ""):
+                with self.subTest(name=name, value=value):
+                    case = cell.Case(self, outputs=True, world=deployed_twice())
+                    result = case.run(SCRIPT, env=case.env(**{name: value}))
+                    self.assertEqual(2, result.status, result.output)
+                    self.assertIn(f"{name} is not set", result.stderr)
+                    self.assertEqual([], case.calls())
+
+    def test_it_needs_no_certificate_domain(self):
+        case = cell.Case(self, outputs=True, world=deployed_twice())
+        result = case.run(SCRIPT, env=case.env(SPA_CERT_DOMAIN=None, SPA_CELL=None))
+        self.assertEqual(0, result.status, result.output)
+
+    def test_help_reads_no_entry_value_and_names_no_profile(self):
+        case = cell.Case(self)
+        result = case.run(SCRIPT, "--help", env=case.env(**{name: None for name in cell.ENTRY_NAMES}))
+        self.assertEqual(0, result.status, result.output)
+        self.assertNotIn("the spa-platform profile", result.stdout)
+        self.assertNotIn("tools/aws-project.env", result.stdout)
+        self.assertNotIn("infra/envs/", result.stdout)
 
 
 if __name__ == "__main__":
