@@ -80,6 +80,18 @@ variable "health_check_path" {
   default     = "/"
 }
 
+variable "gateway_writable_root" {
+  description = <<-EOT
+    true only while the gateway's container runs the public sample image, which writes under
+    /tmp as uid 101 and so cannot start on the read-only root's root-owned /tmp volume (#1380).
+    tools/scripts/platform-tfvars.sh writes true beside the sample's pin, and deploy.sh and
+    rollback.sh apply the gateway with false. The module refuses true beside any health check
+    but the sample's / (infra/modules/cell/variables.tf).
+  EOT
+  type        = bool
+  default     = false
+}
+
 # --- Task 1.4a -------------------------------------------------------------------------------
 
 variable "state_bucket" {
