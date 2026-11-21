@@ -63,7 +63,7 @@ internal sealed class ControlledUpstream : IAsyncDisposable
     /// <summary>A header on every response this upstream sends, so a response that carries it came from here.</summary>
     public const string MarkerHeader = "X-Controlled-Upstream";
 
-    /// <summary>The loopback port <see cref="UpstreamBehaviour.Refuse"/> names: privileged, and listened on by nothing here.</summary>
+    /// <summary>The loopback port <see cref="UpstreamBehaviour.Refuse"/> names, which nothing here listens on; N-33 checks that it refuses.</summary>
     public const int RefusedPort = 1;
 
     /// <summary>The body byte each beat writes.</summary>
@@ -111,7 +111,7 @@ internal sealed class ControlledUpstream : IAsyncDisposable
         /// <summary>A call arrived.</summary>
         Arrived,
 
-        /// <summary>A held call ended after <see cref="Release"/>, its body whole.</summary>
+        /// <summary>A held call ended after <see cref="Release"/>: its body whole, or cut by its peer closing after the release, which a proof tells apart by the body written.</summary>
         Ended,
 
         /// <summary>A held call ended before <see cref="Release"/>: its peer closed, or a write failed.</summary>
@@ -150,8 +150,10 @@ internal sealed class ControlledUpstream : IAsyncDisposable
         ControlledUpstream upstream = new(behaviour);
         if (behaviour == UpstreamBehaviour.Refuse)
         {
-            // Loopback port 1, as workstream 4's proof uses: a privileged port nothing here listens on and
-            // no unprivileged test can bind, so a connect is refused at once. Two alternatives were
+            // Loopback port 1, as workstream 4's proof uses: a port nothing here listens on, so a connect
+            // is refused at once. It is privileged on Linux, the CI runner; macOS has let any user bind
+            // it since 10.14, so nothing here relies on that, and N-33's own refusal check fails by
+            // name if anything accepts on it. Two alternatives were
             // tried or weighed and fail: a socket bound and never listening is not refused on macOS (the
             // connect times out, observed 2026-11-21), and a listener started and stopped frees an
             // ephemeral port another test may take. N-33 checks the refusal itself before it asserts

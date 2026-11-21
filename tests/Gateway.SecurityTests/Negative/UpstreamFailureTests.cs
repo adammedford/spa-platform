@@ -47,6 +47,9 @@ public sealed class UpstreamFailureTests
     /// </summary>
     private static readonly TimeSpan Deadline = TimeSpan.FromSeconds(120);
 
+    /// <summary>How long N-35 may take to reach its N held calls open at the upstream (#741 Q5).</summary>
+    private static readonly TimeSpan HeldBudget = TimeSpan.FromSeconds(30);
+
     /// <summary>How long N-33's refusal precondition may take: a refusal on loopback is immediate.</summary>
     private static readonly TimeSpan RefusalBudget = TimeSpan.FromSeconds(5);
 
@@ -138,7 +141,19 @@ public sealed class UpstreamFailureTests
             // The test browser reads each body whole, so these complete only once the upstream is
             // released; whether they are held is read from the upstream's side.
             held.AddRange(heldPaths.Select(path => browser.GetAsync($"/api/{ApiName}{path}", ct: ct)));
-            await upstream.WaitForHeldAsync(heldPaths, ct);
+            using (CancellationTokenSource holding = CancellationTokenSource.CreateLinkedTokenSource(ct))
+            {
+                holding.CancelAfter(HeldBudget);
+                try
+                {
+                    await upstream.WaitForHeldAsync(heldPaths, holding.Token);
+                }
+                catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+                {
+                    Assert.Fail($"The {N} held calls were not open at the upstream within {HeldBudget.TotalSeconds} s.\n" + upstream.Describe());
+                }
+            }
+
             AssertStillHeld(upstream, heldPaths);
 
             // The extra call races the upstream's record of it. A call the gateway let through would be
