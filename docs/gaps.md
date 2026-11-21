@@ -70,8 +70,8 @@ full: each of its areas has an entry, or names the entry that carries it, in GAP
   task or to the upstream in that case.
 - **Found.** #715 Q5, which kept YARP's HTTP/2 default and sent this gap here; #738 Q1 named the
   constant for what it bounds; #741 added this entry.
-- **Closes with.** P2-10's measurement, the load test in `docs/plan/06-phase-2-and-risks.md`, which
-  measures the HTTP/2 case and decides whether it needs a bound of its own. Open.
+- **Closes with.** P2-10's measurement (`docs/plan/06-phase-2-and-risks.md`). Open. P2-10 has not
+  landed.
 
 ## What a mature release still needs (GAP-3 to GAP-12)
 

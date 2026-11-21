@@ -126,8 +126,18 @@ public sealed class UpstreamFailureTests
             // Held calls write their request lines when they end, so the extra call's is the one new line.
             int before = await Observed.SettledCountAsync(harness, ct);
 
+            // The extra call races the upstream's record of it. A call the gateway let through would be
+            // held and trickled like the others, and the test browser would wait on its body, so the
+            // race is what makes "the upstream never sees it" fail by name rather than at the deadline.
             Stopwatch waited = Stopwatch.StartNew();
-            BrowserResponse extra = await browser.GetAsync($"/api/{ApiName}{Extra}", ct: ct);
+            Task<BrowserResponse> extraCall = browser.GetAsync($"/api/{ApiName}{Extra}", ct: ct);
+            held.Add(extraCall);
+            using CancellationTokenSource watching = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            Task arrived = upstream.WaitForPathAsync(Extra, watching.Token);
+            Task first = await Task.WhenAny(extraCall, arrived);
+            await watching.CancelAsync();
+            Assert.True(first == extraCall, "The call over the bound reached the upstream.\n" + upstream.Describe());
+            BrowserResponse extra = await extraCall;
             waited.Stop();
 
             Assert.True(
@@ -149,9 +159,13 @@ public sealed class UpstreamFailureTests
             AssertOnlyTheHeldCallsArrived(upstream, heldPaths);
 
             upstream.Release();
-            foreach (BrowserResponse response in await Task.WhenAll(held))
+            foreach (BrowserResponse response in await Task.WhenAll(held.Where(call => call != extraCall)))
             {
                 Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+                // The control on the extra call's missing marker: the gateway forwards the header, so its
+                // absence there means the upstream wrote nothing of that answer.
+                Assert.Equal("1", response.Header(ControlledUpstream.MarkerHeader));
                 Assert.Matches($"^\\{ControlledUpstream.BeatByte}+{ControlledUpstream.EndOfBody}$", response.Body);
             }
 
@@ -206,6 +220,7 @@ public sealed class UpstreamFailureTests
     private static void AssertOnlyTheHeldCallsArrived(ControlledUpstream upstream, string[] heldPaths)
     {
         IReadOnlyList<ControlledUpstream.Event> requests = upstream.Requests;
+        Assert.DoesNotContain(requests, seen => seen.Path == Extra);
         Assert.Equal(heldPaths.Order(StringComparer.Ordinal), requests.Select(seen => seen.Path!).Order(StringComparer.Ordinal));
         Assert.All(requests, seen => Assert.Equal("HTTP/1.1", seen.Protocol));
     }

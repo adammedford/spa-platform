@@ -181,10 +181,10 @@ internal sealed class ControlledUpstream : IAsyncDisposable
         }
     }
 
-    /// <summary>Waits until at least one call has arrived, under the caller's token.</summary>
-    public async Task WaitForArrivalAsync(CancellationToken ct)
+    /// <summary>Completes when a call for <paramref name="path"/> has arrived, polling, under the caller's token.</summary>
+    public async Task WaitForPathAsync(string path, CancellationToken ct)
     {
-        while (Requests.Count == 0)
+        while (!Requests.Any(seen => seen.Path == path))
         {
             await Task.Delay(TimeSpan.FromMilliseconds(20), ct);
         }
