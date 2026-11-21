@@ -61,7 +61,13 @@
 // integrates. A last short run has the live read find tickets relabelled since collect (#721), #544's case relabelled
 // ready-for-human among them, and checks that none is implemented, that each takes its live status, and that a read
 // that died fails closed. One more has the subject selector refuse a merge (#1052), and checks that the ticket fails at
-// integrate as neither a conflict nor a red gate. Every house-rules prompt sends docker to ~/.docker/bin before an agent may call it
+// integrate as neither a conflict nor a red gate. Short runs on two or three tickets prove the path-wait release
+// (#1385): a predecessor's disjoint committed implement diff releases its edge before it settles, while a true overlap,
+// a missing or empty file list, one holding an entry git --name-only never prints (blank, non-string, absolute,
+// quoted, or with a . or .. segment), a waiter or a predecessor with no readable Touches path, and a forecast that
+// did not run keep the edge until settle; a release before the lane is free costs no wait; and two predecessors are
+// judged edge by edge, the waiter starting at its last release or settle, reported per predecessor, its wait clocked to
+// that point and its fork the last verified tip. Every house-rules prompt sends docker to ~/.docker/bin before an agent may call it
 // absent (#742). No agent, gh or git call is made.
 import fs from 'node:fs'
 import os from 'node:os'
@@ -2377,6 +2383,179 @@ const forkOf = (prompt) => (/Otherwise fork from [^:]+: forkSha = (\S+?)\. Take 
     if (r === STALLED) { fail(`#916: forward cycle run ${c.label} did not finish: the cycle guard let a path wait close a cycle through a wait that points forwards in n`); continue }
     for (const x of [1, 2, 3, 4, 5, 6].map(id)) if (!(r.integrated || []).includes(x)) fail(`#916: ${x} did not integrate in forward cycle run ${c.label}: ${JSON.stringify((r.reasons || []).find((y) => y.id === x))}`)
     if (!logged.some((l) => l.text === c.drop(id))) fail(`#916: forward cycle run ${c.label} did not log "${c.drop(id)}": ` + JSON.stringify(logged.filter((l) => l.text.includes('no path wait behind')).map((l) => l.text)))
+  }
+}
+
+// 49. A path wait releases on its predecessor's committed implement diff (#1385; #1419 Q1 to Q8). An edge ends before
+//     its predecessor settles once that predecessor's implement resolves with a readable, nonempty changedFiles list
+//     none of whose files overlaps the waiter's Touches paths; it stays until settle on a true overlap, a missing,
+//     empty list, one holding an entry git --name-only never prints (blank, non-string, absolute, quoted, or with a .
+//     or .. segment), a waiter or a predecessor with no readable Touches path, and a forecast that did not run.
+//     #1292's night is the disjoint case: its predecessor named the directory tests/e2e/Stack and changed one other
+//     file under it. Each predecessor's review is slow, so a wait that releases is told from one that settles by
+//     whether the waiter started its implement before the predecessor's tail ended (ordered by seq, not by tick).
+//     Two runs with two predecessors each prove that each edge is judged on its own: one where the edge that releases
+//     goes first and the waiter starts at the other's settle, and one where the release comes last and the waiter
+//     starts on it, its wait clocked to end there and its fork the last verified tip, never its predecessor's merge.
+{
+  const T = (base, n, owner, touches) => ({ n, id: `issue-${base + n}`, slug: `r${base + n}`, issue: base + n, url: `https://example.invalid/${base + n}`,
+    title: `Release ${base + n}`, status: 'ready-for-agent', owner, blockedBy: [], why: 'companion', openBoxes: 1, changeRequest: false, willEndPartial: [], touches })
+  const NONE = Symbol('no changedFiles')
+  // cfg: id -> {impl, review: ms, files: the implement's changedFiles, NONE to leave the field out}
+  const run = async (set, cfg, label, forecastFailed = '') => {
+    const ev = [], logged = [], prompts = [], clockSeq = {}, greens = []
+    let seq = 0
+    globalThis.args = { ...fixture.args, skills: OTHER_SKILLS, only: null, skip: [], maxParallel: 6, maxFailures: 8 }
+    globalThis.log = (text) => logged.push({ at: tick, seq: ++seq, text })
+    globalThis.agent = async (prompt, opts) => {
+      prompts.push({ label: opts.label, prompt, schema: opts.schema })
+      const [kind, tid, edge] = opts.label.split(':')
+      if (kind === 'collect') return { outcome: 'ok', reason: 'companion', tickets: set.map((t) => ({ ...t })), landed: [], base: RUN_BASE_665, shell: '3.2', shellCommand: '/bin/bash', forecastFailed }
+      if (kind === 'resume') return NOT_MERGED
+      if (kind === 'live') return LIVE_READY
+      if (kind === 'clock') { clockSeq[`${tid}:${edge}`] = ++seq; return { epoch: tick * 6 } }
+      if (kind === 'report') return { questions: 0, mainCheckoutClean: true, leftovers: '', issue: 0, url: '' }
+      if (kind === 'closing') return { ok: true, headSha: 'd'.repeat(40), lastLine: 'check: pass: companion', notes: '' }
+      const c = cfg[tid] || {}
+      ev.push({ kind, id: tid, edge: 'start', seq: ++seq })
+      await sleep(kind === 'implement' ? (c.impl || 15) : kind === 'review' ? (c.review || 15) : 15)
+      ev.push({ kind, id: tid, edge: 'end', seq: ++seq })
+      if (kind === 'implement') {
+        const out = { outcome: 'resolved', branch: `b-${tid}`, forkSha: 'f', headSha: 'h', complete: true, outstanding: '', summary: 's', question: '', delegatedDecisions: [], changeRequests: [] }
+        if (c.files !== NONE) out.changedFiles = c.files || [`files/${tid}.txt`]
+        return out
+      }
+      if (kind === 'review') return { outcome: 'committed', headSha: 'h', findingsFixed: [], findingsSkipped: [], summary: 's', question: '', changeRequests: [], changedFiles: [`files/${tid}.txt`] }
+      if (kind === 'integrate') { greens.push({ seq, head: `verified-${tid}` }); return { ok: true, mergeSha: 'm', notes: '', conflictFiles: [], headSha: `verified-${tid}`, old: '', redHead: '', reach: '' } }
+      throw new Error(`unexpected agent label ${opts.label} in the release run ${label}`)
+    }
+    const src = fs.readFileSync(scriptPath, 'utf8').replace(/^export const meta/m, 'const meta')
+    const releaseTick = setInterval(() => { tick++ }, 1)
+    let stop
+    const r = await Promise.race([new Function('return (async () => {' + src + '\n})()')(), new Promise((res) => { stop = setTimeout(() => res(STALLED), LIMIT_MS) })])
+    clearTimeout(stop)
+    clearInterval(releaseTick)
+    const startSeq = (x) => (ev.find((e) => e.kind === 'implement' && e.id === x && e.edge === 'start') || {}).seq
+    const implEnd = (x) => (ev.find((e) => e.kind === 'implement' && e.id === x && e.edge === 'end') || {}).seq
+    const settledSeq = (x) => Math.max(...ev.filter((e) => e.id === x && e.edge === 'end').map((e) => e.seq))
+    return { r, ev, logged, prompts, clockSeq, greens, startSeq, implEnd, settledSeq }
+  }
+  const released = (x, w, p) => (x.r.pathReleases || []).find((e) => e.id === w && e.behind === p)
+  const said = (x, s) => x.logged.some((l) => l.text.startsWith(s))
+
+  // One waiter, one predecessor: the release, then each case that keeps the edge until settle.
+  const single = [
+    // [label, P's touches, W's touches, same lane, P's files, forecastFailed, releases, why the edge stays]
+    ['disjoint', ['tests/e2e/Stack'], ['tests/e2e/Stack/NavigationHold.cs'], false, ['tests/e2e/Stack/FragmentsRun.cs'], '', true, ''],
+    ['overlap', ['tests/e2e/Stack'], ['tests/e2e/Stack/NavigationHold.cs'], false, ['tests/e2e/Stack/NavigationHold.cs'], '', false, 'implement diff changes tests/e2e/Stack/NavigationHold.cs'],
+    ['overlap under a waiter directory', ['tests/e2e'], ['tests/e2e/Stack'], false, ['tests/e2e/Stack/FragmentsRun.cs'], '', false, 'implement diff changes tests/e2e/Stack/FragmentsRun.cs'],
+    ['missing', ['tests/e2e/Stack'], ['tests/e2e/Stack/NavigationHold.cs'], false, NONE, '', false, 'implement returned no changedFiles'],
+    ['empty', ['tests/e2e/Stack'], ['tests/e2e/Stack/NavigationHold.cs'], false, [], '', false, 'implement diff lists no file'],
+    ['blank entry', ['tests/e2e/Stack'], ['tests/e2e/Stack/NavigationHold.cs'], false, ['tests/e2e/Stack/FragmentsRun.cs', ' '], '', false, 'lists an entry that is no repo-relative path'],
+    // Entries git --name-only never prints, each naming the waiter's own file: judged, they would match no Touches path.
+    ['non-string entry', ['tests/e2e/Stack'], ['tests/e2e/Stack/NavigationHold.cs'], false, ['tests/e2e/Stack/FragmentsRun.cs', 42], '', false, 'lists an entry that is no repo-relative path'],
+    ['absolute entry', ['tests/e2e/Stack'], ['tests/e2e/Stack/NavigationHold.cs'], false, ['/w/integrator-issue-1/tests/e2e/Stack/NavigationHold.cs'], '', false, 'lists an entry that is no repo-relative path'],
+    ['quoted entry', ['tests/e2e/Stack'], ['tests/e2e/Stack'], false, ['"tests/e2e/Stack/Navigation\\tHold.cs"'], '', false, 'lists an entry that is no repo-relative path'],
+    ['dot segment', ['tests/e2e/Stack'], ['tests/e2e/Stack/NavigationHold.cs'], false, ['./tests/e2e/Stack/NavigationHold.cs'], '', false, 'lists an entry that is no repo-relative path'],
+    ['parent segment', ['tests/e2e/Stack'], ['tests/e2e/Stack/NavigationHold.cs'], false, ['tests/e2e/Stack/../Stack/NavigationHold.cs'], '', false, 'lists an entry that is no repo-relative path'],
+    ['waiter unreadable', ['tests/e2e/Stack'], [], true, ['tests/e2e/Stack/FragmentsRun.cs'], '', false, 'has no readable Touches path'],
+    ['predecessor unreadable', [], ['tests/e2e/Stack/NavigationHold.cs'], true, ['tests/e2e/Stack/FragmentsRun.cs'], '', false, 'has no readable Touches path'],
+    ['forecast failed', ['tests/e2e/Stack'], ['tests/e2e/Stack/NavigationHold.cs'], false, ['tests/e2e/Stack/FragmentsRun.cs'], 'exit 1', false, 'the forecast did not run (exit 1)'],
+  ]
+  for (const [i, [label, pT, wT, sameLane, files, ff, releases, why]] of single.entries()) {
+    const base = 7000 + 10 * i, P = `issue-${base + 1}`, W = `issue-${base + 2}`
+    const set = [T(base, 1, 'ws1-infra', pT), T(base, 2, sameLane ? 'ws1-infra' : 'ws2-hosting', wT)]
+    const x = await run(set, { [P]: { impl: 25, review: 200, files } }, label, ff)
+    if (x.r === STALLED) { fail(`#1385: the release run "${label}" did not finish: a wait never cleared`); continue }
+    for (const t of [P, W]) if (!(x.r.integrated || []).includes(t)) fail(`#1385 "${label}": ${t} did not integrate: ${JSON.stringify((x.r.reasons || []).find((y) => y.id === t))}`)
+    if (!said(x, `${W}: waiting to start behind ${P} (`)) { fail(`#1385 "${label}": ${W} never waited behind ${P}, so the case read nothing: ${JSON.stringify(x.logged.map((l) => l.text).filter((t) => t.startsWith(W)))}`); continue }
+    const w = (x.r.pathWaits || []).find((e) => e.id === W)
+    const b = w && w.behind.find((e) => e.id === P)
+    if (releases) {
+      const rel = released(x, W, P)
+      if (!rel || !String(rel.why).includes(`#${base + 1}'s implement diff shares no file`) || JSON.stringify(rel.files) !== JSON.stringify(files) || rel.behindIssue !== base + 1)
+        fail(`#1385 "${label}": the disjoint committed diff did not record a release of ${W} behind ${P}: ${JSON.stringify(x.r.pathReleases)}`)
+      if (!said(x, `${W}: path wait behind ${P} released: `)) fail(`#1385 "${label}": the release of ${W} behind ${P} is not logged`)
+      if (!(x.startSeq(W) > x.implEnd(P)) || !(x.startSeq(W) < x.settledSeq(P))) fail(`#1385 "${label}": ${W} started at ${x.startSeq(W)}, not between ${P}'s implement end ${x.implEnd(P)} and its settle ${x.settledSeq(P)}`)
+      if (!b || !b.released) fail(`#1385 "${label}": ${W}'s path wait does not carry the release behind ${P}: ${JSON.stringify(w)}`)
+      const e = x.clockSeq[`${W}:end`]
+      if (!(e > x.implEnd(P)) || !(e < x.settledSeq(P))) fail(`#1385 "${label}": ${W}'s wait was clocked to end at ${e}, not at the release (between ${x.implEnd(P)} and ${x.settledSeq(P)})`)
+    } else {
+      if ((x.r.pathReleases || []).length) fail(`#1385 "${label}": the edge was released: ${JSON.stringify(x.r.pathReleases)}`)
+      if (!(x.startSeq(W) > x.settledSeq(P))) fail(`#1385 "${label}": ${W} started at ${x.startSeq(W)}, before ${P} settled at ${x.settledSeq(P)}`)
+      if (!x.logged.some((l) => l.text.startsWith(`${W}: path wait behind ${P} kept until it settles: `) && l.text.includes(why))) fail(`#1385 "${label}": no "kept until it settles" line naming "${why}": ${JSON.stringify(x.logged.map((l) => l.text).filter((t) => t.includes('path wait behind')))}`)
+      if (!b || b.released !== '') fail(`#1385 "${label}": ${W}'s wait behind ${P} does not read as settled (released ""): ${JSON.stringify(w)}`)
+    }
+    if (i === 0) {
+      // The implementer is asked for the list, and its schema requires it (#1419 Q4).
+      const ip = x.prompts.find((p) => p.label === `implement:${P}`)
+      if (!ip || !ip.prompt.includes('changedFiles (after your last commit, every path `git -C ') || !ip.prompt.includes(' diff --no-renames --name-only <forkSha> HEAD` prints')) fail('#1385: the implement prompt does not ask for changedFiles from the committed fork-to-head diff')
+      if (!ip || !ip.schema || !(ip.schema.required || []).includes('changedFiles') || !ip.schema.properties.changedFiles) fail('#1385: the IMPL schema does not require changedFiles')
+      const rep = x.prompts.find((p) => p.label === 'report')
+      const item = rep ? (rep.prompt.split('\n').find((l) => l.includes('- Path waits (#665)')) || '') : ''
+      for (const rule of ['`released: <its released, as printed>`', 'the count of early releases', '"pathReleases"', 'a release made before the waiter\'s lane was free']) if (!item.includes(rule)) fail(`#1385: the report prompt's Path waits item lacks "${rule}"`)
+      const sum = rep ? JSON.parse((/^Run results \(JSON\): (.*)$/m.exec(rep.prompt) || [, 'null'])[1]) : null
+      if (!sum || JSON.stringify(sum.pathReleases) !== JSON.stringify(x.r.pathReleases)) fail('#1385: the report\'s results do not carry the run\'s pathReleases')
+    }
+  }
+
+  // A release before the waiter's lane is free: P and W share a lane, so the lane implements P first, and P's
+  // disjoint diff releases W before the lane looks again. W then starts at once, before P's tail ends, with no wait
+  // logged or clocked, since it cost none, and the release is still recorded.
+  {
+    const base = 6100, P = `issue-${base + 1}`, W = `issue-${base + 2}`
+    const set = [T(base, 1, 'ws1-infra', ['tests/e2e/Stack']), T(base, 2, 'ws1-infra', ['tests/e2e/Stack/NavigationHold.cs'])]
+    const x = await run(set, { [P]: { impl: 25, review: 200, files: ['tests/e2e/Stack/FragmentsRun.cs'] } }, 'same lane')
+    if (x.r === STALLED) fail('#1385: the same-lane release run did not finish')
+    else {
+      for (const t of [P, W]) if (!(x.r.integrated || []).includes(t)) fail(`#1385 same lane: ${t} did not integrate`)
+      if (!released(x, W, P)) fail(`#1385 same lane: ${W}'s edge behind ${P} was not released: ${JSON.stringify(x.r.pathReleases)}`)
+      if (!(x.startSeq(W) < x.settledSeq(P))) fail(`#1385 same lane: ${W} started at ${x.startSeq(W)}, not before ${P} settled at ${x.settledSeq(P)}`)
+      if (said(x, `${W}: waiting to start behind ${P} (`) || (x.r.pathWaits || []).some((e) => e.id === W)) fail(`#1385 same lane: ${W} logged or reported a wait behind ${P}, whose edge had released before its lane was free`)
+    }
+  }
+
+  // Two predecessors, each edge judged on its own. Run A: P1 (disjoint diff, slow review) releases first, P2 (true
+  // overlap, quick) holds until it settles, and W starts at P2's settle, still before P1's. Run B: Q1 (overlap,
+  // quick) settles first and Q2 (disjoint, slow implement and review) releases last, and W starts on the release.
+  {
+    const base = 6200, P1 = `issue-${base + 1}`, P2 = `issue-${base + 2}`, W = `issue-${base + 3}`
+    const set = [T(base, 1, 'ws1-infra', ['m']), T(base, 2, 'ws2-hosting', ['m/w.txt']), T(base, 3, 'ws3-identity', ['m/w.txt'])]
+    const x = await run(set, { [P1]: { impl: 20, review: 400, files: ['m/other.txt'] }, [P2]: { impl: 60, review: 15, files: ['m/w.txt'] } }, 'two, release first')
+    if (x.r === STALLED) fail('#1385: the two-predecessor run (release first) did not finish')
+    else {
+      for (const t of [P1, P2, W]) if (!(x.r.integrated || []).includes(t)) fail(`#1385 two, release first: ${t} did not integrate`)
+      if (!released(x, W, P1)) fail(`#1385 two, release first: ${W}'s edge behind ${P1}, whose diff is disjoint, was not released: ${JSON.stringify(x.r.pathReleases)}`)
+      if (released(x, W, P2)) fail(`#1385 two, release first: ${W}'s edge behind ${P2}, whose diff overlaps, was released`)
+      if (!(x.startSeq(W) > x.settledSeq(P2)) || !(x.startSeq(W) < x.settledSeq(P1))) fail(`#1385 two, release first: ${W} started at ${x.startSeq(W)}, not after ${P2} settled (${x.settledSeq(P2)}) and before ${P1} settled (${x.settledSeq(P1)})`)
+      const w = (x.r.pathWaits || []).find((e) => e.id === W)
+      const by = Object.fromEntries(((w && w.behind) || []).map((e) => [e.id, e]))
+      if (!by[P1] || !by[P1].released || !by[P2] || by[P2].released !== '') fail(`#1385 two, release first: ${W}'s wait does not report ${P1} released and ${P2} settled: ${JSON.stringify(w)}`)
+      const e = x.clockSeq[`${W}:end`]
+      if (!(e > x.settledSeq(P2)) || !(e < x.settledSeq(P1))) fail(`#1385 two, release first: ${W}'s wait was clocked to end at ${e}, not at ${P2}'s settle, the last edge to clear`)
+      // P2 path-waits behind P1 too (m holds m/w.txt), and P1's diff releases it: two releases in all.
+      if (!released(x, P2, P1) || (x.r.pathReleases || []).length !== 2) fail(`#1385 two, release first: the releases are not ${W} and ${P2} behind ${P1}: ${JSON.stringify(x.r.pathReleases)}`)
+      if (!x.logged.some((l) => l.text.startsWith('path waits: ') && l.text.includes(`\n  ${W} behind ${P1} (released), ${P2}: `))) fail('#1385 two, release first: the path waits log line does not mark the released edge: ' + JSON.stringify((x.logged.find((l) => l.text.startsWith('path waits: ')) || {}).text))
+      if (!x.logged.some((l) => l.text.startsWith('path releases: 2\n') && l.text.includes(`\n  ${W} behind ${P1}: `))) fail('#1385 two, release first: the path releases log line does not count and name the release: ' + JSON.stringify((x.logged.find((l) => l.text.startsWith('path releases: ')) || {}).text))
+    }
+  }
+  {
+    const base = 6300, Q1 = `issue-${base + 1}`, Q2 = `issue-${base + 2}`, W = `issue-${base + 3}`
+    const set = [T(base, 1, 'ws1-infra', ['m/w.txt']), T(base, 2, 'ws2-hosting', ['m']), T(base, 3, 'ws3-identity', ['m/w.txt'])]
+    const x = await run(set, { [Q1]: { impl: 20, review: 15, files: ['m/w.txt'] }, [Q2]: { impl: 120, review: 400, files: ['m/other.txt'] } }, 'two, release last')
+    if (x.r === STALLED) fail('#1385: the two-predecessor run (release last) did not finish')
+    else {
+      for (const t of [Q1, Q2, W]) if (!(x.r.integrated || []).includes(t)) fail(`#1385 two, release last: ${t} did not integrate`)
+      if (!released(x, W, Q2) || released(x, W, Q1)) fail(`#1385 two, release last: the releases are not ${W} behind ${Q2} alone: ${JSON.stringify(x.r.pathReleases)}`)
+      if (!(x.settledSeq(Q1) < x.implEnd(Q2))) fail(`#1385 two, release last: ${Q1} did not settle before ${Q2}'s implement returned, so the case read nothing`)
+      if (!(x.startSeq(W) > x.implEnd(Q2)) || !(x.startSeq(W) < x.settledSeq(Q2))) fail(`#1385 two, release last: ${W} started at ${x.startSeq(W)}, not at ${Q2}'s release (after ${x.implEnd(Q2)}, before its settle ${x.settledSeq(Q2)})`)
+      const e = x.clockSeq[`${W}:end`]
+      if (!(e > x.implEnd(Q2)) || !(e < x.settledSeq(Q2))) fail(`#1385 two, release last: ${W}'s wait was clocked to end at ${e}, not at ${Q2}'s release`)
+      const fork = forkOf((x.prompts.find((p) => p.label === `implement:${W}`) || {}).prompt || '')
+      const before = x.greens.filter((g) => g.seq < x.startSeq(W))
+      const want = before.length ? before[before.length - 1].head : RUN_BASE_665
+      if (fork !== want || fork === `verified-${Q2}`) fail(`#1385 two, release last: ${W} forks from ${fork}, not ${want}, the last verified tip when it started`)
+    }
   }
 }
 

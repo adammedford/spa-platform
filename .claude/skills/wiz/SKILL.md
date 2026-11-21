@@ -245,7 +245,7 @@ python3 -I - <<'EOF'
 import os, re
 root = "infra/envs/poc/platform/"
 def keys(path, commented): return {m.group(1) for m in re.finditer(r"^(?:#\s*)?([a-z_]+)\s*=" if commented else r"^([a-z_]+)\s*=", open(root + path).read(), re.M)}
-phase1 = {"region", "cell", "vpc_cidr", "certificate_domain", "health_check_path", "additional_teardown_principal_arns", "gateway_image", "issuers"}
+phase1 = {"region", "cell", "vpc_cidr", "certificate_domain", "health_check_path", "gateway_writable_root", "additional_teardown_principal_arns", "gateway_image", "issuers"}
 bastion = {"bastion", "bastion_image"}   # the tunnel's hop (#1168), which N step 3 writes: never a G6 input (#1395)
 g6 = keys("terraform.tfvars.example", True) - phase1 - bastion
 present = os.path.exists(root + "terraform.tfvars")   # git-ignored: absent on a fresh checkout, and N step 3 writes it
@@ -262,7 +262,7 @@ EOF
 - The platform root is absent: Stage 0's `describe-services` answers no service, or one with no
   running task and no deployment. D0 deploys from nothing, and a part-run D never resumes.
 - `infra/envs/poc/platform/terraform.tfvars` carries none of the G6 keys. The script prints the
-  example's G6 keys (every key it names, set or commented out, beyond the Phase 1 eight and the
+  example's G6 keys (every key it names, set or commented out, beyond the Phase 1 nine and the
   bastion's two, `bastion` and `bastion_image`) and the ones `terraform.tfvars` sets; a second
   list that is not empty is a G6 input, and D is not offered until the human removes it, since D0
   needs the Phase 1 shape and D2 is what adds the block. The bastion's two do not hold D back: the
