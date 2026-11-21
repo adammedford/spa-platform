@@ -907,6 +907,14 @@ run "gateway_writable_root_gives_the_sample_image_a_writable_root_and_no_tmp_vol
     )
     error_message = "gateway_writable_root changes the root and /tmp alone: the gateway still drops every capability (#786)."
   }
+
+  assert {
+    condition = try(
+      one([for c in jsondecode(aws_ecs_task_definition.gateway.container_definitions) : c if c.name == "gateway"]).linuxParameters.initProcessEnabled == true,
+      false
+    )
+    error_message = "gateway_writable_root changes the root and /tmp alone: the gateway still runs under an init process (#786)."
+  }
 }
 
 # #1380. The writable root is the sample's and never the gateway's: deploy.sh and rollback.sh apply

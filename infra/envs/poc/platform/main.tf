@@ -121,7 +121,8 @@ locals {
 
   # The module adds nothing to an extra container, so this definition carries what the gateway's
   # carries in the module (modules/cell/ecs.tf), for the same reasons, and the suite holds the two
-  # in step:
+  # in step. The one difference is gateway_writable_root (#1380): it gives the gateway's container,
+  # while it runs the sample image, a writable root and no /tmp mount, and leaves this one as below:
   #   - a read-only root with no writable path at all (#787): #780's third answer names none for
   #     the mock API, and tools/image-check.sh starts its image on a read-only root with no tmpfs
   #     (#1169);

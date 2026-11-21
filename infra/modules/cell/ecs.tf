@@ -204,8 +204,7 @@ locals {
     # src/Gateway/Dockerfile does not. That the process can write there is not shown by any test
     # here; it is seen only on a running task (#787, "Not shown by this ticket"). Under
     # gateway_writable_root nothing is mounted (#1380): the mount would shadow the image's own /tmp,
-    # 1777 in the sample image, with the same root-owned 0755 directory on the writable root too. A
-    # for expression rather than a conditional, whose two arms would be tuples of different lengths.
+    # 1777 in the sample image, with the same root-owned 0755 directory on the writable root too.
     mountPoints = [
       for mount in [{
         sourceVolume  = local.gateway_tmp_volume_name
@@ -347,7 +346,8 @@ resource "aws_ecs_service" "gateway" {
 
   # Off (#787). The tunnel's hop is the bastion's task (#1167; aws_ecs_service.bastion below), and
   # tools/scripts/tunnel.sh forwards through no task of this service. With Exec off, the task role
-  # holds no ssmmessages permission (iam.tf) and both roots are read-only: nothing in the shipping
+  # holds no ssmmessages permission (iam.tf) and both roots are read-only, except the gateway
+  # container's while gateway_writable_root runs the sample image (#1380): nothing in the shipping
   # task is reachable for an incident, which uses the logs, /readyz and the bastion's network path
   # (#780, answer 2).
   enable_execute_command = false
