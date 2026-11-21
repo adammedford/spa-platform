@@ -2449,13 +2449,19 @@ const forkOf = (prompt) => (/Otherwise fork from [^:]+: forkSha = (\S+?)\. Take 
     ['overlap under a waiter directory', ['tests/e2e'], ['tests/e2e/Stack'], false, ['tests/e2e/Stack/FragmentsRun.cs'], '', false, 'implement diff changes tests/e2e/Stack/FragmentsRun.cs'],
     ['missing', ['tests/e2e/Stack'], ['tests/e2e/Stack/NavigationHold.cs'], false, NONE, '', false, 'implement returned no changedFiles'],
     ['empty', ['tests/e2e/Stack'], ['tests/e2e/Stack/NavigationHold.cs'], false, [], '', false, 'implement diff lists no file'],
-    ['blank entry', ['tests/e2e/Stack'], ['tests/e2e/Stack/NavigationHold.cs'], false, ['tests/e2e/Stack/FragmentsRun.cs', ' '], '', false, 'lists an entry that is no path'],
+    ['blank entry', ['tests/e2e/Stack'], ['tests/e2e/Stack/NavigationHold.cs'], false, ['tests/e2e/Stack/FragmentsRun.cs', ' '], '', false, 'lists an entry that is no repo-relative path'],
+    // Entries git --name-only never prints, each naming the waiter's own file: judged, they would match no Touches path.
+    ['non-string entry', ['tests/e2e/Stack'], ['tests/e2e/Stack/NavigationHold.cs'], false, ['tests/e2e/Stack/FragmentsRun.cs', 42], '', false, 'lists an entry that is no repo-relative path'],
+    ['absolute entry', ['tests/e2e/Stack'], ['tests/e2e/Stack/NavigationHold.cs'], false, ['/w/integrator-issue-1/tests/e2e/Stack/NavigationHold.cs'], '', false, 'lists an entry that is no repo-relative path'],
+    ['quoted entry', ['tests/e2e/Stack'], ['tests/e2e/Stack'], false, ['"tests/e2e/Stack/Navigation\\tHold.cs"'], '', false, 'lists an entry that is no repo-relative path'],
+    ['dot segment', ['tests/e2e/Stack'], ['tests/e2e/Stack/NavigationHold.cs'], false, ['./tests/e2e/Stack/NavigationHold.cs'], '', false, 'lists an entry that is no repo-relative path'],
+    ['parent segment', ['tests/e2e/Stack'], ['tests/e2e/Stack/NavigationHold.cs'], false, ['tests/e2e/Stack/../Stack/NavigationHold.cs'], '', false, 'lists an entry that is no repo-relative path'],
     ['waiter unreadable', ['tests/e2e/Stack'], [], true, ['tests/e2e/Stack/FragmentsRun.cs'], '', false, 'has no readable Touches path'],
     ['predecessor unreadable', [], ['tests/e2e/Stack/NavigationHold.cs'], true, ['tests/e2e/Stack/FragmentsRun.cs'], '', false, 'has no readable Touches path'],
     ['forecast failed', ['tests/e2e/Stack'], ['tests/e2e/Stack/NavigationHold.cs'], false, ['tests/e2e/Stack/FragmentsRun.cs'], 'exit 1', false, 'the forecast did not run (exit 1)'],
   ]
   for (const [i, [label, pT, wT, sameLane, files, ff, releases, why]] of single.entries()) {
-    const base = 6000 + 10 * i, P = `issue-${base + 1}`, W = `issue-${base + 2}`
+    const base = 7000 + 10 * i, P = `issue-${base + 1}`, W = `issue-${base + 2}`
     const set = [T(base, 1, 'ws1-infra', pT), T(base, 2, sameLane ? 'ws1-infra' : 'ws2-hosting', wT)]
     const x = await run(set, { [P]: { impl: 25, review: 200, files } }, label, ff)
     if (x.r === STALLED) { fail(`#1385: the release run "${label}" did not finish: a wait never cleared`); continue }
@@ -2527,6 +2533,7 @@ const forkOf = (prompt) => (/Otherwise fork from [^:]+: forkSha = (\S+?)\. Take 
       if (!(e > x.settledSeq(P2)) || !(e < x.settledSeq(P1))) fail(`#1385 two, release first: ${W}'s wait was clocked to end at ${e}, not at ${P2}'s settle, the last edge to clear`)
       // P2 path-waits behind P1 too (m holds m/w.txt), and P1's diff releases it: two releases in all.
       if (!released(x, P2, P1) || (x.r.pathReleases || []).length !== 2) fail(`#1385 two, release first: the releases are not ${W} and ${P2} behind ${P1}: ${JSON.stringify(x.r.pathReleases)}`)
+      if (!x.logged.some((l) => l.text.startsWith('path waits: ') && l.text.includes(`\n  ${W} behind ${P1} (released), ${P2}: `))) fail('#1385 two, release first: the path waits log line does not mark the released edge: ' + JSON.stringify((x.logged.find((l) => l.text.startsWith('path waits: ')) || {}).text))
       if (!x.logged.some((l) => l.text.startsWith('path releases: 2\n') && l.text.includes(`\n  ${W} behind ${P1}: `))) fail('#1385 two, release first: the path releases log line does not count and name the release: ' + JSON.stringify((x.logged.find((l) => l.text.startsWith('path releases: ')) || {}).text))
     }
   }

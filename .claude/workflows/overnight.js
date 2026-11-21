@@ -1069,8 +1069,12 @@ const releaseRule = (t, p, impl) => {
   const raw = impl && impl.changedFiles
   if (!Array.isArray(raw)) return { why: `${p.id}'s implement returned no changedFiles` }
   if (!raw.length) return { why: `${p.id}'s implement diff lists no file` }
-  const files = raw.map((f) => (typeof f === 'string' ? f.trim().replace(/^\.\//, '').replace(/^\/+/, '') : ''))
-  if (files.some((f) => !f)) return { why: `${p.id}'s implement diff lists an entry that is no path` }
+  // An entry is a path as git --name-only prints one, repo-relative and unquoted, or the list is unread: an absolute
+  // path, a git-quoted one or a ./ segment matches no Touches path, so judging it would release on a file it names.
+  const plain = (f) => typeof f === 'string' && f === f.trim() && !f.startsWith('"')
+    && !f.split('/').some((s) => s === '' || s === '.' || s === '..')
+  if (!raw.every(plain)) return { why: `${p.id}'s implement diff lists an entry that is no repo-relative path` }
+  const files = raw
   const hit = files.filter((f) => pathsOf(t).some((x) => overlap(f, x)))
   if (hit.length) return { why: `${p.id}'s implement diff changes ${hit.join(', ')}, under ${t.id}'s Touches paths` }
   return { release: true, files, why: `#${p.issue}'s implement diff shares no file with ${t.id}'s Touches paths` }
