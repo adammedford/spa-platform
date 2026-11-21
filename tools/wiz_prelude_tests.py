@@ -1052,7 +1052,7 @@ class SkillAdmitsTheBastionToSittingD(unittest.TestCase):
         return keys | {"issuers"}
 
     def run_check(self, extra: str = "", example_extra: str = "") -> list[str]:
-        """Runs the check from a root holding the tree's example and a file N step 3 with --bastion leaves."""
+        """Runs the check from a root holding the tree's example plus example_extra, and a file N step 3 with --bastion leaves."""
         work = pathlib.Path(tempfile.mkdtemp(prefix="wiz-stage0-")).resolve()
         self.addCleanup(shutil.rmtree, work, True)
         root = work / "infra" / "envs" / "poc" / "platform"
@@ -1084,9 +1084,9 @@ class SkillAdmitsTheBastionToSittingD(unittest.TestCase):
     def test_the_gateways_writable_root_is_a_phase_1_key_not_a_g6_key(self) -> None:
         # #1380's example names the key uncommented beside health_check_path, and N step 3 writes it on every
         # run (#1441): the example here names it as #1380's does, so the check meets it whether or not the
-        # tree's example carries it yet.
-        lines = self.run_check("gateway_writable_root = true\n",
-                               example_extra='\ngateway_writable_root = true\n')
+        # tree's example carries it yet. The file copies that uncommented line, so it sets the key once, as N
+        # step 3 leaves it: a second assignment would be a file no sitting writes (Terraform refuses it at plan).
+        lines = self.run_check(example_extra='\ngateway_writable_root = true\n')
         self.assertNotIn("'gateway_writable_root'", lines[0], lines)
         self.assertEqual(lines[1], "G6 keys set in terraform.tfvars: []", lines)
 
