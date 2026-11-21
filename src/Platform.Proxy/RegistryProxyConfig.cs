@@ -128,7 +128,7 @@ public sealed class RegistryProxyConfig : IProxyConfig
 
             // The HTTP/1.1 connection bound for this one API, a constant so that YARP keeps the
             // cluster's handler, and its pool, across a registry swap (ProxyLimits; #738).
-            HttpClient = new HttpClientConfig { MaxConnectionsPerServer = ProxyLimits.MaxConnectionsPerApi },
+            HttpClient = new HttpClientConfig { MaxConnectionsPerServer = ProxyLimits.MaxHttp11ConnectionsPerApi },
         });
     }
 

@@ -10,12 +10,13 @@ namespace Platform.Proxy;
 public static class ProxyLimits
 {
     /// <summary>
-    /// The most HTTP/1.1 connections the gateway holds open, per task, for one of an app's APIs: 64.
-    /// <see cref="RegistryProxyConfig"/> sets it as <c>HttpClientConfig.MaxConnectionsPerServer</c> on
-    /// every cluster it builds, and a cluster is one app's API (shell or fragment). A request that
-    /// finds every connection busy waits for one inside the entry's idle limit, so a wait past
+    /// The most HTTP/1.1 connections one cluster's handler holds open to its one destination, and a
+    /// cluster is one app's API (shell or fragment): 64. <see cref="RegistryProxyConfig"/> sets it as
+    /// <c>HttpClientConfig.MaxConnectionsPerServer</c> on every cluster it builds. A request that finds
+    /// every connection busy waits for one inside the entry's idle limit, so a wait past
     /// <c>timeoutSeconds</c> is 504 <c>upstream_timeout</c> and the upstream never sees it
-    /// (<c>ConnectionBoundTests</c>).
+    /// (<c>ConnectionBoundTests</c>). The name says HTTP/1.1 and per API because that is all it bounds
+    /// (#738 Q1).
     ///
     /// <para>
     /// What it bounds is read from the sources, not from the setting's name. YARP copies the setting
@@ -33,10 +34,13 @@ public static class ProxyLimits
     /// </para>
     ///
     /// <para>
-    /// It holds per handler, and YARP gives each cluster one handler, which it keeps across a registry
-    /// swap while the cluster's <c>HttpClientConfig</c> is unchanged (<c>CanReuseOldClient</c> in the
-    /// same factory). A constant keeps it unchanged. It is no total: apps that name the same upstream
-    /// each hold up to this number to it, and so does each fragment API, and each gateway task.
+    /// The unit is one destination pool in one cluster's handler, inside one instance (the glossary's
+    /// Instance: in a cell, one task). YARP gives each cluster one handler and keeps it across a
+    /// registry swap while the cluster's <c>HttpClientConfig</c> is unchanged (<c>CanReuseOldClient</c>
+    /// in the same factory). It is no aggregate: apps that name the same upstream each hold up to this
+    /// number to it, and so does each fragment API. Nor is it a lifetime total for an instance: while a
+    /// configuration change replaces a cluster's handler, the old handler's connections and the new
+    /// one's can be open at once, which this constant does not bound (#738 Q2).
     /// </para>
     ///
     /// <para>
@@ -44,5 +48,5 @@ public static class ProxyLimits
     /// measured against the task's 0.25 vCPU and 1 GB (plan row 1.4).
     /// </para>
     /// </summary>
-    public const int MaxConnectionsPerApi = 64;
+    public const int MaxHttp11ConnectionsPerApi = 64;
 }
