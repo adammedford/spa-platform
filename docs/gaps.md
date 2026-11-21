@@ -55,6 +55,24 @@ full: each of its areas has an entry, or names the entry that carries it, in GAP
 - **Closes with.** An adopter's run of the composed suites against its own licensed PingFederate,
   or Ping's written consent to publish conformance results. Accepted, no plan.
 
+### GAP-29. The connection bound does not bound an upstream that negotiates HTTP/2
+
+- **Missing.** `ProxyLimits.MaxHttp11ConnectionsPerApi` in `Platform.Proxy` bounds the HTTP/1.1
+  connections one app's API holds open in one task, and N-35 proves it over a cleartext upstream.
+  Under an upstream that negotiates HTTP/2 the constant bounds neither connections nor concurrent
+  requests: YARP 2.3.0 enables multiple HTTP/2 connections by default
+  (`EnableMultipleHttp2Connections`, set in `ForwarderHttpClientFactory.ConfigureHandler`), and
+  .NET 10's HTTP/2 connection injection consults no `MaxConnectionsPerServer`; only HTTP/1.1's does
+  (`HttpConnectionPool.Http1.cs` against `HttpConnectionPool.Http2.cs`). The sources are cited in
+  the constant's own comment.
+- **Risk.** One app's API on an https upstream that speaks h2 can open as many connections, and
+  carry as many concurrent calls, as its traffic asks for, so the bound gives no protection to the
+  task or to the upstream in that case.
+- **Found.** #715 Q5, which kept YARP's HTTP/2 default and sent this gap here; #738 Q1 named the
+  constant for what it bounds; #741 added this entry.
+- **Closes with.** P2-10's measurement, the load test in `docs/plan/06-phase-2-and-risks.md`, which
+  measures the HTTP/2 case and decides whether it needs a bound of its own. Open.
+
 ## What a mature release still needs (GAP-3 to GAP-12)
 
 Each is argued in `docs/roadmap.md` → "What a mature release still needs, and nothing has written
