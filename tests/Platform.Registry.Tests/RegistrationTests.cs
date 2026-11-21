@@ -24,6 +24,7 @@ public sealed class RegistrationTests
         HostApplicationBuilder builder = Host.CreateEmptyApplicationBuilder(new HostApplicationBuilderSettings());
         builder.Services.AddLogging();
         builder.Services.AddSingleton<IAmazonSimpleSystemsManagement>(ssm);
+        builder.Configuration.AddJsonWithoutFileProvider(Examples.PathOf("platform-config.example.json"));
 
         builder.AddPlatformRegistry();
         using IHost host = builder.Build();
@@ -40,6 +41,7 @@ public sealed class RegistrationTests
     public void Without_a_registered_client_one_sdk_client_is_registered_and_not_yet_built()
     {
         HostApplicationBuilder builder = Host.CreateEmptyApplicationBuilder(new HostApplicationBuilderSettings());
+        builder.Configuration.AddJsonWithoutFileProvider(Examples.PathOf("platform-config.example.json"));
 
         builder.AddPlatformRegistry();
 
@@ -53,6 +55,7 @@ public sealed class RegistrationTests
     public void The_registry_is_one_live_registry_and_starts_with_nothing_live()
     {
         HostApplicationBuilder builder = Host.CreateEmptyApplicationBuilder(new HostApplicationBuilderSettings());
+        builder.Configuration.AddJsonWithoutFileProvider(Examples.PathOf("platform-config.example.json"));
         builder.Services.AddLogging();
 
         builder.AddPlatformRegistry();
@@ -105,15 +108,28 @@ public sealed class RegistrationTests
     public void With_no_configuration_the_policy_allows_nothing()
     {
         // Fail closed: with no Policy:* every host suffix, upstream and issuer is refused, so no entry
-        // can validate.
-        HostApplicationBuilder builder = Host.CreateEmptyApplicationBuilder(new HostApplicationBuilderSettings());
-
-        builder.AddPlatformRegistry();
-        using IHost host = builder.Build();
-        PlatformPolicy policy = host.Services.GetRequiredService<PlatformPolicy>();
+        // can validate. Read directly: since ADR-0042 the registration refuses an empty configuration
+        // before it registers the policy (the next test).
+        PlatformPolicy policy = PlatformPolicyConfiguration.Read(new ConfigurationBuilder().Build());
 
         Assert.Empty(policy.AllowedHostSuffixes);
         Assert.Empty(policy.AllowedUpstreams);
         Assert.Empty(policy.Issuers);
+    }
+
+    [Fact]
+    public void With_no_configuration_the_registration_refuses_naming_every_required_key()
+    {
+        HostApplicationBuilder builder = Host.CreateEmptyApplicationBuilder(new HostApplicationBuilderSettings());
+
+        InvalidOperationException refusal = Assert.Throws<InvalidOperationException>(() => builder.AddPlatformRegistry());
+
+        foreach (string key in new[] { "Platform:Cell", "Registry:Bucket", "Registry:Key", "Registry:PollSeconds", "Assets:Bucket",
+            "Issuers", "Policy:AllowedHostSuffixes", "Policy:AllowedUpstreams", "ForwardedHeaders:TrustedNetworks", "Session:Store", "Session:MaxSessions" })
+        {
+            Assert.Contains(key, refusal.Message, StringComparison.Ordinal);
+        }
+
+        Assert.DoesNotContain(builder.Services, d => d.ServiceType == typeof(IRegistry));
     }
 }

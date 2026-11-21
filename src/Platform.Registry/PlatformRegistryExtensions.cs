@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using Amazon.S3;
 using Amazon.SimpleSystemsManagement;
 using Microsoft.Extensions.DependencyInjection;
@@ -24,9 +25,18 @@ namespace Platform.Registry;
 /// </summary>
 public static class PlatformRegistryExtensions
 {
+    /// <summary>The category the start-up check's Error lines are logged under (#1400).</summary>
+    public const string ConfigurationCategory = "Platform.Registry.Configuration";
+
     public static IHostApplicationBuilder AddPlatformRegistry(this IHostApplicationBuilder builder)
     {
+        ArgumentNullException.ThrowIfNull(builder);
         IServiceCollection services = builder.Services;
+
+        // First, so nothing is registered over a configuration the schema refuses (ADR-0042 decision 1).
+        // Here and not in AddPlatformHosting: the engine and the embedded schemas are in this project,
+        // and A-03 keeps Platform.Hosting from referencing it.
+        RefuseAnInvalidConfiguration(builder);
 
         // The SDK clients take their region and credentials from the environment: the ECS task role and
         // AWS_REGION in the cell, a profile on a workstation (the SDK's default chains,
@@ -61,5 +71,47 @@ public static class PlatformRegistryExtensions
         services.AddHostedService<RegistryPoller>();
 
         return builder;
+    }
+
+    /// <summary>
+    /// Validates the configuration and, on any finding, logs one Error line per finding under
+    /// <see cref="ConfigurationCategory"/>, naming its key and never its value, then throws, so the
+    /// process stops before it serves (ADR-0042). A configuration the schema refuses is not a runtime
+    /// condition the way an unreadable registry is: <see cref="RegistryPoller"/> still never stops the host.
+    ///
+    /// No host exists yet, so the lines go through a provider built over the services registered so far,
+    /// which in the gateway hold <c>AddPlatformTelemetry</c>'s console logger. That provider is disposed
+    /// before the throw: the console logger writes from a background queue, and its processor's
+    /// <c>Dispose</c> drains that queue before it returns
+    /// (https://github.com/dotnet/runtime/blob/v10.0.0/src/libraries/Microsoft.Extensions.Logging.Console/src/ConsoleLoggerProcessor.cs),
+    /// so the lines reach stdout before the process ends; the gateway run of #1400 shows them there. A
+    /// valid configuration builds nothing.
+    /// </summary>
+    private static void RefuseAnInvalidConfiguration(IHostApplicationBuilder builder)
+    {
+        ImmutableArray<PlatformConfigurationFinding> findings = PlatformConfiguration.Findings(builder.Configuration);
+        if (findings.IsEmpty)
+        {
+            return;
+        }
+
+        using (ServiceProvider provider = builder.Services.BuildServiceProvider())
+        {
+            if (provider.GetService<ILoggerFactory>()?.CreateLogger(ConfigurationCategory) is { } logger)
+            {
+                foreach (PlatformConfigurationFinding finding in findings)
+                {
+                    logger.LogError(
+                        "The platform configuration fails contracts/platform-config.schema.json at {Key}: {Keyword}. The gateway does not start (ADR-0042).",
+                        finding.Key,
+                        finding.Keyword.Length == 0 ? "schema" : finding.Keyword);
+                }
+            }
+        }
+
+        throw new InvalidOperationException(
+            "The platform configuration fails contracts/platform-config.schema.json at " +
+            string.Join(", ", findings.Select(finding => finding.ToString())) +
+            $". Each finding is an Error line under {ConfigurationCategory}; the gateway does not start (ADR-0042).");
     }
 }

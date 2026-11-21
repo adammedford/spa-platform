@@ -15,6 +15,13 @@ namespace Platform.Registry;
 /// else. Which engine is decided: JsonSchema.Net 8.0.5, running in the gateway process through this
 /// project (docs/dependencies.md -> "Decided", D-1, which records what would reopen it).
 /// </summary>
+/// <summary>
+/// One schema violation without the engine's message: a JSON pointer into the instance, the keyword
+/// that failed (empty when the failing node names none), and the evaluation path: a JSON pointer into
+/// the root schema whose <c>$ref</c> segments are followed where they stand.
+/// </summary>
+internal sealed record SchemaFailure(string InstanceLocation, string Keyword, string EvaluationPath);
+
 internal static class RegistrySchemas
 {
     public const string Registry = "registry.schema.json";
@@ -103,6 +110,60 @@ internal static class RegistrySchemas
         Definitions.TryGetValue(definition, out JsonSchema? schema)
             ? schema.Evaluate(instance, Options).IsValid
             : throw new ArgumentOutOfRangeException(nameof(definition), definition, $"contracts/{Registry} has no $defs/{definition}.");
+
+    /// <summary>
+    /// Every schema violation as where it is and which keyword failed, and never the engine's message:
+    /// a message can quote the value it refused ("15 is less than ..."), and the platform configuration's
+    /// start-up check logs a key and never a value (ADR-0042 decision 1). The same walk as
+    /// <see cref="Collect"/>, so a finding is reported where its whole ancestry failed too; a failing
+    /// node with no keyword of its own and no failing child is reported with an empty keyword.
+    /// </summary>
+    public static ImmutableArray<SchemaFailure> Failures(string schemaFile, JsonElement instance)
+    {
+        EvaluationResults results = Loaded[schemaFile].Evaluate(instance, Options);
+        ImmutableArray<SchemaFailure>.Builder failures = ImmutableArray.CreateBuilder<SchemaFailure>();
+        if (!results.IsValid)
+        {
+            CollectFailures(results, failures);
+        }
+
+        return failures.ToImmutable();
+    }
+
+    /// <summary>The text of a contract schema, the bytes the engine was built from.</summary>
+    public static string SchemaText(string file) => Text(file);
+
+    /// <summary>The <c>$id</c> base every contract schema lives under (contracts/README.md, "Using the schemas").</summary>
+    public static string SchemaIdBase => IdBase;
+
+    private static void CollectFailures(EvaluationResults results, ImmutableArray<SchemaFailure>.Builder failures)
+    {
+        int before = failures.Count;
+        foreach (string keyword in (results.Errors ?? new Dictionary<string, string>()).Keys)
+        {
+            failures.Add(new SchemaFailure(results.InstanceLocation.ToString(), keyword, results.EvaluationPath.ToString()));
+        }
+
+        // Only into failing nodes, as Collect does, and never into an "if": its subschema failing is how
+        // "then" is skipped, not a finding (https://json-schema.org/draft/2020-12/json-schema-core#section-10.2.2.1).
+        // The platform configuration's Session section carries one, which in a Session that fails for
+        // another reason reported "memory is not dynamodb" as a finding at Session:Store.
+        foreach (EvaluationResults nested in results.Details ?? [])
+        {
+            if (!nested.IsValid && !IsIf(nested))
+            {
+                CollectFailures(nested, failures);
+            }
+        }
+
+        if (failures.Count == before)
+        {
+            failures.Add(new SchemaFailure(results.InstanceLocation.ToString(), "", results.EvaluationPath.ToString()));
+        }
+    }
+
+    private static bool IsIf(EvaluationResults node) =>
+        node.EvaluationPath.ToString().EndsWith("/if", StringComparison.Ordinal);
 
     private static ImmutableArray<RegistryIssue> Issues(EvaluationResults results)
     {
