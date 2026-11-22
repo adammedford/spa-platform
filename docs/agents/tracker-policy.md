@@ -28,7 +28,13 @@ ADR-0020 records the decision and its reasons. What it adds to `docs/agents/issu
   5. Every ticket carries a `**Touches:**` line of the paths it writes; its owner is derived from
      those paths through `OWNERSHIP.md`. Under it every ticket carries a `**Vendor:**` line, which
      says what the paths cannot show: `none`, or the vendors the work is tied to, by the names
-     `tools/issue_labels.json` defines ("The derived labels", below).
+     `tools/issue_labels.json` defines ("The derived labels", below). A ticket that moves or
+     renames files also carries a `**Moves:**` line beside its Touches line, one pair per path,
+     `` `old path` -> `new path` ``, comma-separated, each path also on the Touches line. The
+     moves line of `tools/overnight_preflight.sh` searches origin/main for each old path and makes
+     the ticket a skip candidate for every citation in a file outside its Touches, naming the file
+     and the line: a move breaks a file it does not update, so each citing file belongs on the
+     Touches line, or the citation to another ticket that lands first (#1471).
 - **The ticket-shape check holds them where a ticket is written.** `tools/ticket_shape.py` reads one
   issue and fails it, naming the rule, on: `**Touches:**` paths of more than one owner; an
   `**Owner:**` line naming other than exactly the role those paths derive, or other than exactly one
