@@ -1300,7 +1300,7 @@ class MovesTests(PreflightTestCase):
         self.assertEqual([], result.arguments()["skip"])
 
     def test_an_old_path_cited_only_inside_the_touches_passes_a_directory_holding_its_files(self):
-        for directory in ("`tools/cell/`", "`tools/cell`"):
+        for directory in ("`tools/cell/`", "`tools/cell`", "`tools/cell/*`"):
             with self.subTest(directory=directory):
                 case = Case(self)
                 land_on_origin(case, CITED)
@@ -1314,14 +1314,19 @@ class MovesTests(PreflightTestCase):
                 self.assertEqual([], result.arguments()["skip"])
 
     def test_a_moves_line_not_read_whole_as_pairs_is_a_skip_candidate(self):
-        case = Case(self)
-        land_on_origin(case, CITED)
-        case.issue(12, "ready-for-agent", moving("`tools/cell/`", "`tools/cell/old.sh` to `tools/new.sh`"))
-        result = case.run()
-        self.assertOnlyFails(result)
-        self.assertIn("skip candidates: issue-12 (#12: its Moves line is not read as old path -> new path "
-                      "pairs: tools/cell/old.sh to tools/new.sh)", result.row("moves")[1])
-        self.assertEqual(["issue-12"], result.arguments()["skip"])
+        # No arrow at all, and a path left outside every pair: a.sh would go unsearched.
+        for moves, said in (("`tools/cell/old.sh` to `tools/new.sh`", "tools/cell/old.sh to tools/new.sh"),
+                            ("`tools/a.sh`, `tools/cell/old.sh` -> `tools/cell/poc/`",
+                             "tools/a.sh, tools/cell/old.sh -> tools/cell/poc/")):
+            with self.subTest(moves=moves):
+                case = Case(self)
+                land_on_origin(case, CITED)
+                case.issue(12, "ready-for-agent", moving("`tools/`", moves))
+                result = case.run()
+                self.assertOnlyFails(result)
+                self.assertIn("skip candidates: issue-12 (#12: its Moves line is not read as old path -> "
+                              f"new path pairs: {said})", result.row("moves")[1])
+                self.assertEqual(["issue-12"], result.arguments()["skip"])
 
 
 class UnblocksTests(PreflightTestCase):

@@ -116,10 +116,11 @@
 #             fixed string, in origin/main's tree with `git grep`, and a hit in a file outside the
 #             ticket's Touches paths, read by origin/main's ticket_shape.touches(), makes the ticket
 #             a skip candidate, named with each such file and line. A Touches path names a file, or
-#             a directory with or without its trailing slash, holding every file under it. Such a
-#             file is one the move breaks and the lane may not write: #1349's move of
-#             tools/scripts/platform-tfvars.sh broke citations in tools/wiz_prelude_tests.py its
-#             table missed, found mid-lane, and the chain behind it was lost for the night (#1471).
+#             a directory with or without its trailing slash, holding every file under it, or a
+#             glob matched against the citing file's path. Such a file is one the move breaks and
+#             the lane may not write: #1349's move of tools/scripts/platform-tfvars.sh broke
+#             citations in tools/wiz_prelude_tests.py its table missed, found mid-lane, and the chain
+#             behind it was lost for the night (#1471).
 #             A Moves line not read whole as such pairs is a skip candidate too, so a path it could
 #             not read is never passed. No line, or `none`, moves nothing.
 #   unblocks  The five open blockers with the most downstream tickets, each counted once however
@@ -815,8 +816,7 @@ except Exception:
     sys.exit(3)
 
 MOVES = re.compile(r"(?m)^\*\*Moves:\*\*[ \t]*(?P<value>[^\n]*)$")
-ARROW = re.compile(r"->|→")
-PAIR = re.compile(r"([^\s,;]+)\s*(?:->|→)\s*([^\s,;]+)")
+PAIR = re.compile(r"([^\s,;]+)\s*(?:->|\u2192)\s*([^\s,;]+)")
 REF = "refs/remotes/origin/main"
 
 def bare(path):
@@ -847,8 +847,9 @@ for n in judged:
     if re.fullmatch(r"(?i)none\b.*", value):
         continue
     pairs = PAIR.findall(value)
-    if not pairs or len(pairs) != len(ARROW.findall(value)):
-        # A line read in part would pass the paths it could not read.
+    if not pairs or re.sub(r"[\s,;]", "", PAIR.sub("", value)):
+        # A line read in part would pass the paths it could not read: a path left outside every pair,
+        # as `a, b -> dir/` leaves a, is never searched.
         candidates.append((n, f"its Moves line is not read as old path -> new path pairs: {value}"))
         continue
     touches = shape.touches(body, parsed) or []
@@ -861,7 +862,8 @@ for n in judged:
                             "so it is unjudged")
             continue
         hits = []
-        for record in found.stdout.splitlines():
+        # Split on newlines alone: splitlines() also breaks a matched line on a form feed.
+        for record in filter(None, found.stdout.split("\n")):
             path, number = record.split("\0")[:2]
             path = path[len(REF) + 1:]
             if not inside(path, touches):
