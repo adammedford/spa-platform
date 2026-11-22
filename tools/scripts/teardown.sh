@@ -20,9 +20,12 @@
 #      operator. The repositories need nothing: they are force_delete, so the destroy removes their
 #      images (infra/modules/cell/storage.tf).
 #   2. terraform destroy in each root on $SPA_ROOTS, last first, the reverse of the order they are
-#      applied in. The platform root, $SPA_PLATFORM_ROOT, must be one of them. images.auto.tfvars,
-#      which deploy.sh wrote, goes with the platform root, so the next first deployment starts on the
-#      sample image again.
+#      applied in. The platform root, $SPA_PLATFORM_ROOT, must be one of them. Every *.auto.tfvars
+#      in its directory goes with it: images.auto.tfvars, which deploy.sh wrote, and any other a
+#      cell's own script wrote there for an image beside the gateway, whose repository the destroy
+#      removed. Only the scripts write that pattern there, since git ignores *.tfvars; and
+#      terraform.tfvars, the operator's, stays. So the next first deployment starts on the sample
+#      image again and plans no image the destroyed repositories no longer hold (#1349).
 #   3. The certificate certs.sh imported, found by its Platform and Cell tags, retried while ACM
 #      still counts it in use after the listener went; the cell's inactive task definitions, the
 #      gateway's family and the bastion's (#1168), which keep their tags until deleted; and the key
@@ -48,7 +51,7 @@
 # standing; 2 when it, or verify-teardown.sh, did not start, among them a cell other than the one
 # the roots' state holds (#1304), or an entry value it needs that is not set.
 #
-# Written for the bash 3.2 that ships with macOS, like tools/scripts/certs.sh.
+# Written for the bash 3.2 that ships with macOS.
 # Owner: workstream 1, AWS and IaC.
 
 set -euo pipefail
@@ -124,7 +127,7 @@ for dir in "${ROOT_DIRS[@]}"; do
 done
 [ "$PLATFORM_LISTED" -eq 1 ] ||
   refuse "SPA_PLATFORM_ROOT, $(root_name "$PLATFORM_ROOT"), is not one of SPA_ROOTS's roots. Nothing was deleted."
-# The cell's lexical form, as tools/scripts/certs.sh checks it.
+# The cell's lexical form, as tools/scripts/poc/certs.sh checks it.
 case "$CELL" in
   *[!a-z0-9-]* | "" | -* | *-) refuse "--cell must be lowercase letters, digits and inner hyphens: got '${CELL}'" ;;
 esac
@@ -256,7 +259,9 @@ while [ "$index" -gt 0 ]; do
   else
     destroy "$PLATFORM_ROOT"
   fi
-  rm -f "$IMAGES_TFVARS"
+  # Every *.auto.tfvars of the platform root, images.auto.tfvars ($IMAGES_TFVARS) among them (the
+  # header's step 2). A pattern that matches nothing stays as written, and rm -f passes over it.
+  rm -f "$PLATFORM_ROOT"/*.auto.tfvars
 done
 
 # --- 3. what Terraform leaves -----------------------------------------------------------------------

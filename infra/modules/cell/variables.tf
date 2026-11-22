@@ -96,7 +96,7 @@ variable "teardown_principal_arns" {
 variable "certificate_domain" {
   description = <<-EOT
     The domain the cell's wildcard certificate covers, without the wildcard: the
-    load balancer's listener presents *.{certificate_domain}. tools/scripts/certs.sh
+    load balancer's listener presents *.{certificate_domain}. tools/scripts/poc/certs.sh
     imports that certificate into ACM, tagged with this cell, and the module finds it
     there; Terraform never creates it.
 
@@ -135,7 +135,7 @@ variable "gateway_writable_root" {
     first apply: it gives that container a writable root and no /tmp volume, the shape it had
     before #787. The sample image, nginx-unprivileged, runs as uid 101 and writes its temp files
     under /tmp, which a read-only root's task volume, owned by root at 0755, refuses (#1380).
-    tools/scripts/platform-tfvars.sh writes true beside the sample's pin; deploy.sh and
+    tools/scripts/poc/platform-tfvars.sh writes true beside the sample's pin; deploy.sh and
     rollback.sh apply the gateway with false. The default is the gateway's read-only shape.
   EOT
   type        = bool
@@ -534,7 +534,7 @@ variable "bastion" {
 variable "bastion_image" {
   description = <<-EOT
     The bastion container's image: the sample image, public.ecr.aws/nginx/nginx-unprivileged, by
-    digest (#1167, sub-question 3.1), which tools/scripts/platform-tfvars.sh already resolves for
+    digest (#1167, sub-question 3.1), which tools/scripts/poc/platform-tfvars.sh already resolves for
     gateway_image. Held to gateway_image's rule, a digest reference and never a tag, so an apply
     never moves the running bastion. Empty, the default, is allowed only while bastion is false.
   EOT

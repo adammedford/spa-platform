@@ -22,10 +22,11 @@
 # same redaction as every other line.
 #
 # The group is the logGroup of the outputs document, $SPA_OUTPUTS_FILE (an entry value with no
-# default: cell-common.sh's header), which seed.sh, deploy.sh and rollback.sh write after
-# every apply (contracts/infra-outputs.schema.json), and never Terraform state. One group holds both
-# containers' streams, each named <container>/<container>/<task id> (infra/modules/cell/ecs.tf), so
-# --container reads the streams with that prefix.
+# default: cell-common.sh's header), written from the cell's roots' outputs after every apply,
+# deploy.sh's and rollback.sh's among them (contracts/infra-outputs.schema.json), and never
+# Terraform state. One group holds both containers' streams, each named
+# <container>/<container>/<task id> (infra/modules/cell/ecs.tf), so --container reads the streams
+# with that prefix.
 #
 # Run it as the operator's own session, with credentials for the account the cell is in and
 # AWS_REGION set to the cell's Region. It needs the AWS CLI and python3. It never prints the account
@@ -35,7 +36,7 @@
 # AWS refused the read, named by its error code; 2 when it did not start (no outputs document among
 # the reasons, and SPA_OUTPUTS_FILE unset).
 #
-# Written for the bash 3.2 that ships with macOS, like tools/scripts/certs.sh.
+# Written for the bash 3.2 that ships with macOS.
 # Owner: workstream 1, AWS and IaC.
 
 set -euo pipefail

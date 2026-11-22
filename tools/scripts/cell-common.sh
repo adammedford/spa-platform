@@ -1,11 +1,11 @@
-# cell-common.sh -- what seed.sh, deploy.sh, rollback.sh, teardown.sh, logs.sh and tunnel.sh share.
-# Sourced, never run.
+# cell-common.sh -- what deploy.sh, rollback.sh, teardown.sh, logs.sh and tunnel.sh share, and the
+# proof cell's scripts under poc/ with them. Sourced, never run.
 #
 # Task 1.7 (#58). The plumbing is tunnel.sh's and verify-release-immutability.sh's: every AWS call
 # names the Region and --output text, a failure is reported by its error code and never by its
 # message (which can carry an ARN), and nothing printed names the account id. Two calls name the
 # Region and not --output text, because neither answers with a document for --output to shape:
-# deploy.sh's `ecr get-login-password`, whose output is the registry password alone, piped to
+# ecr_login's `ecr get-login-password`, whose output is the registry password alone, piped to
 # docker login (https://docs.aws.amazon.com/cli/latest/reference/ecr/get-login-password.html), and
 # tunnel.sh's `ssm start-session`, which hands the terminal to the Session Manager plugin. certs.sh
 # sources none of this and keeps its own calls. The cell's documents are built and read by
@@ -31,7 +31,7 @@
 #   SPA_OUTPUTS_FILE   the outputs document's path (contracts/infra-outputs.schema.json).
 #   SPA_FIELD_MAP      the field map: which root's output answers each field of that document.
 #
-# Written for the bash 3.2 that ships with macOS, like tools/scripts/certs.sh.
+# Written for the bash 3.2 that ships with macOS.
 # Owner: workstream 1, AWS and IaC.
 
 # The AWS CLI pages a terminal's output through less unless told not to.
@@ -196,11 +196,20 @@ REDACTIONS=""
 # After cell_start. Refuses, as outputs_field does, when the outputs document is missing or for
 # another Region.
 redact_clients() {
-  [ -f "$OUTPUTS_FILE" ] ||
-    refuse "there is no $(root_name "$OUTPUTS_FILE"). Run tools/scripts/seed.sh first: it writes it from the cell's roots."
+  [ -f "$OUTPUTS_FILE" ] || refuse "$(no_outputs)"
   REDACTIONS="${WORK}/redactions"
-  documents clients "$OUTPUTS_FILE" "$REGION" > "$REDACTIONS" ||
-    refuse "$(root_name "$OUTPUTS_FILE") gives no clients for ${REGION}. Run tools/scripts/seed.sh again to rewrite it from the cell's roots."
+  documents clients "$OUTPUTS_FILE" "$REGION" > "$REDACTIONS" || refuse "$(outputs_lack clients)"
+}
+
+# What a reader of the outputs document says when it is missing, or gives no $1 for the Region: how
+# the document comes to be, which is the same for every cell, rather than a cell's own script that
+# writes it (#1349).
+no_outputs() {
+  printf '%s' "there is no $(root_name "$OUTPUTS_FILE"). It is written from the cell's roots' outputs after an apply (cell-common.sh's write_outputs): write it once the cell's roots are applied."
+}
+
+outputs_lack() {
+  printf '%s' "$(root_name "$OUTPUTS_FILE") gives no $1 for ${REGION}. It is written from the cell's roots' outputs after an apply: rewrite it from the roots after their last apply."
 }
 
 redact() { printf '%s' "$1" | redact_stream; }
@@ -299,7 +308,8 @@ printed() { awk 'NR == 1' "$OUT"; }
 # --- spactl ----------------------------------------------------------------------------------------
 #
 # spactl is `dotnet run --project tools/spactl`, unless SPACTL names an executable to run instead (a
-# published spactl, say). seed.sh publishes and adds through it, and wait_for_revision waits with it.
+# published spactl, say). An operator publishes and adds apps through it (the proof cell's seed.sh
+# does), and wait_for_revision waits with it.
 
 need_spactl() {
   if [ -z "${SPACTL:-}" ]; then
@@ -352,20 +362,19 @@ terraform_shown() {
 documents() { python3 -I "$DOCUMENTS" "$@"; }
 
 # A field of the outputs document that a script cannot run without, in the contract's names
-# (contracts/infra-outputs.schema.json). seed.sh writes the document first, and deploy.sh and
-# rollback.sh rewrite it after their apply, so a script that reads it reads the last apply's.
+# (contracts/infra-outputs.schema.json). The cell writes the document once its roots are applied
+# (the proof cell's seed.sh does), and deploy.sh and rollback.sh rewrite it after their apply, so a
+# script that reads it reads the last apply's.
 outputs_field() {
-  [ -f "$OUTPUTS_FILE" ] ||
-    refuse "there is no $(root_name "$OUTPUTS_FILE"). Run tools/scripts/seed.sh first: it writes it from the cell's roots."
-  documents field "$OUTPUTS_FILE" "$1" "$REGION" ||
-    refuse "$(root_name "$OUTPUTS_FILE") gives no $1 for ${REGION}. Run tools/scripts/seed.sh again to rewrite it from the cell's roots."
+  [ -f "$OUTPUTS_FILE" ] || refuse "$(no_outputs)"
+  documents field "$OUTPUTS_FILE" "$1" "$REGION" || refuse "$(outputs_lack "$1")"
 }
 
 # The outputs document's ecsBastionService, the bastion service the tunnel lists for its hop, or
 # nothing when the document names none (#1167): the platform root publishes it only while its
 # bastion input is true, and cell_documents.py copies it only when published. After outputs_field
 # has read the document, so that a missing document, or one for another Region, is refused there,
-# naming seed.sh, and an empty answer here means only that the field is absent.
+# saying how it is written, and an empty answer here means only that the field is absent.
 outputs_bastion() {
   documents field "$OUTPUTS_FILE" ecsBastionService "$REGION" 2> /dev/null || true
 }
@@ -373,7 +382,7 @@ outputs_bastion() {
 # What the scripts say when the document names no bastion: how to turn it on, and which scripts
 # rewrite the document after the apply. After need_entry, which sets both paths.
 no_bastion() {
-  printf '%s' "$(root_name "$OUTPUTS_FILE") names no ecsBastionService, so the cell has no bastion for a tunnel's hop (#1167). Set bastion = true and bastion_image in $(root_name "$PLATFORM_ROOT")/terraform.tfvars, apply that root, and rewrite the document with tools/scripts/seed.sh; deploy.sh and rollback.sh rewrite it after their own applies."
+  printf '%s' "$(root_name "$OUTPUTS_FILE") names no ecsBastionService, so the cell has no bastion for a tunnel's hop (#1167). Set bastion = true and bastion_image in $(root_name "$PLATFORM_ROOT")/terraform.tfvars, apply that root, and rewrite the document from the roots' outputs after that apply; deploy.sh and rollback.sh rewrite it after their own applies."
 }
 
 # The outputs document, from each root's outputs, read in SPA_ROOTS's order, and the field map,
@@ -432,20 +441,68 @@ read_platform_config() {
   REGISTRY_KEY="$(awk -F '\t' '$1 == "Registry__Key" { print $2 }' "${WORK}/environment.tsv")"
 }
 
+# --- build and push --------------------------------------------------------------------------------
+#
+# deploy.sh's build of the gateway, and any other image a cell builds beside it, the same way: one
+# copy, so that no two builds differ in their platform, their attestations or their pull (#1349).
+
+# A tag of this run's own: the repositories' tags are immutable (infra/modules/cell/storage.tf), so a
+# second push of a tag is refused, and a tag can never name two images.
+push_tag() { printf '%s-%s' "$(date -u +%Y%m%dT%H%M%SZ)" "$$"; }
+
+# Docker logged in to the registry that holds the repository $1. The password goes from the AWS CLI
+# to Docker on a pipe and never into an argument, a file or the output.
+# https://docs.aws.amazon.com/AmazonECR/latest/userguide/registry_auth.html
+ecr_login() {
+  aws --region "$REGION" ecr get-login-password 2> "$ERR" |
+    docker login --username AWS --password-stdin "${1%%/*}" 2>&1 | redact_stream ||
+    fail "could not log Docker in to the cell's registry."
+}
+
+# $1 the Dockerfile, from the repository root, $2 the repository URI, $3 the run's tag. Builds for
+# ARM64, the task's platform (ecs.tf's runtime_platform), with the SBOM and provenance attestations
+# (deploy.sh's header, step 2; #779), pushes, and prints the image by digest,
+# repository@sha256:<hex>, the digest ECR names for the tag. With the attestations that is the image
+# index's, and that is the one applied; wait_and_assert reads the index back to know its linux/arm64
+# image. https://docs.docker.com/build/metadata/attestations/#creating-attestations
+build_and_push() {
+  local dockerfile="$1" repository="$2" tag="$3" name="${2#*/}"
+  note "building ${dockerfile} for linux/arm64 as $(redact "${repository}:${tag}")" >&2
+  docker_build "$dockerfile" "${repository}:${tag}" >&2 ||
+    fail "building ${dockerfile} failed."
+  aws_read "the digest of ${name}:${tag}" ecr describe-images --repository-name "$name" \
+    --image-ids "imageTag=${tag}" --query 'imageDetails[0].imageDigest'
+  local digest
+  digest="$(printed)"
+  case "$digest" in
+    sha256:[0-9a-f]*) ;;
+    *) fail "ECR named no digest for ${name}:${tag}." ;;
+  esac
+  printf '%s@%s' "$repository" "$digest"
+}
+
+# Docker's own output, through the redaction: it names the repository, which carries the account.
+docker_build() {
+  local status=0
+  docker buildx build --pull --platform linux/arm64 --sbom=true --provenance=mode=max \
+    --file "${REPO_ROOT}/$1" --tag "$2" --push "$REPO_ROOT" 2>&1 | redact_stream || status=$?
+  return "$status"
+}
+
 # --- apply, wait, assert ---------------------------------------------------------------------------
 
-# Plan and apply the platform root with these two images and the gateway's health path, then record
-# them for every later apply. $1 the gateway image, $2 the mock API image or "". The gateway runs on
-# its read-only root, gateway_writable_root = false: true is the sample image's alone, which
-# platform-tfvars.sh writes into terraform.tfvars for the first apply (#1380), and the module refuses
-# it beside /readyz.
+# Plan and apply the platform root with the gateway's image and health path, then record them for
+# every later apply. $1 the gateway image. It passes no other container's image: an image a cell runs
+# beside the gateway stays at what the root's own tfvars hold (#1349). The gateway runs on its
+# read-only root, gateway_writable_root = false: true is the sample image's alone, which a cell's
+# first apply sets in terraform.tfvars (#1380), and the module refuses it beside /readyz.
 apply_images() {
-  local gateway="$1" mock="$2" plan="${WORK}/platform.tfplan"
+  local gateway="$1" plan="${WORK}/platform.tfplan"
   note "planning $(root_name "$PLATFORM_ROOT") with the gateway at $(redact "$gateway")"
   # The plan file holds the values the apply will write, so it stays in the scratch directory and
   # never in the tree (change request 1.1).
   terraform_shown -chdir="$PLATFORM_ROOT" plan -input=false -no-color -out="$plan" \
-    -var "gateway_image=${gateway}" -var "mock_api_image=${mock}" -var "health_check_path=${READY_PATH}" \
+    -var "gateway_image=${gateway}" -var "health_check_path=${READY_PATH}" \
     -var "gateway_writable_root=false" ||
     fail "the platform root's plan failed; nothing was applied."
   terraform_shown -chdir="$PLATFORM_ROOT" apply -input=false -no-color "$plan" ||
@@ -455,7 +512,6 @@ apply_images() {
     printf '# Written by tools/scripts/%s.sh after its apply. Every later apply of this root passes\n' "$PROGRAM"
     printf '# these back, so it never moves the image (plan row 1.7). teardown.sh removes this file.\n'
     printf 'gateway_image     = "%s"\n' "$gateway"
-    printf 'mock_api_image    = "%s"\n' "$mock"
     printf 'health_check_path = "%s"\n' "$READY_PATH"
     printf 'gateway_writable_root = false\n'
   } > "$IMAGES_TFVARS"

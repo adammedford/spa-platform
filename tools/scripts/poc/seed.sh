@@ -6,9 +6,9 @@
 # publishes the two fixture releases and writes the first registry". deploy.sh refuses to run
 # before it, because a gateway started against an empty registry never becomes ready.
 #
-#   tools/scripts/seed.sh
-#   tools/scripts/seed.sh --release 2026-10-20.1    # one release name for every app
-#   tools/scripts/seed.sh --shell fixtures/fragments/shell.json   # and a shell with its fragments
+#   tools/scripts/poc/seed.sh
+#   tools/scripts/poc/seed.sh --release 2026-10-20.1    # one release name for every app
+#   tools/scripts/poc/seed.sh --shell fixtures/fragments/shell.json   # and a shell with its fragments
 #
 # In order:
 #   1. It writes the outputs document, $SPA_OUTPUTS_FILE, from the outputs of the roots on
@@ -55,7 +55,7 @@
 # not start (a usage error, an entry value unset, a missing tool, no Region, no credentials, a root
 # not applied).
 #
-# Written for the bash 3.2 that ships with macOS, like tools/scripts/certs.sh.
+# Written for the bash 3.2 that ships with macOS, like tools/scripts/poc/certs.sh.
 # Owner: workstream 1, AWS and IaC.
 
 set -euo pipefail
@@ -63,7 +63,7 @@ umask 077
 
 PROGRAM="seed"
 # shellcheck source=tools/scripts/cell-common.sh
-. "$(dirname -- "$0")/cell-common.sh"
+. "$(dirname -- "$0")/../cell-common.sh"
 
 RELEASE=""
 SHELLS=()

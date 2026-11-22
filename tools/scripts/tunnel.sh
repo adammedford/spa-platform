@@ -38,18 +38,19 @@
 # Its names come from the outputs document, $SPA_OUTPUTS_FILE, and from nowhere else: the
 # ECS cluster is its ecsCluster, the service its ecsBastionService and the load balancer its
 # albDnsName (contracts/infra-outputs.schema.json: "The scripts and the deployed tests read it").
-# seed.sh, deploy.sh and rollback.sh write it after every apply, so it names the last apply's cell,
-# and it has an ecsBastionService only when that apply declared the bastion. Nothing is looked up in
-# AWS by name and nothing is read from Terraform state (#198); without the document, with one for
+# It is written from the cell's roots' outputs after every apply, deploy.sh's and rollback.sh's
+# among them, so it names the last apply's cell, and it has an ecsBastionService only when that
+# apply declared the bastion. Nothing is looked up in AWS by name and nothing is read from Terraform
+# state (#198); without the document, with one for
 # another Region, or with one that names no bastion, it refuses. AWS is asked only for the bastion
 # service's running tasks, and the hop is a task's bastion container (infra/modules/cell/ecs.tf),
 # never a task of the gateway's service, ecsService. The load balancer is the cell module's, which
 # is internal (alb.tf).
 #
 # Run it as the operator's own session, with credentials for the account the cell is in and
-# AWS_REGION set to the cell's Region, after seed.sh. It reads the entry value SPA_OUTPUTS_FILE and,
-# with --keepalive, SPA_CERT_DOMAIN, which have no default (cell-common.sh's header), and refuses,
-# exit 2, when one it needs is unset. It needs the AWS CLI v2, the Session Manager plugin and
+# AWS_REGION set to the cell's Region, once the outputs document is written. It reads the entry
+# value SPA_OUTPUTS_FILE and, with --keepalive, SPA_CERT_DOMAIN, which have no default
+# (cell-common.sh's header), and refuses, exit 2, when one it needs is unset. It needs the AWS CLI v2, the Session Manager plugin and
 # python3, and curl with --keepalive.
 #
 # It never prints the account id: of a task it names only the id, never the ARN. The session's own
@@ -64,7 +65,7 @@
 # tool, no Region, the local port already held, no outputs document with the three names for this
 # Region, or one that names no bastion).
 #
-# Written for the bash 3.2 that ships with macOS, like tools/scripts/certs.sh.
+# Written for the bash 3.2 that ships with macOS.
 # Owner: workstream 1, AWS and IaC.
 
 set -euo pipefail
@@ -164,10 +165,10 @@ REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-}}"
 [ -n "$REGION" ] || refuse "no Region in AWS_REGION or AWS_DEFAULT_REGION: set AWS_REGION to the cell's Region."
 
 # The three names, before any AWS call. The cluster and the load balancer each refuse, exit 2, when
-# the document is absent, is for another Region or lacks the name, and say to run seed.sh
-# (cell-common.sh, outputs_field). Then the service, the bastion's: a document that names none is a
-# cell with no hop, refused, exit 2, with what turns the bastion on (#1167). The gateway's service,
-# ecsService, is never read: no task of it is the hop.
+# the document is absent, is for another Region or lacks the name, and say how the document is
+# written (cell-common.sh, outputs_field). Then the service, the bastion's: a document that names
+# none is a cell with no hop, refused, exit 2, with what turns the bastion on (#1167). The gateway's
+# service, ecsService, is never read: no task of it is the hop.
 CLUSTER="$(outputs_field ecsCluster)"
 ALB="$(outputs_field albDnsName)"
 SERVICE="$(outputs_bastion)"

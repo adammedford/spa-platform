@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Test companion for tools/scripts/certs.sh. Owner: workstream 1.
+"""Test companion for tools/scripts/poc/certs.sh. Owner: workstream 1.
 
 #241, from #118's Q8, accepted as #129's Q33: tools/preflight.sh passes on the profile's Region
 alone, and in that shell certs.sh used to import the wildcard certificate into us-east-1, its own
@@ -26,7 +26,7 @@ returns exit code 1.)
 
 **A universal held on every run:** nothing the script prints holds private key material.
 
-Run: python3 -I tools/scripts/certs_tests.py
+Run: python3 -I tools/scripts/poc/certs_tests.py
 """
 
 from __future__ import annotations
@@ -36,8 +36,8 @@ import os
 import pathlib
 import sys
 
-ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
-SCRIPT = ROOT / "tools" / "scripts" / "certs.sh"
+ROOT = pathlib.Path(__file__).resolve().parent.parent.parent.parent
+SCRIPT = ROOT / "tools" / "scripts" / "poc" / "certs.sh"
 BASH = "/bin/bash"
 REQUIRE_BASH = "SCRIPT_TESTS_REQUIRE_BASH"
 

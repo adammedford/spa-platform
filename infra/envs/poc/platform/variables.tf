@@ -62,7 +62,7 @@ variable "additional_teardown_principal_arns" {
 
 variable "certificate_domain" {
   description = <<-EOT
-    The domain of the wildcard certificate tools/scripts/certs.sh imported, without
+    The domain of the wildcard certificate tools/scripts/poc/certs.sh imported, without
     the wildcard. The listener presents *.{certificate_domain}, found in ACM by that
     name and this cell's Cell tag. Run `certs.sh issue` and `certs.sh import` before
     the first apply of this root, or the lookup fails the plan.
@@ -84,7 +84,7 @@ variable "gateway_writable_root" {
   description = <<-EOT
     true only while the gateway's container runs the public sample image, which writes under
     /tmp as uid 101 and so cannot start on the read-only root's root-owned /tmp volume (#1380).
-    tools/scripts/platform-tfvars.sh writes true beside the sample's pin, and deploy.sh and
+    tools/scripts/poc/platform-tfvars.sh writes true beside the sample's pin, and deploy.sh and
     rollback.sh apply the gateway with false. The module refuses true beside any health check
     but the sample's / (infra/modules/cell/variables.tf).
   EOT
