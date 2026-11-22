@@ -11,8 +11,9 @@
 #   tools/scripts/seed.sh --shell fixtures/fragments/shell.json   # and a shell with its fragments
 #
 # In order:
-#   1. It writes infra/envs/poc/outputs.json from the idp, apps and platform roots' outputs, which
-#      is where spactl reads the bucket and each app's client from.
+#   1. It writes the outputs document, $SPA_OUTPUTS_FILE, from the outputs of the roots on
+#      $SPA_ROOTS through the field map $SPA_FIELD_MAP (cell-common.sh's write_outputs), which is
+#      where spactl reads the bucket and each app's client from.
 #   2. It reads the platform configuration the gateway runs with out of its container's environment
 #      in the service's task definition: the issuers and the policy that bound a registry entry at
 #      run time are the ones spactl bounds it with here.
@@ -42,14 +43,17 @@
 # spactl is `dotnet run --project tools/spactl`, unless SPACTL names an executable to run instead
 # (a published spactl, say).
 #
-# Run it as the operator's own session: the spa-platform profile, with tools/aws-project.env
-# sourced, after the three roots are applied, the platform root on the sample image. It needs the
-# AWS CLI, Terraform, python3 and the .NET SDK.
+# Run it as the operator's own session, with credentials for the account the cell is in and
+# AWS_REGION set to the cell's Region, and the proof cell's entry file, infra/envs/poc/cell.env,
+# sourced beside it, after the three roots are applied, the platform root on the sample image. It
+# reads the entry values SPA_ROOTS, SPA_FIELD_MAP and SPA_OUTPUTS_FILE, and refuses, exit 2, when one
+# is unset. It needs the AWS CLI, Terraform, python3 and the .NET SDK.
 #
 # It never prints the account id.
 #
 # Exit status: 0 when every app is published and in the registry; 1 when one is not; 2 when it did
-# not start (a usage error, a missing tool, no Region, no credentials, a root not applied).
+# not start (a usage error, an entry value unset, a missing tool, no Region, no credentials, a root
+# not applied).
 #
 # Written for the bash 3.2 that ships with macOS, like tools/scripts/certs.sh.
 # Owner: workstream 1, AWS and IaC.
@@ -108,6 +112,8 @@ if [ -n "$RELEASE" ]; then
   esac
   [ "${#RELEASE}" -le 64 ] || refuse "--release must be at most 64 characters."
 fi
+
+need_entry SPA_ROOTS SPA_FIELD_MAP SPA_OUTPUTS_FILE
 
 trap cell_cleanup EXIT
 trap 'exit 130' INT TERM

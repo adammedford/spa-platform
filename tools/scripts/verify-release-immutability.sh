@@ -16,8 +16,11 @@
 # run left, and names each one it removed; so the two runs above, in that order, leave nothing
 # under apps/p04-probe/ (#184). It needs no bare run before it.
 #
-# Run it as the operator's own session, the principal spactl writes as: the spa-platform profile,
-# with tools/aws-project.env sourced. A Deny in a bucket policy applies to administrators too, so
+# Run it as the operator's own session, the principal spactl writes as: credentials for the account
+# the cell is in, and AWS_REGION set to the cell's Region. It reads two of the cell's entry values,
+# with no default (tools/scripts/cell-common.sh's header): SPA_PLATFORM_ROOT, the platform root whose
+# outputs name the bucket and the repositories, a relative path read from the checkout's root; and
+# SPA_CELL, the cell, unless --cell names it. A Deny in a bucket policy applies to administrators too, so
 # the operator's refusal is the strongest test of an ordinary writer. It refuses to start as the
 # teardown role, which would observe the policy's exception rather than its rule (ADR-0014).
 #
@@ -34,7 +37,7 @@ set -euo pipefail
 umask 077
 
 PROGRAM="verify-release-immutability"
-CELL="${SPA_CELL:-poc}"
+CELL="${SPA_CELL:-}"
 CLEAN_UP=0
 
 # The AWS CLI pages a terminal's output through less unless told not to.
@@ -53,8 +56,12 @@ export AWS_REQUEST_CHECKSUM_CALCULATION="when_required"
 # where it went, so the documented relative invocation captured that line as well as pwd's, and
 # PLATFORM_ROOT carried a newline Terraform could not read (PR #130's review).
 # https://www.gnu.org/software/bash/manual/html_node/Bourne-Shell-Builtins.html#index-cd
-REPO_ROOT="$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd -P)"
-PLATFORM_ROOT="${REPO_ROOT}/infra/envs/poc/platform"
+SCRIPTS_DIR="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)"
+REPO_ROOT="$(CDPATH='' cd -- "${SCRIPTS_DIR}/../.." && pwd -P)"
+DOCUMENTS="${SCRIPTS_DIR}/cell_documents.py"
+# The platform root, from the entry value once the arguments are read: read from the checkout's root
+# when relative, as cell-common.sh's entry_path reads it.
+PLATFORM_ROOT=""
 
 # --- plumbing ------------------------------------------------------------------------------------
 
@@ -77,7 +84,12 @@ Options
                                version and delete marker under apps/p04-probe/, an earlier run's
                                included. Off by default, so P-04 alone never acts as that role.
   --cell NAME                  The cell whose teardown role the clean-up assumes, as
-                               spa-platform-<cell>-teardown. Default: \$SPA_CELL, else poc.
+                               spa-platform-<cell>-teardown. Default: \$SPA_CELL; with
+                               neither, it refuses.
+
+Environment
+  SPA_PLATFORM_ROOT            The platform root, whose outputs it reads. No default.
+  SPA_CELL                     The cell, when --cell is not given. No default.
   -h, --help                   This text.
 EOF
 }
@@ -123,17 +135,25 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 
+[ -n "$CELL" ] || refuse "no cell: SPA_CELL is not set and no --cell was given. SPA_CELL is one of the cell's entry values, which have no default."
 # The cell's lexical form, as tools/scripts/certs.sh checks it.
 case "$CELL" in
   *[!a-z0-9-]* | "" | -* | *-) refuse "--cell must be lowercase letters, digits and inner hyphens: got '${CELL}'" ;;
 esac
+[ -n "${SPA_PLATFORM_ROOT:-}" ] ||
+  refuse "SPA_PLATFORM_ROOT is not set. It is one of the cell's entry values, which have no default: set it for the cell, as the proof cell's entry file cell.env does, and export it (set -a; . <entry file>; set +a)."
+case "$SPA_PLATFORM_ROOT" in
+  /*) PLATFORM_ROOT="$SPA_PLATFORM_ROOT" ;;
+  *) PLATFORM_ROOT="${REPO_ROOT}/${SPA_PLATFORM_ROOT}" ;;
+esac
 
 command -v aws > /dev/null 2>&1 || refuse "the AWS CLI is not on PATH. brew install awscli"
 command -v terraform > /dev/null 2>&1 || refuse "terraform is not on PATH. brew install hashicorp/tap/terraform"
+command -v python3 > /dev/null 2>&1 || refuse "python3 is not on PATH. xcode-select --install"
 
 # The Region the AWS CLI would build in, named on every call so nothing else can choose it.
 REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-}}"
-[ -n "$REGION" ] || refuse "no Region in AWS_REGION or AWS_DEFAULT_REGION. set -a; . tools/aws-project.env; set +a"
+[ -n "$REGION" ] || refuse "no Region in AWS_REGION or AWS_DEFAULT_REGION: set AWS_REGION to the cell's Region."
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/${PROGRAM}.XXXXXX")"
 OUT="${WORK}/out"
@@ -278,7 +298,7 @@ counted() {
 # refused, so a --cell naming the wrong cell cannot let one through. get-caller-identity prints the
 # assumed-role session ARN, arn:<partition>:sts::<account>:assumed-role/<role>/<session>.
 aws_call sts get-caller-identity --query '[Account, Arn]'
-[ "$OUTCOME" = "success" ] || refuse "no AWS credentials answered get-caller-identity (${OUTCOME}). Sign in with the spa-platform profile."
+[ "$OUTCOME" = "success" ] || refuse "no AWS credentials answered get-caller-identity (${OUTCOME}). Sign in as the operator, with credentials for the account the cell is in."
 ACCOUNT=""
 CALLER_ARN=""
 read -r ACCOUNT CALLER_ARN < "$OUT" || true
@@ -315,7 +335,10 @@ esac
 # --- the platform root's outputs ---------------------------------------------------------------------
 #
 # Every consumer reads the bucket from the platform root's output and never derives the name
-# (contracts/s3-layout.md; change request 1.5a, decision 2), and the repositories the same way.
+# (contracts/s3-layout.md; change request 1.5a, decision 2), and the repositories the same way: every
+# output whose value is a repository URL in the account's registry, recognised by its value and not
+# by its name, so a root with other repositories, or none of the reference module's, has each one
+# checked (#1348).
 # The storage-only targeted apply #92's sitting runs (Q18 on #98) writes the outputs that depend on
 # the resources it targeted, which are these three, and not `cell` or `region`, which read only a
 # variable: so the cell comes from --cell, and the Region from the environment. Checked on
@@ -326,9 +349,11 @@ output() {
 }
 
 BUCKET="$(output bucket)" || BUCKET=""
-[ -n "$BUCKET" ] || refuse "could not read the platform root's bucket output. Run terraform init -backend-config=backend.hcl in infra/envs/poc/platform, and apply the bucket first."
-ECR_GATEWAY="$(output ecr_gateway)" || ECR_GATEWAY=""
-ECR_MOCK_API="$(output ecr_mock_api)" || ECR_MOCK_API=""
+[ -n "$BUCKET" ] || refuse "could not read the platform root's bucket output. Run terraform init -backend-config=backend.hcl in ${SPA_PLATFORM_ROOT}, and apply the bucket first."
+REPOSITORIES=""
+if terraform -chdir="$PLATFORM_ROOT" output -no-color -json > "${WORK}/outputs.json" 2> "$ERR"; then
+  REPOSITORIES="$(python3 -I "$DOCUMENTS" repositories "${WORK}/outputs.json" "$ACCOUNT" "$REGION" 2> "$ERR")" || REPOSITORIES=""
+fi
 
 # --- the probe -------------------------------------------------------------------------------------
 #
@@ -497,16 +522,14 @@ record "the bucket has no replication configuration" ReplicationConfigurationNot
 aws_call --endpoint-url "http://s3.${REGION}.amazonaws.com" s3api get-bucket-versioning --bucket "$BUCKET"
 record "a plain-HTTP request is refused" AccessDenied "$OUTCOME"
 
-# The repository's name is its URL's path: <registry>/<name>.
+# The repository's name is its URL's path: <registry>/<name>, which cell_documents.py printed, one a
+# line. None at all is a case not run: a root with no repository has no tag to hold immutable.
 # https://docs.aws.amazon.com/AmazonECR/latest/userguide/Repositories.html
-for pair in "ecr_gateway ${ECR_GATEWAY}" "ecr_mock_api ${ECR_MOCK_API}"; do
-  name="${pair#* }"
-  if [ -z "$name" ]; then
-    not_run "the image repository the platform root's ${pair% *} output names has immutable tags" \
-      "the platform root has no ${pair% *} output"
-    continue
-  fi
-  name="${name#*/}"
+if [ -z "$REPOSITORIES" ]; then
+  not_run "every image repository the platform root outputs has immutable tags" \
+    "the platform root outputs no repository URL"
+fi
+for name in $REPOSITORIES; do
   read_back "the image repository ${name} has immutable tags" IMMUTABLE \
     ecr describe-repositories --repository-names "$name" --query 'repositories[0].imageTagMutability'
 done

@@ -6,6 +6,13 @@ spactl." The doubles, the world they share and the universal every run holds (no
 account id) are tools/scripts/cell_doubles.py's; spactl is reached as `dotnet run --project
 tools/spactl --`, and the dotnet double answers as spactl does for publish and app add.
 
+Since #1348 it also holds the entry point the reference scripts share: the proof cell's entry
+file and field map, cell-common.sh's write_outputs run through a driver of the case's own, and what
+the reference scripts' sources may not name. Those cases read the files below, so a change to one
+runs this companion.
+
+Checkout inputs: tools/scripts/*.sh tools/scripts/cell_documents.py infra/envs/poc/cell.env infra/envs/poc/outputs-fields.json
+
 Run: python3 -I tools/scripts/seed_tests.py
 """
 
@@ -20,12 +27,10 @@ import sys
 _spec = importlib.util.spec_from_file_location("cell_doubles", pathlib.Path(__file__).resolve().parent / "cell_doubles.py")
 cell = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(cell)
-# The fields the scripts write, from the list they write them from, not from the schema's root
-# required: the contract may require fewer of every cell than this cell's scripts write (#1367).
-_documents_spec = importlib.util.spec_from_file_location("cell_documents", pathlib.Path(__file__).resolve().parent / "cell_documents.py")
-cell_documents = importlib.util.module_from_spec(_documents_spec)
-_documents_spec.loader.exec_module(cell_documents)
-WRITTEN_FIELDS = sorted(field for field, _, _ in cell_documents.FIELDS)
+# The fields the scripts write, from the field map they write them from (the proof cell's, which
+# its entry file names; #1348), not from the schema's root required: the contract may require fewer
+# of every cell than this cell's scripts write (#1367). The optional ones are left out.
+WRITTEN_FIELDS = sorted(entry["field"] for entry in cell.field_map()["fields"] if not entry.get("optional"))
 
 import unittest  # noqa: E402
 
@@ -598,6 +603,253 @@ class CellDocumentsReadsFragments(cell.CompanionTestCase):
         self.assertRegex(first.strip(), r"^fixture-[0-9a-f]{12}$")
         (root / "main.js").write_text("export const changed = 1;\n")
         self.assertNotEqual(first, documents("fragment-release", str(root), "main.js")[1])
+
+
+# --- the entry point (#1348) -----------------------------------------------------------------------
+
+# The field list cell_documents.py held at c3fa0e0, written out here from that commit as the record
+# of the document write_outputs wrote then: (field, root, output), and the one optional field after.
+C3FA0E0_FIELDS = (
+    ("region", "platform", "region"), ("cell", "platform", "cell"), ("bucket", "platform", "bucket"),
+    ("albDnsName", "platform", "alb_dns_name"), ("ecsCluster", "platform", "ecs_cluster"),
+    ("ecsService", "platform", "ecs_service"), ("ecrGateway", "platform", "ecr_gateway"),
+    ("ecrMockApi", "platform", "ecr_mock_api"), ("gatewayImage", "platform", "gateway_image"),
+    ("issuer", "idp", "issuer"), ("cognitoDomain", "idp", "cognito_domain"), ("clients", "apps", "clients"),
+    ("testUsers", "idp", "test_users"), ("logGroup", "platform", "log_group"),
+)
+# The optional field trunk added after c3fa0e0 (#1167), written only when the platform root publishes
+# it: a cell with no bastion gets c3fa0e0's document exactly, and one with a bastion the fork's.
+C3FA0E0_OPTIONAL = (("ecsBastionService", "platform", "ecs_bastion_service"),)
+
+# write_outputs as seed.sh, deploy.sh and rollback.sh call it, after need_entry and cell_start.
+DRIVER = """set -euo pipefail
+PROGRAM="write-outputs"
+. "$(dirname -- "$0")/cell-common.sh"
+need_entry SPA_ROOTS SPA_FIELD_MAP SPA_OUTPUTS_FILE
+trap cell_cleanup EXIT
+cell_start
+write_outputs
+"""
+# The operator's way in: the proof cell's entry file sourced with set -a, then the script named.
+SOURCING = """set -a
+. "$(dirname -- "$0")/../../infra/envs/poc/cell.env"
+set +a
+exec /bin/bash "$(dirname -- "$0")/$1"
+"""
+
+# The reference scripts: every file of tools/scripts/ but the proof cell's three, the doubles and
+# the companions, which follow their scripts (the #1335 spec's table).
+EXEMPT = ("seed.sh", "certs.sh", "platform-tfvars.sh", "cell_doubles.py")
+REFERENCE = sorted(path for path in cell.SCRIPTS.iterdir()
+                   if path.is_file() and path.name not in EXEMPT and not path.name.endswith("_tests.py"))
+
+
+def driven(test, world: dict | None = None, **env: str | None):
+    case = cell.Case(test, world=world)
+    (case.repo / "tools" / "scripts" / "write-outputs.sh").write_text(DRIVER)
+    return case, case.run("write-outputs.sh", env=case.env(**env))
+
+
+class TheProofCellsEntryFile(cell.CompanionTestCase):
+    """infra/envs/poc/cell.env sets the five entry values to the proof cell's own and names the
+    field map; sourced, it makes write_outputs write what it wrote at c3fa0e0."""
+
+    def test_it_sets_the_five_values_and_names_the_field_map(self):
+        values = cell.entry_values()
+        self.assertEqual(sorted(cell.ENTRY_NAMES), sorted(values))
+        self.assertEqual(cell.CELL, values["SPA_CELL"])
+        # The domain certs.sh issues for, read from it rather than typed here.
+        certs = re.search(r'^DOMAIN="\$\{SPA_CERT_DOMAIN:-([^}]*)\}"', (cell.SCRIPTS / "certs.sh").read_text(), re.M)
+        self.assertEqual(certs[1], values["SPA_CERT_DOMAIN"])
+        roots = values["SPA_ROOTS"].split(":")
+        self.assertEqual(["idp", "apps", "platform"], [root.rsplit("/", 1)[-1] for root in roots])
+        for directory in roots:
+            self.assertTrue((cell.ROOT / directory / "main.tf").is_file(), directory)
+        self.assertEqual(roots[-1], values["SPA_PLATFORM_ROOT"])
+        self.assertTrue((cell.ROOT / values["SPA_FIELD_MAP"]).is_file())
+        self.assertEqual("infra/envs/poc/outputs.json", values["SPA_OUTPUTS_FILE"])
+
+    def test_sourced_it_writes_from_the_three_roots_the_document_write_outputs_wrote_at_c3fa0e0(self):
+        for world in (cell.default_world(), cell.with_bastion(cell.default_world())):
+            with self.subTest(bastion="ecs_bastion_service" in world["roots"]["platform"]):
+                case = cell.Case(self, world=world)
+                scripts = case.repo / "tools" / "scripts"
+                (scripts / "write-outputs.sh").write_text(DRIVER)
+                (scripts / "with-entry.sh").write_text(SOURCING)
+                # No entry value from the case: only what the entry file sets.
+                result = case.run("with-entry.sh", "write-outputs.sh",
+                                  env=case.env(**{name: None for name in cell.ENTRY_NAMES}))
+                self.assertEqual(0, result.status, result.output)
+                roots = world["roots"]
+                expected = {field: roots[root][output] for field, root, output in C3FA0E0_FIELDS}
+                expected.update({field: roots[root][output] for field, root, output in C3FA0E0_OPTIONAL
+                                 if roots[root].get(output) is not None})
+                self.assertEqual(json.dumps(expected, indent=2) + "\n", case.outputs_path().read_text())
+                self.assertEqual(["idp", "apps", "platform"],
+                                 [c["root"] for c in case.calls("terraform") if c.get("command") == "output"])
+
+
+class WriteOutputsWritesWhatTheMapLists(cell.CompanionTestCase):
+    """write_outputs writes exactly the fields a field map lists, from the roots SPA_ROOTS names, in
+    its order, and refuses roots that disagree on region or cell, whichever two they are."""
+
+    def other_map(self, case, fields: list[dict]) -> pathlib.Path:
+        path = case.dir / "another-cell" / "fields.json"
+        path.parent.mkdir()
+        path.write_text(json.dumps({"fields": fields}))
+        return path
+
+    def test_a_map_other_than_the_proof_cells_from_the_roots_it_names(self):
+        world = cell.default_world()
+        case = cell.Case(self, world=world)
+        (case.repo / "tools" / "scripts" / "write-outputs.sh").write_text(DRIVER)
+        fields = self.other_map(case, [
+            {"field": "region", "root": "platform", "output": "region"},
+            {"field": "where", "root": "idp", "output": "issuer"},
+            {"field": "bucketName", "root": "platform", "output": "bucket"},
+            {"field": "absent", "root": "idp", "output": "no_such_output", "optional": True},
+        ])
+        out = case.dir / "another-cell" / "outputs.json"
+        roots = "infra/envs/poc/platform:infra/envs/poc/idp"
+        result = case.run("write-outputs.sh", env=case.env(SPA_ROOTS=roots, SPA_FIELD_MAP=str(fields),
+                                                            SPA_OUTPUTS_FILE=str(out)))
+        self.assertEqual(0, result.status, result.output)
+        expected = {"region": world["roots"]["platform"]["region"], "where": world["roots"]["idp"]["issuer"],
+                    "bucketName": world["roots"]["platform"]["bucket"]}
+        self.assertEqual(json.dumps(expected, indent=2) + "\n", out.read_text())
+        # The two roots on the list, in its order, and not the third.
+        self.assertEqual(["platform", "idp"], [c["root"] for c in case.calls("terraform") if c.get("command") == "output"])
+        self.assertFalse(case.outputs_path().exists())
+
+    def test_a_map_naming_a_root_that_is_not_on_the_list_is_refused(self):
+        case = cell.Case(self)
+        (case.repo / "tools" / "scripts" / "write-outputs.sh").write_text(DRIVER)
+        fields = self.other_map(case, [{"field": "region", "root": "platform", "output": "region"},
+                                       {"field": "clients", "root": "apps", "output": "clients"}])
+        result = case.run("write-outputs.sh", env=case.env(SPA_ROOTS="infra/envs/poc/platform", SPA_FIELD_MAP=str(fields)))
+        self.assertEqual(1, result.status, result.output)
+        self.assertIn("not on the roots list: apps", result.stderr)
+        self.assertFalse(case.outputs_path().exists())
+
+    def test_a_missing_output_is_refused_by_root_and_name_and_an_optional_one_is_left_out(self):
+        case = cell.Case(self)
+        (case.repo / "tools" / "scripts" / "write-outputs.sh").write_text(DRIVER)
+        fields = self.other_map(case, [{"field": "region", "root": "platform", "output": "region"},
+                                       {"field": "gone", "root": "idp", "output": "gone"}])
+        result = case.run("write-outputs.sh", env=case.env(SPA_FIELD_MAP=str(fields)))
+        self.assertEqual(1, result.status, result.output)
+        self.assertIn("idp.gone", result.stderr)
+
+    def test_roots_that_output_different_regions_or_cells_are_refused_whichever_two_they_are(self):
+        names = ("idp", "apps", "platform")
+        for first in names:
+            for second in names:
+                if first == second:
+                    continue
+                for output, other in (("region", "eu-west-1"), ("cell", "poc2")):
+                    world = cell.default_world()
+                    # The apps root has no region or cell output in the proof cell; given both, it
+                    # is a root like the others.
+                    world["roots"]["apps"].update(region=cell.REGION, cell=cell.CELL)
+                    world["roots"][second][output] = other
+                    case = cell.Case(self, world=world)
+                    (case.repo / "tools" / "scripts" / "write-outputs.sh").write_text(DRIVER)
+                    fields = self.other_map(case, [{"field": "region", "root": first, "output": "region"}])
+                    roots = f"infra/envs/poc/{first}:infra/envs/poc/{second}"
+                    with self.subTest(first=first, second=second, output=output):
+                        result = case.run("write-outputs.sh", env=case.env(SPA_ROOTS=roots, SPA_FIELD_MAP=str(fields)))
+                        self.assertEqual(1, result.status, result.output)
+                        self.assertIn(f"the {first} root's {output} differs from the {second} root's", result.stderr)
+                        self.assertFalse(case.outputs_path().exists())
+                    # The same two roots agreeing are written: the refusal above is the difference's.
+                    world["roots"][second][output] = world["roots"][first][output]
+                    case = cell.Case(self, world=world)
+                    (case.repo / "tools" / "scripts" / "write-outputs.sh").write_text(DRIVER)
+                    fields = self.other_map(case, [{"field": "region", "root": first, "output": "region"}])
+                    with self.subTest(first=first, second=second, output=output, agreeing=True):
+                        result = case.run("write-outputs.sh", env=case.env(SPA_ROOTS=roots, SPA_FIELD_MAP=str(fields)))
+                        self.assertEqual(0, result.status, result.output)
+
+    def test_roots_that_agree_on_another_region_than_aws_region_are_refused(self):
+        world = cell.default_world()
+        for name in ("idp", "platform"):
+            world["roots"][name]["region"] = "eu-west-1"
+        case, result = driven(self, world)
+        self.assertEqual(1, result.status, result.output)
+        self.assertIn("the document's region is not AWS_REGION", result.stderr)
+        self.assertFalse(case.outputs_path().exists())
+
+    def test_a_map_with_no_region_field_is_refused(self):
+        case = cell.Case(self)
+        (case.repo / "tools" / "scripts" / "write-outputs.sh").write_text(DRIVER)
+        fields = self.other_map(case, [{"field": "bucket", "root": "platform", "output": "bucket"}])
+        result = case.run("write-outputs.sh", env=case.env(SPA_FIELD_MAP=str(fields)))
+        self.assertEqual(1, result.status, result.output)
+        self.assertIn("names no region field", result.stderr)
+
+    def test_each_entry_value_write_outputs_reads_unset_exits_2_naming_it_before_any_call(self):
+        for name in ("SPA_ROOTS", "SPA_FIELD_MAP", "SPA_OUTPUTS_FILE"):
+            for value in (None, ""):
+                with self.subTest(name=name, value=value):
+                    case, result = driven(self, **{name: value})
+                    self.assertEqual(2, result.status, result.output)
+                    self.assertIn(f"{name} is not set", result.stderr)
+                    self.assertEqual([], case.calls())
+
+    def test_seed_refuses_each_entry_value_it_reads_unset_before_any_call(self):
+        for name in ("SPA_ROOTS", "SPA_FIELD_MAP", "SPA_OUTPUTS_FILE"):
+            with self.subTest(name=name):
+                case = cell.Case(self)
+                result = case.run(SCRIPT, env=case.env(**{name: None}))
+                self.assertEqual(2, result.status, result.output)
+                self.assertIn(f"{name} is not set", result.stderr)
+                self.assertEqual([], case.calls())
+
+
+class TheReferenceScriptsNameNoCell(unittest.TestCase):
+    """What the reference scripts' sources may not hold (#1348): the proof cell's paths, the
+    operator profile's name and its file, the mock API's container in the shared file, and in
+    cell_documents.py any field list, root name or Cognito name."""
+
+    def test_the_reference_scripts_are_the_ones_the_spec_names(self):
+        self.assertEqual(["cell-common.sh", "cell_documents.py", "deploy.sh", "logs.sh", "rollback.sh",
+                          "teardown.sh", "tunnel.sh", "verify-release-immutability.sh", "verify-teardown.sh",
+                          "verify-tunnel.sh"], [path.name for path in REFERENCE])
+
+    def test_no_reference_script_names_an_infra_envs_path(self):
+        for path in REFERENCE:
+            with self.subTest(path.name):
+                self.assertNotIn("infra/envs/", path.read_text())
+
+    def test_no_reference_script_names_the_profile_or_its_file(self):
+        for path in REFERENCE:
+            with self.subTest(path.name):
+                text = path.read_text()
+                self.assertNotRegex(text, r"spa-platform\s+profile")
+                self.assertNotIn("aws-project.env", text)
+
+    def test_cell_common_defines_no_mock_api_container(self):
+        text = (cell.SCRIPTS / "cell-common.sh").read_text()
+        self.assertNotRegex(text, r"(?m)^\s*MOCK_API_CONTAINER=")
+        self.assertNotIn("mock-api", text)
+
+    def test_cell_documents_holds_no_field_list_no_root_name_and_no_cognito(self):
+        text = (cell.SCRIPTS / "cell_documents.py").read_text()
+        self.assertNotRegex(text, r"(?i)cognito")
+        entries = cell.field_map()["fields"]
+        # A field list holds its names as string literals. The outputs every root may carry and the
+        # fields other commands read are the contract's own words, not a cell's list: region and cell
+        # (the cross-check), clients (the clients command).
+        shared = {"region", "cell", "clients"}
+        for name in sorted({entry["field"] for entry in entries} | {entry["output"] for entry in entries}):
+            if name not in shared:
+                with self.subTest(name=name):
+                    self.assertNotRegex(text, rf"[\"']{re.escape(name)}[\"']")
+        for root in sorted({entry["root"] for entry in entries}):
+            with self.subTest(root=root):
+                self.assertNotRegex(text, rf"\b{root} root\b")
+                self.assertNotRegex(text, rf"\[\s*[\"']{root}[\"']\s*\]")
+        self.assertNotRegex(text, r"\bidp\b")
 
 
 if __name__ == "__main__":

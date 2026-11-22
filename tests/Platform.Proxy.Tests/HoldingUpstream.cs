@@ -69,7 +69,7 @@ public sealed class HoldingUpstream : IAsyncDisposable
         /// <summary>A request arrived and is now held.</summary>
         Arrived,
 
-        /// <summary>A held request ended after <see cref="Release"/>, its body whole.</summary>
+        /// <summary>A held request ended after <see cref="Release"/>: its body whole, or cut by an abort or a failed write after the release, which a proof tells apart by the body it reads.</summary>
         Ended,
 
         /// <summary>A held request ended before <see cref="Release"/>: aborted, or its write failed.</summary>
@@ -222,8 +222,9 @@ public sealed class HoldingUpstream : IAsyncDisposable
         }
         catch (Exception e) when (e is OperationCanceledException or IOException)
         {
-            // An abort, or a write to a connection the proxy closed. Kept as an early end, which a
-            // test fails on while it still expects the request held (#738 Q11).
+            // An abort, or a write to a connection the proxy closed. Before Release it is an early
+            // end, which a test fails on while it still expects the request held (#738 Q11); after
+            // Release it is Ended, and the proof tells a cut body from a whole one by reading it.
             Record(released.Task.IsCompleted ? Kind.Ended : Kind.EndedEarly, connectionId, path);
         }
         finally

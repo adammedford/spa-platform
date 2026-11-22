@@ -41,8 +41,10 @@
 #
 #   tools/scripts/verify-teardown.sh [--cell NAME]
 #
-# Reads only. Run it as the operator's own session: the spa-platform profile, with
-# tools/aws-project.env sourced. It needs the AWS CLI and python3, and no Terraform state. It never
+# Reads only. Run it as the operator's own session, with credentials for the account the cell is in
+# and AWS_REGION set to the cell's Region. The cell is --cell, or else the entry value SPA_CELL
+# (cell-common.sh's header), and with neither it refuses. It needs the AWS CLI and python3, and no
+# Terraform state. It never
 # prints the account id: of a resource still standing it names the ARN with the account replaced.
 #
 # Exit status: 0 when no reader finds anything; 1 when one still does after the wait, or a read or a
@@ -58,7 +60,7 @@ PROGRAM="verify-teardown"
 # shellcheck source=tools/scripts/cell-common.sh
 . "$(dirname -- "$0")/cell-common.sh"
 
-CELL="${SPA_CELL:-poc}"
+CELL="${SPA_CELL:-}"
 # contracts/resource-tags.md: the platform tag, matched exactly.
 PLATFORM_TAG_KEY="Platform"
 PLATFORM_TAG_VALUE="spa-platform"
@@ -78,7 +80,8 @@ usage() {
   cat <<EOF
 
 Options
-  --cell NAME   The cell whose roles are checked by name. Default: \$SPA_CELL, else poc.
+  --cell NAME   The cell whose roles are checked by name. Default: \$SPA_CELL; with
+                neither, it refuses.
   -h, --help    This text.
 
 Environment
@@ -103,6 +106,7 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 
+[ -n "$CELL" ] || refuse "no cell: SPA_CELL is not set and no --cell was given. SPA_CELL is one of the cell's entry values, which have no default."
 # The cell's lexical form, as tools/scripts/certs.sh checks it.
 case "$CELL" in
   *[!a-z0-9-]* | "" | -* | *-) refuse "--cell must be lowercase letters, digits and inner hyphens: got '${CELL}'" ;;

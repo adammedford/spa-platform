@@ -156,10 +156,10 @@ public sealed partial class FragmentFixtureTests
     [Fact]
     public void The_shell_release_loads_the_reference_client_byte_for_byte()
     {
-        // The release is uploaded as its directory, so the shell carries a copy of fixtures/bff-client.js
+        // The release is uploaded as its directory, so the shell carries a copy of client/bff-client.js
         // at its root. Mutation: editing the client without copying it turns this red.
         Assert.Equal(
-            File.ReadAllBytes(FixtureFiles.Path("fixtures", "bff-client.js")),
+            File.ReadAllBytes(FixtureFiles.Path("client", "bff-client.js")),
             File.ReadAllBytes(Path.Combine(ShellRelease, "bff-client.js")));
         Assert.Contains("<script src=\"/bff-client.js\"></script>", File.ReadAllText(Path.Combine(ShellRelease, "index.html")), StringComparison.Ordinal);
     }

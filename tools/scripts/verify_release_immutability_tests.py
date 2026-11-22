@@ -43,6 +43,11 @@ session name or a credential. Its output goes into the landing merge's body in a
 logging a credential. The double's access-denied messages carry the caller's ARN, as S3's do for a
 same-account request, so a script that printed S3's message would fail here.
 
+The proof cell's entry file sets every case's entry values (#1348), so a change to it runs this
+companion.
+
+Checkout inputs: infra/envs/poc/cell.env infra/envs/poc/outputs-fields.json
+
 Run: python3 -I tools/scripts/verify_release_immutability_tests.py
 """
 
@@ -57,7 +62,16 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 SCRIPT = ROOT / "tools" / "scripts" / "verify-release-immutability.sh"
-PLATFORM_ROOT = ROOT / "infra" / "envs" / "poc" / "platform"
+# The proof cell's entry file (#1348): every case's environment carries its values, as an operator's
+# session that sourced it does, and the script reads a relative SPA_PLATFORM_ROOT from its checkout's
+# root, which is this one. A case that holds one unset leaves it out.
+CELL_ENV = ROOT / "infra" / "envs" / "poc" / "cell.env"
+ENTRY = {name.strip(): value.strip() for name, _, value in
+         (line.partition("=") for line in CELL_ENV.read_text().splitlines()
+          if line.strip() and not line.lstrip().startswith("#"))}
+# The two entry values this script reads, and no other.
+READS = ("SPA_PLATFORM_ROOT", "SPA_CELL")
+PLATFORM_ROOT = ROOT / ENTRY["SPA_PLATFORM_ROOT"]
 REGISTRY_SCHEMA = ROOT / "contracts" / "registry.schema.json"
 BASH = "/bin/bash"
 REQUIRE_BASH = "SCRIPT_TESTS_REQUIRE_BASH"
@@ -82,7 +96,8 @@ TEARDOWN_TOKEN = "canary-session-token/IQoJb3JpZ2luX2VjEOr0000+=="
 SECRETS = (ACCOUNT, SESSION, TEARDOWN_KEY, TEARDOWN_SECRET, TEARDOWN_TOKEN)
 
 # The real tools the script reads its answers with. Everything else it could look for is absent.
-TOOLS = ("awk", "cat", "dirname", "mktemp", "rm", "sed", "tr")
+# python3 runs cell_documents.py, which reads the platform root's outputs for its repositories.
+TOOLS = ("awk", "cat", "dirname", "mktemp", "rm", "sed", "tr", "python3")
 
 # The first clock reading each case's date double answers, and the next after it.
 CLOCK = ("20261019T031500Z", "20261019T031501Z")
@@ -561,11 +576,19 @@ def aws_double(argv: list[str], case: pathlib.Path) -> int:
 def terraform_double(argv: list[str], case: pathlib.Path) -> int:
     """`terraform -chdir=<platform root> output -no-color -raw <name>`, answered from the case's
     outputs as -raw prints a string: the value and no newline. A missing output fails as Terraform
-    fails, which is what a storage-only targeted apply leaves for an output it did not write."""
+    fails, which is what a storage-only targeted apply leaves for an output it did not write. And
+    `... output -no-color -json`, every output as Terraform's JSON form gives it, {name: {sensitive,
+    type, value}}. The root is the case's own, platform_root in its directory, when it names one."""
     outputs = json.loads((case / "terraform.json").read_text())
+    root_file = case / "platform-root"
+    root = root_file.read_text() if root_file.exists() else str(PLATFORM_ROOT)
     with open(case / "terraform-calls.jsonl", "a") as log:
         log.write(json.dumps(argv) + "\n")
-    if len(argv) != 5 or argv[:4] != [f"-chdir={PLATFORM_ROOT}", "output", "-no-color", "-raw"]:
+    if argv == [f"-chdir={root}", "output", "-no-color", "-json"]:
+        sys.stdout.write(json.dumps({name: {"sensitive": False, "type": "string", "value": value}
+                                     for name, value in outputs.items()}, indent=2) + "\n")
+        return 0
+    if len(argv) != 5 or argv[:4] != [f"-chdir={root}", "output", "-no-color", "-raw"]:
         sys.stderr.write(f"terraform double: unexpected call: {argv}\n")
         return 97
     name = argv[4]
@@ -652,9 +675,12 @@ class Case:
                 f"{shlex.quote(str(self.dir))} \"$@\"\n"))
         self.world = world if world is not None else default_world()
         self.save_world()
+        # The platform root's own: the gateway image by digest is in its repository and is not a
+        # repository URL, so it is not checked as one (#1348).
         default_outputs = {"bucket": BUCKET,
                            "ecr_gateway": f"{ACCOUNT}.dkr.ecr.{REGION}.amazonaws.com/{REPOSITORIES[0]}",
-                           "ecr_mock_api": f"{ACCOUNT}.dkr.ecr.{REGION}.amazonaws.com/{REPOSITORIES[1]}"}
+                           "ecr_mock_api": f"{ACCOUNT}.dkr.ecr.{REGION}.amazonaws.com/{REPOSITORIES[1]}",
+                           "gateway_image": f"{ACCOUNT}.dkr.ecr.{REGION}.amazonaws.com/{REPOSITORIES[0]}@sha256:{'a' * 64}"}
         (self.dir / "terraform.json").write_text(json.dumps(default_outputs if outputs is None else outputs))
         (self.dir / "clock.json").write_text(json.dumps(list(clock)))
 
@@ -671,7 +697,8 @@ class Case:
 
     def env(self, **extra: str) -> dict[str, str]:
         env = {"PATH": str(self.bin), "HOME": str(self.home), "LC_ALL": "C",
-               "AWS_PROFILE": "spa-platform", "AWS_REGION": REGION, "TMPDIR": str(self.dir)}
+               "AWS_PROFILE": "spa-platform", "AWS_REGION": REGION, "TMPDIR": str(self.dir),
+               **{name: ENTRY[name] for name in READS}}
         env.update(extra)
         return {name: value for name, value in env.items() if value is not None}
 
@@ -817,7 +844,8 @@ class ExpectedBucketTests(CompanionTestCase):
     def test_the_bucket_and_repositories_come_from_the_platform_roots_outputs(self):
         case = Case(self)
         case.run()
-        self.assertEqual({"bucket", "ecr_gateway", "ecr_mock_api"}, {call[-1] for call in case.terraform_calls()})
+        # The bucket by its name; the repositories by their values, from every output at once.
+        self.assertEqual({"bucket", "-json"}, {call[-1] for call in case.terraform_calls()})
         self.assertEqual({BUCKET}, {call["options"]["bucket"] for call in case.aws_calls() if "bucket" in call.get("options", {})})
         self.assertEqual(set(REPOSITORIES), {call["options"]["repository-names"] for call in case.aws_calls()
                                              if call.get("command") == "describe-repositories"})
@@ -1106,15 +1134,65 @@ class DidNotStartTests(CompanionTestCase):
         self.assertIn("Exit status: 0 when every case is as expected", result.stdout)
         self.assertEqual([], case.aws_calls())
 
+    def test_help_names_no_cell_and_no_profile(self):
+        # Nor with the entry values unset: --help reads none of them (#1348).
+        case = Case(self)
+        result = case.run("--help", env=case.env(**{name: None for name in READS}))
+        self.assertEqual(0, result.status, result.stderr)
+        self.assertNotRegex(result.stdout, r"\bpoc\b")
+        self.assertNotIn("the spa-platform profile", result.stdout)
+        self.assertNotIn("tools/aws-project.env", result.stdout)
+        for name in READS:
+            self.assertIn(name, result.stdout)
+
+    def test_each_entry_value_unset_is_refused_by_name_before_any_call(self):
+        for name in READS:
+            with self.subTest(name):
+                for value in (None, ""):
+                    case = Case(self)
+                    result = case.run(env=case.env(**{name: value}))
+                    self.assertDidNotStart(case, result, f"{name} is not set" if name != "SPA_CELL" else name)
+                    self.assertEqual([], case.aws_calls())
+                    self.assertEqual([], case.terraform_calls())
+
+    def test_with_no_cell_variable_and_no_cell_flag_it_refuses_naming_the_variable(self):
+        case = Case(self)
+        result = case.run(FLAG, env=case.env(SPA_CELL=None))
+        self.assertDidNotStart(case, result, "SPA_CELL is not set and no --cell was given")
+        self.assertEqual([], case.aws_calls())
+
+    def test_the_cell_flag_serves_with_no_cell_variable(self):
+        case = Case(self)
+        result = case.run(FLAG, "--cell", CELL, env=case.env(SPA_CELL=None))
+        self.assertEqual(0, result.status, result.stdout + result.stderr)
+        self.assertIn(TEARDOWN_ROLE, [call["options"].get("role-name") for call in case.aws_calls()
+                                      if call.get("command") == "get-role"])
+
+    def test_the_platform_root_is_the_entry_values_whether_absolute_or_relative(self):
+        for given, expected in ((ENTRY["SPA_PLATFORM_ROOT"], str(PLATFORM_ROOT)),
+                                ("/elsewhere/platform", "/elsewhere/platform")):
+            with self.subTest(given):
+                case = Case(self)
+                (case.dir / "platform-root").write_text(expected)
+                result = case.run(env=case.env(SPA_PLATFORM_ROOT=given))
+                self.assertEqual(0, result.status, result.stdout + result.stderr)
+                self.assertEqual({f"-chdir={expected}"}, {call[0] for call in case.terraform_calls()})
+
+    def test_no_python3_on_path(self):
+        case = Case(self, tools=tuple(tool for tool in TOOLS if tool != "python3"))
+        self.assertDidNotStart(case, case.run(), "python3 is not on PATH")
+
     def test_no_aws_cli_or_no_terraform_on_path(self):
         for missing, fragment in (("aws", "the AWS CLI is not on PATH"), ("terraform", "terraform is not on PATH")):
             with self.subTest(missing):
                 case = Case(self, doubles=tuple(name for name in DOUBLES if name != missing))
                 self.assertDidNotStart(case, case.run(), fragment)
 
-    def test_no_region_names_the_file_that_holds_it(self):
+    def test_no_region_says_to_set_the_cells_region(self):
         case = Case(self)
-        self.assertDidNotStart(case, case.run(env=case.env(AWS_REGION=None)), "tools/aws-project.env")
+        result = case.run(env=case.env(AWS_REGION=None))
+        self.assertDidNotStart(case, result, "set AWS_REGION to the cell's Region")
+        self.assertNotIn("tools/aws-project.env", result.stderr)
         self.assertEqual([], case.aws_calls())
 
     def test_the_default_region_serves_when_aws_region_is_unset(self):
@@ -1140,13 +1218,76 @@ class DidNotStartTests(CompanionTestCase):
         self.assertDidNotStart(case, result, "could not read the platform root's bucket output")
         self.assertEqual(["get-caller-identity"], [call["command"] for call in case.aws_calls()])
 
-    def test_missing_repository_outputs_leave_their_cases_not_run_and_p04_still_runs(self):
+    def test_a_root_that_outputs_no_repository_fails_a_case_not_run_and_p04_still_runs(self):
         case = Case(self, outputs={"bucket": BUCKET})
         result = case.run()
         self.assertEqual(1, result.status, result.stdout)
         self.assertCases(result, P04_CASES + READ_BACKS[:6])
-        not_run = [line for status, line in result.cases() if "not run, because the platform root has no" in line]
-        self.assertEqual(2, len(not_run), result.stdout)
+        not_run = [line for status, line in result.cases()
+                   if status == "FAIL" and "not run, because the platform root outputs no repository URL" in line]
+        self.assertEqual(1, len(not_run), result.stdout)
+        self.assertEqual([], [call for call in case.aws_calls() if call.get("command") == "describe-repositories"])
+
+
+class EveryRepositoryTests(CompanionTestCase):
+    """#1348: the repositories are every output of the platform root whose value is a repository URL
+    in the account's registry, <account>.dkr.ecr.<region>.amazonaws.com/<name>, recognised by the
+    value, never by an output's name."""
+
+    def described(self, case: Case) -> list[str]:
+        return [call["options"]["repository-names"] for call in case.aws_calls()
+                if call.get("command") == "describe-repositories"]
+
+    def test_a_third_output_naming_a_repository_has_that_repository_checked(self):
+        world = default_world()
+        world["repositories"]["spa-poc/edge-proxy"] = "IMMUTABLE"
+        outputs = {"bucket": BUCKET,
+                   "ecr_gateway": f"{ACCOUNT}.dkr.ecr.{REGION}.amazonaws.com/{REPOSITORIES[0]}",
+                   "ecr_mock_api": f"{ACCOUNT}.dkr.ecr.{REGION}.amazonaws.com/{REPOSITORIES[1]}",
+                   # Named after the other two, so that its case comes last: outputs are read by name.
+                   "ecr_proxy": f"{ACCOUNT}.dkr.ecr.{REGION}.amazonaws.com/spa-poc/edge-proxy"}
+        case = Case(self, world=world, outputs=outputs)
+        result = case.run()
+        self.assertEqual(0, result.status, result.stdout + result.stderr)
+        self.assertEqual(sorted([*REPOSITORIES, "spa-poc/edge-proxy"]), sorted(self.described(case)))
+        self.assertCases(result, P04_CASES + READ_BACKS + (("spa-poc/edge-proxy", "IMMUTABLE"),))
+
+    def test_a_third_repository_with_mutable_tags_fails_its_case(self):
+        world = default_world()
+        world["repositories"]["spa-poc/edge-proxy"] = "MUTABLE"
+        outputs = {"bucket": BUCKET, "edge": f"{ACCOUNT}.dkr.ecr.{REGION}.amazonaws.com/spa-poc/edge-proxy"}
+        case = Case(self, world=world, outputs=outputs)
+        result = case.run()
+        self.assertEqual(1, result.status, result.stdout)
+        self.assertCases(result, P04_CASES + READ_BACKS[:6] + (("spa-poc/edge-proxy", "IMMUTABLE"),),
+                         failing=("spa-poc/edge-proxy",))
+
+    def test_no_output_is_read_by_the_reference_modules_names(self):
+        # Neither repository output under its own name: the two are still checked, by their values.
+        outputs = {"bucket": BUCKET,
+                   "first": f"{ACCOUNT}.dkr.ecr.{REGION}.amazonaws.com/{REPOSITORIES[0]}",
+                   "second": f"{ACCOUNT}.dkr.ecr.{REGION}.amazonaws.com/{REPOSITORIES[1]}"}
+        case = Case(self, outputs=outputs)
+        result = case.run()
+        self.assertEqual(0, result.status, result.stdout + result.stderr)
+        self.assertEqual(sorted(REPOSITORIES), sorted(self.described(case)))
+        self.assertNotIn("ecr_mock_api", SCRIPT.read_text())
+
+    def test_a_value_that_is_no_repository_url_of_this_registry_is_not_checked(self):
+        registry = f"{ACCOUNT}.dkr.ecr.{REGION}.amazonaws.com"
+        outputs = {"bucket": BUCKET,
+                   "ecr_gateway": f"{registry}/{REPOSITORIES[0]}",
+                   # An image by digest and by tag in the registry, a repository of another account,
+                   # one in another Region, and a URL with a scheme: none is a repository URL here.
+                   "by_digest": f"{registry}/{REPOSITORIES[1]}@sha256:{'b' * 64}",
+                   "by_tag": f"{registry}/{REPOSITORIES[1]}:stable",
+                   "other_account": f"444455556666.dkr.ecr.{REGION}.amazonaws.com/{REPOSITORIES[1]}",
+                   "other_region": f"{ACCOUNT}.dkr.ecr.eu-west-1.amazonaws.com/{REPOSITORIES[1]}",
+                   "with_scheme": f"https://{registry}/{REPOSITORIES[1]}"}
+        case = Case(self, outputs=outputs)
+        result = case.run()
+        self.assertEqual([REPOSITORIES[0]], self.described(case))
+        self.assertEqual(0, result.status, result.stdout + result.stderr)
 
 
 class NothingSecretIsPrintedTests(CompanionTestCase):
