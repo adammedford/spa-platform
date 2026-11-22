@@ -111,6 +111,17 @@
 #             identity and freshness, the frozen-contract restrictions and the edit authority to the
 #             lane, so an `accept as drafted` whose draft was edited after the decision passes here,
 #             and so does #562, which needs foreground delivery (#663).
+#   moves     Each ticket the shape line read whose `**Moves:**` line declares `old path -> new path`
+#             pairs (docs/agents/tracker-policy.md, rule 5): each old path is searched for, as a
+#             fixed string, in origin/main's tree with `git grep`, and a hit in a file outside the
+#             ticket's Touches paths, read by origin/main's ticket_shape.touches(), makes the ticket
+#             a skip candidate, named with each such file and line. A Touches path names a file, or
+#             a directory with or without its trailing slash, holding every file under it. Such a
+#             file is one the move breaks and the lane may not write: #1349's move of
+#             tools/scripts/platform-tfvars.sh broke citations in tools/wiz_prelude_tests.py its
+#             table missed, found mid-lane, and the chain behind it was lost for the night (#1471).
+#             A Moves line not read whole as such pairs is a skip candidate too, so a path it could
+#             not read is never passed. No line, or `none`, moves nothing.
 #   unblocks  The five open blockers with the most downstream tickets, each counted once however
 #             many paths reach it, transitively over the forecast's known blockedBy edges in
 #             collect's answer, not over every issue in the repository, so no GraphQL walk is made;
@@ -119,17 +130,17 @@
 #             `gh issue view <n> --json labels`. It is informational and adds no skip candidate
 #             (#663).
 #
-# Each of adr, decision and unblocks passes when it judged everything and fails only when it could
-# not judge: the forecast failed, origin/main's decision_citation.py or ticket_shape.py could not be
-# loaded, gh could not read a ticket, its comments or a blocker's labels, or judge() raised
-# Unreadable. A candidate is never a failure, and a pass means the screen completed its stated
+# Each of adr, decision, moves and unblocks passes when it judged everything and fails only when it
+# could not judge: the forecast failed, origin/main's decision_citation.py or ticket_shape.py could
+# not be loaded, gh could not read a ticket, its comments or a blocker's labels, judge() raised
+# Unreadable, or git grep could not search origin/main. A candidate is never a failure, and a pass means the screen completed its stated
 # checks, not that it authorised implementation (#663).
 #
 # A line is `pass: <name>: <evidence>` or `fail: <name>: <evidence>`. Every line runs whatever the
 # ones before it said, so one run shows everything that blocks the launch. Then comes one verdict
 # line, `overnight_preflight: pass: ...` or `overnight_preflight: fail: ...`, and last the Workflow
 # `args` JSON for the date: repo, date, wt, maxParallel and skip (the skip candidates of the
-# demoted, shape, adr and decision lines, then --skip's ids, each once). maxParallel is
+# demoted, shape, adr, decision and moves lines, then --skip's ids, each once). maxParallel is
 # min(2 x lanes, 7), lanes the number of owners with ready-for-agent tickets, at least 1, and is
 # left out when the forecast failed, so the workflow's default applies (#663). It is a launch
 # recommendation and a heuristic, which the verdict line says too, and no measured optimum: slots
@@ -781,6 +792,107 @@ for name, (verdict, evidence) in (("adr", adr), ("decision", decision)):
   fi
 fi
 
+# --- moves ------------------------------------------------------------------------------------------
+# Each ticket the shape line read, its **Moves:** old paths searched for in origin/main's tree, which
+# the lane's branch forks from; a hit outside the ticket's Touches paths, read by origin/main's
+# ticket_shape.touches(), is a file the move breaks and the lane may not write (#1471).
+: > "$scratch/moves-candidates"
+if ! $forecast_ok; then
+  row fail moves "the forecast failed, so no ticket's Moves line was read"
+elif [ ! -f "$copy/tools/ticket_shape.py" ]; then
+  row fail moves "origin/main has no tools/ticket_shape.py, so no ticket's Touches line was read"
+else
+  python3 -I -c '
+import fnmatch, importlib.util, json, pathlib, re, subprocess, sys
+copy, repo, collect, issues, unread_issues, out = sys.argv[1:]
+try:
+    spec = importlib.util.spec_from_file_location("ticket_shape", pathlib.Path(copy, "tools", "ticket_shape.py"))
+    shape = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(shape)
+    parsed = shape.ownership().rules()
+except Exception:
+    sys.exit(3)
+
+MOVES = re.compile(r"(?m)^\*\*Moves:\*\*[ \t]*(?P<value>[^\n]*)$")
+ARROW = re.compile(r"->|→")
+PAIR = re.compile(r"([^\s,;]+)\s*(?:->|→)\s*([^\s,;]+)")
+REF = "refs/remotes/origin/main"
+
+def bare(path):
+    return path.strip().lstrip("/")
+
+def inside(hit, paths):
+    # A Touches path names a file, a directory with or without its slash, or a glob.
+    for path in map(bare, paths):
+        if hit == path or hit.startswith(path.rstrip("/") + "/") or ("*" in path and fnmatch.fnmatchcase(hit, path)):
+            return True
+    return False
+
+tickets = json.load(open(collect))["tickets"]
+ids = {t["issue"]: t["id"] for t in tickets}
+judged = [int(t["issue"]) for t in tickets if t["status"] in ("ready-for-agent", "needs-triage")]
+unread = [int(n) for n in open(unread_issues).read().split()]
+problems = [f"gh could not read #{n}, so its Moves line is unjudged" for n in unread]
+candidates = []
+for n in judged:
+    if n in unread:
+        continue
+    body = json.loads(pathlib.Path(issues, f"{n}.json").read_text()).get("body") or ""
+    line = MOVES.search(body)
+    if not line:
+        continue
+    value = line.group("value").replace("`", "").strip()
+    if re.fullmatch(r"(?i)none\b.*", value):
+        continue
+    pairs = PAIR.findall(value)
+    if not pairs or len(pairs) != len(ARROW.findall(value)):
+        # A line read in part would pass the paths it could not read.
+        candidates.append((n, f"its Moves line is not read as old path -> new path pairs: {value}"))
+        continue
+    touches = shape.touches(body, parsed) or []
+    cited = []
+    for old, _ in pairs:
+        found = subprocess.run(["git", "--no-optional-locks", "-C", repo, "grep", "-n", "-z", "-F", "-I",
+                                "-e", bare(old), REF], capture_output=True, text=True)
+        if found.returncode > 1:
+            problems.append(f"git grep could not search origin/main for #{n}\x27s {old}, so it is unjudged")
+            continue
+        hits = []
+        for record in found.stdout.splitlines():
+            path, number = record.split("\0")[:2]
+            path = path[len(REF) + 1:]
+            if not inside(path, touches):
+                hits.append(f"{path}:{number}")
+        if hits:
+            cited.append(f"{bare(old)} is cited at " + ", ".join(hits))
+    if cited:
+        candidates.append((n, "; ".join(cited)))
+found = ("these move a path cited outside their Touches and are skip candidates: "
+         + "; ".join(f"{ids[n]} (#{n}: {what})" for n, what in candidates)) if candidates \
+    else "none moves a path cited outside its Touches"
+if problems:
+    print(f"fail\t{len(judged)} ready-for-agent and needs-triage tickets; " + "; ".join(problems)
+          + f"; of the rest, {found}")
+else:
+    print(f"pass\t{len(judged)} ready-for-agent and needs-triage tickets read; {found}")
+pathlib.Path(out).write_text("".join(f"{ids[n]}\t#{n}\n" for n, _ in candidates))
+' "$copy" "$repo" "$scratch/collect.json" "$scratch/issues" "$scratch/unread-issues" \
+    "$scratch/moves-candidates" > "$scratch/moves-row" 2> "$scratch/moves.err"
+  status=$?
+  if [ "$status" -eq 0 ] && IFS=$'\t' read -r verdict evidence < "$scratch/moves-row"; then
+    row "$verdict" moves "$evidence"
+  else
+    : > "$scratch/moves-candidates"
+    if [ "$status" -eq 3 ]; then
+      row fail moves "origin/main's tools/ticket_shape.py could not be loaded, so no ticket's Touches line was read"
+    else
+      last=""
+      while IFS= read -r line; do [ -n "$line" ] && last="$line"; done < "$scratch/moves.err"
+      row fail moves "the screen stopped before it judged every ticket (${last:-no output}), so none was judged"
+    fi
+  fi
+fi
+
 # --- unblocks ---------------------------------------------------------------------------------------
 # Informational: the open blockers holding the most work, counted over collect's blockedBy edges, so
 # no GraphQL walk over the repository's issues is made (#663).
@@ -869,11 +981,11 @@ else
 fi
 python3 -I -c '
 import json, os, sys
-repo, date, wt, collect, candidates, shaped, adr, decision, held, given, ok, parallel, fixture = sys.argv[1:]
+repo, date, wt, collect, candidates, shaped, adr, decision, moves, held, given, ok, parallel, fixture = sys.argv[1:]
 args = {"repo": repo, "date": date, "wt": wt}
 if ok == "true" and parallel:
     args["maxParallel"] = int(parallel)
-named = [line.split("\t")[0] for path in (candidates, shaped, adr, decision) for line in open(path) if line.strip()]
+named = [line.split("\t")[0] for path in (candidates, shaped, adr, decision, moves) for line in open(path) if line.strip()]
 given = [tid for tid in given.split(",") if tid]
 args["skip"] = list(dict.fromkeys(named + given))
 print(json.dumps(args))
@@ -927,8 +1039,8 @@ if fixture:
           "the forecast run reads it",
           file=sys.stderr)
 ' "$repo" "$date" "$wt" "$scratch/collect.json" "$scratch/candidates" "$scratch/shape-candidates" \
-  "$scratch/adr-candidates" "$scratch/decision-candidates" "$scratch/held" "$given_skip" "$forecast_ok" \
-  "$parallel" "$fixture" ||
+  "$scratch/adr-candidates" "$scratch/decision-candidates" "$scratch/moves-candidates" "$scratch/held" \
+  "$given_skip" "$forecast_ok" "$parallel" "$fixture" ||
   { echo "overnight_preflight: fail: the arguments could not be written"; exit 1; }
 
 [ -z "$failed" ]
