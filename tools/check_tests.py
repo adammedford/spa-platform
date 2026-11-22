@@ -100,6 +100,7 @@ PORT = "5299"
 # A double: records its name and arguments as one call in the shared sequence, then fails when the
 # case named this call, and otherwise prints a line (dotnet, terraform, smoke, image) or nothing
 # (python3). The image check takes no arguments, so a case names its call as `*`, which fails any.
+# A case names several calls by joining them with `|`, as two red companions need (#1472).
 # A Terraform double answers `version` as Terraform does, first line `Terraform v<version>`, with the
 # version the case gave it (#69).
 DOUBLE = """#!/bin/bash
@@ -117,9 +118,16 @@ if [ -n "$reports" ] && [ "$*" = version ]; then
 fi
 if [ "$fails_on" = "*" ]; then printf '%s double failed\\n' "$name" >&2; exit 1; fi
 if [ -n "$fails_on" ]; then
-  case " $* " in
-    *" $fails_on "*) printf '%s double failed: %s\\n' "$name" "$*" >&2; exit 1 ;;
-  esac
+  args="$*"
+  set -f
+  IFS='|'
+  for pattern in $fails_on; do
+    case " $args " in
+      *" $pattern "*) printf '%s double failed: %s\\n' "$name" "$args" >&2; exit 1 ;;
+    esac
+  done
+  unset IFS
+  set +f
 fi
 if [ -n "$loud" ]; then printf '%s double ran: %s\\n' "$name" "$*"; fi
 exit 0
@@ -1392,8 +1400,29 @@ class CompanionTests(CheckTestCase):
         self.assertEqual(1, result.status, result.stdout)
         self.assertEqual("check: fail: the test companion tools/other_tests.py failed.",
                          result.last_line(result.stderr))
-        # Stopped at the first failure, in the companions' order.
-        self.assertEqual(FULL_PYTHON_CHECKS + [companion("tools/other_tests.py")], case.calls())
+        # Said where it failed, under its own lines, and the companion after it still runs (#1472).
+        self.assertEqual(["python3 double failed: -I tools/other_tests.py",
+                          "check: the test companion tools/other_tests.py failed."],
+                         result.stderr.splitlines()[:2])
+        self.assertEqual(FULL_PYTHON_CHECKS + [companion("tools/other_tests.py"),
+                                               companion("tools/thing_tests.py")], case.calls())
+        self.assertIn("check: the test companion tools/thing_tests.py:", result.stdout.splitlines())
+
+    def test_two_companions_that_fail_are_each_said_and_the_verdict_names_both(self):
+        # #1472: the #1349 reviewer ran by hand the two companions a red one had stopped.
+        case = Case(self, extra=SCRIPTS, change=("tools/thing.sh", "tools/other.py", ".github/gizmo.py"),
+                    fails_on={"python3": ".github/gizmo_tests.py|tools/thing_tests.py"})
+        result = self.full(case)
+        self.assertEqual(1, result.status, result.stdout)
+        self.assertEqual(FULL_PYTHON_CHECKS + [companion(".github/gizmo_tests.py"),
+                                               companion("tools/other_tests.py"),
+                                               companion("tools/thing_tests.py")], case.calls())
+        lines = result.stderr.splitlines()
+        self.assertIn("check: the test companion .github/gizmo_tests.py failed.", lines)
+        self.assertIn("check: the test companion tools/thing_tests.py failed.", lines)
+        self.assertNotIn("check: the test companion tools/other_tests.py failed.", lines)
+        self.assertEqual("check: fail: the test companions .github/gizmo_tests.py, tools/thing_tests.py failed.",
+                         result.last_line(result.stderr))
 
     def test_several_touched_scripts_run_each_companion_once(self):
         case = Case(self, extra=SCRIPTS,
@@ -1875,10 +1904,43 @@ class WorkflowCompanionTests(CheckTestCase):
         result = self.full(case)
         self.assertEqual(1, result.status, result.stdout)
         self.assertEqual(["node double failed: .claude/workflows/alpha_tests.mjs",
+                          "check: the workflow test companion .claude/workflows/alpha_tests.mjs failed.",
                           "check: fail: the workflow test companion .claude/workflows/alpha_tests.mjs failed."],
-                         result.stderr.splitlines()[-2:])
-        # Stopped at the first failure.
-        self.assertEqual([["node", ".claude/workflows/alpha_tests.mjs"]], node_calls(case))
+                         result.stderr.splitlines()[-3:])
+        # The companion after it still runs (#1472).
+        self.assertEqual([["node", path] for path in WORKFLOW_COMPANIONS], node_calls(case))
+
+    def test_a_red_test_companion_runs_the_workflow_companions_and_the_verdict_names_each_red(self):
+        # #1472: a red companion in tools/ no longer stops the workflow companions after it.
+        case = Case(self, extra={**SCRIPTS, **WORKFLOW_SCRIPTS},
+                    change=("tools/thing.sh", ".claude/workflows/alpha.js"),
+                    fails_on={"python3": "tools/thing_tests.py",
+                              "node": ".claude/workflows/alpha_tests.mjs|.claude/workflows/two-words_tests.mjs"})
+        result = self.full(case)
+        self.assertEqual(1, result.status, result.stdout)
+        self.assertEqual([["node", path] for path in WORKFLOW_COMPANIONS], node_calls(case))
+        self.assertEqual("check: fail: the test companion tools/thing_tests.py and the workflow test companions "
+                         + ", ".join(WORKFLOW_COMPANIONS) + " failed.", result.last_line(result.stderr))
+
+    def test_a_check_that_fails_after_a_red_companion_keeps_its_reason_and_names_the_red_one(self):
+        scripts = {**SCRIPTS, **WORKFLOW_SCRIPTS}
+        scripts[".claude/workflows/lonely.js"] = "// a workflow script that lost its companion\n"
+        case = Case(self, extra=scripts, change=("tools/thing.sh", ".claude/workflows/alpha.js"),
+                    fails_on={"python3": "tools/thing_tests.py"})
+        result = self.full(case)
+        self.assertEqual(1, result.status, result.stdout)
+        self.assertEqual("check: fail: the workflow script .claude/workflows/lonely.js has no test companion; "
+                         "add .claude/workflows/lonely_tests.mjs beside it. Before it, the test companion "
+                         "tools/thing_tests.py failed.", result.last_line(result.stderr))
+
+    def test_no_node_after_a_red_companion_keeps_its_reason_and_names_the_red_one(self):
+        case = Case(self, extra={**SCRIPTS, **WORKFLOW_SCRIPTS}, missing=("node",),
+                    change=("tools/thing.sh", ".claude/workflows/alpha.js"),
+                    fails_on={"python3": "tools/thing_tests.py"})
+        result = self.full(case)
+        self.assertEqual(1, result.status, result.stdout)
+        self.assertEqual("check: fail: node is not on PATH. Before it, the test companion tools/thing_tests.py "
+                         "failed.", result.last_line(result.stderr))
 
     def test_a_script_with_no_companion_fails_naming_the_script(self):
         scripts = dict(WORKFLOW_SCRIPTS)
@@ -2054,6 +2116,16 @@ class ElapsedTests(CheckTestCase):
         self.assertEqual(0, result.status, result.stderr)
         self.assertEqual(ELAPSED_STEPS + [REACH, "the test companion .github/gizmo_tests.py",
                                           "the test companion tools/thing_tests.py", "total"], self.steps(result))
+
+    def test_a_red_companion_is_timed_and_the_total_still_precedes_the_verdict(self):
+        # #1472: the check runs on past a red companion, so its time is its own, not the next one's.
+        case = Case(self, extra=SCRIPTS, change=("tools/thing.sh", ".github/gizmo.py"),
+                    fails_on={"python3": ".github/gizmo_tests.py"})
+        result = case.run("--full", "--port", PORT, merged=True)
+        self.assertEqual(1, result.status)
+        self.assertEqual(ELAPSED_STEPS + [REACH, "the test companion .github/gizmo_tests.py",
+                                          "the test companion tools/thing_tests.py", "total"], self.steps(result))
+        self.assertTotalBeforeVerdict(result, "check", "check: fail: the test companion .github/gizmo_tests.py failed.")
 
     def test_each_workflow_companion_is_timed_on_its_own(self):
         case = Case(self, extra=WORKFLOW_SCRIPTS, change=".claude/workflows/alpha.js")
