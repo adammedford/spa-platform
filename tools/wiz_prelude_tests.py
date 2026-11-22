@@ -92,7 +92,7 @@ key there and still lists a continuity key set beside them. It holds N step 3 to
 forms, step 4's count to the bastion's service, D0 and D2 to the bastion's two keys, and C1 to the
 bastion's task as the hop.
 
-Checkout inputs: .claude/skills/wiz/*.md .gitignore infra/envs/poc/platform/terraform.tfvars.example tools/scripts/platform-tfvars.sh infra/modules/idp-cognito/main.tf tests/e2e/Program.cs tests/e2e/Deployed/LoginKindsTests.cs tests/e2e/Stack/StackSwitch.cs tests/e2e/Stack/RollingDeployLoop.cs tests/e2e/Stack/ContinuityObserver.cs tests/e2e/Stack/DeployedStack.cs tools/wiz_d6.sh tools/wiz_row_post.py tools/wiz_redact.py tests/e2e/SittingBrowser/Observations.cs tests/e2e/SittingBrowser/ObservationLine.cs tests/e2e/SittingBrowser/SittingBrowser.cs tests/e2e/SittingBrowser/SittingCommand.cs
+Checkout inputs: .claude/skills/wiz/*.md .gitignore infra/envs/poc/platform/terraform.tfvars.example tools/scripts/poc/platform-tfvars.sh infra/modules/idp-cognito/main.tf tests/e2e/Program.cs tests/e2e/Deployed/LoginKindsTests.cs tests/e2e/Stack/StackSwitch.cs tests/e2e/Stack/RollingDeployLoop.cs tests/e2e/Stack/ContinuityObserver.cs tests/e2e/Stack/DeployedStack.cs tools/wiz_d6.sh tools/wiz_row_post.py tools/wiz_redact.py tests/e2e/SittingBrowser/Observations.cs tests/e2e/SittingBrowser/ObservationLine.cs tests/e2e/SittingBrowser/SittingBrowser.cs tests/e2e/SittingBrowser/SittingCommand.cs
 """
 from __future__ import annotations
 
@@ -1053,7 +1053,7 @@ class SkillAdmitsTheBastionToSittingD(unittest.TestCase):
     """
 
     PLATFORM = ROOT / "infra" / "envs" / "poc" / "platform"
-    TFVARS_SCRIPT = ROOT / "tools" / "scripts" / "platform-tfvars.sh"
+    TFVARS_SCRIPT = ROOT / "tools" / "scripts" / "poc" / "platform-tfvars.sh"
 
     @staticmethod
     def flat(text: str) -> str:
@@ -1142,7 +1142,7 @@ class SkillAdmitsTheBastionToSittingD(unittest.TestCase):
         return self.flat(step.group(1))
 
     def test_n_step_3_runs_platform_tfvars_with_the_bastion_in_both_forms(self) -> None:
-        runs = re.findall(r"`shown tools/scripts/platform-tfvars\.sh([^`]*)`", self.n_step_3())
+        runs = re.findall(r"`shown tools/scripts/poc/platform-tfvars\.sh([^`]*)`", self.n_step_3())
         self.assertEqual(len(runs), 2, f"N step 3 should run the script in two forms: {runs}")
         self.assertEqual(runs[0], " --bastion")
         self.assertEqual(runs[1], " --bastion --sample-digest sha256:<64 hex>")
