@@ -12,17 +12,23 @@ C1, C2, C3 and T where it names them.
 shown terraform -chdir=infra/envs/poc/platform plan -input=false -lock=false -detailed-exitcode   # 0: no drift with the current images
 ```
 
+First the proof cell's mock API, which `deploy.sh` no longer builds (#1349): when the platform
+root has no `mock-api.auto.tfvars`, or `fixtures/MockApi` has changed since it was written, run
+`shown tools/scripts/poc/mock-api.sh` and show its output. It builds and pushes the mock API for
+ARM64 and writes its digest as `mock_api_image` to that file, and applies nothing, so the one apply
+`deploy.sh` makes still moves both images.
+
 Then ask for the confirm on launch of `deploy.sh`, naming the shape it will apply: `1 to add, 1 to
-change, 1 to destroy` from a standing gateway, `1 to add, 2 to change, 1 to destroy` from the
-sample image, the one replacement being the task definition as its new revision. Run it in the
-background (it builds both images for ARM64, pushes by digest, applies, waits for steady state and
+change, 1 to destroy` from a standing gateway, `1 to add, 2 to change, 1 to destroy` from the sample
+image, the one replacement being the task definition as its new revision. Run it in the background
+(it builds the gateway image for ARM64, pushes it by digest, applies, waits for steady state and
 asserts the running digest, then waits for each new task to report the registry revision on
 `/readyz`), and start no tunnel while it runs: its readiness wait opens a tunnel of its own and
 closes it when the wait ends (#1008). Once `deploy.sh` prints its pass line, start `tunnel.sh` in
 the background, for `verify-tunnel.sh /healthz` and, at the screen, the human's browser. Its hop is
 the bastion's task (#1168), never a gateway task, and the deployment replaces no bastion task: a
-`tunnel.sh` still running from before goes through the same task and is left running, not started
-a second time, since a second one refuses the local port the first holds:
+`tunnel.sh` still running from before goes through the same task and is left running, not started a
+second time, since a second one refuses the local port the first holds:
 
 ```bash
 shown tools/scripts/deploy.sh                    # in the background; no tunnel while it runs
@@ -355,8 +361,8 @@ rm -rf "$P"
 A declined confirm removes the directory too. A plan rule 2 stops on keeps it until the human has
 read the file in the ssh login the route names, and then removes it.
 
-1. `shown tools/scripts/certs.sh status`, then `shown tools/scripts/certs.sh import` when ACM holds
-   no `*.spa-poc.test`.
+1. `shown tools/scripts/poc/certs.sh status`, then `shown tools/scripts/poc/certs.sh import` when
+   ACM holds no `*.spa-poc.test`.
 2. The identity root, then the apps root: `shown guarded_init <root>`, the prelude's function,
    which runs the root's `init` under a guard. It compares the bucket and key the root is
    configured with (the bucket from `backend.hcl`; the key from `backend.hcl` when it sets one,
@@ -373,19 +379,20 @@ read the file in the ssh login the route names, and then removes it.
    shape before it goes.
 3. `infra/envs/poc/platform/terraform.tfvars` (git-ignored: on a fresh checkout copy
    `terraform.tfvars.example` to it first): back it up first (`cp -p` to `terraform.tfvars.bak`),
-   then `shown tools/scripts/platform-tfvars.sh --bastion` (#470, #1397), which rewrites `issuers`
-   from the identity root's outputs and pins `gateway_image` to the sample image by its current
-   digest, with `health_check_path = "/"` and `gateway_writable_root = true` (#1380: the sample
-   image cannot start on the gateway's read-only root), sets `bastion = true` and pins
+   then `shown tools/scripts/poc/platform-tfvars.sh --bastion` (#470, #1397), which rewrites
+   `issuers` from the identity root's outputs and pins `gateway_image` to the sample image by its
+   current digest, with `health_check_path = "/"` and `gateway_writable_root = true` (#1380: the
+   sample image cannot start on the gateway's read-only root), sets `bastion = true` and pins
    `bastion_image` by the same digest, and leaves the file as it was unless every value is well
-   formed. The bastion is the
-   tunnel's hop (#1168): without it `deploy.sh` and `tunnel.sh` refuse the root, so the root's first
-   apply declares it, in sitting C and in D0 alike, and it runs, and is billed, until T tears the
-   cell down. Show its output: it names which keys changed and prints no value but the digest. When
-   it exits 1 on the digest lookup (ECR Public can answer 429, and an empty digest was written once
-   by hand), run it again as `shown tools/scripts/platform-tfvars.sh --bastion --sample-digest
-   sha256:<64 hex>` with the digest the human supplies. `images.auto.tfvars` must be absent (`teardown.sh` removes it; a
-   plain `terraform destroy` leaves it, and it overrides the sample image).
+   formed. The bastion is the tunnel's hop (#1168): without it `deploy.sh` and `tunnel.sh` refuse
+   the root, so the root's first apply declares it, in sitting C and in D0 alike, and it runs, and
+   is billed, until T tears the cell down. Show its output: it names which keys changed and prints
+   no value but the digest. When it exits 1 on the digest lookup (ECR Public can answer 429, and an
+   empty digest was written once by hand), run it again as
+   `shown tools/scripts/poc/platform-tfvars.sh --bastion --sample-digest sha256:<64 hex>` with the
+   digest the human supplies. `images.auto.tfvars` and the mock API's `mock-api.auto.tfvars` must be absent
+   (`teardown.sh` removes both, with every `*.auto.tfvars` in the root; a plain `terraform destroy`
+   leaves both, and they override the sample image and the mock API's digest).
 4. The platform root on the sample image, by N's saved plan, its plan read for the certificate
    found, no per-app resource, and P-01's counts (one load balancer, one listener, one target group,
    one gateway service and, under `bastion`, the bastion's one, one bucket; no NAT gateway, database
@@ -393,10 +400,13 @@ read the file in the ssh login the route names, and then removes it.
    services-stable`. `infra/envs/poc/outputs.json` is now stale, or absent: a `tunnel.sh` run
    before step 5 answers "no such host", because it reads the cell's names from that file, and
    `seed.sh` is what rewrites it.
-5. `shown tools/scripts/seed.sh`, with #236's Q107 capture in its order: the commit; the names only
-   of the `AWS_*` variables set; the count of `[spa-platform]` sections in `~/.aws/credentials`;
-   seed's whole output to its pass line; `exit=`. Post it on #236 and cite it from #242 (Q103).
-6. `deploy.sh` as C1 runs it, from the sample image, with no tunnel while it runs; after its pass
+5. `shown tools/scripts/poc/seed.sh`, with #236's Q107 capture in its order: the commit; the names
+   only of the `AWS_*` variables set; the count of `[spa-platform]` sections in
+   `~/.aws/credentials`; seed's whole output to its pass line; `exit=`. Post it on #236 and cite it
+   from #242 (Q103).
+6. `shown tools/scripts/poc/mock-api.sh`, as C1 runs it: it builds and pushes the mock API and
+   writes its digest to `mock-api.auto.tfvars` in the platform root, which step 7's apply loads.
+7. `deploy.sh` as C1 runs it, from the sample image, with no tunnel while it runs; after its pass
    line, `tunnel.sh` in the background, then `verify-tunnel.sh /healthz`. Post both on #242: this
    is the second deployment #63's Q79 asks for, and the suite is not run again.
 
@@ -407,7 +417,8 @@ human cuts the tag.
 
 **C5, keep the stack or destroy it.** Ask whether the stack stays up (about $30 a month) or is
 destroyed until Phase 2's deployed tier; `teardown.sh --yes` on confirm, never a plain `terraform
-destroy` of the platform root, which leaves `images.auto.tfvars` to override the next sample-image
-apply and a stale `infra/envs/poc/outputs.json` on which `tunnel.sh` answers "no such host".
+destroy` of the platform root, which leaves `images.auto.tfvars` and `mock-api.auto.tfvars` to
+override the next sample-image apply and a stale `infra/envs/poc/outputs.json` on which `tunnel.sh`
+answers "no such host".
 
 End the sitting by printing what was posted where, what is held, and what the human still owes.

@@ -81,8 +81,8 @@ MUST_NOT_SEND = {
     "the mock API's host build output": ("fixtures/MockApi/obj/project.assets.json",),
     "a test project's host build output": ("tests/Gateway.IntegrationTests/bin/Debug/x.dll",
                                            "TestResults/run.trx"),
-    # tools/scripts/certs.sh writes to <repo>/.certs by default, and *.key and *.pem wherever --dir
-    # puts them.
+    # tools/scripts/poc/certs.sh writes to <repo>/.certs by default, and *.key and *.pem wherever
+    # --dir puts them.
     "the local certificate authority": (".certs/spa-poc-ca.key", ".certs/spa-poc-ca.pem",
                                         "infra/local/ca.key", "some/where/leaf.pem", "a.p12",
                                         "b/c.pfx", ".certs/spa-poc-ca.srl"),

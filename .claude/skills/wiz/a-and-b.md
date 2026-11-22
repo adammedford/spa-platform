@@ -133,7 +133,7 @@ if the login was done).
 
 ## Sitting B: the tunnel on the sample image, then the destroy
 
-**B0.** `tools/preflight.sh` (the Session Manager plugin row), `tools/scripts/certs.sh status`, and
+**B0.** `tools/preflight.sh` (the Session Manager plugin row), `tools/scripts/poc/certs.sh status`, and
 `grep spa-poc.test /etc/hosts`. Anything missing is the human's: `sudo` for the hosts file,
 `certs.sh trust` for the keychain.
 

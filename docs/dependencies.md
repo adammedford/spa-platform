@@ -228,15 +228,17 @@ either, and has a companion of its own, `tools/companion_runner_tests.py`, in bo
 `tools/scripts/tunnel.sh` and `tools/scripts/verify-tunnel.sh` have
 `tools/scripts/tunnel_tests.py` (#57), in both jobs: doubles for aws, session-manager-plugin and
 curl, and the real curl against two loopback listeners, so no case reaches AWS.
-`tools/scripts/seed.sh`, `deploy.sh`, `rollback.sh` and `teardown.sh` have
-`tools/scripts/seed_tests.py`, `deploy_tests.py`, `rollback_tests.py` and `teardown_tests.py` (#58),
-in both jobs, sharing the doubles in `tools/scripts/cell_doubles.py`: aws, terraform, docker and
-dotnet, so no case reaches AWS, Docker or NuGet. `tools/scripts/verify-release-immutability.sh` has
+`tools/scripts/deploy.sh`, `rollback.sh` and `teardown.sh` have `tools/scripts/deploy_tests.py`,
+`rollback_tests.py` and `teardown_tests.py` (#58), and the proof cell's `tools/scripts/poc/seed.sh`
+and `tools/scripts/poc/mock-api.sh` have `tools/scripts/poc/seed_tests.py` (#58) and
+`tools/scripts/poc/mock_api_tests.py`, all in both jobs, sharing the doubles in
+`tools/scripts/cell_doubles.py`: aws, terraform, docker and dotnet, so no case reaches AWS, Docker or
+NuGet. `tools/scripts/verify-release-immutability.sh` has
 `tools/scripts/verify_release_immutability_tests.py` (#122), in both jobs: doubles for aws,
 terraform and date, so no case reaches AWS.
 `tools/scripts/verify-teardown.sh` has `tools/scripts/verify_teardown_tests.py` (#308), in both
 jobs, against the shared doubles.
-`tools/scripts/certs.sh` has `tools/scripts/certs_tests.py` (#241), in both jobs: an aws double
+`tools/scripts/poc/certs.sh` has `tools/scripts/poc/certs_tests.py` (#241), in both jobs: an aws double
 and the real openssl, so no case reaches AWS.
 
 **The Python floor is not checked.** The checks and their companions stay 3.9-compatible because

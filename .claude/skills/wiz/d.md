@@ -60,12 +60,12 @@ rev-parse HEAD`).
 
 **D0, the fresh deploy and the live login (#348 Q22).** The root is absent (Stage 0). Fetch and
 fast-forward first (rule 8) and name the commit: D0 deploys the commit `main` is on, which is the
-one #348 Q34 tags, and its CI run must be green. Then N's steps 1 to 6 from the first root that is
+one #348 Q34 tags, and its CI run must be green. Then N's steps 1 to 7 from the first root that is
 absent, with `terraform.tfvars` in its Phase 1 shape: N step 3's rewrite, which
-`tools/scripts/platform-tfvars.sh --bastion` (#470, #1397) does, with `bastion = true` and
+`tools/scripts/poc/platform-tfvars.sh --bastion` (#470, #1397) does, with `bastion = true` and
 `bastion_image` beside the Phase 1 keys, and no G6 key. Stage 0's check admits the bastion's two keys for this:
 the bastion is the tunnel's hop (#1168), and without it `deploy.sh` and `tunnel.sh` refuse the root. N's posts for the identity and apps
-roots, seed and the deploy go where N sends them; D0's own post is the one below. Once N step 6's
+roots, seed and the deploy go where N sends them; D0's own post is the one below. Once N step 7's
 tunnel, started after `deploy.sh`'s pass line, is up and `verify-tunnel.sh /healthz` passes, the
 sitting browser starts, and D0's live login is its own. In D the human opens no browser; each
 `sitting_browser` call is shown and approved under rule 1 like any other, until #1028 says
