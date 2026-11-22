@@ -44,14 +44,19 @@ inside one, which TheSecrecyMatrix proves while checking that no string holds it
 alone proves nothing of a canary that never came in, so TheSecrecyMatrix asserts where each one's
 placeholder lands, and names each source and outcome no path connects.
 
+**The cases run side by side** (#1473): Concurrently, at the foot of this file, runs the loaded
+tests a few at a time with their fixtures' scopes kept, and reports in unittest's own form.
+
 Run: python3 -I tools/bench/fargate_tests.py
 """
 
 from __future__ import annotations
 
+import concurrent.futures
 import http.server
 import importlib.util
 import json
+import os
 import pathlib
 import re
 import shutil
@@ -98,6 +103,17 @@ BASTION_TARGET = f"ecs:{CLUSTER}_{task_id(BASTION_N)}_{task_id(BASTION_N)}-3333"
 AUTHORITY = None
 
 
+def python() -> list:
+    """The interpreter every case runs, the script and each double call alike: python3 -I, with the
+    bytecode of what it imports cached under the module's temporary directory (#1473). A case makes
+    up to about 270 calls to the doubles, each a fresh interpreter, and an interpreter whose standard
+    library ships without bytecode in a directory it cannot write, as the Xcode one does, compiles
+    some 47 modules from source on every start: most of the suite's time. -X pycache_prefix holds under -I,
+    which ignores PYTHONPYCACHEPREFIX, and changes where bytecode is kept, not what runs.
+    https://docs.python.org/3/using/cmdline.html#cmdoption-X"""
+    return [sys.executable, "-I", "-X", f"pycache_prefix={pathlib.Path(AUTHORITY) / 'pycache'}"]
+
+
 def setUpModule():
     """A test authority and a wildcard leaf for *.spa-poc.test, as certs.sh issues the real ones."""
     global AUTHORITY
@@ -130,10 +146,21 @@ def tearDownModule():
         shutil.rmtree(AUTHORITY, ignore_errors=True)
 
 
+HANDED_OUT = set()
+HANDED_OUT_LOCK = threading.Lock()
+
+
 def free_port() -> int:
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        return probe.getsockname()[1]
+    """A port nothing listens on, and one no other case of this run was given: cases run side by side
+    (Concurrently), and two scripts handed the same port would see each other's forward."""
+    with HANDED_OUT_LOCK:
+        while True:
+            with socket.socket() as probe:
+                probe.bind(("127.0.0.1", 0))
+                port = probe.getsockname()[1]
+            if port not in HANDED_OUT:
+                HANDED_OUT.add(port)
+                return port
 
 
 class Run:
@@ -181,7 +208,8 @@ def run_case(document: dict, outputs: dict = None, region: str = REGION, extra=(
     bin_dir.mkdir()
     for name in ("aws", "session-manager-plugin"):
         wrapper = bin_dir / name
-        wrapper.write_text(f"#!/bin/sh\nexec '{sys.executable}' -I '{DOUBLES}' {name} '{case}' \"$@\"\n")
+        interpreter = " ".join(f"'{word}'" for word in python())
+        wrapper.write_text(f"#!/bin/sh\nexec {interpreter} '{DOUBLES}' {name} '{case}' \"$@\"\n")
         wrapper.chmod(0o755)
     git = shutil.which("git")
     if git_stdout is not None:
@@ -196,7 +224,7 @@ def run_case(document: dict, outputs: dict = None, region: str = REGION, extra=(
     if region is None:
         env.pop("AWS_REGION")
     env.update(env_changes or {})
-    argv = [sys.executable, "-I", str(repo / "tools" / "bench" / "fargate.py"), "--txt", str(case / txt_name),
+    argv = [*python(), str(repo / "tools" / "bench" / "fargate.py"), "--txt", str(case / txt_name),
             "--json", str(case / "out.json"), "--ca", str(case / ca), "--local-port", str(free_port()),
             "--poll-seconds", "0", "--probe-interval", "0", "--task-timeout", "20", "--health-timeout", "20",
             "--log-timeout", "1", "--probe-attempts", "5", "--forward-timeout", "20", *extra]
@@ -1540,7 +1568,7 @@ class TheDoubles(unittest.TestCase):
     def test_an_unknown_call_shape_is_recorded_and_exits_97(self):
         case = pathlib.Path(tempfile.mkdtemp(prefix="fargate-double-"))
         save(case, world())
-        done = subprocess.run([sys.executable, "-I", str(DOUBLES), "aws", str(case),
+        done = subprocess.run([*python(), str(DOUBLES), "aws", str(case),
                                "--region", REGION, "ecs", "delete-service", "--cluster", CLUSTER, "--output", "json"],
                               capture_output=True, text=True, env={"PATH": "/usr/bin:/bin"})
         self.assertEqual(97, done.returncode)
@@ -1550,7 +1578,7 @@ class TheDoubles(unittest.TestCase):
     def double(self, document, *argv):
         case = pathlib.Path(tempfile.mkdtemp(prefix="fargate-double-"))
         save(case, document)
-        return subprocess.run([sys.executable, "-I", str(DOUBLES), "aws", str(case), "--region", REGION, *argv, "--output", "json"],
+        return subprocess.run([*python(), str(DOUBLES), "aws", str(case), "--region", REGION, *argv, "--output", "json"],
                               capture_output=True, text=True, env={"PATH": "/usr/bin:/bin"})
 
     def test_a_session_to_a_gateway_container_is_refused_once_exec_is_off(self):
@@ -1581,5 +1609,104 @@ class TheDoubles(unittest.TestCase):
         self.assertTrue(any(call["credential_env"] for call in run.calls))
 
 
+# --- running the cases side by side ---------------------------------------------------------------
+
+
+class Recorded(unittest.TestResult):
+    """What one test reported, kept to be replayed onto the run's own result in the main thread."""
+
+    def __init__(self):
+        super().__init__()
+        self.events = []
+
+    def __getattribute__(self, name):
+        if name.startswith("add") and name != "addCleanup":
+            events = object.__getattribute__(self, "events")
+            return lambda *args: events.append((name, args))
+        return object.__getattribute__(self, name)
+
+
+def each_test(suite):
+    for item in suite:
+        if isinstance(item, unittest.TestSuite):
+            yield from each_test(item)
+        else:
+            yield item
+
+
+class Concurrently(unittest.TestSuite):
+    """The loaded tests, run WORKERS at a time (#1473). Each case is a run of fargate.py of up to about
+    270 calls to the doubles, waiting on a subprocess almost throughout, and no case reads another's
+    directory, port or result, so a serial run spends its time waiting. The fixtures keep their
+    scopes: setUpModule once before anything, each class's setUpClass once before its tests and
+    tearDownClass after them, tearDownModule last. Each test reports into a Recorded of its own,
+    replayed in load order onto the run's result, so the output and the count are unittest's own. A
+    fixture that raises is an error on every test it was for, never a test skipped in silence."""
+
+    WORKERS = min(8, os.cpu_count() or 1)
+
+    def __init__(self, suite):
+        super().__init__()
+        self.tests = list(each_test(suite))
+
+    def run(self, result, debug=False):
+        tests, classes = self.tests, list(dict.fromkeys(type(test) for test in self.tests))
+        if not tests:
+            return result
+        failed = {}
+        try:
+            setUpModule()
+        except Exception:
+            failed = {cls: sys.exc_info() for cls in classes}
+        with concurrent.futures.ThreadPoolExecutor(self.WORKERS) as pool:
+            if not failed:
+                failed = {cls: err for cls, err in zip(classes, pool.map(self.set_up, classes)) if err}
+            recorded = list(pool.map(lambda test: self.one(test, failed.get(type(test))), tests))
+            torn = [err for err in pool.map(lambda cls: None if cls in failed else self.tear_down(cls), classes) if err]
+        try:
+            tearDownModule()
+        except Exception:
+            torn.append(sys.exc_info())
+        for test, events in zip(tests, recorded):
+            result.startTest(test)
+            for name, args in events:
+                getattr(result, name)(*args)
+            result.stopTest(test)
+        for err in torn:
+            # A clean-up that raised is an error of the run, after every test's own outcome.
+            result.addError(tests[-1], err)
+        return result
+
+    @staticmethod
+    def set_up(cls):
+        try:
+            cls.setUpClass()
+        except Exception:
+            return sys.exc_info()
+        return None
+
+    @staticmethod
+    def tear_down(cls):
+        try:
+            cls.tearDownClass()
+        except Exception:
+            return sys.exc_info()
+        return None
+
+    @staticmethod
+    def one(test, failed):
+        recorded = Recorded()
+        if failed:
+            recorded.events.append(("addError", (test, failed)))
+        else:
+            test(recorded)
+        return recorded.events
+
+
+class Runner(unittest.TextTestRunner):
+    def run(self, test):
+        return super().run(Concurrently(test))
+
+
 if __name__ == "__main__":
-    unittest.main()
+    unittest.main(testRunner=Runner)
