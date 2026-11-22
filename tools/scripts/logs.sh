@@ -23,9 +23,10 @@
 #
 # The group is the logGroup of the outputs document, $SPA_OUTPUTS_FILE (an entry value with no
 # default: cell-common.sh's header), written from the cell's roots' outputs after every apply,
-# deploy.sh's and rollback.sh's among them (contracts/infra-outputs.schema.json), and never Terraform state. One group holds both
-# containers' streams, each named <container>/<container>/<task id> (infra/modules/cell/ecs.tf), so
-# --container reads the streams with that prefix.
+# deploy.sh's and rollback.sh's among them (contracts/infra-outputs.schema.json), and never
+# Terraform state. One group holds both containers' streams, each named
+# <container>/<container>/<task id> (infra/modules/cell/ecs.tf), so --container reads the streams
+# with that prefix.
 #
 # Run it as the operator's own session, with credentials for the account the cell is in and
 # AWS_REGION set to the cell's Region. It needs the AWS CLI and python3. It never prints the account

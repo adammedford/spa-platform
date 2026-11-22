@@ -39,17 +39,18 @@
 # ECS cluster is its ecsCluster, the service its ecsBastionService and the load balancer its
 # albDnsName (contracts/infra-outputs.schema.json: "The scripts and the deployed tests read it").
 # It is written from the cell's roots' outputs after every apply, deploy.sh's and rollback.sh's
-# among them, so it names the last apply's cell, and it has an ecsBastionService only when that apply declared the bastion. Nothing is looked up in
-# AWS by name and nothing is read from Terraform state (#198); without the document, with one for
+# among them, so it names the last apply's cell, and it has an ecsBastionService only when that
+# apply declared the bastion. Nothing is looked up in AWS by name and nothing is read from Terraform
+# state (#198); without the document, with one for
 # another Region, or with one that names no bastion, it refuses. AWS is asked only for the bastion
 # service's running tasks, and the hop is a task's bastion container (infra/modules/cell/ecs.tf),
 # never a task of the gateway's service, ecsService. The load balancer is the cell module's, which
 # is internal (alb.tf).
 #
 # Run it as the operator's own session, with credentials for the account the cell is in and
-# AWS_REGION set to the cell's Region, once the outputs document is written. It reads the entry value SPA_OUTPUTS_FILE and,
-# with --keepalive, SPA_CERT_DOMAIN, which have no default (cell-common.sh's header), and refuses,
-# exit 2, when one it needs is unset. It needs the AWS CLI v2, the Session Manager plugin and
+# AWS_REGION set to the cell's Region, once the outputs document is written. It reads the entry
+# value SPA_OUTPUTS_FILE and, with --keepalive, SPA_CERT_DOMAIN, which have no default
+# (cell-common.sh's header), and refuses, exit 2, when one it needs is unset. It needs the AWS CLI v2, the Session Manager plugin and
 # python3, and curl with --keepalive.
 #
 # It never prints the account id: of a task it names only the id, never the ARN. The session's own
@@ -165,9 +166,9 @@ REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-}}"
 
 # The three names, before any AWS call. The cluster and the load balancer each refuse, exit 2, when
 # the document is absent, is for another Region or lacks the name, and say how the document is
-# written (cell-common.sh, outputs_field). Then the service, the bastion's: a document that names none is a
-# cell with no hop, refused, exit 2, with what turns the bastion on (#1167). The gateway's service,
-# ecsService, is never read: no task of it is the hop.
+# written (cell-common.sh, outputs_field). Then the service, the bastion's: a document that names
+# none is a cell with no hop, refused, exit 2, with what turns the bastion on (#1167). The gateway's
+# service, ecsService, is never read: no task of it is the hop.
 CLUSTER="$(outputs_field ecsCluster)"
 ALB="$(outputs_field albDnsName)"
 SERVICE="$(outputs_bastion)"
