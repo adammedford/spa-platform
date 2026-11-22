@@ -2602,19 +2602,29 @@ const forkOf = (prompt) => (/Otherwise fork from [^:]+: forkSha = (\S+?)\. Take 
 //     #1350 reviewers each said "No sub-agent tool was available" before doing both axes themselves. No prompt names
 //     run_in_background or asks to launch, spawn or start a sub-agent, and every review prompt, the second review
 //     after a conflict included, asks for the two axes in turn as two separate reports, overriding the code-review
-//     skill's parallel sub-agents.
+//     skill's parallel sub-agents. A prompt that calls a skill whose steps hand work to an agent (research's
+//     background agent, grilling's fact-finding sub-agent) carries the override that keeps the step in its session.
 {
-  const LAUNCH = /run_in_background|\b(launch|spawn|start)\w*\s+(?:(?:every|each|both|a|an|the|two|parallel)\s+)*sub-?agents?\b/i
+  const LAUNCH = /run_in_background|\b(launch|spawn|start|dispatch|run)\w*\s+(?:\S+\s+){0,3}?(?:background |sub-?)agents?\b|\buse (?:the |an )?Agent tool/i
   for (const c of allPrompts) {
     const m = LAUNCH.exec(c.prompt)
     if (m) fail(`#1475: the ${c.label} prompt asks for a sub-agent its agent has no Agent tool to launch: ${JSON.stringify(m[0])}`)
   }
-  const AXES = 'You have no Agent tool, so the skill\'s two sub-agents cannot run here: do the Standards axis yourself and write its report, then the Spec axis and its report, and keep the two reports separate in your record.'
+  const OVERRIDE = '; you have no Agent tool, so do yourself, in this session, every step the skill hands to a background agent or a sub-agent)'
+  for (const name of ['research', 'grilling']) {
+    const calls = allPrompts.filter((c) => c.prompt.includes(`call the Skill tool with "${name}"`))
+    if (!calls.length) fail(`#1475: no prompt calls the ${name} skill, so its override check read nothing`)
+    for (const c of calls) {
+      const at = c.prompt.indexOf(`call the Skill tool with "${name}"`)
+      if (!c.prompt.slice(at, c.prompt.indexOf(')', at) + 1).endsWith(OVERRIDE)) fail(`#1475: the ${c.label} prompt calls the ${name} skill without the override that keeps its agent steps in the session`)
+    }
+  }
+  const AXES_SENTENCE ='You have no Agent tool, so the skill\'s two sub-agents cannot run here: do the Standards axis yourself and write its report, then the Spec axis and its report, and keep the two reports separate in your record.'
   const reviews = allPrompts.filter((c) => c.label.startsWith('review:'))
   if (!reviews.length) fail('#1475: no review prompt was rendered, so the axes check read nothing')
   if (!reviews.some((c) => c.prompt.includes('This is the second review (#279)'))) fail('#1475: no second review was rendered, so the axes check did not read one')
   if (!allPrompts.some((c) => c.label.startsWith('implement:'))) fail('#1475: no implement prompt was rendered, so the sub-agent check did not read one')
-  for (const c of reviews) if (!c.prompt.includes(AXES)) fail(`#1475: the ${c.label} prompt does not ask for the Standards and Spec axes in turn, as two separate reports`)
+  for (const c of reviews) if (!c.prompt.includes(AXES_SENTENCE)) fail(`#1475: the ${c.label} prompt does not ask for the Standards and Spec axes in turn, as two separate reports`)
 }
 
 // 40. A pre-accepted question is one table row, and the full form is kept for what needs a human (#965). On 2026-10-22
