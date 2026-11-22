@@ -1261,9 +1261,9 @@ def land_on_origin(case: Case, files: dict[str, str]):
 # Origin's files for the moves line (#1471): the script a ticket moves, which cites itself, and two
 # files that cite it from elsewhere.
 CITED = {
-    "tools/scripts/old.sh": "#!/usr/bin/env bash\n# tools/scripts/old.sh prints the cell.\n",
-    "tools/old_tests.py": "\"\"\"Tests.\"\"\"\nSCRIPT = 'tools/scripts/old.sh'\n",
-    "docs/runbook.md": "Run tools/scripts/old.sh first.\n",
+    "tools/cell/old.sh": "#!/usr/bin/env bash\n# tools/cell/old.sh prints the cell.\n",
+    "tools/old_tests.py": "\"\"\"Tests.\"\"\"\nSCRIPT = 'tools/cell/old.sh'\n",
+    "docs/runbook.md": "Run tools/cell/old.sh first.\n",
 }
 
 
@@ -1275,15 +1275,52 @@ class MovesTests(PreflightTestCase):
     def test_an_old_path_cited_outside_the_touches_is_a_skip_candidate_naming_each_file_and_line(self):
         case = Case(self)
         land_on_origin(case, CITED)
-        case.issue(12, "ready-for-agent", moving("`tools/scripts/old.sh`, `tools/scripts/poc/old.sh`",
-                                                 "`tools/scripts/old.sh` -> `tools/scripts/poc/old.sh`"))
-        result = case.run()
+        case.issue(12, "ready-for-agent", moving("`tools/cell/old.sh`, `tools/cell/poc/old.sh`",
+                                                 "`tools/cell/old.sh` -> `tools/cell/poc/old.sh`"))
+        fixture = case.dir / "fixture.json"
+        result = case.run("--fixture", str(fixture), DATE)
         self.assertOrder(result)
         self.assertOnlyFails(result)
         self.assertEqual(("pass", "4 ready-for-agent and needs-triage tickets read; these move a path "
                                   "cited outside their Touches and are skip candidates: issue-12 (#12: "
-                                  "tools/scripts/old.sh is cited at docs/runbook.md:1, tools/old_tests.py:2)"),
+                                  "tools/cell/old.sh is cited at docs/runbook.md:1, tools/old_tests.py:2)"),
                          result.row("moves"))
+        self.assertEqual(["issue-12"], result.arguments()["skip"])
+        self.assertEqual(["issue-12"], json.loads(fixture.read_text())["args"]["skip"])
+        # The moves line names it, not the shape line.
+        self.assertNotIn("issue-12", result.row("shape")[1])
+
+    def test_a_ticket_with_no_moves_line_passes_listing_none(self):
+        case = Case(self)
+        land_on_origin(case, CITED)
+        result = case.run()
+        self.assertOnlyFails(result)
+        self.assertEqual(("pass", "4 ready-for-agent and needs-triage tickets read; none moves a path "
+                                  "cited outside its Touches"), result.row("moves"))
+        self.assertEqual([], result.arguments()["skip"])
+
+    def test_an_old_path_cited_only_inside_the_touches_passes_a_directory_holding_its_files(self):
+        for directory in ("`tools/cell/`", "`tools/cell`"):
+            with self.subTest(directory=directory):
+                case = Case(self)
+                land_on_origin(case, CITED)
+                case.issue(12, "ready-for-agent", moving(
+                    f"{directory}, `tools/old_tests.py`, `docs/runbook.md`",
+                    "`tools/cell/old.sh` -> `tools/cell/poc/old.sh`"))
+                result = case.run()
+                self.assertOnlyFails(result)
+                self.assertEqual(("pass", "4 ready-for-agent and needs-triage tickets read; none moves a "
+                                          "path cited outside its Touches"), result.row("moves"))
+                self.assertEqual([], result.arguments()["skip"])
+
+    def test_a_moves_line_not_read_whole_as_pairs_is_a_skip_candidate(self):
+        case = Case(self)
+        land_on_origin(case, CITED)
+        case.issue(12, "ready-for-agent", moving("`tools/cell/`", "`tools/cell/old.sh` to `tools/new.sh`"))
+        result = case.run()
+        self.assertOnlyFails(result)
+        self.assertIn("skip candidates: issue-12 (#12: its Moves line is not read as old path -> new path "
+                      "pairs: tools/cell/old.sh to tools/new.sh)", result.row("moves")[1])
         self.assertEqual(["issue-12"], result.arguments()["skip"])
 
 

@@ -133,8 +133,8 @@
 # Each of adr, decision, moves and unblocks passes when it judged everything and fails only when it
 # could not judge: the forecast failed, origin/main's decision_citation.py or ticket_shape.py could
 # not be loaded, gh could not read a ticket, its comments or a blocker's labels, judge() raised
-# Unreadable, or git grep could not search origin/main. A candidate is never a failure, and a pass means the screen completed its stated
-# checks, not that it authorised implementation (#663).
+# Unreadable, or git grep could not search origin/main. A candidate is never a failure, and a pass
+# means the screen completed its stated checks, not that it authorised implementation (#663).
 #
 # A line is `pass: <name>: <evidence>` or `fail: <name>: <evidence>`. Every line runs whatever the
 # ones before it said, so one run shows everything that blocks the launch. Then comes one verdict
@@ -806,7 +806,8 @@ else
 import fnmatch, importlib.util, json, pathlib, re, subprocess, sys
 copy, repo, collect, issues, unread_issues, out = sys.argv[1:]
 try:
-    spec = importlib.util.spec_from_file_location("ticket_shape", pathlib.Path(copy, "tools", "ticket_shape.py"))
+    spec = importlib.util.spec_from_file_location("ticket_shape",
+                                                  pathlib.Path(copy, "tools", "ticket_shape.py"))
     shape = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(shape)
     parsed = shape.ownership().rules()
@@ -824,7 +825,8 @@ def bare(path):
 def inside(hit, paths):
     # A Touches path names a file, a directory with or without its slash, or a glob.
     for path in map(bare, paths):
-        if hit == path or hit.startswith(path.rstrip("/") + "/") or ("*" in path and fnmatch.fnmatchcase(hit, path)):
+        if (hit == path or hit.startswith(path.rstrip("/") + "/")
+                or ("*" in path and fnmatch.fnmatchcase(hit, path))):
             return True
     return False
 
@@ -855,7 +857,8 @@ for n in judged:
         found = subprocess.run(["git", "--no-optional-locks", "-C", repo, "grep", "-n", "-z", "-F", "-I",
                                 "-e", bare(old), REF], capture_output=True, text=True)
         if found.returncode > 1:
-            problems.append(f"git grep could not search origin/main for #{n}\x27s {old}, so it is unjudged")
+            problems.append(f"git grep could not search origin/main for #{n}\x27s {old}, "
+                            "so it is unjudged")
             continue
         hits = []
         for record in found.stdout.splitlines():
