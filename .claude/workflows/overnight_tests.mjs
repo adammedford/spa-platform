@@ -2597,6 +2597,26 @@ const forkOf = (prompt) => (/Otherwise fork from [^:]+: forkSha = (\S+?)\. Take 
   }
 }
 
+// 50. No prompt asks for a tool its agent lacks (#1475). A workflow agent has no Agent tool, yet on 2026-11-22 the
+//     implement and review prompts told it to launch sub-agents with run_in_background: false, and the #1349 and
+//     #1350 reviewers each said "No sub-agent tool was available" before doing both axes themselves. No prompt names
+//     run_in_background or asks to launch, spawn or start a sub-agent, and every review prompt, the second review
+//     after a conflict included, asks for the two axes in turn as two separate reports, overriding the code-review
+//     skill's parallel sub-agents.
+{
+  const LAUNCH = /run_in_background|\b(launch|spawn|start)\w*\s+(?:(?:every|each|both|a|an|the|two|parallel)\s+)*sub-?agents?\b/i
+  for (const c of allPrompts) {
+    const m = LAUNCH.exec(c.prompt)
+    if (m) fail(`#1475: the ${c.label} prompt asks for a sub-agent its agent has no Agent tool to launch: ${JSON.stringify(m[0])}`)
+  }
+  const AXES = 'You have no Agent tool, so the skill\'s two sub-agents cannot run here: do the Standards axis yourself and write its report, then the Spec axis and its report, and keep the two reports separate in your record.'
+  const reviews = allPrompts.filter((c) => c.label.startsWith('review:'))
+  if (!reviews.length) fail('#1475: no review prompt was rendered, so the axes check read nothing')
+  if (!reviews.some((c) => c.prompt.includes('This is the second review (#279)'))) fail('#1475: no second review was rendered, so the axes check did not read one')
+  if (!allPrompts.some((c) => c.label.startsWith('implement:'))) fail('#1475: no implement prompt was rendered, so the sub-agent check did not read one')
+  for (const c of reviews) if (!c.prompt.includes(AXES)) fail(`#1475: the ${c.label} prompt does not ask for the Standards and Spec axes in turn, as two separate reports`)
+}
+
 // 40. A pre-accepted question is one table row, and the full form is kept for what needs a human (#965). On 2026-10-22
 //     263 of 284 questions, and on 2026-10-27 204 of 232, were written in full with the line "Answer: yes, pre-accepted
 //     under the standing answer granted <date>" under each. Two short runs on one ticket for a grill render the grill's
