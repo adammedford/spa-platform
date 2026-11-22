@@ -75,6 +75,65 @@ public sealed class RegistryProxyConfigTests
         Assert.Equal(TimeSpan.FromSeconds(7), cluster.HttpRequest!.ActivityTimeout);
     }
 
+    [Fact]
+    public void Every_cluster_a_shell_or_a_fragment_api_produces_carries_the_connection_bound()
+    {
+        // Two apps with two APIs each, the four clusters #738 Q3 names, and a fragment's API besides,
+        // so a bound set on one path through From and not the other fails here. What the bound does
+        // on the wire is ConnectionBoundTests'.
+        AppDefinition app1 = TestApps.Entry(
+            "app1",
+            apis: [TestApps.Api("orders"), TestApps.Api("reports")],
+            fragments: [TestApps.Fragment("frag1", apis: [TestApps.Api("orders")])]);
+        AppDefinition app2 = TestApps.Entry("app2", apis: [TestApps.Api("orders"), TestApps.Api("reports")]);
+
+        IReadOnlyList<ClusterConfig> clusters = RegistryProxyConfig.From(SnapshotOf(app1, app2)).Clusters;
+
+        Assert.Equal(5, clusters.Count);
+        Assert.All(clusters, cluster =>
+            Assert.Equal(ProxyLimits.MaxHttp11ConnectionsPerApi, cluster.HttpClient?.MaxConnectionsPerServer));
+    }
+
+    // ---- Fragment routes (#996; contracts/upstream-contract.md -> Fragment routes) ----
+
+    [Fact]
+    public void One_upstream_under_the_shell_and_a_fragment_is_two_routes_each_with_its_own_id()
+    {
+        // The same name and the same upstream in the shell's apis[] and the fragment's: two routes,
+        // because each carries its own client's token.
+        AppDefinition app = TestApps.Entry(
+            "app1",
+            apis: [TestApps.Api("orders", upstream: "http://127.0.0.1:5080")],
+            fragments: [TestApps.Fragment("frag1", apis: [TestApps.Api("orders", upstream: "http://127.0.0.1:5080")])]);
+
+        IProxyConfig config = RegistryProxyConfig.From(SnapshotOf(app));
+
+        Assert.Equal(
+            ["app1/fragments/frag1/orders", "app1/orders"],
+            config.Routes.Select(route => route.RouteId).Order(StringComparer.Ordinal));
+        Assert.Equal(
+            ["app1/fragments/frag1/orders", "app1/orders"],
+            config.Clusters.Select(cluster => cluster.ClusterId).Order(StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public void A_fragment_route_matches_the_app_host_and_the_fragments_api_prefix_and_removes_it()
+    {
+        AppDefinition app = TestApps.Entry(
+            "app1", fragments: [TestApps.Fragment("frag1", apis: [TestApps.Api("orders", timeoutSeconds: 9)])]);
+
+        IProxyConfig config = RegistryProxyConfig.From(SnapshotOf(app));
+        RouteConfig route = Assert.Single(config.Routes);
+        ClusterConfig cluster = Assert.Single(config.Clusters);
+
+        Assert.Equal(["app1.spa-poc.test"], route.Match.Hosts);
+        Assert.Equal("/fragments/frag1/api/orders/{**rest}", route.Match.Path);
+        IReadOnlyDictionary<string, string> transform = Assert.Single(route.Transforms!);
+        Assert.Equal("/fragments/frag1/api/orders", transform["PathRemovePrefix"]);
+        Assert.Equal("https://orders.internal/", Assert.Single(cluster.Destinations!).Value.Address);
+        Assert.Equal(TimeSpan.FromSeconds(9), cluster.HttpRequest!.ActivityTimeout);
+    }
+
     private static RegistrySnapshot SnapshotOf(params AppDefinition[] apps) =>
         InMemoryRegistry.SnapshotOf(1, "\"etag\"", apps);
 

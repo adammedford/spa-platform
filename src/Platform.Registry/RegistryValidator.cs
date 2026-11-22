@@ -55,7 +55,7 @@ public static class RegistryValidator
         JsonArray apps = root["apps"]!.AsArray();
         Dictionary<string, int> appIds = new(StringComparer.Ordinal);
         Dictionary<string, int> hosts = new(StringComparer.Ordinal);
-        Dictionary<string, int> clientIds = new(StringComparer.Ordinal);
+        Dictionary<string, string> clientIds = new(StringComparer.Ordinal);
         for (int index = 0; index < apps.Count; index++)
         {
             JsonObject entry = apps[index]!.AsObject();
@@ -63,9 +63,25 @@ public static class RegistryValidator
 
             Unique(findings, appIds, entry["appId"]!.GetValue<string>(), index, RegistryRules.DuplicateAppId, $"{at}/appId", "appId");
             Unique(findings, hosts, entry["host"]!.GetValue<string>(), index, RegistryRules.DuplicateHost, $"{at}/host", "host");
-            Unique(findings, clientIds, entry["oauth"]!["clientId"]!.GetValue<string>(), index, RegistryRules.DuplicateClientId, $"{at}/oauth/clientId", "oauth.clientId");
+            ClaimClientId(findings, clientIds, entry["oauth"]!, $"{at}/oauth/clientId");
 
             CheckEntry(findings, entry, at, policy);
+        }
+
+        // Every shell's client id is claimed before any fragment's, so a fragment that repeats a shell's
+        // id is the one reported, at fragments[i]/oauth/clientId, whichever order the entries are in
+        // (#992: a fragment's clientId is unique across every shell and every fragment).
+        for (int index = 0; index < apps.Count; index++)
+        {
+            if (apps[index]!["fragments"] is not JsonArray fragments)
+            {
+                continue;
+            }
+
+            for (int position = 0; position < fragments.Count; position++)
+            {
+                ClaimClientId(findings, clientIds, fragments[position]!["oauth"]!, $"/apps/{index}/fragments/{position}/oauth/clientId");
+            }
         }
 
         if (findings.Errors.Count > 0)
@@ -150,12 +166,63 @@ public static class RegistryValidator
 
         Exact(findings, entry["session"]!["lifetimeMinutes"]!, $"{at}/session/lifetimeMinutes", "lifetimeMinutes", "minutes");
 
-        if (entry["apis"] is not JsonArray apis)
+        HashSet<string> allowed = [.. policy.AllowedUpstreams.Select(HostPolicy.Origin).OfType<string>()];
+        CheckApis(findings, entry["apis"], at, allowed);
+
+        if (entry["fragments"] is JsonArray fragments)
+        {
+            CheckFragments(findings, fragments, at, issuer, allowed, policy);
+        }
+    }
+
+    /// <summary>
+    /// The fragment rules one entry holds on its own (#992; the fragments spec, #961): the cap on how
+    /// many, <c>fragmentId</c> unique within the entry, one issuer per host, and each fragment's
+    /// <c>apis</c> as its own token set. The field rules (<c>fragmentId</c>, <c>entry</c>, no
+    /// <c>host</c> or <c>session</c>, the narrower <c>csp</c>) are the schema's, which has already
+    /// passed the document.
+    /// </summary>
+    private static void CheckFragments(Findings findings, JsonArray fragments, string at, string issuer, HashSet<string> allowed, PlatformPolicy policy)
+    {
+        // Configuration only: the schema sets no maxItems (registry.schema.json, $defs/fragments).
+        if (fragments.Count > policy.FragmentsPerShell)
+        {
+            findings.Error(RegistryRules.FragmentsPerShellExceeded, $"{at}/fragments",
+                $"The entry lists {fragments.Count} fragments; Policy:FragmentsPerShell allows {policy.FragmentsPerShell}.");
+        }
+
+        Dictionary<string, int> ids = new(StringComparer.Ordinal);
+        for (int index = 0; index < fragments.Count; index++)
+        {
+            JsonObject fragment = fragments[index]!.AsObject();
+            string fragmentAt = $"{at}/fragments/{index}";
+
+            Unique(findings, ids, fragment["fragmentId"]!.GetValue<string>(), index, RegistryRules.DuplicateFragmentId,
+                $"{fragmentAt}/fragmentId", "fragmentId", $"{at}/fragments");
+
+            string fragmentIssuer = fragment["oauth"]!["issuer"]!.GetValue<string>();
+            if (!string.Equals(fragmentIssuer, issuer, StringComparison.Ordinal))
+            {
+                findings.Error(RegistryRules.FragmentIssuerMismatch, $"{fragmentAt}/oauth/issuer",
+                    $"Issuer '{fragmentIssuer}' is not the shell's issuer '{issuer}': one issuer per host.");
+            }
+
+            CheckApis(findings, fragment["apis"], fragmentAt, allowed);
+        }
+    }
+
+    /// <summary>
+    /// One token set's <c>apis</c>, the shell's or one fragment's: names unique within it, each
+    /// timeout exact, each upstream inside policy, and more than one origin a warning. A shell's names
+    /// and each fragment's are separate namespaces, so each call counts its own.
+    /// </summary>
+    private static void CheckApis(Findings findings, JsonNode? node, string at, HashSet<string> allowed)
+    {
+        if (node is not JsonArray apis)
         {
             return;
         }
 
-        HashSet<string> allowed = [.. policy.AllowedUpstreams.Select(HostPolicy.Origin).OfType<string>()];
         Dictionary<string, int> names = new(StringComparer.Ordinal);
         SortedSet<string> origins = new(StringComparer.Ordinal);
         for (int index = 0; index < apis.Count; index++)
@@ -186,8 +253,21 @@ public static class RegistryValidator
         if (origins.Count > 1)
         {
             findings.Warning(RegistryRules.MultipleUpstreamOrigins, $"{at}/apis",
-                $"The entry names {origins.Count} upstream origins ({string.Join(", ", origins)}). Phase 1 sends one " +
+                $"One token set names {origins.Count} upstream origins ({string.Join(", ", origins)}). Phase 1 sends one " +
                 "access token to each, which is safe only inside one trust domain (contracts/upstream-contract.md).");
+        }
+    }
+
+    /// <summary>
+    /// Claims an <c>oauth.clientId</c> for the shell or fragment at <paramref name="path"/>, or reports
+    /// <see cref="RegistryRules.DuplicateClientId"/> there, naming the path that claimed it first.
+    /// </summary>
+    private static void ClaimClientId(Findings findings, Dictionary<string, string> claimed, JsonNode oauth, string path)
+    {
+        string clientId = oauth["clientId"]!.GetValue<string>();
+        if (!claimed.TryAdd(clientId, path))
+        {
+            findings.Error(RegistryRules.DuplicateClientId, path, $"oauth.clientId '{clientId}' is already claimed by {claimed[clientId]}.");
         }
     }
 
@@ -227,34 +307,54 @@ public static class RegistryValidator
     }
 
     /// <summary>The typed record, from an entry every rule above has accepted.</summary>
-    private static AppDefinition Model(JsonObject entry)
-    {
-        JsonObject oauth = entry["oauth"]!.AsObject();
-        return new AppDefinition(
+    private static AppDefinition Model(JsonObject entry) =>
+        new(
             AppId: entry["appId"]!.GetValue<string>(),
             Host: entry["host"]!.GetValue<string>(),
             Release: entry["release"]!.GetValue<string>(),
-            OAuth: new OAuthDefinition(
-                Issuer: oauth["issuer"]!.GetValue<string>(),
-                ClientId: oauth["clientId"]!.GetValue<string>(),
-                ClientSecretRef: oauth["clientSecretRef"]!.GetValue<string>(),
-                Scopes: Strings(oauth["scopes"]!.AsArray()),
-                Resource: oauth["resource"]?.GetValue<string>()),
-            // Absent apis: an app with no upstream (contracts/README.md, "Using the schemas"). The schema's
-            // maximum on timeoutSeconds, the proxy's ceiling (ADR-0019), is far inside what a TimeSpan holds.
-            Apis: entry["apis"] is JsonArray apis
-                ? [.. apis.Select(api => new ApiDefinition(
-                    api!["name"]!.GetValue<string>(),
-                    new Uri(api["upstream"]!.GetValue<string>(), UriKind.Absolute),
-                    TimeSpan.FromSeconds(JsonInteger.Read(api["timeoutSeconds"]!))))]
-                : [],
-            // Absent csp: an app that adds nothing to the baseline content security policy.
-            Csp: entry["csp"] is JsonObject csp
-                ? csp.ToImmutableDictionary(directive => directive.Key, directive => Strings(directive.Value!.AsArray()), StringComparer.Ordinal)
-                : ImmutableDictionary<string, ImmutableArray<string>>.Empty,
+            OAuth: OAuth(entry["oauth"]!),
+            Apis: Apis(entry["apis"]),
+            Csp: Csp(entry["csp"]),
             SessionLifetime: TimeSpan.FromMinutes(JsonInteger.Read(entry["session"]!["lifetimeMinutes"]!)),
-            Fingerprint: EntryFingerprint.Of(entry));
-    }
+            // The whole entry, its fragments included: a change to any part of it, a fragment's
+            // included, evicts every scheme of the entry together (#992; AppDefinition.Fingerprint).
+            Fingerprint: EntryFingerprint.Of(entry))
+        {
+            // Absent fragments: an entry that composes none, which means what an entry meant before them.
+            Fragments = entry["fragments"] is JsonArray fragments
+                ? [.. fragments.Select(fragment => new FragmentDefinition(
+                    FragmentId: fragment!["fragmentId"]!.GetValue<string>(),
+                    OAuth: OAuth(fragment["oauth"]!),
+                    Release: fragment["release"]!.GetValue<string>(),
+                    Apis: Apis(fragment["apis"]),
+                    Csp: Csp(fragment["csp"]),
+                    Entry: fragment["entry"]?.GetValue<string>() ?? PlatformPaths.DefaultEntry))]
+                : [],
+        };
+
+    private static OAuthDefinition OAuth(JsonNode oauth) =>
+        new(
+            Issuer: oauth["issuer"]!.GetValue<string>(),
+            ClientId: oauth["clientId"]!.GetValue<string>(),
+            ClientSecretRef: oauth["clientSecretRef"]!.GetValue<string>(),
+            Scopes: Strings(oauth["scopes"]!.AsArray()),
+            Resource: oauth["resource"]?.GetValue<string>());
+
+    // Absent apis: an app or fragment with no upstream (contracts/README.md, "Using the schemas"). The
+    // schema's maximum on timeoutSeconds, the proxy's ceiling (ADR-0019), is far inside what a TimeSpan holds.
+    private static ImmutableArray<ApiDefinition> Apis(JsonNode? node) =>
+        node is JsonArray apis
+            ? [.. apis.Select(api => new ApiDefinition(
+                api!["name"]!.GetValue<string>(),
+                new Uri(api["upstream"]!.GetValue<string>(), UriKind.Absolute),
+                TimeSpan.FromSeconds(JsonInteger.Read(api["timeoutSeconds"]!))))]
+            : [];
+
+    // Absent csp: an app or fragment that adds nothing to the baseline content security policy.
+    private static ImmutableDictionary<string, ImmutableArray<string>> Csp(JsonNode? node) =>
+        node is JsonObject csp
+            ? csp.ToImmutableDictionary(directive => directive.Key, directive => Strings(directive.Value!.AsArray()), StringComparer.Ordinal)
+            : ImmutableDictionary<string, ImmutableArray<string>>.Empty;
 
     private static ImmutableArray<string> Strings(JsonArray values) => [.. values.Select(value => value!.GetValue<string>())];
 

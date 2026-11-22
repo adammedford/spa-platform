@@ -7,11 +7,13 @@ Owner: integrator.
     tools/prune_branches.py --delete --verbose   and list each kept branch, not only a count
     tools/prune_branches.py --delete --only <branch>...   delete the named branches alone
 
-docs/agents/landing-work.md makes a task's branch its claim and says the claim is deleted when the
-task is done, and nothing deleted it (#71). On 17 October 2026 this repository held 44 `task/*`
-branches, 19 of them not ancestors of main; five tickets that night needed dated branch names
-because older branches of the same names sat at stale heads; and `overnight/2026-10-16` looked
-unmerged though every commit on it was on main in equivalent form.
+docs/agents/landing-work.md makes a branch the claim for a plan row that no issue carries, and
+deletes it once the row has landed; a ticket is claimed by its assignee
+(docs/agents/tracker-policy.md), and its branch goes once it has landed too. When #71 was filed
+nothing deleted either. On 17 October 2026 this repository held 44 `task/*` branches, 19 of them
+not ancestors of main; five tickets that night needed dated branch names because older branches of
+the same names sat at stale heads; and `overnight/2026-10-16` looked unmerged though every commit
+on it was on main in equivalent form.
 
 tools/land.sh runs --delete after every merge into main. Run by hand from a checkout at origin/main,
 it is the one-off pass over what is left, by the same rule. It reads `task/*` and `overnight/*`
@@ -23,11 +25,13 @@ branches and no others, and deletes a copy only when all three of these hold:
                           (issue-66) in "tickets". A split no merge subject names reads as its row,
                           because a row that landed whole landed its splits with it: 3.0 did, and
                           3.0a and 3.0b were never named. A part-landed, open or ongoing id keeps the
-                          branch, because the claim is how the next session knows the row is taken.
-                          An id that is none of the three, or no id, claims nothing a session could
-                          take -- ADR-0020 made every ticket a GitHub issue, so a live claim names a
-                          row, a split or issue-<n>, and a ticket-<n> name is the archived tracker's
-                          -- so rules 2 and 3 alone decide such a branch.
+                          branch: for a row or a split no issue carries, the branch is its claim,
+                          how the next session knows the row is taken; a ticket is claimed by its
+                          assignee, and its branch holds work that has not landed. An id that is
+                          none of the three, or no id, names nothing a session could take --
+                          ADR-0020 made every ticket a GitHub issue, so a live id names a row, a
+                          split or issue-<n>, and a ticket-<n> name is the archived tracker's -- so
+                          rules 2 and 3 alone decide such a branch.
        overnight/<date>   a pull request from it into main has merged, as gh reports.
   2. No worktree has it checked out. The cleanup never removes a worktree.
   3. Its current tip's work is on origin/main: the tip is an ancestor, or every commit on it that

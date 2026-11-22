@@ -31,11 +31,53 @@ public sealed class PlatformPathsTests
     }
 
     [Fact]
-    public void Reserved_is_the_seven_prefixes_in_the_contracts_order()
+    public void Reserved_is_the_contracts_reserved_prefixes_in_its_order()
     {
+        // Mutation: add or remove a prefix in contracts/http-contract.md's "A path reserved outright"
+        // sentence alone, or in Reserved alone. The contract's list is read from the file, not copied.
+        string[] contract = ContractTables.ReservedOutrightPaths();
+
         Assert.Equal(
-            ["/bff", "/api", "/signin-oidc", "/signout-callback-oidc", "/signout-oidc", "/healthz", "/readyz"],
+            contract.Where(path => !path.Contains('{', StringComparison.Ordinal)).Select(path => path.TrimEnd('/')),
             PlatformPaths.Reserved);
+    }
+
+    [Fact]
+    public void The_contracts_templated_reserved_paths_are_the_fragment_api_and_callback_namespaces()
+    {
+        // The two templated paths of the same sentence are not in Reserved: IsReservedOutright matches
+        // them by FragmentApi's segment rule and under /signin-oidc. A templated path added to the
+        // contract alone fails here rather than passing as one Reserved leaves aside.
+        string[] contract = ContractTables.ReservedOutrightPaths();
+
+        Assert.Equal(
+            [PlatformPaths.FragmentApi("{fragmentId}").Value + "/", PlatformPaths.FragmentCallback("{fragmentId}").Value],
+            contract.Where(path => path.Contains('{', StringComparison.Ordinal)));
+    }
+
+    [Fact]
+    public void The_reserved_sentence_is_read_up_to_its_full_stop_in_its_order()
+    {
+        // Mutation: read past the sentence's end, and the next sentence's `/fragments/` joins the list.
+        string[] lines =
+        [
+            "Two kinds of path are reserved. A path reserved outright is served from no release, the shell's",
+            "or a fragment's: `/b/`, `/a/{x}/`, and",
+            "`/c`. A path reserved from the shell's release is `/fragments/`.",
+        ];
+
+        Assert.Equal(["/b/", "/a/{x}/", "/c"], ContractTables.ParseReservedOutrightPaths(lines));
+    }
+
+    [Fact]
+    public void A_missing_reserved_sentence_cannot_pass_as_no_reserved_paths()
+    {
+        // Mutation: drop the parser's anchor check, its closing check or its Assert.NotEmpty.
+        Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => ContractTables.ParseReservedOutrightPaths(["Paths are reserved: `/b/`."]));
+        Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => ContractTables.ParseReservedOutrightPaths(
+            ["A path reserved outright is served from no release, the shell's or a fragment's: `/b/`"]));
+        Assert.Throws<Xunit.Sdk.NotEmptyException>(() => ContractTables.ParseReservedOutrightPaths(
+            ["A path reserved outright is served from no release, the shell's or a fragment's: none. Next."]));
     }
 
     [Theory]

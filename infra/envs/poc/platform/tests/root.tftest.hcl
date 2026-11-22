@@ -337,6 +337,39 @@ run "a_health_check_path_must_be_absolute" {
   expect_failures = [var.health_check_path]
 }
 
+# #1380. The root passes gateway_writable_root to the module, and its default is the gateway's
+# read-only root. platform-tfvars.sh writes true beside the sample's pin, and deploy.sh and
+# rollback.sh apply the gateway with false; the module holds what each value gives the container.
+# Mutations that turn these two runs red: the root's argument to the module removed (the first); the
+# root's default true (the second).
+run "the_root_passes_gateway_writable_root_to_the_module" {
+  command = plan
+
+  variables {
+    gateway_writable_root = true
+  }
+
+  assert {
+    condition = try(
+      one([for c in jsondecode(module.cell.container_definitions) : c if c.name == "gateway"]).readonlyRootFilesystem == false,
+      false
+    )
+    error_message = "gateway_writable_root = true reaches the module: the sample image's gateway container has a writable root (#1380)."
+  }
+}
+
+run "the_root_s_default_gateway_root_is_read_only" {
+  command = plan
+
+  assert {
+    condition = try(
+      one([for c in jsondecode(module.cell.container_definitions) : c if c.name == "gateway"]).readonlyRootFilesystem == true,
+      false
+    )
+    error_message = "With gateway_writable_root unset the gateway's root is read-only (#787, #1380)."
+  }
+}
+
 run "a_certificate_domain_carries_no_wildcard" {
   command = plan
 

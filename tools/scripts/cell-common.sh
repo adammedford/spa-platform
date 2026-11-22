@@ -15,6 +15,22 @@
 # tunnel.sh is the exception: it asks AWS only for its service's tasks, never who the caller is, so
 # it sets REGION, WORK, OUT and ERR itself.
 #
+# The cell's entry values (#1348). The scripts hold no cell's paths or names: the operator sets
+# these in the environment, with no default, and a script that needs one and finds it unset exits 2
+# naming it, before it asks AWS anything. Each script names the ones it reads in a call to
+# need_entry. A relative path is read from the checkout's root, the directory two above this file,
+# so a script reads the same cell wherever it is started from. The proof cell's are in its entry
+# file, cell.env, sourced beside the operator's session.
+#   SPA_CELL           the cell's name: its teardown role, task definition families, key ring prefix
+#                      and Cell tag. --cell, where a script takes it, defaults to this.
+#   SPA_CERT_DOMAIN    the certificate's domain: an app's host is <app>.<domain>.
+#   SPA_PLATFORM_ROOT  the platform root's directory, which applies the images and holds the bucket.
+#   SPA_ROOTS          every root's directory, colon-separated, in the order they are applied:
+#                      write_outputs reads them in this order and teardown.sh destroys them in the
+#                      reverse. A root is named by its directory's last segment.
+#   SPA_OUTPUTS_FILE   the outputs document's path (contracts/infra-outputs.schema.json).
+#   SPA_FIELD_MAP      the field map: which root's output answers each field of that document.
+#
 # Written for the bash 3.2 that ships with macOS, like tools/scripts/certs.sh.
 # Owner: workstream 1, AWS and IaC.
 
@@ -25,21 +41,22 @@ export AWS_PAGER=""
 # CDPATH empty for this cd, for the reason verify-release-immutability.sh gives (PR #130's review).
 SCRIPTS_DIR="$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 REPO_ROOT="$(CDPATH='' cd -- "${SCRIPTS_DIR}/../.." && pwd -P)"
-IDP_ROOT="${REPO_ROOT}/infra/envs/poc/idp"
-APPS_ROOT="${REPO_ROOT}/infra/envs/poc/apps"
-PLATFORM_ROOT="${REPO_ROOT}/infra/envs/poc/platform"
 DOCUMENTS="${SCRIPTS_DIR}/cell_documents.py"
 
-# contracts/infra-outputs.schema.json's own description: "infra/envs/poc/outputs.json, written by
-# workstream 1 after every apply. The scripts and the deployed tests read it."
-OUTPUTS_FILE="${REPO_ROOT}/infra/envs/poc/outputs.json"
-
+# Set by need_entry from the entry values, and empty until then.
+PLATFORM_ROOT=""
+OUTPUTS_FILE=""
+FIELD_MAP=""
+CERT_DOMAIN=""
+# The roots' directories, in SPA_ROOTS's order, and their names, one a line in the same order.
+ROOT_DIRS=()
+ROOT_NAMES=""
 # The images the platform root last applied, as Terraform variables. Terraform loads *.auto.tfvars
 # after terraform.tfvars, so every later plain `terraform apply` in the root passes these back and
 # never moves the image (plan row 1.7: "Every other apply passes the digest already in state").
 # *.tfvars is ignored by git (change request 1.5): the values carry the account id.
 # https://developer.hashicorp.com/terraform/language/values/variables#variable-definition-precedence
-IMAGES_TFVARS="${PLATFORM_ROOT}/images.auto.tfvars"
+IMAGES_TFVARS=""
 
 # The gateway answers /readyz 200 once a registry snapshot is live, and the load balancer's health
 # check follows the image (docs/plan/05-infrastructure-and-cost.md, First deployment, step 3).
@@ -48,7 +65,6 @@ READY_PATH="/readyz"
 # The container names in infra/modules/cell/ecs.tf. The bastion's is the tunnel's hop (#1167): the
 # one container of the bastion service's task.
 GATEWAY_CONTAINER="gateway"
-MOCK_API_CONTAINER="mock-api"
 BASTION_CONTAINER="bastion"
 
 note() { printf '%s: %s\n' "$PROGRAM" "$*"; }
@@ -81,19 +97,70 @@ need_tool() {
   command -v "$1" > /dev/null 2>&1 || refuse "$1 is not on PATH. $2"
 }
 
+# An entry value's path, read from the checkout's root when it is relative.
+entry_path() {
+  case "$1" in
+    /*) printf '%s' "$1" ;;
+    *) printf '%s/%s' "$REPO_ROOT" "$1" ;;
+  esac
+}
+
+# The entry values the caller reads (the header's list), each refused by name when unset or empty,
+# and the paths among them resolved. Called once a script's arguments are read, before cell_start.
+need_entry() {
+  local name value dir rest
+  for name in "$@"; do
+    value="${!name:-}"
+    [ -n "$value" ] ||
+      refuse "${name} is not set. It is one of the cell's entry values, which have no default: set it for the cell, as the proof cell's entry file cell.env does, and export it (set -a; . <entry file>; set +a)."
+    case "$name" in
+      SPA_PLATFORM_ROOT)
+        PLATFORM_ROOT="$(entry_path "$value")"
+        IMAGES_TFVARS="${PLATFORM_ROOT}/images.auto.tfvars"
+        ;;
+      SPA_OUTPUTS_FILE) OUTPUTS_FILE="$(entry_path "$value")" ;;
+      SPA_FIELD_MAP) FIELD_MAP="$(entry_path "$value")" ;;
+      SPA_CERT_DOMAIN) CERT_DOMAIN="$value" ;;
+      SPA_ROOTS)
+        ROOT_DIRS=()
+        ROOT_NAMES=""
+        rest="${value}:"
+        while [ -n "$rest" ]; do
+          dir="${rest%%:*}"
+          rest="${rest#*:}"
+          # Its trailing slashes off, so that the name is the directory's own last segment.
+          while [ "${dir%/}" != "$dir" ]; do dir="${dir%/}"; done
+          [ -n "$dir" ] || refuse "SPA_ROOTS has an empty entry: got '${value}'. It is the roots' directories, colon-separated."
+          case "
+${ROOT_NAMES}" in
+            *"
+${dir##*/}
+"*) refuse "SPA_ROOTS names two roots ${dir##*/}: a root is named by its directory's last segment, so each must differ." ;;
+          esac
+          ROOT_DIRS[${#ROOT_DIRS[@]}]="$(entry_path "$dir")"
+          ROOT_NAMES="${ROOT_NAMES}${dir##*/}
+"
+        done
+        ;;
+      SPA_CELL) ;;
+      *) refuse "need_entry: ${name} is not an entry value." ;;
+    esac
+  done
+}
+
 # The Region, the scratch directory and the caller. Sets REGION, WORK, OUT, ERR, ACCOUNT,
 # CALLER_ROLE.
 cell_start() {
   need_tool aws "brew install awscli"
   need_tool python3 "xcode-select --install"
   REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-}}"
-  [ -n "$REGION" ] || refuse "no Region in AWS_REGION or AWS_DEFAULT_REGION. set -a; . tools/aws-project.env; set +a"
+  [ -n "$REGION" ] || refuse "no Region in AWS_REGION or AWS_DEFAULT_REGION: set AWS_REGION to the cell's Region."
   WORK="$(mktemp -d "${TMPDIR:-/tmp}/${PROGRAM}.XXXXXX")"
   OUT="${WORK}/out"
   ERR="${WORK}/err"
 
   aws_call sts get-caller-identity --query '[Account, Arn]'
-  [ "$OUTCOME" = "success" ] || refuse "no AWS credentials answered get-caller-identity (${OUTCOME}). Sign in with the spa-platform profile."
+  [ "$OUTCOME" = "success" ] || refuse "no AWS credentials answered get-caller-identity (${OUTCOME}). Sign in as the operator, with credentials for the account the cell is in."
   ACCOUNT=""
   local caller_arn=""
   read -r ACCOUNT caller_arn < "$OUT" || true
@@ -111,7 +178,7 @@ cell_start() {
   # The teardown role deletes releases and may write nothing (ADR-0014). None of these scripts runs
   # as it; teardown.sh assumes it itself for the one thing it is for.
   case "$CALLER_ROLE" in
-    spa-platform-*-teardown) refuse "the caller is a session of the teardown role ${CALLER_ROLE}. Run as the operator, with the spa-platform profile (ADR-0014)." ;;
+    spa-platform-*-teardown) refuse "the caller is a session of the teardown role ${CALLER_ROLE}. Run as the operator, with credentials for the account the cell is in (ADR-0014)." ;;
   esac
 }
 
@@ -130,10 +197,10 @@ REDACTIONS=""
 # another Region.
 redact_clients() {
   [ -f "$OUTPUTS_FILE" ] ||
-    refuse "there is no $(root_name "$OUTPUTS_FILE"). Run tools/scripts/seed.sh first: it writes it from the three roots."
+    refuse "there is no $(root_name "$OUTPUTS_FILE"). Run tools/scripts/seed.sh first: it writes it from the cell's roots."
   REDACTIONS="${WORK}/redactions"
   documents clients "$OUTPUTS_FILE" "$REGION" > "$REDACTIONS" ||
-    refuse "$(root_name "$OUTPUTS_FILE") gives no clients for ${REGION}. Run tools/scripts/seed.sh again to rewrite it from the three roots."
+    refuse "$(root_name "$OUTPUTS_FILE") gives no clients for ${REGION}. Run tools/scripts/seed.sh again to rewrite it from the cell's roots."
 }
 
 redact() { printf '%s' "$1" | redact_stream; }
@@ -284,14 +351,14 @@ terraform_shown() {
 
 documents() { python3 -I "$DOCUMENTS" "$@"; }
 
-# A field of infra/envs/poc/outputs.json that a script cannot run without, in the contract's names
+# A field of the outputs document that a script cannot run without, in the contract's names
 # (contracts/infra-outputs.schema.json). seed.sh writes the document first, and deploy.sh and
 # rollback.sh rewrite it after their apply, so a script that reads it reads the last apply's.
 outputs_field() {
   [ -f "$OUTPUTS_FILE" ] ||
-    refuse "there is no $(root_name "$OUTPUTS_FILE"). Run tools/scripts/seed.sh first: it writes it from the three roots."
+    refuse "there is no $(root_name "$OUTPUTS_FILE"). Run tools/scripts/seed.sh first: it writes it from the cell's roots."
   documents field "$OUTPUTS_FILE" "$1" "$REGION" ||
-    refuse "$(root_name "$OUTPUTS_FILE") gives no $1 for ${REGION}. Run tools/scripts/seed.sh again to rewrite it from the three roots."
+    refuse "$(root_name "$OUTPUTS_FILE") gives no $1 for ${REGION}. Run tools/scripts/seed.sh again to rewrite it from the cell's roots."
 }
 
 # The outputs document's ecsBastionService, the bastion service the tunnel lists for its hop, or
@@ -304,24 +371,27 @@ outputs_bastion() {
 }
 
 # What the scripts say when the document names no bastion: how to turn it on, and which scripts
-# rewrite the document after the apply.
-NO_BASTION="$(root_name "$OUTPUTS_FILE") names no ecsBastionService, so the cell has no bastion for a tunnel's hop (#1167). Set bastion = true and bastion_image in $(root_name "$PLATFORM_ROOT")/terraform.tfvars, apply that root, and rewrite the document with tools/scripts/seed.sh; deploy.sh and rollback.sh rewrite it after their own applies."
+# rewrite the document after the apply. After need_entry, which sets both paths.
+no_bastion() {
+  printf '%s' "$(root_name "$OUTPUTS_FILE") names no ecsBastionService, so the cell has no bastion for a tunnel's hop (#1167). Set bastion = true and bastion_image in $(root_name "$PLATFORM_ROOT")/terraform.tfvars, apply that root, and rewrite the document with tools/scripts/seed.sh; deploy.sh and rollback.sh rewrite it after their own applies."
+}
 
-# infra/envs/poc/outputs.json, from the three roots' outputs. After every apply.
+# The outputs document, from each root's outputs, read in SPA_ROOTS's order, and the field map,
+# which says which root and output answers each field. After every apply. The caller has called
+# need_entry for SPA_ROOTS, SPA_FIELD_MAP and SPA_OUTPUTS_FILE.
 write_outputs() {
-  local root dir
-  for root in idp apps platform; do
-    case "$root" in
-      idp) dir="$IDP_ROOT" ;;
-      apps) dir="$APPS_ROOT" ;;
-      platform) dir="$PLATFORM_ROOT" ;;
-    esac
-    terraform -chdir="$dir" output -no-color -json > "${WORK}/${root}-outputs.json" 2> "$ERR" ||
-      refuse "could not read the ${root} root's outputs. Run terraform init -backend-config=backend.hcl in $(root_name "$dir")."
+  local dir name pairs="" index=0
+  set --
+  for dir in "${ROOT_DIRS[@]}"; do
+    name="${dir##*/}"
+    index=$((index + 1))
+    terraform -chdir="$dir" output -no-color -json > "${WORK}/root-${index}.json" 2> "$ERR" ||
+      refuse "could not read the ${name} root's outputs. Run terraform init -backend-config=backend.hcl in $(root_name "$dir")."
+    set -- "$@" "$name" "${WORK}/root-${index}.json"
+    pairs="${pairs:+${pairs}, }${name}"
   done
-  documents outputs "$REGION" "${WORK}/idp-outputs.json" "${WORK}/apps-outputs.json" \
-    "${WORK}/platform-outputs.json" "$OUTPUTS_FILE" || fail "could not write $(root_name "$OUTPUTS_FILE")."
-  note "wrote $(root_name "$OUTPUTS_FILE") from the idp, apps and platform roots' outputs"
+  documents outputs "$REGION" "$FIELD_MAP" "$OUTPUTS_FILE" "$@" || fail "could not write $(root_name "$OUTPUTS_FILE")."
+  note "wrote $(root_name "$OUTPUTS_FILE") from the roots' outputs, in order: ${pairs}"
 }
 
 # The service's current task definition: sets TASK_DEFINITION (its ARN) and TARGET_GROUP.
@@ -365,14 +435,18 @@ read_platform_config() {
 # --- apply, wait, assert ---------------------------------------------------------------------------
 
 # Plan and apply the platform root with these two images and the gateway's health path, then record
-# them for every later apply. $1 the gateway image, $2 the mock API image or "".
+# them for every later apply. $1 the gateway image, $2 the mock API image or "". The gateway runs on
+# its read-only root, gateway_writable_root = false: true is the sample image's alone, which
+# platform-tfvars.sh writes into terraform.tfvars for the first apply (#1380), and the module refuses
+# it beside /readyz.
 apply_images() {
   local gateway="$1" mock="$2" plan="${WORK}/platform.tfplan"
   note "planning $(root_name "$PLATFORM_ROOT") with the gateway at $(redact "$gateway")"
   # The plan file holds the values the apply will write, so it stays in the scratch directory and
   # never in the tree (change request 1.1).
   terraform_shown -chdir="$PLATFORM_ROOT" plan -input=false -no-color -out="$plan" \
-    -var "gateway_image=${gateway}" -var "mock_api_image=${mock}" -var "health_check_path=${READY_PATH}" ||
+    -var "gateway_image=${gateway}" -var "mock_api_image=${mock}" -var "health_check_path=${READY_PATH}" \
+    -var "gateway_writable_root=false" ||
     fail "the platform root's plan failed; nothing was applied."
   terraform_shown -chdir="$PLATFORM_ROOT" apply -input=false -no-color "$plan" ||
     fail "the platform root's apply failed. Read its output above; $(root_name "$IMAGES_TFVARS") is unchanged."
@@ -383,6 +457,7 @@ apply_images() {
     printf 'gateway_image     = "%s"\n' "$gateway"
     printf 'mock_api_image    = "%s"\n' "$mock"
     printf 'health_check_path = "%s"\n' "$READY_PATH"
+    printf 'gateway_writable_root = false\n'
   } > "$IMAGES_TFVARS"
   note "recorded the applied images in $(root_name "$IMAGES_TFVARS")"
   # The infrastructure outputs are written after every apply (contracts/infra-outputs.schema.json),
@@ -602,9 +677,9 @@ wait_for_revision() {
   done
   [ -n "$ids" ] || fail "${SERVICE} has no running task to wait for."
   if [ -z "$origin" ]; then
-    [ -n "$(outputs_bastion)" ] || fail "${NO_BASTION} Or pass --url with an origin this workstation already reaches, and the wait opens no tunnel."
+    [ -n "$(outputs_bastion)" ] || fail "$(no_bastion) Or pass --url with an origin this workstation already reaches, and the wait opens no tunnel."
     open_wait_tunnel
-    origin="https://app1.${SPA_CERT_DOMAIN:-spa-poc.test}:${WAIT_TUNNEL_PORT}"
+    origin="https://app1.${CERT_DOMAIN}:${WAIT_TUNNEL_PORT}"
   fi
   note "waiting through ${origin} until each running task reports revision ${revision} or later: ${ids}"
   spactl wait --url "$origin" --revision "$revision" --instances "$ids" > "$OUT" 2> "$ERR" || status=$?

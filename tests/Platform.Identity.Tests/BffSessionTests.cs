@@ -55,7 +55,7 @@ public sealed class BffSessionTests
         Assert.StartsWith("application/json", session.ContentType, StringComparison.Ordinal);
         JsonElement body = JsonDocument.Parse(session.Body).RootElement;
         Assert.Equal(
-            ["csrfToken", "email", "expiresAt", "name", "sub"],
+            ["csrfToken", "email", "expiresAt", "fragments", "name", "sub"],
             body.EnumerateObject().Select(p => p.Name).Order(StringComparer.Ordinal));
         Assert.Equal(gateway.Idp.DefaultSubject, body.GetProperty("sub").GetString());
         Assert.Equal(gateway.Idp.DefaultSubject + " (display)", body.GetProperty("name").GetString());

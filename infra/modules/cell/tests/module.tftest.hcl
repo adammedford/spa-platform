@@ -857,6 +857,82 @@ run "the_gateway_s_tmp_is_the_task_s_one_writable_path" {
   }
 }
 
+# #1380. The sample image's shape. The public sample image a fresh cell's first apply runs,
+# nginx-unprivileged, runs as uid 101 and keeps its temp files under /tmp, which on the read-only
+# root is the task volume ECS gives "0755 and the owner as root": #787's Docker stand-in showed it
+# exit at start on "mkdir() /tmp/proxy_temp ... Permission denied". gateway_writable_root = true,
+# which tools/scripts/platform-tfvars.sh writes beside the sample's pin, gives the gateway's
+# container the shape it had before #787: a writable root, no /tmp volume and no mount, so /tmp is
+# the image's own directory. The capabilities and the init process (#786) and Exec off are not part
+# of it. The run on the default inputs above holds the read-only shape; this one holds the switch.
+# Mutations that turn this run red: readonlyRootFilesystem left true under the input; the /tmp
+# mount kept under it; the volume kept under it; the switch also turning Exec back on.
+run "gateway_writable_root_gives_the_sample_image_a_writable_root_and_no_tmp_volume" {
+  command = plan
+
+  variables {
+    gateway_writable_root = true
+  }
+
+  assert {
+    condition = try(
+      one([for c in jsondecode(aws_ecs_task_definition.gateway.container_definitions) : c if c.name == "gateway"]).readonlyRootFilesystem == false,
+      false
+    )
+    error_message = "Under gateway_writable_root the gateway's root is writable, explicitly (#1380): the sample image writes under /tmp and its entrypoint edits /etc/nginx/conf.d."
+  }
+
+  assert {
+    condition = try(
+      one([for c in jsondecode(aws_ecs_task_definition.gateway.container_definitions) : c if c.name == "gateway"]).mountPoints == [],
+      false
+    )
+    error_message = "Under gateway_writable_root the gateway mounts nothing at /tmp (#1380): a root-owned 0755 mount there would shadow the image's own /tmp on the writable root too."
+  }
+
+  assert {
+    condition     = length(aws_ecs_task_definition.gateway.volume) == 0
+    error_message = "Under gateway_writable_root the task declares no volume (#1380): nothing mounts one."
+  }
+
+  assert {
+    condition     = aws_ecs_service.gateway.enable_execute_command == false
+    error_message = "gateway_writable_root changes the root and /tmp alone: Exec stays off on the gateway's service (#787)."
+  }
+
+  assert {
+    condition = try(
+      one([for c in jsondecode(aws_ecs_task_definition.gateway.container_definitions) : c if c.name == "gateway"]).linuxParameters.capabilities.drop == ["ALL"],
+      false
+    )
+    error_message = "gateway_writable_root changes the root and /tmp alone: the gateway still drops every capability (#786)."
+  }
+
+  assert {
+    condition = try(
+      one([for c in jsondecode(aws_ecs_task_definition.gateway.container_definitions) : c if c.name == "gateway"]).linuxParameters.initProcessEnabled == true,
+      false
+    )
+    error_message = "gateway_writable_root changes the root and /tmp alone: the gateway still runs under an init process (#786)."
+  }
+}
+
+# #1380. The writable root is the sample's and never the gateway's: deploy.sh and rollback.sh apply
+# the gateway with health_check_path = "/readyz" and gateway_writable_root = false, and a root whose
+# terraform.tfvars still says true from the sample's first apply is refused at plan rather than
+# shipping the gateway on a writable root, should a run ever leave the switch out.
+# Mutation that turns this run red: the validation removed.
+run "a_writable_root_with_the_gateway_s_health_check_is_refused" {
+  command = plan
+
+  variables {
+    gateway_writable_root = true
+    health_check_path     = "/readyz"
+  }
+
+  expect_failures = [var.gateway_writable_root]
+}
+
 # #786. The gateway's container drops every Linux capability Docker grants by default and runs an
 # init process as PID 1, which forwards signals to the process and reaps zombies. On the default
 # inputs the task is the gateway's container alone, so each assertion over every container holds of
@@ -2650,6 +2726,88 @@ run "a_ring_under_memory_carries_the_ring_and_no_table" {
     )
     error_message = "A ring with the memory store sets DataProtection__ParameterPrefix and no Session__TableName."
   }
+}
+
+# --- Fragments (#961): the two optional policy values --------------------------------------------
+#
+# On the default inputs neither key is set, which under_memory_the_cell_is_phase_1_s_unchanged and
+# under_memory_the_plan_is_phase_1_s_byte_for_byte above hold with their literals unedited. These
+# runs hold the other side: set, each arrives under its contract name as its decimal string, and
+# below 1 each is refused at plan.
+
+# Each key counts only when the contract's Policy section names its leaf, so a schema that drops or
+# renames either key fails this run until the module follows. terraform test refuses an assertion
+# that reads the schema alone ("Invalid assert expression: The condition expression must refer to
+# at least one object from elsewhere in the configuration", Terraform 1.11.0), so the schema is read
+# in the same filter that finds the key in the gateway's environment.
+#
+# Mutations that turn this run red: FragmentsPerShell or MergeBudget deleted from
+# contracts/platform-config.schema.json -> Policy.properties; either key dropped from ecs.tf's
+# platform_configuration, or renamed (Policy__MergeBudgets); either value read from the other input.
+run "set_the_fragment_inputs_arrive_as_the_contract_s_policy_keys_with_their_decimal_strings" {
+  command = plan
+
+  variables {
+    fragments_per_shell = 4
+    merge_budget        = 7
+  }
+
+  assert {
+    condition = alltrue([
+      for leaf, expected in { FragmentsPerShell = "4", MergeBudget = "7" } :
+      one([
+        for e in one([
+          for c in jsondecode(aws_ecs_task_definition.gateway.container_definitions) : c if c.name == "gateway"
+        ]).environment : e.value if e.name == "Policy__${leaf}" && contains(keys(jsondecode(file("../../../contracts/platform-config.schema.json")).properties.Policy.properties), leaf)
+      ]) == expected
+    ])
+    error_message = "Set, fragments_per_shell = 4 arrives as Policy__FragmentsPerShell = \"4\" and merge_budget = 7 as Policy__MergeBudget = \"7\", each under a key the contract's Policy section names."
+  }
+}
+
+# Mutations that turn this run red: fragments_per_shell's validation made >= 0, or removed.
+run "a_fragments_per_shell_of_0_is_refused" {
+  command = plan
+
+  variables {
+    fragments_per_shell = 0
+  }
+
+  expect_failures = [var.fragments_per_shell]
+}
+
+# Mutations that turn this run red: merge_budget's validation made >= 0, or removed.
+run "a_merge_budget_of_0_is_refused" {
+  command = plan
+
+  variables {
+    merge_budget = 0
+  }
+
+  expect_failures = [var.merge_budget]
+}
+
+# The schema types both as integers, and the binder cannot read "2.5" as one.
+#
+# Mutations that turn this run red: the floor() half of either input's validation removed.
+run "a_fractional_fragments_per_shell_is_refused" {
+  command = plan
+
+  variables {
+    fragments_per_shell = 2.5
+  }
+
+  expect_failures = [var.fragments_per_shell]
+}
+
+run "a_fractional_merge_budget_is_refused" {
+  command = plan
+
+  variables {
+    merge_budget = 2.5
+  }
+
+  expect_failures = [var.merge_budget]
 }
 
 # --- Continuity (#347, #332 D6): the two-task shape, behind multi_task --------------------------

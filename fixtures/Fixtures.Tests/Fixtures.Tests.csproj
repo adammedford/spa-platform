@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-  <!-- Tests for everything under fixtures/. Owner: workstream 5. -->
+  <!-- Tests for everything under fixtures/, and for the browser client in client/. Owner: workstream 5. -->
 
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
@@ -17,7 +17,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- Task 5.2: bff-client.js is unit-tested in headless Chromium (docs/dependencies.md lists this
+    <!-- Task 5.2: client/bff-client.js is unit-tested in headless Chromium (docs/dependencies.md lists this
          package for Fixtures.Tests, and the browser it installs). -->
     <PackageReference Include="Microsoft.Playwright" />
   </ItemGroup>

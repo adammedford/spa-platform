@@ -75,13 +75,7 @@ internal static class AuthenticationEvents
         events.OnRemoteFailure = async context =>
         {
             context.HandleResponse();
-            // The page below ends the response, so the rule is only noted (#142, Q11).
-            Rejection.Note(context.HttpContext, RuleIds.AuthCallback);
-            HttpResponse response = context.Response;
-            response.StatusCode = StatusCodes.Status400BadRequest;
-            response.ContentType = "text/html; charset=utf-8";
-            response.Headers.CacheControl = "no-store";
-            await response.WriteAsync(FailurePage, context.HttpContext.RequestAborted);
+            await FailAsync(context.HttpContext);
         };
 
         Func<TicketReceivedContext, Task> profileTicket = events.OnTicketReceived;
@@ -93,6 +87,21 @@ internal static class AuthenticationEvents
                 context.Principal = Trimmed(principal);
             }
         };
+    }
+
+    /// <summary>
+    /// Ends a refused callback on <see cref="FailurePage"/> with 400 under <c>auth.callback</c>. The page
+    /// ends the response, so the rule is only noted (#142, Q11). A fragment callback whose state carries
+    /// no hop ends here too (#994).
+    /// </summary>
+    internal static async Task FailAsync(HttpContext context)
+    {
+        Rejection.Note(context, RuleIds.AuthCallback);
+        HttpResponse response = context.Response;
+        response.StatusCode = StatusCodes.Status400BadRequest;
+        response.ContentType = "text/html; charset=utf-8";
+        response.Headers.CacheControl = "no-store";
+        await response.WriteAsync(FailurePage, context.RequestAborted);
     }
 
     /// <summary>

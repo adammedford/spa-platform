@@ -23,6 +23,11 @@
 #     --sample-digest gives, or else by the current digest of its stable-alpine tag, read with
 #     `docker buildx imagetools inspect`.
 #   - health_check_path = "/", the sample image's (infra/modules/cell/variables.tf -> health_check_path).
+#   - gateway_writable_root = true, the sample image's shape (#1380): it runs as uid 101 and writes
+#     under /tmp, which the gateway's read-only root mounts root-owned 0755, so it needs a writable
+#     root and no /tmp volume (infra/modules/cell/variables.tf -> gateway_writable_root). deploy.sh
+#     applies the gateway with false and records it in images.auto.tfvars, which Terraform loads
+#     after this file.
 #   - with --bastion only, bastion = true and bastion_image, the sample image pinned by the same digest
 #     as gateway_image (#1397). The bastion is the tunnel's hop (#1167), off by default (#1168), and
 #     deploy.sh and tunnel.sh refuse a cell whose outputs document names none, so a from-nothing
@@ -65,6 +70,11 @@ SAMPLE_REPOSITORY="public.ecr.aws/nginx/nginx-unprivileged"
 SAMPLE_TAG="stable-alpine"
 # The one issuer of Assumption A4, named as contracts/platform-config.example.json names it.
 ISSUER_NAME="cognito-poc"
+# The proof cell's own roots, named here: cell-common.sh holds no cell's paths (#1348), and this
+# script writes the platform root's inputs from the identity root's outputs before the platform
+# root's first apply, so it needs no entry value.
+IDP_ROOT="${REPO_ROOT}/infra/envs/poc/idp"
+PLATFORM_ROOT="${REPO_ROOT}/infra/envs/poc/platform"
 TFVARS="${PLATFORM_ROOT}/terraform.tfvars"
 
 # A SHA-256 digest in full: 64 lowercase hex.
@@ -334,6 +344,7 @@ def set_issuer():
 try:
     set_scalar("gateway_image", image, after_comment=True)
     set_scalar("health_check_path", health, after_comment=False)
+    set_scalar("gateway_writable_root", "true", after_comment=False, boolean=True)
     set_issuer()
     if bastion:
         set_scalar("bastion", "true", after_comment=True, boolean=True)

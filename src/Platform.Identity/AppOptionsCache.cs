@@ -96,7 +96,9 @@ internal sealed class AppOptionsCache<TOptions>(IHttpContextAccessor accessor, I
             return null;
         }
 
-        string appId = name[prefix.Length..];
+        // A fragment's OpenID Connect scheme, oidc:{appId}:{fragmentId}, is cached under its entry's
+        // whole fingerprint, so a change to any part of the entry evicts every scheme of it (#994).
+        string appId = SchemeNames.ParseOidc(name)?.AppId ?? name[prefix.Length..];
         AppDefinition? app = pinnedFirst
             ? SchemeApp.Find(accessor, registry, appId)
             : registry.Current.ByAppId.GetValueOrDefault(appId);

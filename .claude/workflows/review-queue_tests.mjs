@@ -677,6 +677,37 @@ try {
       const prompt = (env.mutations.find((x) => x.test === test) || {}).prompt || ''
       if (!/stayed green, the result is did-not-fail: failingNames names the tests that went red/.test(prompt) || /reproduced all the same/.test(prompt)) fail(`the ${kind} mutation prompt does not say a break caught only by another test is did-not-fail`)
     }
+    // A stated cell that names a unittest class is that class's methods (#1416): unittest prints a
+    // failing name as a method of its class, so on #1406 the cell FencedBoxTests, red on all five of
+    // its methods, matched none and read did-not-fail. Red only on that class's methods, in either
+    // printed form or under a dotted module, it reproduces and merges; a cell naming the class with
+    // its module does too. Red only on another class's methods, or on a class whose name merely ends
+    // in the cell's, it is still did-not-fail and holds. A name xUnit printed, 'Ns.Class.Method(args)',
+    // is read the same way (#1452): on #1451 the cell PolicyConfigurationTests, red on seven of its
+    // methods, read did-not-fail. Red only on another class's methods, or on a class whose name ends
+    // in the cell's but not at a dot, it is still did-not-fail and holds.
+    {
+      const CLS = 'FencedBoxTests'
+      const PY = 'tools/landing_subjects_tests.py'
+      for (const [cell, names, want, verdict] of [
+        [CLS, ['test_a (__main__.FencedBoxTests)', 'test_b (__main__.FencedBoxTests)'], 'reproduced', 'merge'],
+        [CLS, ['test_a (__main__.FencedBoxTests.test_a)'], 'reproduced', 'merge'],
+        [CLS, ['test_a (tools.landing_subjects_tests.FencedBoxTests) (k=\'v\')'], 'reproduced', 'merge'],
+        [`__main__.${CLS}`, ['test_a (__main__.FencedBoxTests)'], 'reproduced', 'merge'],
+        [CLS, ['test_a (__main__.OtherTests)', 'test_b (__main__.OtherTests.test_b)'], 'did-not-fail', 'hold'],
+        [CLS, ['test_a (__main__.XFencedBoxTests)'], 'did-not-fail', 'hold'],
+        ['PolicyConfigurationTests', ['Platform.Registry.Tests.PolicyConfigurationTests.Nom', 'Platform.Registry.Tests.PolicyConfigurationTests.Other(value: "a.b")'], 'reproduced', 'merge'],
+        ['PolicyConfigurationTests', ['Platform.Registry.Tests.OtherTests.Nom', 'Platform.Registry.Tests.OtherTests.Other'], 'did-not-fail', 'hold'],
+        ['ConfigurationTests', ['Platform.Registry.Tests.PolicyConfigurationTests.Nom'], 'did-not-fail', 'hold'],
+      ]) {
+        const SERVED = { 206: pr(206, [PY], { statedMutations: [stated(cell, names.length, 104, PY)] }) }
+        env = run({ prs: [206] }, SERVED, { mutate: { [cell]: { ...row('reproduced', names.length, 104), failingNames: names } } })
+        result = await execute(env)
+        const c = resultOf(206, result)
+        const m = (c.mutations || []).find((x) => x.test === cell) || {}
+        if (m.result !== want || c.verdict !== verdict) fail(`PR 206 with the stated row ${cell} red on ${JSON.stringify(names)}: row ${m.result}, verdict ${c.verdict}, expected ${want} and ${verdict}`)
+      }
+    }
     // A nomination whose test carries a qualifier after its name is mutated under the bare name, and
     // red on that test it reads reproduced and merges (#763): on #762 the qualifier turned it did-not-fail.
     {

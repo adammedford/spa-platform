@@ -3,7 +3,8 @@ using Gateway.TestHarness;
 namespace Gateway.SecurityTests.Negative;
 
 /// <summary>
-/// Plan row 6.3, the negative suite N-01 to N-25 and N-27, exercised through the composed gateway.
+/// Plan row 6.3, the negative suite N-01 to N-25 and N-27, with N-33 to N-35 (#734), exercised
+/// through the composed gateway.
 /// Each test observes a client response, rendered logs, the session store or an upstream's record
 /// rather than invoking middleware directly (docs/plan/04-tests.md).
 ///

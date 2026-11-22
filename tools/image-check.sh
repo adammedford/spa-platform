@@ -17,11 +17,13 @@
 # from that copy. The tree it was run in is left as it was.
 #
 # It passes only when the image builds, its configured user is not root, and the gateway, started
-# as that user, logs that it started, which it can do only after WebApplication.CreateBuilder has
-# read appsettings.json. It fails when the image does not build, runs as root (root reads anything,
-# so an image without its USER would pass for the wrong reason), or throws, exits or stays silent
-# for STARTUP_SECONDS. Nothing is pushed. Before its verdict it prints the runtimes the image carries,
-# read with `dotnet --list-runtimes` inside it, which fail nothing (#273).
+# as that user with the platform configuration `contracts/platform-config.example.json` in its
+# environment form (ADR-0042: a gateway with no platform configuration refuses to start), logs that
+# it started, which it can do only after WebApplication.CreateBuilder has read appsettings.json. It
+# fails when the image does not build, runs as root (root reads anything, so an image without its
+# USER would pass for the wrong reason), or throws, exits or stays silent for STARTUP_SECONDS.
+# Nothing is pushed. Before its verdict it prints the runtimes the image carries, read with
+# `dotnet --list-runtimes` inside it, which fail nothing (#273).
 #
 # Then it holds the image's hardened shape (#781). It fails when the image has /bin/sh, which the
 # chiseled base does not ship; when its environment does not set DOTNET_EnableDiagnostics=0; or when
@@ -129,8 +131,35 @@ case "$user" in
     ;;
 esac
 
+# The platform configuration, contracts/platform-config.example.json in its deployed form, read from
+# the copy rather than copied: without one the gateway refuses to start (ADR-0042). The example's
+# buckets are placeholders and the container has no AWS Region, so the registry poll fails and logs,
+# which the start line does not wait for.
+platform_env=()
+while IFS= read -r pair; do
+  platform_env+=(-e "$pair")
+done < <(python3 -I -c '
+import json, sys
+def walk(key, value):
+    if isinstance(value, dict):
+        for name, item in value.items():
+            yield from walk(key + [name], item)
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            yield from walk(key + [str(index)], item)
+    else:
+        text = ("true" if value else "false") if isinstance(value, bool) else str(value)
+        yield "__".join(key) + "=" + text
+for pair in walk([], json.load(open(sys.argv[1]))):
+    print(pair)
+' "$context/contracts/platform-config.example.json")
+# A process substitution's failure does not reach the loop's status, so an empty list is the failure
+# (CODING_STANDARDS.md, "A check fails closed"); it also keeps bash 3.2's set -u off an empty array.
+[ "${#platform_env[@]}" -gt 0 ] \
+  || fail "contracts/platform-config.example.json could not be read into the gateway's environment."
+
 # As the image's own user: no --user, so what runs is what ECS runs.
-"$docker" run -d --name "$name" "$image" > /dev/null || fail "the gateway image could not be started."
+"$docker" run -d --name "$name" "${platform_env[@]}" "$image" > /dev/null || fail "the gateway image could not be started."
 
 started=false
 waited=0
@@ -240,7 +269,7 @@ wait_for_lines() {
 }
 
 # The gateway again, on a read-only root with a tmpfs at /tmp, and as the image's own user.
-"$docker" run -d --name "$readonly_name" --read-only --tmpfs /tmp "$image" > /dev/null \
+"$docker" run -d --name "$readonly_name" --read-only --tmpfs /tmp "${platform_env[@]}" "$image" > /dev/null \
   || fail "the gateway image could not be started a second time, on a read-only root with a tmpfs at /tmp."
 waited_for=0
 wait_for_lines "$readonly_name" 1 'Application started' "$work/readonly.log" || waited_for=$?

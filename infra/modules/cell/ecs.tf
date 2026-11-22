@@ -112,6 +112,12 @@ locals {
     # upstreams it may name.
     { for index, suffix in var.allowed_host_suffixes : "Policy__AllowedHostSuffixes__${index}" => suffix },
     { for index, upstream in var.allowed_upstreams : "Policy__AllowedUpstreams__${index}" => upstream },
+    # Fragments (#961). The schema marks both optional, and the gateway supplies its own placeholder
+    # for an absent one (contracts/platform-config.schema.json -> Policy.FragmentsPerShell,
+    # Policy.MergeBudget), so each is present only behind its input and the default inputs add no
+    # key: a Phase 1 task definition is unchanged.
+    var.fragments_per_shell != null ? { "Policy__FragmentsPerShell" = tostring(var.fragments_per_shell) } : {},
+    var.merge_budget != null ? { "Policy__MergeBudget" = tostring(var.merge_budget) } : {},
     # UsePlatformForwardedHeaders trusts X-Forwarded-Proto and X-Forwarded-For from these addresses
     # and from nowhere else (contracts/pipeline.md, UsePlatformForwardedHeaders; N-09). The contract
     # names the value itself -- "The ALB subnets, in CIDR form"
@@ -173,8 +179,10 @@ locals {
     # tunnel's hop; the hop is the bastion's task now (#1167), Exec is off on this service and no
     # session agent writes here. The one writable path is /tmp, the task volume below (#780, answer
     # 3: "the safe contract and not a measured one"). Explicit rather than left to the default,
-    # which is writable.
-    readonlyRootFilesystem = true
+    # which is writable. The one exception is the public sample image's first apply, behind
+    # gateway_writable_root (#1380, variables.tf): that image writes under /tmp as uid 101, which a
+    # root-owned 0755 volume refuses, and its entrypoint edits /etc/nginx/conf.d.
+    readonlyRootFilesystem = !var.gateway_writable_root
 
     # hostPort is the value ECS fills in under awsvpc, where it must equal containerPort, spelled out
     # with the three empty lists below so the definition is the one ECS reads back (#1006). ECS's
@@ -194,12 +202,16 @@ locals {
     # ECS gives a task volume "0755 and the owner as root" unless the image says otherwise
     # (https://docs.aws.amazon.com/AmazonECS/latest/developerguide/bind-mounts.html), and
     # src/Gateway/Dockerfile does not. That the process can write there is not shown by any test
-    # here; it is seen only on a running task (#787, "Not shown by this ticket").
-    mountPoints = [{
-      sourceVolume  = local.gateway_tmp_volume_name
-      containerPath = "/tmp"
-      readOnly      = false
-    }]
+    # here; it is seen only on a running task (#787, "Not shown by this ticket"). Under
+    # gateway_writable_root nothing is mounted (#1380): the mount would shadow the image's own /tmp,
+    # 1777 in the sample image, with the same root-owned 0755 directory on the writable root too.
+    mountPoints = [
+      for mount in [{
+        sourceVolume  = local.gateway_tmp_volume_name
+        containerPath = "/tmp"
+        readOnly      = false
+      }] : mount if !var.gateway_writable_root
+    ]
 
     # ECS's values when none is given (#1006): no other container's volumes and no namespaced kernel
     # parameters.
@@ -301,8 +313,12 @@ resource "aws_ecs_task_definition" "gateway" {
   # mount on the task's own ephemeral storage, which Fargate provides and removes with the task: no
   # host path, no Docker volume, no EFS or FSx share, and nothing outlives the task.
   # https://docs.aws.amazon.com/AmazonECS/latest/developerguide/bind-mounts.html
-  volume {
-    name = local.gateway_tmp_volume_name
+  # Absent under gateway_writable_root (#1380), where nothing mounts it.
+  dynamic "volume" {
+    for_each = var.gateway_writable_root ? [] : [local.gateway_tmp_volume_name]
+    content {
+      name = volume.value
+    }
   }
 
   tags = { Name = local.name_prefix }
@@ -330,7 +346,8 @@ resource "aws_ecs_service" "gateway" {
 
   # Off (#787). The tunnel's hop is the bastion's task (#1167; aws_ecs_service.bastion below), and
   # tools/scripts/tunnel.sh forwards through no task of this service. With Exec off, the task role
-  # holds no ssmmessages permission (iam.tf) and both roots are read-only: nothing in the shipping
+  # holds no ssmmessages permission (iam.tf) and both roots are read-only, except the gateway
+  # container's while gateway_writable_root runs the sample image (#1380): nothing in the shipping
   # task is reachable for an incident, which uses the logs, /readyz and the bastion's network path
   # (#780, answer 2).
   enable_execute_command = false

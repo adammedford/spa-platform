@@ -9,7 +9,7 @@
 #   tools/scripts/verify-tunnel.sh /           # the sample image, which answers / only
 #   tools/scripts/verify-tunnel.sh /healthz    # the gateway (contracts/pipeline.md, Health endpoints)
 #
-# It requests https://app1.spa-poc.test:8443<path> and passes only when all of these hold:
+# It requests https://app1.$SPA_CERT_DOMAIN:8443<path> and passes only when all of these hold:
 #   - the name resolved to the loopback address, so the request went into the tunnel and not
 #     somewhere else (the hosts-file line certs.sh names);
 #   - TLS validated against this workstation's own trust store: no -k, no CA file of its own, no
@@ -20,10 +20,12 @@
 # A failure says which of those broke, and a connection the tunnel accepted but nothing answered
 # reads as a dead session (risk 15 in docs/plan/06-phase-2-and-risks.md).
 #
-# It needs no AWS credentials: it reads nothing but the one request.
+# It needs no AWS credentials: it reads nothing but the one request. It reads the entry value
+# SPA_CERT_DOMAIN, the certificate's domain, which has no default (tools/scripts/cell-common.sh's
+# header): the default host is under it, and so is the hosts-file line a failure names.
 #
 # Exit status: 0 when the path answered 200 over trusted TLS through the tunnel, 1 when it did not,
-# 2 when it did not start (a usage error, or no curl).
+# 2 when it did not start (a usage error, SPA_CERT_DOMAIN unset, or no curl).
 #
 # Written for the bash 3.2 that ships with macOS, like tools/scripts/certs.sh.
 # Owner: workstream 1, AWS and IaC.
@@ -32,7 +34,7 @@ set -euo pipefail
 umask 077
 
 PROGRAM="verify-tunnel"
-DOMAIN="${SPA_CERT_DOMAIN:-spa-poc.test}"
+DOMAIN="${SPA_CERT_DOMAIN:-}"
 HOST=""
 PORT="${SPA_TUNNEL_PORT:-8443}"
 REQUEST_PATH=""
@@ -54,7 +56,7 @@ usage() {
 
 Usage: verify-tunnel.sh <path> [--host NAME] [--port N]
   <path>        The health path, absolute: / on the sample image, /healthz on the gateway.
-  --host NAME   The app host to ask. Default: app1.\$SPA_CERT_DOMAIN, else app1.spa-poc.test.
+  --host NAME   The app host to ask. Default: app1.\$SPA_CERT_DOMAIN.
   --port N      The tunnel's local port. Default: \$SPA_TUNNEL_PORT, else 8443.
   -h, --help    This text.
 EOF
@@ -81,6 +83,8 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 
+[ -n "$DOMAIN" ] ||
+  refuse "SPA_CERT_DOMAIN is not set. It is one of the cell's entry values, which have no default: set it for the cell, as the proof cell's entry file cell.env does, and export it (set -a; . <entry file>; set +a)."
 [ -n "$REQUEST_PATH" ] || refuse "give the health path: / on the sample image, /healthz on the gateway. Try --help."
 # The form modules/cell's health_check_path takes (variables.tf): absolute, no query string, and
 # nothing a URL would need escaped.

@@ -106,22 +106,22 @@ internal static class PlatformAntiforgery
 }
 
 /// <summary>
-/// <c>UsePlatformAntiforgery</c>: an unsafe method on <c>/api</c> needs a valid
+/// <c>UsePlatformAntiforgery</c>: an unsafe method on <c>/api</c> or a fragment's
+/// <c>/fragments/{seg}/api</c> needs a valid
 /// <c>X-CSRF-TOKEN</c>, or it is refused with 403 <c>csrf_failed</c> under rule <c>csrf.token</c>
 /// (<c>contracts/request-gate.md</c>).
 /// </summary>
 internal sealed partial class AntiforgeryStage(ICsrfTokens tokens, ILogger logger)
 {
-    // Case-insensitive, as the request gate's match and endpoint routing are, so /API/... cannot
-    // reach the proxy route without a token.
-    private static readonly PathString Api = "/api";
-
     /// <summary><c>contracts/request-gate.md</c> -> Rule ids, via <see cref="RuleIds"/> (ADR-0015).</summary>
     private const string Rule = RuleIds.CsrfToken;
 
     internal async Task InvokeAsync(HttpContext context, RequestDelegate next)
     {
-        if (!context.Request.Path.StartsWithSegments(Api) || IsSafe(context.Request.Method))
+        // /api and a fragment's /fragments/{seg}/api, by the request gate's own test, so the two cannot
+        // disagree on a path; case-insensitive as routing is, so /API/... cannot reach the proxy route
+        // without a token. One token per app covers both (contracts/pipeline.md, UsePlatformAntiforgery).
+        if (!ApiPaths.IsApi(context.Request.Path) || IsSafe(context.Request.Method))
         {
             // /bff/logout is a form post and carries no token: the request gate's Origin check covers
             // it (ADR-0007).

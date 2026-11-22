@@ -129,6 +129,27 @@ variable "health_check_path" {
   }
 }
 
+variable "gateway_writable_root" {
+  description = <<-EOT
+    true only while the gateway's container runs the public sample image, on a fresh cell's
+    first apply: it gives that container a writable root and no /tmp volume, the shape it had
+    before #787. The sample image, nginx-unprivileged, runs as uid 101 and writes its temp files
+    under /tmp, which a read-only root's task volume, owned by root at 0755, refuses (#1380).
+    tools/scripts/platform-tfvars.sh writes true beside the sample's pin; deploy.sh and
+    rollback.sh apply the gateway with false. The default is the gateway's read-only shape.
+  EOT
+  type        = bool
+  default     = false
+
+  # The sample answers its health check on / (health_check_path), the gateway on /readyz. A root
+  # whose terraform.tfvars still says true from the sample's first apply is refused once an apply
+  # names the gateway's health check, rather than shipping the gateway on a writable root.
+  validation {
+    condition     = !var.gateway_writable_root || var.health_check_path == "/"
+    error_message = "gateway_writable_root is the sample image's, whose health check is /: a writable root with any other health_check_path, such as the gateway's /readyz, is refused. deploy.sh and rollback.sh pass gateway_writable_root = false."
+  }
+}
+
 # --- The gateway's image ---------------------------------------------------------------------
 
 variable "gateway_image" {
@@ -407,6 +428,41 @@ variable "session_max_sessions" {
   validation {
     condition     = var.session_max_sessions >= 1 && floor(var.session_max_sessions) == var.session_max_sessions
     error_message = "session_max_sessions is a whole number of sessions, at least 1."
+  }
+}
+
+# --- Fragments (#961): the two policy values a registry entry's fragments answer to ---------------
+#
+# Both are optional in the contract, with the gateway's placeholder standing in for an absent one, so
+# both default to null here and null sets no key (ecs.tf). Each is refused below 1 when set: the
+# schema lets FragmentsPerShell be 0, but a cell that sets the cap to 0 refuses every entry that
+# lists a fragment, which is what leaving fragments out of the registry already does.
+
+variable "fragments_per_shell" {
+  description = <<-EOT
+    The most fragments one registry entry may list, or null to leave the key out and take the
+    gateway's placeholder (contracts/platform-config.schema.json -> Policy.FragmentsPerShell).
+  EOT
+  type        = number
+  default     = null
+
+  validation {
+    condition     = var.fragments_per_shell == null ? true : (var.fragments_per_shell >= 1 && floor(var.fragments_per_shell) == var.fragments_per_shell)
+    error_message = "fragments_per_shell is null, or a whole number of fragments, at least 1 (contracts/platform-config.schema.json -> Policy.FragmentsPerShell)."
+  }
+}
+
+variable "merge_budget" {
+  description = <<-EOT
+    How many attempts a fragment callback's versioned replace makes, or null to leave the key out
+    and take the gateway's placeholder (contracts/platform-config.schema.json -> Policy.MergeBudget).
+  EOT
+  type        = number
+  default     = null
+
+  validation {
+    condition     = var.merge_budget == null ? true : (var.merge_budget >= 1 && floor(var.merge_budget) == var.merge_budget)
+    error_message = "merge_budget is null, or a whole number of attempts, at least 1 (contracts/platform-config.schema.json -> Policy.MergeBudget)."
   }
 }
 

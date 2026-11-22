@@ -8,7 +8,7 @@
 # digest and checks that the running task has it".
 #
 #   tools/scripts/deploy.sh
-#   tools/scripts/deploy.sh --url https://app1.spa-poc.test:9443    # wait through this origin instead
+#   tools/scripts/deploy.sh --url https://app1.$SPA_CERT_DOMAIN:9443    # wait through this origin instead
 #
 # In order, and it stops at the first that fails:
 #   1. It reads the live registry from the bucket the gateway reads, and refuses when there is none
@@ -39,10 +39,11 @@
 #      it (https://docs.docker.com/build/metadata/attestations/attestation-storage/), so the digest
 #      ECR gives for the tag is the index's. Nothing signs a digest: #779's answer 4 defers signing
 #      until a verifier other than the signer exists.
-#   3. It plans and applies infra/envs/poc/platform with both images by digest and the health
-#      check on /readyz, and records them in images.auto.tfvars there, so every later apply of the
-#      root passes the same digests back and never moves the image.
-#   4. It writes infra/envs/poc/outputs.json from the three roots' outputs.
+#   3. It plans and applies the platform root, $SPA_PLATFORM_ROOT, with both images by digest and
+#      the health check on /readyz, and records them in images.auto.tfvars there, so every later
+#      apply of the root passes the same digests back and never moves the image.
+#   4. It writes the outputs document, $SPA_OUTPUTS_FILE, from the outputs of the roots on
+#      $SPA_ROOTS, in order, through the field map $SPA_FIELD_MAP.
 #   5. It waits for the service to be stable, then asserts the primary deployment completed on the
 #      applied task definition, every running task's gateway container runs the image pushed (the
 #      index's digest, or the index's linux/arm64 image's: which of them ECS reports is what #788
@@ -70,11 +71,14 @@
 # false after the document was last written, the wait fails, exit 1, with the same line, before it
 # opens a tunnel (#1168).
 #
-# The cell's names come from infra/envs/poc/outputs.json, which seed.sh wrote, and never from
-# Terraform state (contracts/infra-outputs.schema.json).
+# The cell's names come from the outputs document, which seed.sh wrote, and never from Terraform
+# state (contracts/infra-outputs.schema.json).
 #
-# Run it as the operator's own session: the spa-platform profile, with tools/aws-project.env
-# sourced, after `terraform init -backend-config=backend.hcl` in each root. It needs the AWS CLI,
+# Run it as the operator's own session, with credentials for the account the cell is in and
+# AWS_REGION set to the cell's Region, after `terraform init -backend-config=backend.hcl` in each
+# root. It reads the entry values SPA_PLATFORM_ROOT, SPA_ROOTS, SPA_FIELD_MAP, SPA_OUTPUTS_FILE and,
+# without --url, SPA_CERT_DOMAIN, which have no default (cell-common.sh's header), and refuses, exit
+# 2, when one is unset, before anything is built. It needs the AWS CLI,
 # Terraform, python3, Docker with buildx (decision D-2 in docs/dependencies.md), the .NET SDK for
 # spactl, or SPACTL naming a spactl to run instead (cell-common.sh), and the Session Manager plugin
 # for the wait's tunnel unless --url is given. Docker's own builder, the docker driver, builds the
@@ -84,14 +88,15 @@
 # It redacts two kinds of value, and Docker's and Terraform's output pass through the filter that
 # does it (cell-common.sh's redact_stream):
 #   - the account id, which the repositories, the bucket and every ARN carry, becomes <account>;
-#   - each app's client id that infra/envs/poc/outputs.json lists becomes <client-id:appId>. The
+#   - each app's client id that the outputs document lists becomes <client-id:appId>. The
 #     plan shows the mock API's environment, MockApi__App1Client and MockApi__App2Client among it
 #     (#251). The list is the outputs document's as this run starts: a client id the apps root
 #     changed after seed.sh last wrote that document is not on it. Run seed.sh after any apply of the
 #     apps root.
 #
 # Exit status: 0 when the applied gateway runs steady and healthy; 1 when a step failed; 2 when it
-# did not start (a usage error, a missing tool, no Region, no credentials, no outputs document).
+# did not start (a usage error, an entry value unset, a missing tool, no Region, no credentials, no
+# outputs document).
 #
 # Written for the bash 3.2 that ships with macOS, like tools/scripts/certs.sh.
 # Owner: workstream 1, AWS and IaC.
@@ -142,6 +147,12 @@ case "$ORIGIN" in
   '' | https://?* | http://?*) ;;
   *) refuse "--url must be an http or https origin: got '${ORIGIN}'" ;;
 esac
+need_entry SPA_PLATFORM_ROOT SPA_ROOTS SPA_FIELD_MAP SPA_OUTPUTS_FILE
+# The wait's own tunnel reads through an app's host under the certificate's domain; --url names the
+# origin instead.
+if [ -z "$ORIGIN" ]; then
+  need_entry SPA_CERT_DOMAIN
+fi
 
 need_terraform
 need_spactl
@@ -163,7 +174,7 @@ SERVICE="$(outputs_field ecsService)"
 # names none is a cell with no hop (#1167). Read from the document, which names the last apply's
 # cell; this deployment's apply passes the images and leaves the bastion input as it is.
 if [ -z "$ORIGIN" ] && [ -z "$(outputs_bastion)" ]; then
-  refuse "${NO_BASTION} Or pass --url with an origin this workstation already reaches, and the wait opens no tunnel."
+  refuse "$(no_bastion) Or pass --url with an origin this workstation already reaches, and the wait opens no tunnel."
 fi
 # After the reads above, so that a missing or foreign outputs document is refused by them, naming
 # the field. Before anything prints: Terraform's plan names both apps' client ids (#251).

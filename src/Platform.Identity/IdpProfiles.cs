@@ -21,9 +21,8 @@ public sealed class StandardIdpProfile : IIdpProfile
     /// <summary>The form body: the handler's own style at the code exchange (ADR-0017).</summary>
     public ClientCredentialStyle ClientCredentialStyle => ClientCredentialStyle.PostBody;
 
-    public void Configure(OpenIdConnectOptions options, AppDefinition app, IssuerDefinition issuer)
-    {
-    }
+    /// <summary>A chain hop sends <c>prompt=none</c>, which OpenID Connect Core 1.0 section 3.1.2.1 defines (#994).</summary>
+    public void Configure(OpenIdConnectOptions options, AppDefinition app, IssuerDefinition issuer) => SilentHops.Apply(options);
 
     /// <summary>Keeps the request the handler built, so the handler redirects with it.</summary>
     public Task RedirectToSignOutAsync(RedirectContext context, AppDefinition app, IssuerDefinition issuer) =>
@@ -50,9 +49,12 @@ public sealed class CognitoIdpProfile : IIdpProfile
     /// </summary>
     public ClientCredentialStyle ClientCredentialStyle => ClientCredentialStyle.AuthorizationHeader;
 
-    public void Configure(OpenIdConnectOptions options, AppDefinition app, IssuerDefinition issuer)
-    {
-    }
+    /// <summary>
+    /// A chain hop sends <c>prompt=none</c>, as Cognito's managed login supports; the classic hosted UI
+    /// does not document it (#994, #961 -> "A chain hop never prompts"). G9's sitting observes which.
+    /// https://docs.aws.amazon.com/cognito/latest/developerguide/authorization-endpoint.html
+    /// </summary>
+    public void Configure(OpenIdConnectOptions options, AppDefinition app, IssuerDefinition issuer) => SilentHops.Apply(options);
 
     /// <summary>
     /// Redirects to the pool's logout endpoint and marks the response handled, so the handler neither
@@ -72,5 +74,27 @@ public sealed class CognitoIdpProfile : IIdpProfile
         context.Response.Redirect(logout);
         context.HandleResponse();
         return Task.CompletedTask;
+    }
+}
+
+/// <summary>
+/// A sign-in chain hop never prompts (#994): whether it says so with <c>prompt=none</c> is the profile's
+/// call, made here, on the redirect the handler raises once it has built the authorize request. The
+/// fallback login, which the user starts, is never silent.
+/// </summary>
+internal static class SilentHops
+{
+    public static void Apply(OpenIdConnectOptions options)
+    {
+        Func<RedirectContext, Task> previous = options.Events.OnRedirectToIdentityProvider;
+        options.Events.OnRedirectToIdentityProvider = async context =>
+        {
+            if (FragmentEvents.IsChainHop(context.Properties))
+            {
+                context.ProtocolMessage.Prompt = "none";
+            }
+
+            await previous(context);
+        };
     }
 }

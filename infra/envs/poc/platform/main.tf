@@ -121,7 +121,8 @@ locals {
 
   # The module adds nothing to an extra container, so this definition carries what the gateway's
   # carries in the module (modules/cell/ecs.tf), for the same reasons, and the suite holds the two
-  # in step:
+  # in step. The one difference is gateway_writable_root (#1380): it gives the gateway's container,
+  # while it runs the sample image, a writable root and no /tmp mount, and leaves this one as below:
   #   - a read-only root with no writable path at all (#787): #780's third answer names none for
   #     the mock API, and tools/image-check.sh starts its image on a read-only root with no tmpfs
   #     (#1169);
@@ -180,6 +181,7 @@ module "cell" {
   teardown_principal_arns = local.teardown_principal_arns
   certificate_domain      = var.certificate_domain
   health_check_path       = var.health_check_path
+  gateway_writable_root   = var.gateway_writable_root
 
   # Task 1.4a. The images, which deploy.sh passes by digest and every other apply passes back
   # unchanged from state, so a routine apply never moves a running image.

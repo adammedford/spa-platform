@@ -15,7 +15,7 @@ internal sealed record StubAnswer(int Status, object? Json = null)
 
 /// <summary>
 /// A page on a made-up origin whose every request is answered by <c>page.RouteAsync</c>, so nothing
-/// reaches DNS or a port. The shell loads <c>fixtures/bff-client.js</c> exactly as an SPA would, with a
+/// reaches DNS or a port. The shell loads <c>client/bff-client.js</c> exactly as an SPA would, with a
 /// <c>&lt;script src&gt;</c> from its own origin, and the <c>/bff</c> and <c>/api</c> endpoints are stubs
 /// in the shapes contracts/http-contract.md gives them. Every request the page makes is recorded, so a
 /// test observes the client at its one real boundary: what it puts on the wire and where it navigates.
@@ -39,7 +39,7 @@ internal sealed class BffClientPage : IAsyncDisposable
     /// <summary>What <c>GET /bff/session</c> answers.</summary>
     public StubAnswer Session { get; set; } = StubAnswer.Problem(401, "unauthenticated");
 
-    /// <summary>What any request under <c>/api/</c> answers.</summary>
+    /// <summary>What any request under <c>/api/</c> or <c>/fragments/</c> answers.</summary>
     public Func<IRequest, StubAnswer> Api { get; set; } = _ => StubAnswer.Ok(new { ok = true });
 
     public IReadOnlyList<IRequest> Requests => [.. requests];
@@ -88,7 +88,7 @@ internal sealed class BffClientPage : IAsyncDisposable
             {
                 Status = 200,
                 ContentType = "text/javascript",
-                Path = FixtureFiles.Path("fixtures", "bff-client.js"),
+                Path = FixtureFiles.Path("client", "bff-client.js"),
             }),
             "/bff/session" => Fulfil(route, Session),
             "/bff/login" or "/bff/logout" => route.FulfillAsync(new()
@@ -98,6 +98,10 @@ internal sealed class BffClientPage : IAsyncDisposable
                 Body = "<!doctype html><title>provider</title>",
             }),
             string path when path.StartsWith("/api/", StringComparison.Ordinal) => Fulfil(route, Api(route.Request)),
+
+            // A fragment's API (#998): the same stub, since what differs is the token the gateway
+            // forwards, which a page never sees.
+            string path when path.StartsWith("/fragments/", StringComparison.Ordinal) => Fulfil(route, Api(route.Request)),
             _ => route.FulfillAsync(new()
             {
                 Status = 200,
