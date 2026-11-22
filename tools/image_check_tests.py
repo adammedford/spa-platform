@@ -33,6 +33,7 @@ Run: python3 -I tools/image_check_tests.py
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import pathlib
 import shlex
@@ -299,7 +300,7 @@ class ImageCheckWithAFakeDockerTests(unittest.TestCase):
         self.addCleanup(scratch.cleanup)
         bin_dir = pathlib.Path(scratch.name) / "bin"
         bin_dir.mkdir()
-        for tool in ("git", "tar", "mktemp", "rm", "chmod", "mkdir", "cat", "grep", "tail", "sleep"):
+        for tool in ("git", "tar", "mktemp", "rm", "chmod", "mkdir", "cat", "python3", "grep", "tail", "sleep"):
             found = shutil.which(tool)
             self.assertIsNotNone(found, f"{tool} is not on PATH")
             (bin_dir / tool).symlink_to(found)
@@ -349,7 +350,7 @@ class ImageCheckRuntimeReadingTests(unittest.TestCase):
         self.addCleanup(scratch.cleanup)
         bin_dir = pathlib.Path(scratch.name) / "bin"
         bin_dir.mkdir()
-        for tool in ("git", "tar", "mktemp", "rm", "chmod", "mkdir", "cat", "grep", "tail", "sleep", "awk"):
+        for tool in ("git", "tar", "mktemp", "rm", "chmod", "mkdir", "cat", "python3", "grep", "tail", "sleep", "awk"):
             found = shutil.which(tool)
             self.assertIsNotNone(found, f"{tool} is not on PATH")
             (bin_dir / tool).symlink_to(found)
@@ -417,7 +418,7 @@ class ImageCheckShellListingTests(unittest.TestCase):
         root = pathlib.Path(scratch.name)
         bin_dir = root / "bin"
         bin_dir.mkdir()
-        for tool in ("git", "tar", "mktemp", "rm", "chmod", "mkdir", "cat", "grep", "tail", "sleep", "awk"):
+        for tool in ("git", "tar", "mktemp", "rm", "chmod", "mkdir", "cat", "python3", "grep", "tail", "sleep", "awk"):
             found = shutil.which(tool)
             self.assertIsNotNone(found, f"{tool} is not on PATH")
             (bin_dir / tool).symlink_to(found)
@@ -502,16 +503,20 @@ class ImageCheckReadOnlyStartTests(unittest.TestCase):
     Kestrel's two lines for the listeners and lets it pass too; a wait that no longer ends on an
     unhandled exception, or on a stopped container, ends the throwing gateway's and the stopped mock
     API's cases on the timeout's verdict instead; and each `rm -f` or `image rm` taken out of
-    cleanup() fails a cleanup case."""
+    cleanup() fails a cleanup case. Either gateway start without "${platform_env[@]}", or the
+    platform block's emptiness check taken out, fails its #1455 case."""
 
-    def run_with(self, gateway: str, mock: str) -> tuple[subprocess.CompletedProcess, list[list[str]]]:
+    def run_with(self, gateway: str, mock: str, without_example: bool = False
+                 ) -> tuple[subprocess.CompletedProcess, list[list[str]]]:
         tree = Tree(self)
+        if without_example:
+            tree.git("rm", "-q", "contracts/platform-config.example.json")
         scratch = tempfile.TemporaryDirectory()
         self.addCleanup(scratch.cleanup)
         root = pathlib.Path(scratch.name)
         bin_dir = root / "bin"
         bin_dir.mkdir()
-        for tool in ("git", "tar", "mktemp", "rm", "chmod", "mkdir", "cat", "grep", "tail", "awk"):
+        for tool in ("git", "tar", "mktemp", "rm", "chmod", "mkdir", "cat", "python3", "grep", "tail", "awk"):
             found = shutil.which(tool)
             self.assertIsNotNone(found, f"{tool} is not on PATH")
             (bin_dir / tool).symlink_to(found)
@@ -588,6 +593,30 @@ class ImageCheckReadOnlyStartTests(unittest.TestCase):
             self.assertNotIn("--user", call)
             self.assertFalse(any(arg.startswith("--user=") or arg == "-u" for arg in call), call)
         self.assert_cleaned_up(calls)
+
+    def test_both_gateway_starts_carry_the_example_platform_configuration(self):
+        # ADR-0042: a gateway with no platform configuration refuses to start (#1455). The values are
+        # the example's own, read from the file the script reads, so a start that drops either key, or
+        # gives a value of its own, fails here.
+        example = json.loads((ROOT / "contracts" / "platform-config.example.json").read_text())
+        expected = {f"Session__MaxSessions={example['Session']['MaxSessions']}",
+                    f"Platform__Cell={example['Platform']['Cell']}"}
+        self.assertEqual({"Session__MaxSessions=10000", "Platform__Cell=poc"}, expected)
+        result, calls = self.run_with("starts", "two")
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        first, readonly, mock = self.started(calls).values()
+        for call in (first, readonly):
+            given = {call[i + 1] for i, arg in enumerate(call) if arg == "-e"}
+            self.assertLessEqual(expected, given, call)
+        # The mock API's start is unchanged: its three values and no platform key.
+        self.assertFalse(any(arg.startswith(("Session__", "Platform__")) for arg in mock), mock)
+
+    def test_an_example_that_cannot_be_read_fails_before_any_start(self):
+        result, calls = self.run_with("starts", "two", without_example=True)
+        self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+        self.assertEqual("image-check: fail: contracts/platform-config.example.json could not be read into the "
+                         "gateway's environment.", last_line(result.stderr))
+        self.assertEqual({}, self.started(calls))
 
     def test_a_read_only_gateway_that_throws_ends_on_its_verdict(self):
         result, calls = self.run_with("throws", "two")
