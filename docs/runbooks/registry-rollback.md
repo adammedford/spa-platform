@@ -48,7 +48,7 @@ the last case run it again.
 ## Wait for it
 
 ```bash
-spactl wait --url "$ORIGIN" --revision N
+spactl wait --url $ORIGIN --revision N
 ```
 
 Use the origin of an app the rolled-back registry still holds: `/readyz` answers on any host, but

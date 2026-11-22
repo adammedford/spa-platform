@@ -20,7 +20,7 @@ Every release ever published stays in the bucket: a release prefix is written on
 deleted (ADR-0009, ADR-0014). List the app's releases:
 
 ```bash
-BUCKET="$(python3 -I tools/scripts/cell_documents.py field "$SPA_OUTPUTS_FILE" bucket "$AWS_REGION")"
+BUCKET="$(python3 -I tools/scripts/cell_documents.py field $SPA_OUTPUTS_FILE bucket "$AWS_REGION")"
 aws s3api list-objects-v2 --region "$AWS_REGION" --bucket "$BUCKET" --prefix apps/$APP/releases/ \
   --delimiter / --query 'CommonPrefixes[].Prefix' --output text | tr '\t' '\n'
 ```
@@ -35,7 +35,7 @@ PREVIOUS="$(aws s3api list-object-versions --region "$AWS_REGION" --bucket "$BUC
 aws s3api get-object --region "$AWS_REGION" --bucket "$BUCKET" --key registry/registry.json \
   --version-id "$PREVIOUS" "$RUN/previous-registry.json" > /dev/null
 python3 -I -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d["revision"], [a["release"] for a in d["apps"] if a["appId"]==sys.argv[2]])' \
-  "$RUN/previous-registry.json" "$APP"
+  "$RUN/previous-registry.json" $APP
 ```
 
 S3 lists versions newest first, so `Versions[1]` is the one before the live one. If that version
@@ -44,7 +44,7 @@ changed something else, step back further (`Versions[2]`, and so on) until the r
 ## 2. Activate it
 
 ```bash
-spactl release activate "$APP" <previous release> --outputs "$SPA_OUTPUTS_FILE" --config "$CONFIG"
+spactl release activate $APP <previous release> --outputs "$SPA_OUTPUTS_FILE" --config "$CONFIG"
 ```
 
 It refuses an app the registry does not hold, and a release whose prefix has no `index.html` (it was
@@ -54,7 +54,7 @@ change` when the app already serves that release.
 ## 3. Wait for it
 
 ```bash
-spactl wait --url "$ORIGIN" --revision N
+spactl wait --url $ORIGIN --revision N
 ```
 
 `Ready: ... reports revision N` means the gateway serves the release. Load the app's host in a

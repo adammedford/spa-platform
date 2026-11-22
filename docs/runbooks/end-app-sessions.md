@@ -27,7 +27,7 @@ The entry comes back at the same release, and once it is out of the registry `sp
 read that release from it.
 
 ```bash
-BUCKET="$(python3 -I tools/scripts/cell_documents.py field "$SPA_OUTPUTS_FILE" bucket "$AWS_REGION")"
+BUCKET="$(python3 -I tools/scripts/cell_documents.py field $SPA_OUTPUTS_FILE bucket "$AWS_REGION")"
 aws s3api get-object --region "$AWS_REGION" --bucket "$BUCKET" --key registry/registry.json "$RUN/registry.json" > /dev/null
 RELEASE="$(python3 -I -c 'import json,sys; print(next(a["release"] for a in json.load(open(sys.argv[1]))["apps"] if a["appId"]==sys.argv[2]))' "$RUN/registry.json" "$APP")"
 echo "$APP serves release $RELEASE"
@@ -48,7 +48,7 @@ It prints `Applied revision N` and `Removed $APP.`
 ## 3. Wait until the gateway has swapped to it
 
 ```bash
-spactl wait --url "$ORIGIN" --revision N
+spactl wait --url $ORIGIN --revision N
 ```
 
 `/readyz` answers on any host, the removed one included (`contracts/pipeline.md`). **Do not skip
@@ -73,7 +73,7 @@ memory; end them with a gateway deployment ([deploy.md](deploy.md)).
 
 ```bash
 spactl app add "$APP_DEFINITION" --release "$RELEASE" --outputs "$SPA_OUTPUTS_FILE" --config "$CONFIG"
-spactl wait --url "$ORIGIN" --revision M
+spactl wait --url $ORIGIN --revision M
 ```
 
 `M` is the revision `app add` printed. The entry is rebuilt from the app definition and the
