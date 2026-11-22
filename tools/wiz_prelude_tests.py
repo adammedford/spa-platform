@@ -12,7 +12,7 @@ run without one.
 
 **What runs is the script itself.** The prelude finds the repository from git, as the skill's line
 does, so each case makes a throwaway git repository, copies the tracked .gitignore,
-tools/wiz_prelude.sh, tools/aws-project.env and tools/wiz_redact.py into it whole, and starts /bin/bash there, the shell
+tools/wiz_prelude.sh, tools/aws-project.env, infra/envs/poc/cell.env and tools/wiz_redact.py into it whole, and starts /bin/bash there, the shell
 the Bash tool runs (#183), which on macOS is 3.2. The environment is built, not inherited: PATH is
 the directories of git and python3 and the system's own, HOME is inside the case's directory, and
 git reads no configuration of the machine's.
@@ -114,7 +114,8 @@ PRELUDE = ROOT / "tools" / "wiz_prelude.sh"
 # .gitignore is the checkout's own, copied whole rather than restated, so the case reads the rule
 # that keeps the pin, the record and the bundle out of git: .scratch/sitting/ is tracked, its log/
 # is not (CODING_STANDARDS.md, "A guard reads the thing it guards").
-COPIED = (".gitignore", "tools/wiz_prelude.sh", "tools/aws-project.env", "tools/wiz_redact.py")
+COPIED = (".gitignore", "tools/wiz_prelude.sh", "tools/aws-project.env", "infra/envs/poc/cell.env",
+          "tools/wiz_redact.py")
 SKILL = ROOT / ".claude" / "skills" / "wiz"
 SKILL_FILES = (SKILL / "SKILL.md", SKILL / "c.md", SKILL / "d.md", SKILL / "a-and-b.md")
 # The skill a sitting runs by: the main file, then sittings C and D, which #1198 moved beside it.
@@ -148,6 +149,7 @@ class Sitting(unittest.TestCase):
         self.repo = self.dir / "repo"
         (self.repo / "tools").mkdir(parents=True)
         for path in COPIED:
+            (self.repo / path).parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(ROOT / path, self.repo / path)
         empty = self.dir / "gitconfig"
         empty.write_text("")
@@ -211,9 +213,19 @@ class PinnedDate(Sitting):
         self.assertIn('SittingBrowserCommand = "sitting-browser"', entry_point)
         self.assertIn('BundleOption = "--bundle"', entry_point)
 
+    def test_the_prelude_exports_the_proof_cells_entry_values(self) -> None:
+        self.pin(utc_day(-1) + "\n")
+        done = self.bash(SOURCE + ' && /usr/bin/env')
+        self.assertEqual(done.returncode, 0, done.stderr)
+        exported = dict(line.split("=", 1) for line in done.stdout.splitlines() if "=" in line)
+        entry = re.findall(r"^(SPA_[A-Z_]+)=(.*)$", (ROOT / "infra" / "envs" / "poc" / "cell.env").read_text(), re.M)
+        self.assertGreater(len(entry), 3, "cell.env's keys were not read")
+        for name, value in entry:
+            self.assertEqual(exported.get(name), value, f"{name} from cell.env is not exported")
+
     def test_a_call_from_a_subdirectory_runs_at_the_top_level(self) -> None:
         self.pin(utc_day(-1) + "\n")
-        (self.repo / "infra").mkdir()
+        (self.repo / "infra").mkdir(exist_ok=True)  # cell.env, copied, already made it
         done = self.bash(". ../tools/wiz_prelude.sh && pwd -P", cwd=self.repo / "infra")
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertEqual(done.stdout, f"{self.repo}\n")
@@ -237,6 +249,16 @@ class NoPinnedDate(Sitting):
             with self.subTest(pin=text):
                 self.pin(text)
                 self.assertRefuses()
+
+
+class NoEntryFile(Sitting):
+    def test_a_missing_cell_env_exits_the_call(self) -> None:
+        self.pin(utc_day(-1) + "\n")
+        (self.repo / "infra" / "envs" / "poc" / "cell.env").unlink()
+        done = self.bash(SOURCE + "; echo the call went on")
+        self.assertNotEqual(done.returncode, 0)
+        self.assertIn("cell.env", done.stderr)
+        self.assertNotIn("the call went on", done.stdout)
 
 
 class StageZeroPins(Sitting):
@@ -276,7 +298,7 @@ class SkillHoldsNoCopy(unittest.TestCase):
 
     # The commands a hand copy of the old block carried, written out here rather than read from the
     # prelude, so a copy is caught even when the prelude changes.
-    SIGNATURES = ("date -u", ".docker/bin", "umask 077;", "aws-project.env && set +a", "shown() {", "captured() {",
+    SIGNATURES = ("date -u", ".docker/bin", "umask 077;", "aws-project.env && set +a", ". infra/envs/poc/cell.env && set +a", "shown() {", "captured() {",
                   "spactl() {", "sitting_browser() {", "wiz_password() {", "guarded_init() {", "wiz_redact.py --stream; echo", "git check-ignore -q \"$E/x\"")
 
     def skill_lines(self) -> list[tuple[str, int, str]]:

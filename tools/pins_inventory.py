@@ -68,8 +68,8 @@ Every network input can be supplied from a file, so the tests need no network:
   `docker buildx imagetools inspect --format '{{json .Manifest}}' <image>:<tag>`, whose `digest` is
   the reference's own descriptor, the manifest list's for a multi-platform tag
   (https://docs.docker.com/reference/cli/docker/buildx/imagetools/inspect/, as
-  tools/scripts/platform-tfvars.sh reads it), which is the digest the Dockerfiles pin. A tag it could
-  not read is left out of the file, never written empty, and its rows stay `not-checked`.
+  tools/scripts/poc/platform-tfvars.sh reads it), which is the digest the Dockerfiles pin. A tag it
+  could not read is left out of the file, never written empty, and its rows stay `not-checked`.
 
 **tags** prints each distinct `image:tag` a tracked Dockerfile pins by digest, one per line: the
 references the sweep asks the registry about (#1166).

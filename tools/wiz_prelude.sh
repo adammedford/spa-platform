@@ -5,7 +5,8 @@
 #
 # Sourced, as the first line of every call, it moves to the top level of the main checkout (the
 # skill's rule 8: a call made from a worktree still runs the landed scripts), exports the AWS
-# profile and Region from tools/aws-project.env, puts a per-user Docker Desktop on PATH, sets umask
+# profile and Region from tools/aws-project.env and the proof cell's entry values from
+# infra/envs/poc/cell.env, puts a per-user Docker Desktop on PATH, sets umask
 # 077, names the sitting's record R and its evidence bundle E after the date Stage 0 pinned, makes
 # the bundle's directory once git confirms it is ignored, and defines shown, captured, spactl,
 # sitting_browser, wiz_password and guarded_init.
@@ -50,7 +51,7 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
 fi
 
 cd "$(git rev-parse --path-format=absolute --git-common-dir)/.." || exit 1
-set -a && . tools/aws-project.env && set +a || exit 1
+set -a && . tools/aws-project.env && . infra/envs/poc/cell.env && set +a || exit 1
 export PATH="$HOME/.docker/bin:$PATH"   # a per-user Docker Desktop; this shell is not a login shell
 umask 077
 

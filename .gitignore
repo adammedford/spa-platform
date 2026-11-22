@@ -34,7 +34,7 @@ backend.hcl
 # item 1, #204).
 infra/envs/poc/outputs.json
 
-# Local certificate authority and keys made by tools/scripts/certs.sh. Never commit a private key.
+# Local certificate authority and keys made by tools/scripts/poc/certs.sh. Never commit a private key.
 *.pem
 *.key
 *.p12
