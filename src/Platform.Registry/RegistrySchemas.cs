@@ -7,6 +7,13 @@ using Json.Schema;
 namespace Platform.Registry;
 
 /// <summary>
+/// One schema violation without the engine's message: a JSON pointer into the instance, the keyword
+/// that failed (empty when the failing node names none), and the evaluation path: a JSON pointer into
+/// the root schema whose <c>$ref</c> segments are followed where they stand.
+/// </summary>
+internal sealed record SchemaFailure(string InstanceLocation, string Keyword, string EvaluationPath);
+
+/// <summary>
 /// The contract schemas, loaded once into one schema registry. The schemas <c>$ref</c> each other by
 /// <c>$id</c> (<c>app-definition</c> reaches into <c>registry.schema.json#/$defs</c>), so every one
 /// must be registered before any is evaluated: contracts/README.md, "Using the schemas".
@@ -15,13 +22,6 @@ namespace Platform.Registry;
 /// else. Which engine is decided: JsonSchema.Net 8.0.5, running in the gateway process through this
 /// project (docs/dependencies.md -> "Decided", D-1, which records what would reopen it).
 /// </summary>
-/// <summary>
-/// One schema violation without the engine's message: a JSON pointer into the instance, the keyword
-/// that failed (empty when the failing node names none), and the evaluation path: a JSON pointer into
-/// the root schema whose <c>$ref</c> segments are followed where they stand.
-/// </summary>
-internal sealed record SchemaFailure(string InstanceLocation, string Keyword, string EvaluationPath);
-
 internal static class RegistrySchemas
 {
     public const string Registry = "registry.schema.json";
