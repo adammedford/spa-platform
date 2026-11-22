@@ -11,7 +11,7 @@ universal every run holds (no output names the account id) are tools/scripts/cel
 The proof cell's entry file sets every case's entry values (#1348), so a change to it runs this
 companion.
 
-Checkout inputs: infra/envs/poc/cell.env infra/envs/poc/outputs-fields.json
+Checkout inputs: infra/envs/poc/cell.env infra/envs/poc/outputs-fields.json tools/scripts/poc/mock-api.sh
 
 Run: python3 -I tools/scripts/teardown_tests.py
 """
@@ -160,6 +160,26 @@ class TeardownEmptiesDestroysAndProvesNothingIsTagged(cell.CompanionTestCase):
     def test_images_auto_tfvars_goes_with_the_platform_root(self):
         case, _ = self.torn_down()
         self.assertFalse((case.repo / "infra/envs/poc/platform/images.auto.tfvars").exists())
+
+    def test_every_auto_tfvars_in_the_platform_root_goes_with_it_and_terraform_tfvars_stays(self):
+        # #1349: the mock API's script writes its digest to a file of its own in the proof-cell root,
+        # which teardown.sh, a reference, may not name; so every *.auto.tfvars there goes, which only
+        # the scripts write (*.tfvars is git-ignored). terraform.tfvars is the operator's and stays.
+        case = cell.Case(self, world=deployed_world())
+        platform = case.repo / "infra/envs/poc/platform"
+        (platform / "images.auto.tfvars").write_text('gateway_image = "x"\n')
+        mock = platform / cell.mock_api_tfvars_name()
+        mock.write_text('mock_api_image = "y"\n')
+        (platform / "terraform.tfvars").write_text('bastion = false\n')
+        # Another root's file is not the platform root's to remove.
+        apps = case.repo / "infra/envs/poc/apps" / "other.auto.tfvars"
+        apps.write_text('x = "z"\n')
+        result = case.run(SCRIPT, "--yes", env=fast(case))
+        self.assertEqual(0, result.status, result.output)
+        self.assertFalse((platform / "images.auto.tfvars").exists())
+        self.assertFalse(mock.exists())
+        self.assertTrue((platform / "terraform.tfvars").exists())
+        self.assertTrue(apps.exists())
 
     def test_the_certificate_is_deleted_after_the_platform_root(self):
         case, _ = self.torn_down()

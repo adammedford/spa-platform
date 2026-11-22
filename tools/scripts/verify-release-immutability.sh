@@ -30,7 +30,7 @@
 #
 # Exit status: 0 when every case is as expected, 1 when any case is not, 2 when it did not start.
 #
-# Written for the bash 3.2 that ships with macOS, like tools/scripts/certs.sh.
+# Written for the bash 3.2 that ships with macOS.
 # Owner: workstream 1, AWS and IaC.
 
 set -euo pipefail
@@ -136,7 +136,7 @@ while [ "$#" -gt 0 ]; do
 done
 
 [ -n "$CELL" ] || refuse "no cell: SPA_CELL is not set and no --cell was given. SPA_CELL is one of the cell's entry values, which have no default."
-# The cell's lexical form, as tools/scripts/certs.sh checks it.
+# The cell's lexical form, as tools/scripts/poc/certs.sh checks it.
 case "$CELL" in
   *[!a-z0-9-]* | "" | -* | *-) refuse "--cell must be lowercase letters, digits and inner hyphens: got '${CELL}'" ;;
 esac

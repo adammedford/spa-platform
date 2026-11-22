@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Test companion for tools/scripts/platform-tfvars.sh. Owner: workstream 1.
+"""Test companion for tools/scripts/poc/platform-tfvars.sh. Owner: workstream 1.
 
 #470, raised by #242: on the from-nothing run of 2026-10-27 the platform root's terraform.tfvars was
 rewritten by hand from the new identity root's outputs and the sample image's current digest, ECR
@@ -19,7 +19,7 @@ The file each case starts from is the root's own terraform.tfvars.example, read 
 what an operator has added to it after a first apply: an uncommented gateway_image and an issuers
 block from an earlier identity root, each with a comment of its own.
 
-Run: python3 -I tools/scripts/platform_tfvars_tests.py
+Run: python3 -I tools/scripts/poc/platform_tfvars_tests.py
 """
 
 from __future__ import annotations
@@ -29,13 +29,13 @@ import pathlib
 import re
 import sys
 
-_spec = importlib.util.spec_from_file_location("cell_doubles", pathlib.Path(__file__).resolve().parent / "cell_doubles.py")
+_spec = importlib.util.spec_from_file_location("cell_doubles", pathlib.Path(__file__).resolve().parent.parent / "cell_doubles.py")
 cell = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(cell)
 
 import unittest  # noqa: E402
 
-SCRIPT = "platform-tfvars.sh"
+SCRIPT = "poc/platform-tfvars.sh"
 # The script reads Terraform and Docker and makes no AWS call of its own, so every case takes the aws
 # double off PATH: a call would fail the case rather than be answered. cell_doubles_tests.py reads
 # this to expect no aws call in this companion's harvest.
@@ -146,7 +146,7 @@ class AFailedOrMalformedLookupLeavesTheFileAsItWas(Tfvars):
 
     # #1015: in sitting D the human had to find the digest the file already pinned to pass it back.
     def assertPinnedAdvice(self, result: cell.Result, digest: str):
-        self.assertIn(f"tools/scripts/platform-tfvars.sh --sample-digest {digest}", result.stderr)
+        self.assertIn(f"tools/scripts/poc/platform-tfvars.sh --sample-digest {digest}", result.stderr)
         self.assertNotIn("Try again later, or pass --sample-digest.", result.stderr)
 
     def assertPlainAdvice(self, result: cell.Result):

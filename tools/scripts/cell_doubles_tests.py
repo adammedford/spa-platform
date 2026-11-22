@@ -148,8 +148,9 @@ def credentials_in(stdout: str) -> list[str]:
 
 
 def companions() -> list[pathlib.Path]:
-    """The companions that load cell_doubles.py, from their own text."""
-    return sorted(path for path in HERE.glob("*_tests.py")
+    """The companions that load cell_doubles.py, from their own text: beside it, and under poc/,
+    where the proof cell's scripts and theirs sit (#1349)."""
+    return sorted(path for path in HERE.rglob("*_tests.py")
                   if path.resolve() != pathlib.Path(__file__).resolve() and '"cell_doubles.py"' in path.read_text())
 
 
@@ -223,11 +224,20 @@ def scripts_calling(name: str) -> list[str]:
     """The cell scripts whose code, outside comments, makes the call `name`."""
     pattern = re.compile(rf"(?<![\w-]){re.escape(name)}(?![\w-])")
     found = []
-    for script in sorted(HERE.glob("*.sh")):
+    for script in sorted(HERE.rglob("*.sh")):
         code = "\n".join(line.split("#", 1)[0] for line in script.read_text().splitlines())
         if pattern.search(code):
             found.append(script.name)
     return found
+
+
+class TheProofCellsCompanionsAreFound(unittest.TestCase):
+    def test_the_companions_under_poc_are_among_those_searched(self):
+        # #1349 moved the proof cell's scripts and their companions to poc/; a search of this
+        # directory alone would drop them from the case above without a word.
+        names = {path.relative_to(HERE).as_posix() for path in companions()}
+        for name in ("poc/seed_tests.py", "poc/platform_tfvars_tests.py", "poc/mock_api_tests.py", "deploy_tests.py"):
+            self.assertIn(name, names)
 
 
 class EveryCredentialTheDoublesHandOutIsSearchedFor(unittest.TestCase):

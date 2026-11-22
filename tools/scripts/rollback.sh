@@ -1,19 +1,20 @@
 #!/usr/bin/env bash
 #
-# rollback.sh -- put the previous gateway back: apply the images of the previous task definition,
-# wait for a steady service, and assert that the running gateway is that one.
+# rollback.sh -- put the previous gateway back: apply the gateway image of the previous task
+# definition, wait for a steady service, and assert that the running gateway is that one.
 #
 # Task 1.7 (#58); the Gateway lever's rollback in docs/plan/05-infrastructure-and-cost.md,
 # Deployment and rollback: "rollback.sh applies the digest of the previous task definition. The
 # deployment circuit breaker also rolls back on failed health checks."
 #
 #   tools/scripts/rollback.sh                    # the previous gateway image
-#   tools/scripts/rollback.sh --to-revision 7    # the images of revision 7 of the family
+#   tools/scripts/rollback.sh --to-revision 7    # the gateway image of revision 7 of the family
 #
 # The previous task definition is the newest revision below the service's own whose gateway image
 # differs from the one running: an apply that changed something else made a new revision with the
-# same image, and rolling back to it would change nothing. Its mock API image comes with it, since
-# the two were deployed together. Each revision is read by family:revision, so a deregistered
+# same image, and rolling back to it would change nothing. It moves the gateway's image and reads no
+# other container's: an image a cell runs beside the gateway stays at what the platform root's tfvars
+# hold, which its own script wrote (#1349). Each revision is read by family:revision, so a deregistered
 # (INACTIVE) one, which every revision the platform root replaced is, is asked for as an active one
 # is. That rests on ECS still describing it, which its API reference words two ways.
 # DeregisterTaskDefinition: "At this time, INACTIVE task definitions remain discoverable in your
@@ -33,13 +34,13 @@
 # the repository no longer holds, since the task could not pull it.
 #
 # Then it does what deploy.sh does after its push: it plans and applies the platform root,
-# $SPA_PLATFORM_ROOT, with both images and the health check on /readyz, records them in
+# $SPA_PLATFORM_ROOT, with the gateway's image and the health check on /readyz, records the two in
 # images.auto.tfvars there, writes the outputs document from the roots on $SPA_ROOTS through the
 # field map $SPA_FIELD_MAP, waits for a stable service, and asserts the running digest and the
 # targets' health as deploy.sh's step 5 does, tolerating the previous task's draining target.
 #
-# The cell's names come from the outputs document, $SPA_OUTPUTS_FILE, which seed.sh wrote, and never
-# from Terraform state (contracts/infra-outputs.schema.json).
+# The cell's names come from the outputs document, $SPA_OUTPUTS_FILE, written from the cell's roots'
+# outputs after their last apply, and never from Terraform state (contracts/infra-outputs.schema.json).
 #
 # Run it as the operator's own session, with credentials for the account the cell is in and
 # AWS_REGION set to the cell's Region. It reads the entry values SPA_PLATFORM_ROOT, SPA_ROOTS,
@@ -49,16 +50,17 @@
 # It redacts two kinds of value, and Terraform's output passes through the filter that does it
 # (cell-common.sh's redact_stream):
 #   - the account id, which the repositories, the bucket and every ARN carry, becomes <account>;
-#   - each app's client id that the outputs document lists becomes <client-id:appId>. The
-#     plan shows the mock API's environment, MockApi__App1Client and MockApi__App2Client among it
-#     (#251). The list is the outputs document's as this run starts: a client id the apps root
-#     changed after seed.sh last wrote that document is not on it. Run seed.sh after any apply of the
-#     apps root.
+#   - each app's client id that the outputs document lists becomes <client-id:appId>. A plan shows
+#     every container's environment, and a container beside the gateway can carry the clients', as
+#     the proof cell's mock API does with MockApi__App1Client and MockApi__App2Client (#251). The
+#     list is the outputs document's as this run starts: a client id an apply changed after that
+#     document was last written is not on it. Rewrite it after any apply of the root that holds the
+#     clients.
 #
 # Exit status: 0 when the previous gateway runs steady and healthy; 1 when there is none to go back
 # to, or a step failed; 2 when it did not start (no outputs document among the reasons).
 #
-# Written for the bash 3.2 that ships with macOS, like tools/scripts/certs.sh.
+# Written for the bash 3.2 that ships with macOS.
 # Owner: workstream 1, AWS and IaC.
 
 set -euo pipefail
@@ -67,10 +69,6 @@ umask 077
 PROGRAM="rollback"
 # shellcheck source=tools/scripts/cell-common.sh
 . "$(dirname -- "$0")/cell-common.sh"
-
-# The mock API's container in the proof cell's task. Its own copy until rollback moves the gateway
-# image only (#1335): cell-common.sh names no container but the gateway and the bastion.
-MOCK_API_CONTAINER="mock-api"
 
 TO_REVISION=""
 # How far back it looks for a different image. A revision is one apply, and twenty applies with one
@@ -123,7 +121,7 @@ ECR_GATEWAY="$(outputs_field ecrGateway)"
 CLUSTER="$(outputs_field ecsCluster)"
 SERVICE="$(outputs_field ecsService)"
 # After the reads above, so that a missing or foreign outputs document is refused by them, naming
-# the field. Before anything prints: Terraform's plan names both apps' client ids (#251).
+# the field. Before anything prints: Terraform's plan can name the apps' client ids (#251).
 redact_clients
 
 read_service
@@ -176,15 +174,10 @@ aws_call ecr describe-images --repository-name "${ECR_GATEWAY#*/}" --image-ids "
 [ "$OUTCOME" = "success" ] ||
   fail "the gateway repository no longer holds ${TARGET_IMAGE##*@} (${OUTCOME}), so a task could not pull it."
 
-aws_read "the mock API image of ${FAMILY}:${TARGET}" ecs describe-task-definition --task-definition "${FAMILY}:${TARGET}" \
-  --query "taskDefinition.containerDefinitions[?name=='${MOCK_API_CONTAINER}'] | [0].image"
-MOCK_API_IMAGE="$(printed)"
-[ "$MOCK_API_IMAGE" != "None" ] || MOCK_API_IMAGE=""
-
 note "rolling back to ${FAMILY}:${TARGET}, gateway ${TARGET_IMAGE##*@}"
 
 # --- apply, wait, assert ---------------------------------------------------------------------------
 
-apply_images "$TARGET_IMAGE" "$MOCK_API_IMAGE"
+apply_images "$TARGET_IMAGE"
 wait_and_assert "$TARGET_IMAGE"
 note "pass: the gateway ${TARGET_IMAGE##*@} of ${FAMILY}:${TARGET} runs steady in ${CLUSTER} and answers ${READY_PATH}"

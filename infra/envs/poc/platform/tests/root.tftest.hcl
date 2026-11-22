@@ -241,7 +241,7 @@ run "the_module_builds_one_listener_and_one_target_group" {
   }
 
   assert {
-    condition     = toset(data.aws_acm_certificate.wildcard.key_types) == toset(split(",", regex("keyTypes=([A-Za-z0-9_,]+)", file("../../../../tools/scripts/certs.sh"))[0]))
+    condition     = toset(data.aws_acm_certificate.wildcard.key_types) == toset(split(",", regex("keyTypes=([A-Za-z0-9_,]+)", file("../../../../tools/scripts/poc/certs.sh"))[0]))
     error_message = "The certificate lookup must accept exactly the key types certs.sh searches."
   }
 

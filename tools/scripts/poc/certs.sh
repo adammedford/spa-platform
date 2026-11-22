@@ -7,16 +7,16 @@
 # listener rules (ADR-0010), so one authority and one certificate for
 # `*.<domain>` cover app1, app2, app3 and anything onboarded later.
 #
-#   tools/scripts/certs.sh issue      # make the authority and the certificate
-#   tools/scripts/certs.sh trust      # trust the authority on this workstation
-#   tools/scripts/certs.sh import     # import the certificate to ACM
-#   tools/scripts/certs.sh all        # the three above, in order
+#   tools/scripts/poc/certs.sh issue      # make the authority and the certificate
+#   tools/scripts/poc/certs.sh trust      # trust the authority on this workstation
+#   tools/scripts/poc/certs.sh import     # import the certificate to ACM
+#   tools/scripts/poc/certs.sh all        # the three above, in order
 #
-#   tools/scripts/certs.sh fetch-ca   # second workstation: trust the same
+#   tools/scripts/poc/certs.sh fetch-ca   # second workstation: trust the same
 #                                     # authority, from ACM, with no key material
-#   tools/scripts/certs.sh verify     # a local HTTPS listener on an app host,
+#   tools/scripts/poc/certs.sh verify     # a local HTTPS listener on an app host,
 #                                     # checked without -k
-#   tools/scripts/certs.sh status     # what exists here and in ACM
+#   tools/scripts/poc/certs.sh status     # what exists here and in ACM
 #
 # Terraform never creates the authority (docs/plan/05-infrastructure-and-cost.md,
 # "What stays out of Terraform"). The ALB listener finds the certificate in ACM by
@@ -170,7 +170,7 @@ repo_root() {
   if have git && git rev-parse --show-toplevel >/dev/null 2>&1; then
     git rev-parse --show-toplevel
   else
-    cd "$(dirname "$0")/../.." && pwd
+    cd "$(dirname "$0")/../../.." && pwd
   fi
 }
 

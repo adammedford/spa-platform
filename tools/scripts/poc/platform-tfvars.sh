@@ -10,9 +10,9 @@
 # lookup with a 429, and the file was left with gateway_image = "public.ecr.aws/nginx/nginx-unprivileged@".
 # This script does the rewrite, and leaves the file as it was unless every value is well formed.
 #
-#   tools/scripts/platform-tfvars.sh
-#   tools/scripts/platform-tfvars.sh --sample-digest sha256:<64 hex>   # no lookup
-#   tools/scripts/platform-tfvars.sh --bastion                         # and the tunnel's hop
+#   tools/scripts/poc/platform-tfvars.sh
+#   tools/scripts/poc/platform-tfvars.sh --sample-digest sha256:<64 hex>   # no lookup
+#   tools/scripts/poc/platform-tfvars.sh --bastion                         # and the tunnel's hop
 #
 # It writes into infra/envs/poc/platform/terraform.tfvars, which you copy from
 # terraform.tfvars.example first:
@@ -55,7 +55,7 @@
 # named, and the file is unchanged; 2 when it did not start (a usage error, a malformed
 # --sample-digest, a missing tool, no terraform.tfvars).
 #
-# Written for the bash 3.2 that ships with macOS, like tools/scripts/certs.sh.
+# Written for the bash 3.2 that ships with macOS, like tools/scripts/poc/certs.sh.
 # Owner: workstream 1, AWS and IaC.
 
 set -euo pipefail
@@ -63,7 +63,7 @@ umask 077
 
 PROGRAM="platform-tfvars"
 # shellcheck source=tools/scripts/cell-common.sh
-. "$(dirname -- "$0")/cell-common.sh"
+. "$(dirname -- "$0")/../cell-common.sh"
 
 # The sample image the platform root's first apply runs (Q5 on #98; terraform.tfvars.example).
 SAMPLE_REPOSITORY="public.ecr.aws/nginx/nginx-unprivileged"
@@ -168,7 +168,7 @@ pin = re.fullmatch(r"gateway_image\s*=\s*\"" + re.escape(sys.argv[2]) + r"@(sha2
 if pin:
     print(pin[1])' "$TFVARS" "$SAMPLE_REPOSITORY" 2> /dev/null || true)"
   if [[ "$pinned" =~ $DIGEST_FORM ]]; then
-    printf 'It already pins the sample image at %s. To reuse that pin, run:\n  tools/scripts/platform-tfvars.sh --sample-digest %s' \
+    printf 'It already pins the sample image at %s. To reuse that pin, run:\n  tools/scripts/poc/platform-tfvars.sh --sample-digest %s' \
       "$pinned" "$pinned"
   else
     printf 'Try again later, or pass --sample-digest.'

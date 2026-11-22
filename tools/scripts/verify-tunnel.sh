@@ -27,7 +27,7 @@
 # Exit status: 0 when the path answered 200 over trusted TLS through the tunnel, 1 when it did not,
 # 2 when it did not start (a usage error, SPA_CERT_DOMAIN unset, or no curl).
 #
-# Written for the bash 3.2 that ships with macOS, like tools/scripts/certs.sh.
+# Written for the bash 3.2 that ships with macOS.
 # Owner: workstream 1, AWS and IaC.
 
 set -euo pipefail
@@ -133,7 +133,7 @@ case "$status" in
   0) ;;
   6) fail "${HOST} does not resolve (${detail}). Add this line to /etc/hosts: ${HOSTS_LINE}" ;;
   7) fail "nothing answers on ${HOST}:${PORT} (${detail}). start tools/scripts/tunnel.sh in another terminal, then run this again." ;;
-  60) fail "this workstation does not trust the certificate ${HOST}:${PORT} presented (${detail}). Run 'tools/scripts/certs.sh trust', or 'certs.sh fetch-ca' on a second workstation, then 'certs.sh status'." ;;
+  60) fail "this workstation does not trust the certificate ${HOST}:${PORT} presented (${detail}). Run 'tools/scripts/poc/certs.sh trust', or 'certs.sh fetch-ca' on a second workstation, then 'certs.sh status'." ;;
   28 | 35 | 52 | 56) fail "the tunnel took the connection but nothing answered through it (${detail}): the session has ended or the task is gone. Restart tools/scripts/tunnel.sh." ;;
   *) fail "curl exited ${status} asking ${URL} (${detail})" ;;
 esac

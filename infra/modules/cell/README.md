@@ -163,7 +163,7 @@ gateway, which resolves the app by exact authority match.
   tunnel reaches it. This module pins a TLS 1.2/1.3 policy as an implementation choice.
 - **Host header preserved, invalid header fields dropped.** The gateway reads the
   `Host` the browser sent, port included.
-- **The certificate is found, not created.** `tools/scripts/certs.sh import` puts
+- **The certificate is found, not created.** `tools/scripts/poc/certs.sh import` puts
   `*.{certificate_domain}` into ACM tagged with this cell, and `alb.tf` looks it up by
   that domain, the `Cell` tag and the key types `certs.sh` searches. Run it before the
   first apply, or the plan fails on the lookup.
@@ -190,7 +190,7 @@ deployment. **A green plan here is not a running cell.**
   `$APP_UID` is seen only on a running task. The sample image a fresh cell starts on
   cannot start on that `/tmp`: nginx-unprivileged runs as uid 101 and creates its temp
   directories there. `gateway_writable_root = true`, which
-  `tools/scripts/platform-tfvars.sh` writes beside the sample's pin, gives the
+  `tools/scripts/poc/platform-tfvars.sh` writes beside the sample's pin, gives the
   gateway's container a writable root and no `/tmp` volume, the shape the sample ran
   on before #787; `deploy.sh` and `rollback.sh` apply the gateway with `false`, and
   the module refuses `true` beside any health check but `/` (#1380). The gateway's container drops every Linux
