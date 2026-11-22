@@ -15,7 +15,7 @@ internal sealed record StubAnswer(int Status, object? Json = null)
 
 /// <summary>
 /// A page on a made-up origin whose every request is answered by <c>page.RouteAsync</c>, so nothing
-/// reaches DNS or a port. The shell loads <c>fixtures/bff-client.js</c> exactly as an SPA would, with a
+/// reaches DNS or a port. The shell loads <c>client/bff-client.js</c> exactly as an SPA would, with a
 /// <c>&lt;script src&gt;</c> from its own origin, and the <c>/bff</c> and <c>/api</c> endpoints are stubs
 /// in the shapes contracts/http-contract.md gives them. Every request the page makes is recorded, so a
 /// test observes the client at its one real boundary: what it puts on the wire and where it navigates.
@@ -88,7 +88,7 @@ internal sealed class BffClientPage : IAsyncDisposable
             {
                 Status = 200,
                 ContentType = "text/javascript",
-                Path = FixtureFiles.Path("fixtures", "bff-client.js"),
+                Path = FixtureFiles.Path("client", "bff-client.js"),
             }),
             "/bff/session" => Fulfil(route, Session),
             "/bff/login" or "/bff/logout" => route.FulfillAsync(new()
