@@ -6,7 +6,7 @@ using Microsoft.Playwright;
 namespace Fixtures.Tests;
 
 /// <summary>
-/// Task 5.2: <c>fixtures/bff-client.js</c>, the reference client contracts/http-contract.md calls
+/// Task 5.2: <c>client/bff-client.js</c>, the reference client contracts/http-contract.md calls
 /// it, proved in headless Chromium against stubbed <c>/bff</c> and <c>/api</c> endpoints.
 ///
 /// The seam is the client's public surface, <c>window.BffClient</c>, observed where it meets the
