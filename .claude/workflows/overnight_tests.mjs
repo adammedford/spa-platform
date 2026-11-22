@@ -64,8 +64,10 @@
 // integrate as neither a conflict nor a red gate. One more has integrate agents return a merge with no verdict line
 // (#1469), answering ok and not ok, and checks that each fails at integrate, is never re-run as a flake, advances no
 // verified tip, and is reset to <old> before the next merge, and runs the check prompt's three commands against a fake
-// tools/check.sh to prove the start returns at once and the wait repeats until the verdict line. Short runs on two or three tickets prove the path-wait release
-// (#1385): a predecessor's disjoint committed implement diff releases its edge before it settles, while a true overlap,
+// tools/check.sh to prove the start returns at once and the wait repeats until the verdict line. One case of each
+// answers ok with no verdict on a merge already on the run branch, which fails and is reset by nothing. Short runs on
+// two or three tickets prove the path-wait release (#1385): a predecessor's disjoint committed implement diff
+// releases its edge before it settles, while a true overlap,
 // a missing or empty file list, one holding an entry git --name-only never prints (blank, non-string, absolute,
 // quoted, or with a . or .. segment), a waiter or a predecessor with no readable Touches path, and a forecast that
 // did not run keep the edge until settle; a release before the lane is free costs no wait; and two predecessors are
@@ -1711,8 +1713,8 @@ const LIMIT_HALTED = 'usage limit; resume after 10pm (America/Chicago)'
     if (kind === 'review') return { outcome: 'committed', headSha: 'h', findingsFixed: [], findingsSkipped: [], summary: 's', question: '', changeRequests: [], changedFiles: [`files/${id}.txt`] }
     if (kind === 'integrate') return { ok: true, mergeSha: 'm', notes: '', conflictFiles: [], headSha: `verified-${id}`, old: '', redHead: '', reach: '', lastLine: 'check: pass: companion.' }
     if (kind === 'gate') {
-      if (id === GATE_RED) return { ok: false, ran: true, mergeSha: mergeOf(id), headSha: '', notes: `the merge stays on the run branch, unverified: later merges sit on it. ${RED_LINE}` }
-      return { ok: true, ran: id !== AS_677, mergeSha: mergeOf(id), headSha: id === AS_677 ? mergeOf(id) : `verified-${id}`, notes: '' }
+      if (id === GATE_RED) return { ok: false, ran: true, mergeSha: mergeOf(id), headSha: '', lastLine: RED_LINE, notes: `the merge stays on the run branch, unverified: later merges sit on it. ${RED_LINE}` }
+      return { ok: true, ran: id !== AS_677, mergeSha: mergeOf(id), headSha: id === AS_677 ? mergeOf(id) : `verified-${id}`, lastLine: 'check: pass: companion.', notes: '' }
     }
     throw new Error(`unexpected agent label ${opts.label} in the resumed-lane run`)
   }
@@ -1826,7 +1828,7 @@ const LIMIT_HALTED = 'usage limit; resume after 10pm (America/Chicago)'
     if (kind === 'resume') return id === MERGED_LIVE ? { merged: true, mergeSha: '8'.repeat(40), subject: `Merge task ${id}: companion`, notes: '' } : NOT_MERGED
     if (kind === 'live') return id in liveOf ? liveOf[id] : LIVE_READY
     if (kind === 'grill') return { questions: [], changeRequests: [], adrCandidates: [], draftDecision: '', decided: '', summary: CARRIED_GRILL_SUMMARY }
-    if (kind === 'gate') return { ok: true, ran: false, mergeSha: '8'.repeat(40), headSha: '8'.repeat(40), notes: '' }
+    if (kind === 'gate') return { ok: true, ran: false, mergeSha: '8'.repeat(40), headSha: '8'.repeat(40), lastLine: 'check: pass: companion.', notes: '' }
     if (kind === 'implement') return { outcome: 'resolved', branch: `task/${id}`, forkSha: 'f', headSha: 'h', complete: true, outstanding: '', summary: 's', question: '', delegatedDecisions: [], changeRequests: [] }
     if (kind === 'review') return { outcome: 'committed', headSha: 'h', findingsFixed: [], findingsSkipped: [], summary: 's', question: '', changeRequests: [], changedFiles: [`files/${id}.txt`] }
     if (kind === 'integrate') return { ok: true, mergeSha: 'm', notes: '', conflictFiles: [], headSha: `verified-${id}`, old: '', redHead: '', reach: '', lastLine: 'check: pass: companion.' }
@@ -2723,7 +2725,7 @@ const forkOf = (prompt) => (/Otherwise fork from [^:]+: forkSha = (\S+?)\. Take 
 }
 
 
-// 49. An integrate that returns with a merge and no verdict line keeps no merge (#1469). A full check can run past
+// 50. An integrate that returns with a merge and no verdict line keeps no merge (#1469). A full check can run past
 //     the Bash tool's 600 s; on 2026-11-22 #1349's integrate agent returned while it ran, with no verdict, and its
 //     merge stayed on the run branch until the closing check found the tip red. Now the script judges the gate from
 //     the log's last line the agent returns: only "check: pass:" with ok keeps a merge; a "check: fail:" line is the
@@ -2732,7 +2734,9 @@ const forkOf = (prompt) => (/Otherwise fork from [^:]+: forkSha = (\S+?)\. Take 
 //     the run branch's head: issue-1471 answers ok with a merge and a log still running, issue-1474 answers not ok
 //     with no last line at all (the #1349 answer), issue-1472 is blocked by issue-1471, and issue-1473 is free. Each
 //     unverified merge fails at integrate, is never re-run as a flake, advances no verified tip, and the next merge
-//     starts only once the branch is back at <old>.
+//     starts only once the branch is back at <old>. Two more answer ok with no verdict on a merge already on the run
+//     branch, which the script resets nothing for (#712): issue-1475's gate alone, after the resume probe found it, and
+//     issue-1476's integrate STEP 0, which gives no <old>. Each fails at integrate and advances no verified tip.
 {
   const NO_VERDICT = { 'issue-1471': { ok: true, lastLine: '  build: Platform.Gateway.Tests (running)' }, 'issue-1474': { ok: false, lastLine: '' } }
   const logged = [], labels = [], prompts = {}, events = []
@@ -2744,16 +2748,21 @@ const forkOf = (prompt) => (/Otherwise fork from [^:]+: forkSha = (\S+?)\. Take 
     { ...synthetic(1472, 'issue-1472', 'ready-for-agent', ['issue-1471'], 1), owner: 'integrator' },
     { ...synthetic(1473, 'issue-1473', 'ready-for-agent', [], 1), owner: 'integrator' },
     { ...synthetic(1474, 'issue-1474', 'ready-for-agent', [], 1), owner: 'integrator' },
+    { ...synthetic(1475, 'issue-1475', 'ready-for-agent', [], 1), owner: 'integrator' },
+    { ...synthetic(1476, 'issue-1476', 'ready-for-agent', [], 1), owner: 'integrator' },
   ]
+  const ALREADY_IN = ['issue-1475', 'issue-1476']
   globalThis.agent = async (prompt, opts) => {
     labels.push(opts.label)
     ;(prompts[opts.label] = prompts[opts.label] || []).push(prompt)
     const [kind, id] = opts.label.split(':')
     if (kind === 'collect') return { outcome: 'ok', reason: 'companion', tickets: set.map((t) => ({ ...t })), landed: [], base: 'a'.repeat(40), shell: '3.2', shellCommand: '/bin/bash' }
-    if (kind === 'resume') return NOT_MERGED
+    if (kind === 'resume') return id === 'issue-1475' ? { merged: true, mergeSha: '7'.repeat(40), subject: 'Merge task issue-1475: companion', notes: '' } : NOT_MERGED
     if (kind === 'live') return LIVE_READY
     if (kind === 'report') return { questions: 0, mainCheckoutClean: true, leftovers: '', issue: 0, url: '' }
     if (kind === 'closing') return { ok: true, headSha: CLOSING_TIP, lastLine: 'check: pass: companion.', notes: '' }
+    if (kind === 'gate') return { ok: true, ran: true, mergeSha: '7'.repeat(40), headSha: `unverified-${id}`, lastLine: '  test: Platform.Gateway.Tests (running)', notes: '' }
+    if (kind === 'integrate' && id === 'issue-1476') return { ok: true, mergeSha: '6'.repeat(40), notes: 'the merge was already in', conflictFiles: [], headSha: `unverified-${id}`, old: '', redHead: '', reach: '', lastLine: '' }
     events.push({ label: opts.label, edge: 'start', seq: ++seq, head })
     await sleep(5)
     let out
@@ -2800,6 +2809,12 @@ const forkOf = (prompt) => (/Otherwise fork from [^:]+: forkSha = (\S+?)\. Take 
     if (!(res.skipped || []).includes('issue-1472')) fail(`#1469: issue-1472, blocked by a merge with no verdict, was not skipped: ${JSON.stringify(res.skipped)}`)
     if (!(res.integrated || []).includes('issue-1473')) fail(`#1469: a merge with no verdict stopped issue-1473, which it does not hold: ${JSON.stringify(res.integrated)}`)
     if (head !== OLD) fail(`#1469: the run ended with the run branch at ${head}, not <old> ${OLD}`)
+    for (const id of ALREADY_IN) {
+      const r = (res.reasons || []).find((x) => x.id === id)
+      if (!r || r.outcome !== 'failed' || r.stage !== 'integrate' || !r.reason.includes('no verdict')) fail(`#1469: ${id}, already on the run branch and answered ok with no verdict, does not fail at integrate saying so: ${JSON.stringify(r)}`)
+      if (labels.some((l) => l === `reset:${id}` || l === `rerun:${id}`)) fail(`#1469: ${id}'s merge, already on the run branch, was reset or re-run by the script`)
+      for (const [label, ps] of Object.entries(prompts)) if (label.startsWith('implement:') && ps.some((p) => p.includes(`unverified-${id}`))) fail(`#1469: ${label} forks from ${id}'s unverified head`)
+    }
   }
   // The check prompt's three commands, rendered for the closing check, run against a fake tools/check.sh that prints its
   // verdict only after the first wait has returned: the wait is repeated, ends on the verdict line, and each wait stays

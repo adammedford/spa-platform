@@ -325,8 +325,9 @@ const LIVE = {
 // already records a pass on a head holding the merge, true when the gate ran now; headSha the head it passed on.
 const GATED = {
   type: 'object',
-  properties: { ok: { type: 'boolean' }, ran: { type: 'boolean' }, mergeSha: { type: 'string' }, headSha: { type: 'string' }, notes: { type: 'string' } },
-  required: ['ok', 'ran', 'mergeSha', 'headSha', 'notes'],
+  // lastLine: the integrate log's last line, unchanged, which the script judges the gate from (#1469)
+  properties: { ok: { type: 'boolean' }, ran: { type: 'boolean' }, mergeSha: { type: 'string' }, headSha: { type: 'string' }, lastLine: { type: 'string' }, notes: { type: 'string' } },
+  required: ['ok', 'ran', 'mergeSha', 'headSha', 'lastLine', 'notes'],
 }
 // The closing check (#629): ok as the agent read it, the head it ran on, and its log's last line unchanged; the
 // script reads the verdict from that line.
@@ -593,7 +594,7 @@ Integration worktree ${INT_WT} (branch ${INT_BRANCH}). The resume probe found ta
 STEP 0 — durable state: if \`git -C ${INT_WT} rev-parse -q --verify MERGE_HEAD\` succeeds, \`git -C ${INT_WT} merge --abort\`. If \`git -C ${INT_WT} merge-base --is-ancestor ${probe.mergeSha} HEAD\` fails, the merge is not on the branch the worktree holds: change nothing, and return ok false, ran false, headSha "", notes "${probe.mergeSha} is not on ${INT_BRANCH} at <HEAD>".
 ${GATE_ALONE(t, probe.mergeSha)}
 
-Return ok, ran, mergeSha (${probe.mergeSha}), headSha and notes.`
+Return ok, ran, mergeSha (${probe.mergeSha}), headSha, lastLine (the last line of ${LOG}/${t.id}-integrate.txt, unchanged; "" when no gate ran or was on record) and notes. The script judges the gate from lastLine (#1469), so never return while the check is still running.`
 
 // How an integrate agent's notes open when tools/landing_subjects.py --subject-for chose no subject (#1052): no merge
 // was made and no gate ran, so the log must not call it a red gate.
@@ -1225,17 +1226,29 @@ const rerunRule = (out) => {
 // The verdict rule (#1469): the script, not the agent's ok, judges an integrate's gate, from the log's last line the
 // agent returns, as closeRun does. Green is ok with "check: pass:"; red is not ok with "check: fail:", whose agent reset
 // the branch itself and which the re-run rule reads. Any other answer after a merge was made (old a sha, no conflict)
-// is unverified: no verdict, or one the ok contradicts. Returns {why} for an unverified merge, {} otherwise. An answer
-// with no merge (a conflict, a refused subject, a dead agent) is for the other paths.
+// is unverified: no verdict, or one the ok contradicts. Returns {why, reset} for an unverified merge, reset true when
+// the answer names the <old> to put the branch back to, and {} otherwise. STEP 0's merge, already on the branch when
+// integrate began, comes with no <old>: the script resets nothing there, as it resets no red gate alone (#712). An
+// answer with no merge (a conflict, a refused subject, a dead agent) is for the other paths.
+const PASS = /^check: pass:/
 const verdictRule = (out) => {
-  if (!out || (out.conflictFiles || []).length || !SHA.test(out.old || '')) return {}
+  if (!out || (out.conflictFiles || []).length || String(out.notes || '').startsWith(NO_SUBJECT)) return {}
+  const reset = SHA.test(out.old || '')
+  if (!reset && !out.mergeSha) return {}
   const line = String(out.lastLine || '')
   const verdict = (/^check: (pass|fail):/.exec(line) || [])[1]
   if (verdict === 'pass' && out.ok) return {}
   if (verdict === 'fail' && !out.ok) return {}
   const quoted = line ? `"${line}"` : 'nothing'
-  if (!verdict) return { why: `the gate gave no verdict: its log's last line is ${quoted}, and the agent answered ${out.ok ? 'ok' : 'not ok'}` }
-  return { why: `the agent answered ${out.ok ? 'ok' : 'not ok'} on a gate whose last line is ${quoted}` }
+  if (!verdict) return { why: `the gate gave no verdict: its log's last line is ${quoted}, and the agent answered ${out.ok ? 'ok' : 'not ok'}`, reset }
+  return { why: `the agent answered ${out.ok ? 'ok' : 'not ok'} on a gate whose last line is ${quoted}`, reset }
+}
+
+// How a reset agent's answer reads (#397, #1469): back only when it answered ok on the old head itself.
+const readReset = (rs, old) => {
+  const back = !!(rs && rs.ok && rs.head === old)
+  return { back, said: back ? `${INT_BRANCH} reset to ${old}`
+    : `${INT_BRANCH} not reset to ${old}: ${!rs ? 'the reset agent died' : rs.ok ? `the reset agent answered ok on head ${rs.head || '""'}` : rs.notes}` }
 }
 
 // The keep rule (#397): a re-run's merge stays only when the agent answered ok on the gate's own head and its record
@@ -1259,10 +1272,13 @@ const gateAlone = async (t, probe, at) => {
   at.stage = 'integrate'
   const g = await serial(() => withSlot(async () => {
     const out = await ask(gatePrompt(t, probe), { label: `gate:${t.id}`, phase: 'Integrate', schema: GATED })
-    if (out && out.ok && out.ran && out.headSha) verifiedTip = out.headSha
+    if (out && out.ok && PASS.test(out.lastLine || '') && out.ran && out.headSha) verifiedTip = out.headSha
     return out
   }))
   if (!g || !g.ok) return fail(t, 'integrate', { why: g ? g.notes : 'the gate agent died', resumed: probe })
+  // The script's verdict, not the agent's ok (#1469): an ok with no pass line resets nothing, as a red gate alone
+  // resets nothing the script judges, and the merge stays on the run branch unverified.
+  if (!PASS.test(g.lastLine || '')) return fail(t, 'integrate', { why: `no verdict at integrate: the gate agent answered ok, but its log's last line is ${g.lastLine ? `"${g.lastLine}"` : 'nothing'}; ${probe.mergeSha} stays on ${INT_BRANCH}, unverified (#712)`, resumed: probe })
   const complete = !/^Merge part of task/.test(probe.subject)
   results[t.id] = { stage: 'integrated', outcome: complete ? 'integrated' : 'partial', mergeSha: probe.mergeSha,
     outstanding: complete ? '' : `its merge ${probe.mergeSha} is "Merge part of task": the Outstanding lines are in that merge's body`,
@@ -1296,15 +1312,17 @@ const finish = async (t, impl, at) => {
       // A merge with no verdict is reset before anything else reads the answer (#1469): it is never re-run as a flake,
       // and its head never becomes the verified tip.
       const unverified = verdictRule(out)
+      if (unverified.why && !unverified.reset) {
+        log(`${t.id}: its merge, already on ${INT_BRANCH}, has no verdict from the integration gate: ${unverified.why}; nothing reset (#1469, #712)`)
+        return { ...out, ok: false, headSha: '', notes: `no verdict at integrate: ${unverified.why}. ${out.mergeSha} was already on ${INT_BRANCH} and stays there, unverified (#712). ${out.notes}` }
+      }
       if (unverified.why) {
         log(`${t.id}: merged with no verdict from the integration gate: ${unverified.why}; resetting ${INT_BRANCH} to ${out.old} (#1469)`)
         const rs = await ask(unverifiedResetPrompt(t, out, unverified.why), { label: `reset:${t.id}`, phase: 'Integrate', schema: RESET })
           .catch(mayHold(`merged with no verdict; the limit stopped the reset to ${out.old}`, () => true))
-        const back = !!(rs && rs.ok && rs.head === out.old)
-        const reset = back ? `${INT_BRANCH} reset to ${out.old}`
-          : `${INT_BRANCH} not reset to ${out.old}: ${!rs ? 'the reset agent died' : rs.ok ? `the reset agent answered ok on head ${rs.head || '""'}` : rs.notes}`
-        if (!back && !halted) { halted = `${reset}, after ${t.id}'s merge with no verdict; no new tickets started`; log(halted) }
-        return { ...out, ok: false, headSha: '', notes: `no verdict at integrate: ${unverified.why}. ${reset}. ${out.notes}` }
+        const { back, said } = readReset(rs, out.old)
+        if (!back && !halted) { halted = `${said}, after ${t.id}'s merge with no verdict; no new tickets started`; log(halted) }
+        return { ...out, ok: false, headSha: '', notes: `no verdict at integrate: ${unverified.why}. ${said}. ${out.notes}` }
       }
       const rule = rerunRule(out)
       if (rule.projects) {
@@ -1326,9 +1344,8 @@ const finish = async (t, impl, at) => {
           const rs = await ask(resetPrompt(t, out, keep.why), { label: `reset:${t.id}`, phase: 'Integrate', schema: RESET })
             .catch(mayHold(`re-run not kept; the limit stopped the reset to ${out.old}`, () => true))
           // The reset is read from the head it reports, not from its ok alone, as the keep rule reads the re-run (#397).
-          const back = !!(rs && rs.ok && rs.head === out.old)
-          flake.reset = back ? `${INT_BRANCH} reset to ${out.old}`
-            : `${INT_BRANCH} not reset to ${out.old}: ${!rs ? 'the reset agent died' : rs.ok ? `the reset agent answered ok on head ${rs.head || '""'}` : rs.notes}`
+          const { back, said } = readReset(rs, out.old)
+          flake.reset = said
           // A run branch that may hold a merge the run reports failed is no base to start more tickets on.
           if (!back && !halted) { halted = `${flake.reset}, after ${t.id}'s re-run was not kept; no new tickets started`; log(halted) }
         } else log(`flake: ${t.id} ${rule.projects.join(', ')} -> ${kept ? 'passed alone, merge kept' : 're-run failed, reset'}`)
