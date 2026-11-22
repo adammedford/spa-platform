@@ -70,6 +70,11 @@ SAMPLE_REPOSITORY="public.ecr.aws/nginx/nginx-unprivileged"
 SAMPLE_TAG="stable-alpine"
 # The one issuer of Assumption A4, named as contracts/platform-config.example.json names it.
 ISSUER_NAME="cognito-poc"
+# The proof cell's own roots, named here: cell-common.sh holds no cell's paths (#1348), and this
+# script writes the platform root's inputs from the identity root's outputs before the platform
+# root's first apply, so it needs no entry value.
+IDP_ROOT="${REPO_ROOT}/infra/envs/poc/idp"
+PLATFORM_ROOT="${REPO_ROOT}/infra/envs/poc/platform"
 TFVARS="${PLATFORM_ROOT}/terraform.tfvars"
 
 # A SHA-256 digest in full: 64 lowercase hex.

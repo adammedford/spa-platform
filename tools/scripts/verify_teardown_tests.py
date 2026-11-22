@@ -15,6 +15,11 @@ identity root's pool while DescribeUserPool answered ResourceNotFoundException.
 The doubles, the world they share and the universal every run holds (no output names the account id)
 are tools/scripts/cell_doubles.py's.
 
+The proof cell's entry file sets every case's entry values (#1348), so a change to it runs this
+companion.
+
+Checkout inputs: infra/envs/poc/cell.env infra/envs/poc/outputs-fields.json
+
 Run: python3 -I tools/scripts/verify_teardown_tests.py
 """
 
@@ -493,6 +498,33 @@ class VerifyRefusesToStart(Verify):
         result = case.run(SCRIPT, env=case.env(SPA_TEARDOWN_TAG_WAIT="5m"))
         self.assertEqual(2, result.status, result.output)
         self.assertEqual([], case.calls())
+
+
+class VerifyTakesItsCellFromTheEntryValue(Verify):
+    """#1348: the cell is --cell or SPA_CELL, with no default."""
+
+    def test_no_cell_flag_and_no_cell_variable_exits_2_naming_the_variable(self):
+        for value in (None, ""):
+            with self.subTest(value=value):
+                case = cell.Case(self, world=torn_down_world())
+                result = case.run(SCRIPT, env=case.env(SPA_TEARDOWN_TAG_WAIT="2", SPA_TEARDOWN_TAG_POLL="0", SPA_CELL=value))
+                self.assertEqual(2, result.status, result.output)
+                self.assertIn("SPA_CELL is not set and no --cell was given", result.stderr)
+                self.assertEqual([], case.calls())
+
+    def test_the_cell_flag_serves_with_no_cell_variable(self):
+        case = cell.Case(self, world=torn_down_world())
+        result = case.run(SCRIPT, "--cell", CELL, env=case.env(SPA_TEARDOWN_TAG_WAIT="2", SPA_TEARDOWN_TAG_POLL="0", SPA_CELL=None))
+        self.assertEqual(0, result.status, result.output)
+
+    def test_help_names_no_poc_and_no_profile(self):
+        case = cell.Case(self)
+        result = case.run(SCRIPT, "--help", env=case.env(**{name: None for name in cell.ENTRY_NAMES}))
+        self.assertEqual(0, result.status, result.output)
+        self.assertNotRegex(result.stdout, r"\bpoc\b")
+        self.assertNotIn("the spa-platform profile", result.stdout)
+        self.assertNotIn("tools/aws-project.env", result.stdout)
+        self.assertIn("SPA_CELL", result.stdout)
 
 
 if __name__ == "__main__":

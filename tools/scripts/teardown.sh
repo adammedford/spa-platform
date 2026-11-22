@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# teardown.sh -- empty the platform bucket, destroy the three roots in reverse order, delete what
+# teardown.sh -- empty the platform bucket, destroy the cell's roots in reverse order, delete what
 # Terraform leaves behind, and prove that nothing carrying the platform tag remains in the platform
 # project (test P-05), by ending on tools/scripts/verify-teardown.sh (#308).
 #
@@ -19,8 +19,9 @@
 #      lets delete a release (ADR-0014), and everything else, the registry's versions, as the
 #      operator. The repositories need nothing: they are force_delete, so the destroy removes their
 #      images (infra/modules/cell/storage.tf).
-#   2. terraform destroy in infra/envs/poc/platform, then apps, then idp. images.auto.tfvars, which
-#      deploy.sh wrote, goes with the platform root, so the next first deployment starts on the
+#   2. terraform destroy in each root on $SPA_ROOTS, last first, the reverse of the order they are
+#      applied in. The platform root, $SPA_PLATFORM_ROOT, must be one of them. images.auto.tfvars,
+#      which deploy.sh wrote, goes with the platform root, so the next first deployment starts on the
 #      sample image again.
 #   3. The certificate certs.sh imported, found by its Platform and Cell tags, retried while ACM
 #      still counts it in use after the listener went; the cell's inactive task definitions, the
@@ -36,14 +37,16 @@
 #
 # --yes is required: nothing here can be undone.
 #
-# Run it as the operator's own session: the spa-platform profile, with tools/aws-project.env
-# sourced, after `terraform init -backend-config=backend.hcl` in each root. It needs the AWS CLI,
+# Run it as the operator's own session, with credentials for the account the cell is in and
+# AWS_REGION set to the cell's Region, after `terraform init -backend-config=backend.hcl` in each
+# root. It reads the entry values SPA_ROOTS, SPA_PLATFORM_ROOT and SPA_CELL (cell-common.sh's
+# header), and refuses, exit 2, when one it needs is unset. It needs the AWS CLI,
 # Terraform and python3. It never prints the account id: of a resource still tagged it names the
 # ARN with the account replaced.
 #
 # Exit status: 0 when verify-teardown.sh passes; 1 when a step failed or it found something still
 # standing; 2 when it, or verify-teardown.sh, did not start, among them a cell other than the one
-# the roots' state holds (#1304).
+# the roots' state holds (#1304), or an entry value it needs that is not set.
 #
 # Written for the bash 3.2 that ships with macOS, like tools/scripts/certs.sh.
 # Owner: workstream 1, AWS and IaC.
@@ -55,7 +58,7 @@ PROGRAM="teardown"
 # shellcheck source=tools/scripts/cell-common.sh
 . "$(dirname -- "$0")/cell-common.sh"
 
-CELL="${SPA_CELL:-poc}"
+CELL="${SPA_CELL:-}"
 CONFIRMED=0
 # contracts/resource-tags.md: the platform tag, matched exactly.
 PLATFORM_TAG_KEY="Platform"
@@ -77,11 +80,15 @@ usage() {
 Options
   --yes         Required: tear the cell down.
   --cell NAME   The cell: its teardown role, its certificate's Cell tag, its task definition
-                family and its key ring prefix. Default: \$SPA_CELL, else poc. It must be
-                the cell the roots' state holds, when any root has state (#1304).
+                family and its key ring prefix. Default: \$SPA_CELL; with neither, it
+                refuses. It must be the cell the roots' state holds, when any root has
+                state (#1304).
   -h, --help    This text.
 
 Environment
+  SPA_ROOTS               The cell's roots, colon-separated, in apply order; destroyed in reverse.
+  SPA_PLATFORM_ROOT       The platform root, one of them: its bucket is emptied first.
+  SPA_CELL                The cell, when --cell is not given.
   SPA_TEARDOWN_TAG_WAIT   Seconds verify-teardown.sh's readers retry for. Default 300.
   SPA_TEARDOWN_TAG_POLL   Seconds between their attempts, and the certificate delete's. Default 30.
   SPA_TEARDOWN_CERT_WAIT  Seconds the certificate delete retries while ACM says it is in use.
@@ -107,6 +114,16 @@ while [ "$#" -gt 0 ]; do
 done
 
 [ "$CONFIRMED" -eq 1 ] || refuse "this destroys the cell and cannot be undone. Run it again with --yes."
+[ -n "$CELL" ] || refuse "no cell: SPA_CELL is not set and no --cell was given. SPA_CELL is one of the cell's entry values, which have no default."
+need_entry SPA_ROOTS SPA_PLATFORM_ROOT
+# The platform root is destroyed with its bucket emptied first and its images file removed after, so
+# it is one of the roots, named as SPA_ROOTS names it.
+PLATFORM_LISTED=0
+for dir in "${ROOT_DIRS[@]}"; do
+  [ "$dir" != "$PLATFORM_ROOT" ] || PLATFORM_LISTED=1
+done
+[ "$PLATFORM_LISTED" -eq 1 ] ||
+  refuse "SPA_PLATFORM_ROOT, $(root_name "$PLATFORM_ROOT"), is not one of SPA_ROOTS's roots. Nothing was deleted."
 # The cell's lexical form, as tools/scripts/certs.sh checks it.
 case "$CELL" in
   *[!a-z0-9-]* | "" | -* | *-) refuse "--cell must be lowercase letters, digits and inner hyphens: got '${CELL}'" ;;
@@ -123,16 +140,18 @@ trap 'exit 130' INT TERM
 need_terraform
 cell_start
 
-# The roots are infra/envs/poc/*, whichever cell they were applied for, and the cell given names the
+# The roots are SPA_ROOTS's, whichever cell they were applied for, and the cell given names the
 # teardown role, the certificate, the task definitions and the key ring. Before anything is deleted
-# the two are compared (#1304): the platform root's cell output, or the identity root's when the
-# platform root has no state, as after a teardown that stopped past its destroy. The apps root has
-# no cell output. When no root has state there is nothing to compare, and the run goes on.
-STATE_CELL="$(tf_output "$PLATFORM_ROOT" cell)"
-[ -n "$STATE_CELL" ] || STATE_CELL="$(tf_output "$IDP_ROOT" cell)"
-if [ -n "$STATE_CELL" ] && [ "$STATE_CELL" != "$CELL" ]; then
-  refuse "the roots under infra/envs/poc hold the cell '${STATE_CELL}', and this run was given '${CELL}' (--cell or SPA_CELL). Nothing was deleted. Run it again with --cell ${STATE_CELL}, or initialise the roots against ${CELL}'s state first."
-fi
+# the two are compared (#1304): every root with a cell output in its state, the platform root first,
+# must hold the cell given. A root with no cell output, or no state, as after a teardown that stopped
+# past its destroy, says nothing. When no root says anything there is nothing to compare, and the run
+# goes on.
+for dir in "$PLATFORM_ROOT" "${ROOT_DIRS[@]}"; do
+  STATE_CELL="$(tf_output "$dir" cell)"
+  if [ -n "$STATE_CELL" ] && [ "$STATE_CELL" != "$CELL" ]; then
+    refuse "the root $(root_name "$dir") holds the cell '${STATE_CELL}', and this run was given '${CELL}' (--cell or SPA_CELL). Nothing was deleted. Run it again with --cell ${STATE_CELL}, or initialise the roots against ${CELL}'s state first."
+  fi
+done
 
 # --- 1. the bucket ---------------------------------------------------------------------------------
 
@@ -222,16 +241,23 @@ destroy() {
     fail "terraform destroy in $(root_name "$dir") failed. Read its output above; nothing after it ran."
 }
 
-# gateway_image has no default, and destroy evaluates the configuration, so it is passed back from
-# state, or from images.auto.tfvars and terraform.tfvars when the output is gone.
-if [ -n "$GATEWAY_IMAGE" ]; then
-  destroy "$PLATFORM_ROOT" -var "gateway_image=${GATEWAY_IMAGE}"
-else
-  destroy "$PLATFORM_ROOT"
-fi
-rm -f "$IMAGES_TFVARS"
-destroy "$APPS_ROOT"
-destroy "$IDP_ROOT"
+# The platform root's gateway_image has no default, and destroy evaluates the configuration, so it
+# is passed back from state, or from images.auto.tfvars and terraform.tfvars when the output is gone.
+index=${#ROOT_DIRS[@]}
+while [ "$index" -gt 0 ]; do
+  index=$((index - 1))
+  dir="${ROOT_DIRS[$index]}"
+  if [ "$dir" != "$PLATFORM_ROOT" ]; then
+    destroy "$dir"
+    continue
+  fi
+  if [ -n "$GATEWAY_IMAGE" ]; then
+    destroy "$PLATFORM_ROOT" -var "gateway_image=${GATEWAY_IMAGE}"
+  else
+    destroy "$PLATFORM_ROOT"
+  fi
+  rm -f "$IMAGES_TFVARS"
+done
 
 # --- 3. what Terraform leaves -----------------------------------------------------------------------
 
