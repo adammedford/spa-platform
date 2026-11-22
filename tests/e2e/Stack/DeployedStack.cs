@@ -11,7 +11,7 @@ namespace Gateway.E2ETests.Stack;
 /// against Cognito. Chosen by <c>SPA_E2E_STACK=deployed</c> (<see cref="StackSwitch"/>).
 ///
 /// <para>A sitting has, before the run: the cell deployed and seeded, <c>tools/scripts/tunnel.sh</c>
-/// up, the local authority <c>tools/scripts/certs.sh</c> made trusted on the workstation, and the
+/// up, the local authority <c>tools/scripts/poc/certs.sh</c> made trusted on the workstation, and the
 /// operator's own AWS session in the environment (the <c>spa-platform</c> profile, with
 /// <c>tools/aws-project.env</c> sourced). The release switch of F-06 also needs
 /// <c>SPA_E2E_PLATFORM_CONFIG</c>, the platform configuration file <c>spactl release activate</c>
@@ -445,7 +445,7 @@ public sealed class DeployedStack : IBrowserStack
             : throw new InvalidOperationException(
                 $"{why}, which needs {PlatformConfigVariable}: the platform configuration the gateway runs with, as seed.sh reads it from the task definition.");
 
-    /// <summary><c>SPACTL</c> when it names an executable, else <c>dotnet run --project tools/spactl</c>, as <c>tools/scripts/seed.sh</c> runs it.</summary>
+    /// <summary><c>SPACTL</c> when it names an executable, else <c>dotnet run --project tools/spactl</c>, as <c>tools/scripts/poc/seed.sh</c> runs it.</summary>
     private static string[] Spactl() =>
         Environment.GetEnvironmentVariable("SPACTL") is { Length: > 0 } spactl
             ? [spactl]
