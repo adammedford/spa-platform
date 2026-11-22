@@ -599,7 +599,6 @@ internal sealed class Commands(Arguments arguments, SpactlEnvironment environmen
     {
         RegistryValidation validation = Validate(document, policy, live.Revision);
         JsonObject proposed = JsonNode.Parse(document)!.AsObject();
-        JsonArray entries = proposed["apps"]!.AsArray();
 
         // registry.schema.json#/properties/schemaVersion: "spactl writes 2 on a document's first fragment
         // and never lowers it". Every command that builds a document keeps it (KeepSchemaVersion);
@@ -630,8 +629,7 @@ internal sealed class Commands(Arguments arguments, SpactlEnvironment environmen
 
             // Only the entry file of a fragment is read, never its index.html: the shell's document is
             // the one the browser loads, and the one place an import map may be.
-            ImmutableArray<FragmentDefinition> fragments = FragmentsOf(Find(entries, app.AppId)!);
-            foreach (FragmentDefinition fragment in fragments)
+            foreach (FragmentDefinition fragment in app.Fragments)
             {
                 string key = FragmentReleasePrefix(app.AppId, fragment.FragmentId, fragment.Release) + fragment.Entry;
                 if (!await ExistsAsync(objects, key, ct))
@@ -644,7 +642,7 @@ internal sealed class Commands(Arguments arguments, SpactlEnvironment environmen
 
             if (index is not null)
             {
-                CheckImportMap(app with { Fragments = fragments }, index, policy, live.Document, maps);
+                CheckImportMap(app, index, policy, live.Document, maps);
             }
         }
 
@@ -744,39 +742,6 @@ internal sealed class Commands(Arguments arguments, SpactlEnvironment environmen
                 .Select(value => value.TryGetValue(out string? source) ? source : null)
                 .OfType<string>()
                 .Where(ImportMap.IsHashSource)
-            : [];
-
-    /// <summary>
-    /// The fragments of one entry of a document the validator has accepted, read from the document:
-    /// at this fork <see cref="RegistryValidator"/> models no <c>fragments</c>, so its
-    /// <see cref="AppDefinition.Fragments"/> is empty and would check nothing. The schema has fixed
-    /// the shape. <c>apis</c> is left empty, because the checks read only each fragment's id,
-    /// <c>release</c>, <c>entry</c> and <c>csp</c>.
-    /// </summary>
-    private static ImmutableArray<FragmentDefinition> FragmentsOf(JsonObject entry) =>
-        entry["fragments"] is JsonArray fragments
-            ? [.. fragments.Select(node =>
-            {
-                JsonObject fragment = node!.AsObject();
-                JsonObject oauth = fragment["oauth"]!.AsObject();
-                return new FragmentDefinition(
-                    FragmentId: fragment["fragmentId"]!.GetValue<string>(),
-                    OAuth: new OAuthDefinition(
-                        Issuer: oauth["issuer"]!.GetValue<string>(),
-                        ClientId: oauth["clientId"]!.GetValue<string>(),
-                        ClientSecretRef: oauth["clientSecretRef"]!.GetValue<string>(),
-                        Scopes: [.. oauth["scopes"]!.AsArray().Select(scope => scope!.GetValue<string>())],
-                        Resource: oauth["resource"]?.GetValue<string>()),
-                    Release: fragment["release"]!.GetValue<string>(),
-                    Apis: [],
-                    Csp: fragment["csp"] is JsonObject csp
-                        ? csp.ToImmutableDictionary(
-                            directive => directive.Key,
-                            directive => directive.Value!.AsArray().Select(source => source!.GetValue<string>()).ToImmutableArray(),
-                            StringComparer.Ordinal)
-                        : ImmutableDictionary<string, ImmutableArray<string>>.Empty,
-                    Entry: fragment["entry"]?.GetValue<string>() ?? PlatformPaths.DefaultEntry);
-            })]
             : [];
 
     /// <summary>

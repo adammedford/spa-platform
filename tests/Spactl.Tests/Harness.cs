@@ -118,7 +118,7 @@ internal sealed class Harness : IDisposable
             {
                 await Store.SeedAsync(
                     $"apps/{appId}/fragments/{fragment!["fragmentId"]!.GetValue<string>()}/releases/" +
-                    $"{fragment["release"]!.GetValue<string>()}/{fragment["entry"]?.GetValue<string>() ?? "entry.js"}",
+                    $"{fragment["release"]!.GetValue<string>()}/{fragment["entry"]?.GetValue<string>() ?? PlatformPaths.DefaultEntry}",
                     "export {};");
             }
         }
