@@ -84,7 +84,8 @@ full: each of its areas has an entry, or names the entry that carries it, in GAP
   check there, because it would prove the operator's access and not the task role's. Once a
   snapshot is live, `src/Platform.Registry/RegistrySource.cs` rejects a whole registry document
   that names an unreadable secret (`RefreshOutcome.SecretsUnreadable`), keeps the live snapshot and
-  reads the document again on the next poll. At a cold start only the affected app is left out.
+  reads the document again on the next poll. At a cold start only the affected apps are left out,
+  unless no app's secret can be read: then the document is not applied and the task stays not ready.
 - **Risk.** On a live cell, one such entry holds back every later registry change, an unrelated
   release activation or another app's onboarding among them, until the parameter is fixed or the
   entry removed. `spactl wait` times out, and the gateway logs the rejection.
