@@ -1494,9 +1494,11 @@ PYCACHE = f"-X pycache_prefix={shlex.quote(BYTECODE.name)}"
 # How a wrapper runs a file as __main__, with the argument list a run of the file itself would
 # have, from the bytecode kept in BYTECODE: the one home of that, which the doubles' wrappers
 # (case_wrapper) and cell_doubles_tests.py's recorder both run. A file run by name is compiled
-# afresh each time, never cached (https://docs.python.org/3/using/cmdline.html#interface-options),
-# which for this one cost 6 ms of the 32 a double took. importlib.machinery is the loader the
-# import system itself uses, so it costs no import of its own, as importlib.util's 8 ms would
+# afresh each time, never cached: Python "always recompiles and does not store the result for the
+# module that's loaded directly from the command line"
+# (https://docs.python.org/3/tutorial/modules.html#compiled-python-files), which for this one cost
+# 6 ms of the 32 a double took. importlib.machinery is the loader the import system itself uses,
+# so it costs no import of its own, as importlib.util's 8 ms would
 # (https://docs.python.org/3/library/importlib.html#importlib.machinery.SourceFileLoader).
 LAUNCH = ("import sys; from importlib.machinery import SourceFileLoader; del sys.argv[0]; "
           "exec(SourceFileLoader('__main__', sys.argv[0]).get_code('__main__'), "
