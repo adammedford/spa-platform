@@ -2954,7 +2954,9 @@ const forkOf = (prompt) => (/Otherwise fork from [^:]+: forkSha = (\S+?)\. Take 
 //     request, with no implement of its own. Today's routing is kept for a red check whose request blocks nothing
 //     (issue-1493), a red check whose request blocks another ticket (issue-1496), a green check with a self-blocking
 //     request (issue-1494), and a self-blocking request with no verdict line (issue-1497): each is reviewed and
-//     integrated. The report's summary marks the held lanes' requests held, and its prompt says how to list them.
+//     integrated. A needs-human answer on a red check with a self-blocking request (issue-1498) keeps its own routing,
+//     the grill, and is not held (the implementer's decision 2 on #1470, pinned by its review). The report's summary
+//     marks the held lanes' requests held, and its prompt says how to list them.
 {
   const RED_LINE = 'check: fail: the test companion tools/wiz_prelude_tests.py failed.'
   const SELF = { number: 1466, title: 'Give the wiz prelude its fixture path', blocking: 1491, queued: 0, filed: true }
@@ -2963,7 +2965,9 @@ const forkOf = (prompt) => (/Otherwise fork from [^:]+: forkSha = (\S+?)\. Take 
   const OTHER = { number: 1468, title: 'A request that blocks another ticket', blocking: 1492, queued: 0, filed: false }
   const GREEN_SELF = { number: 1469, title: 'A request a green lane needs', blocking: 1494, queued: 0, filed: true }
   const SILENT_SELF = { number: 1470, title: 'A request a lane with no verdict needs', blocking: 1497, queued: 0, filed: true }
+  const ASKED_SELF = { number: 1471, title: 'A request a lane with a question needs', blocking: 1498, queued: 0, filed: true }
   const IMPL_OF = {
+    'issue-1498': { outcome: 'needs-human', complete: false, question: 'Which fixture path?', lastLine: RED_LINE, changeRequests: [ASKED_SELF] },
     'issue-1491': { outcome: 'resolved', complete: false, lastLine: RED_LINE, changeRequests: [SELF] },
     'issue-1495': { outcome: 'failed', complete: false, lastLine: RED_LINE, changeRequests: [SELF_QUEUED] },
     'issue-1493': { outcome: 'resolved', complete: true, lastLine: RED_LINE, changeRequests: [NOTHING] },
@@ -2975,7 +2979,7 @@ const forkOf = (prompt) => (/Otherwise fork from [^:]+: forkSha = (\S+?)\. Take 
   const labels = [], prompts = {}
   globalThis.args = { ...fixture.args, skills: OTHER_SKILLS, only: null, skip: [], maxParallel: 6, maxFailures: 1 }
   globalThis.log = () => {}
-  const set = [1491, 1492, 1493, 1494, 1495, 1496, 1497].map((n) => ({ ...synthetic(n, `issue-${n}`, 'ready-for-agent', n === 1492 ? ['issue-1491'] : [], 1), owner: 'integrator' }))
+  const set = [1491, 1492, 1493, 1494, 1495, 1496, 1497, 1498].map((n) => ({ ...synthetic(n, `issue-${n}`, 'ready-for-agent', n === 1492 ? ['issue-1491'] : [], 1), owner: 'integrator' }))
   globalThis.agent = async (prompt, opts) => {
     labels.push(opts.label)
     ;(prompts[opts.label] = prompts[opts.label] || []).push(prompt)
@@ -2985,6 +2989,7 @@ const forkOf = (prompt) => (/Otherwise fork from [^:]+: forkSha = (\S+?)\. Take 
     if (kind === 'live') return LIVE_READY
     if (kind === 'report') return { questions: 0, mainCheckoutClean: true, leftovers: '', issue: 0, url: '' }
     if (kind === 'closing') return { ok: true, headSha: CLOSING_TIP, lastLine: 'check: pass: companion.', notes: '' }
+    if (kind === 'grill') return { questions: [], changeRequests: [], adrCandidates: [], draftDecision: '', decided: '', summary: 's' }
     await sleep(2)
     if (kind === 'implement') return { branch: `b-${id}`, forkSha: 'f', headSha: 'h', outstanding: '', summary: 's', question: '', delegatedDecisions: [], changedFiles: [`files/${id}.txt`], ...(IMPL_OF[id] || { outcome: 'resolved', complete: true, lastLine: 'check: pass: companion.', changeRequests: [] }) }
     if (kind === 'review') return { outcome: 'committed', headSha: 'h', findingsFixed: [], findingsSkipped: [], summary: 's', question: '', changeRequests: [], changedFiles: [`files/${id}.txt`] }
@@ -3008,6 +3013,8 @@ const forkOf = (prompt) => (/Otherwise fork from [^:]+: forkSha = (\S+?)\. Take 
     const down = reason('issue-1492')
     if (down.outcome !== 'skipped' || !String(down.reason || '').includes('issue-1491') || !String(down.reason || '').includes('#1466')) fail(`#1470: issue-1492, blocked by the held issue-1491, is not skipped naming it and its request: ${JSON.stringify(down)}`)
     if (labels.some((l) => l === 'implement:issue-1492')) fail('#1470: issue-1492 was implemented although its blocker was held')
+    const asked = reason('issue-1498')
+    if (asked.outcome !== 'needs-human' || !labels.includes('grill:issue-1498') || (res.held || []).includes('issue-1498')) fail(`#1470: issue-1498, a needs-human answer on a red check with a self-blocking request, lost its own routing to the grill: ${JSON.stringify(asked)}, agents ${labels.filter((l) => l.endsWith(':issue-1498')).join(', ')}`)
     for (const id of KEPT_IDS) {
       if (!labels.includes(`review:${id}`) || !labels.includes(`integrate:${id}`)) fail(`#1470: ${id} lost today's routing: its agents were ${labels.filter((l) => l.endsWith(`:${id}`)).join(', ')}`)
       if (![...(res.integrated || []), ...(res.partial || [])].includes(id)) fail(`#1470: ${id} did not integrate: ${JSON.stringify(reason(id))}`)
@@ -3021,7 +3028,7 @@ const forkOf = (prompt) => (/Otherwise fork from [^:]+: forkSha = (\S+?)\. Take 
       const all = [...summary.changeRequests.filed, ...summary.changeRequests.edges, ...summary.changeRequests.queued]
       const held = (c) => (all.find((x) => x.number === c.number && x.title === c.title) || {}).held
       for (const c of [SELF, SELF_QUEUED]) if (held(c) !== true) fail(`#1470: the report's change requests do not mark "${c.title}" as holding its lane: ${JSON.stringify(all)}`)
-      for (const c of [NOTHING, OTHER, GREEN_SELF, SILENT_SELF]) if (held(c) !== false) fail(`#1470: the report's change requests mark "${c.title}" held, or drop it: ${JSON.stringify(all)}`)
+      for (const c of [NOTHING, OTHER, GREEN_SELF, SILENT_SELF, ASKED_SELF]) if (held(c) !== false) fail(`#1470: the report's change requests mark "${c.title}" held, or drop it: ${JSON.stringify(all)}`)
       const listed = (summary.held || []).map((h) => h.id).sort()
       if (JSON.stringify(listed) !== JSON.stringify([...HELD_IDS].sort())) fail(`#1470: the report's held list is ${JSON.stringify(summary.held)}, not ${HELD_IDS.join(', ')}`)
     }
