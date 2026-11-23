@@ -13,6 +13,12 @@ lsof. gh is the one call that leaves the machine, so each case's bin holds a str
 answers the issue listing the sweep makes for an `overnight-<date>` directory, from the case's
 fixture, and any other call is recorded and exits 97.
 
+**A stubbed process table for --end-orphans** (#1504). Its cases replace ps and lsof with doubles
+answering from the case's fixtures, so the real process table, where orphaned providers may be
+running, is never read by a run that may end one. Each row the table holds names a real `sleep` the
+case started and ends, under an invented parent, name and working directory, so the SIGTERM the
+sweep sends reaches a process the case owns and the rule's verdict is the table's.
+
 **A constructed environment, inheriting nothing**, for tools/land_tests.py's reasons: PATH is the
 case's own bin directory, HOME is inside the throwaway directory, GIT_CONFIG_NOSYSTEM=1,
 GIT_CONFIG_GLOBAL names the case's own file, LC_ALL=C. Every repository is made with `gc.auto=0` and
@@ -33,6 +39,7 @@ import pathlib
 import re
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -483,6 +490,299 @@ class ItNeverRemovesWhereItRunsOrWhereMainIs(Case):
                                  (verdicts["holding-main"][0], verdicts["holding-main"][2]), out)
                 self.assertTrue(here.exists())
                 self.assertTrue(holding.exists())
+
+
+class IdleCase(Case):
+    """Worktrees that the sweep keeps, holding the caches --strip-idle deletes and the things it
+    must leave (#1504)."""
+
+    def caches_branch(self):
+        """A branch whose one commit ignores `.env` and `.certs/` and force-adds a tracked directory named `bin`,
+        so a worktree on it is kept by rule 3 and holds both."""
+        self.git("checkout", "-q", "-b", "task/caches")
+        with open(self.work / ".gitignore", "a") as ignore:
+            ignore.write(".env\n.certs/\n")
+        (self.work / "tools" / "bin").mkdir(parents=True)
+        (self.work / "tools" / "bin" / "run.sh").write_text("#!/bin/sh\n")
+        self.git("add", ".gitignore")
+        self.git("add", "-f", "tools/bin/run.sh")
+        self.git("commit", "-q", "-m", "task/caches: a tracked bin and an ignored .env")
+        sha = self.git("rev-parse", "HEAD")
+        self.git("checkout", "-q", "main")
+        return sha
+
+    def fill(self, path):
+        """The ignored bin/ and .terraform/ the rule deletes, and the ignored .env and .certs/ it
+        leaves."""
+        (path / "bin").mkdir()
+        (path / "bin" / "Gateway.dll").write_bytes(b"\0" * 200_000)
+        (path / ".terraform" / "providers").mkdir(parents=True)
+        (path / ".terraform" / "providers" / "aws").write_bytes(b"\0" * 300_000)
+        (path / ".env").write_text("NOT_A_SECRET=1\n")
+        # An ignored directory whose name is none of the three.
+        (path / ".certs").mkdir(exist_ok=True)
+        (path / ".certs" / "local.pem").write_text("not a certificate\n")
+        return path
+
+    def strip_lines(self, output, word):
+        """{path: (size, rest)} for each line of the output starting with `word`."""
+        found = {}
+        for line in output.splitlines():
+            parts = line.split(None, 1)
+            if not parts or parts[0] != word:
+                continue
+            size_and_path = parts[1].split("  ")
+            found[size_and_path[1]] = (size_and_path[0].strip(), "  ".join(size_and_path[2:]))
+        return found
+
+    def snapshot(self, path):
+        """Every path under `path`, links unfollowed, with its kind and size."""
+        seen = {}
+        for directory, subdirectories, files in os.walk(path):
+            for name in subdirectories + files:
+                full = os.path.join(directory, name)
+                status = os.lstat(full)
+                seen[os.path.relpath(full, path)] = (status.st_mode >> 12, status.st_size)
+        return seen
+
+
+class StripIdleDeletesTheCachesOfAnIdleKeptWorktree(IdleCase):
+    """--strip-idle names, and with --apply deletes, the ignored .terraform, bin and obj
+    directories of a kept worktree in which nothing else has changed for 72 hours."""
+
+    def test_only_the_idle_worktrees_ignored_bin_and_terraform_are_listed_and_deleted(self):
+        sha = self.caches_branch()
+        idle = self.fill(self.add("idle", "task/caches"))
+        self.set_back(idle)
+        busy = self.fill(self.add("busy", "--detach", sha))
+        busy_before = self.snapshot(busy)
+
+        code, out, err = self.sweep("--strip-idle")
+
+        self.assertEqual(0, code, err)
+        listed = self.strip_lines(out, "strip")
+        self.assertEqual({str(idle / "bin"), str(idle / ".terraform")}, set(listed), out)
+        for path, (size, rest) in listed.items():
+            with self.subTest(path=path):
+                self.assertRegex(size, SIZE)
+                self.assertIn("73 hours ago", rest)
+        self.assertTrue((idle / "bin").exists() and (idle / ".terraform").exists(), out)
+        self.assertIn("; --strip-idle would strip 2 cache directories, freeing ", out)
+        self.assertTrue(out.splitlines()[-1].endswith("nothing was changed."), out)
+
+        code, out, err = self.sweep("--apply", "--strip-idle")
+
+        self.assertEqual(0, code, err)
+        self.assertEqual({str(idle / "bin"), str(idle / ".terraform")},
+                         set(self.strip_lines(out, "stripped")), out)
+        self.assertFalse((idle / "bin").exists(), out)
+        self.assertFalse((idle / ".terraform").exists(), out)
+        self.assertTrue((idle / ".env").exists())
+        self.assertTrue((idle / ".certs" / "local.pem").exists())
+        self.assertTrue((idle / "tools" / "bin" / "run.sh").exists())
+        self.assertEqual("", self.git("status", "--porcelain", cwd=idle))
+        self.assertEqual(busy_before, self.snapshot(busy))
+        self.assertRegex(out.splitlines()[-1],
+                         r"^sweep_worktrees: removed 0 and kept 2; freed 0 B\. --strip-idle "
+                         r"stripped 2 cache directories, freeing \d+(\.\d)? kB\.$")
+        freed = float(out.splitlines()[-1].rsplit("freeing ", 1)[1].split()[0])
+        self.assertGreater(freed, 400, out)
+
+    def test_a_symlink_in_terraform_goes_and_its_target_outside_the_worktree_stays(self):
+        # A provider linked into a shared TF_PLUGIN_CACHE_DIR, as `terraform init` leaves it.
+        cache = self.scratch / "plugin-cache" / "aws"
+        cache.mkdir(parents=True)
+        (cache / "terraform-provider-aws").write_bytes(b"\0" * 100_000)
+        idle = self.add("idle", "--detach", self.unmerged)
+        (idle / ".terraform" / "providers").mkdir(parents=True)
+        (idle / ".terraform" / "providers" / "aws").symlink_to(cache, target_is_directory=True)
+        self.set_back(idle)
+
+        code, out, err = self.sweep("--apply", "--strip-idle")
+
+        self.assertEqual(0, code, err)
+        self.assertEqual({str(idle / ".terraform")}, set(self.strip_lines(out, "stripped")), out)
+        self.assertFalse(os.path.lexists(idle / ".terraform"), out)
+        self.assertTrue((cache / "terraform-provider-aws").is_file(), out)
+        self.assertEqual(100_000, (cache / "terraform-provider-aws").stat().st_size)
+
+    def test_the_worktree_holding_main_and_one_a_process_runs_in_are_never_stripped(self):
+        self.git("checkout", "-q", "--detach", "main")
+        holding = self.fill(self.add("holding-main", "main"))
+        busy = self.fill(self.add("busy", "--detach", self.unmerged))
+        (busy / "src").mkdir()
+        # The premise: a third worktree like them, idle and kept, is stripped.
+        control = self.fill(self.add("control", "--detach", self.unmerged))
+        for tree in (holding, busy, control):
+            self.set_back(tree)
+        self.child_in(busy / "src")
+
+        code, out, err = self.sweep("--apply", "--strip-idle", "--verbose")
+
+        self.assertEqual(0, code, err)
+        self.assertEqual({str(control / "bin"), str(control / ".terraform")},
+                         set(self.strip_lines(out, "stripped")), out)
+        for tree in (holding, busy):
+            with self.subTest(tree=tree.name):
+                self.assertTrue((tree / "bin" / "Gateway.dll").exists(), out)
+                self.assertTrue((tree / ".terraform" / "providers" / "aws").exists(), out)
+
+    def test_idle_hours_sets_the_quiet_time(self):
+        # Nothing in the worktree is older than this run, so only --idle-hours 0 makes it idle.
+        tree = self.fill(self.add("recent", "--detach", self.unmerged))
+
+        code, out, err = self.sweep("--strip-idle")
+        self.assertEqual(0, code, err)
+        self.assertEqual({}, self.strip_lines(out, "strip"), out)
+
+        code, out, err = self.sweep("--strip-idle", "--idle-hours", "0")
+        self.assertEqual(0, code, err)
+        self.assertEqual({str(tree / "bin"), str(tree / ".terraform")},
+                         set(self.strip_lines(out, "strip")), out)
+
+
+# The process table the orphan cases stub: ps and lsof doubles answering from the case's fixtures,
+# recording each call, and exiting 97 on any call the sweep was not written to make.
+PS_DOUBLE = """#!/bin/bash
+log={log}
+n=0
+while [ -e "$log/ps-call-$n" ]; do n=$((n + 1)); done
+printf '%s\\0' "$@" > "$log/ps-call-$n"
+[ "$*" = "-A -o pid=,ppid=,lstart=,comm=" ] || {{ echo "ps double: unexpected call" >&2; exit 97; }}
+/bin/cat -- {fixtures}/ps.txt
+"""
+
+LSOF_DOUBLE = """#!/bin/bash
+log={log}
+n=0
+while [ -e "$log/lsof-call-$n" ]; do n=$((n + 1)); done
+printf '%s\\0' "$@" > "$log/lsof-call-$n"
+if [ "$*" = "-a -d cwd -F pn" ]; then exec /bin/cat -- {fixtures}/cwd.txt; fi
+if [ "$1 $2 $3" = "-a +L1 -p" ] && [ "$5 $6" = "-F pfis" ]; then exec /bin/cat -- {fixtures}/held.txt; fi
+echo "lsof double: unexpected call" >&2
+exit 97
+"""
+
+START = "Mon Nov 16 00:02:11 2026"
+
+
+class OrphanCase(IdleCase):
+    """Four real child processes, each named in a stubbed process table as something else: so the
+    sweep's SIGTERM reaches a process this case owns, and the table says what the rule judges."""
+
+    def stub_table(self):
+        for name, text in (("ps", PS_DOUBLE), ("lsof", LSOF_DOUBLE)):
+            # setUp linked the real lsof here; unlinked first, so the double never writes through.
+            (self.bin / name).unlink(missing_ok=True)
+            (self.bin / name).write_text(text.format(log=shlex.quote(str(self.log)),
+                                                     fixtures=shlex.quote(str(self.fixtures))))
+            (self.bin / name).chmod(0o755)
+        gone = str(self.scratch / "removed-worktree" / "infra")
+        there = str(self.scratch)
+        self.children = {}
+        rows, cwds = [], []
+        for name, ppid, executable, cwd in (
+                ("orphan", 1, f"{gone}/.terraform/providers/terraform-provider-x_v5", gone),
+                ("parent-runs", 4242, f"{gone}/.terraform/providers/terraform-provider-x_v5", gone),
+                ("cwd-exists", 1, f"{there}/.terraform/providers/terraform-provider-x_v5", there),
+                ("other-name", 1, "/usr/local/bin/terraform", gone)):
+            child = subprocess.Popen(["/bin/sleep", "300"])
+            self.addCleanup(child.wait)
+            self.addCleanup(child.kill)
+            self.children[name] = child
+            rows.append(f"{child.pid:>5} {ppid:>5} {START}     {executable}\n")
+            cwds.append(f"p{child.pid}\nfcwd\nn{cwd}\n")
+        (self.fixtures / "ps.txt").write_text("".join(rows))
+        (self.fixtures / "cwd.txt").write_text("".join(cwds))
+        (self.fixtures / "held.txt").write_text(
+            f"p{self.children['orphan'].pid}\nftxt\ni4711\ns755000000\n")
+
+    def ended(self, name):
+        child = self.children[name]
+        try:
+            child.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            return False
+        return child.returncode == -signal.SIGTERM
+
+    def alive(self, name):
+        return self.children[name].poll() is None
+
+    def ps_calls(self):
+        return sorted(path.name for path in self.log.glob("ps-call-*"))
+
+
+class EndOrphansEndsAProviderWhoseTerraformHasGone(OrphanCase):
+
+    def test_only_the_provider_with_parent_pid_1_and_a_gone_working_directory_is_ended(self):
+        self.stub_table()
+        orphan = self.children["orphan"].pid
+
+        code, out, err = self.sweep("--end-orphans")
+
+        self.assertEqual(0, code, err)
+        listed = [line for line in out.splitlines() if line.split(None, 1)[:1] == ["end"]]
+        self.assertEqual(1, len(listed), out)
+        self.assertIn(f"  pid {orphan} started {START}  ", listed[0])
+        self.assertIn("/.terraform/providers/terraform-provider-x_v5  ", listed[0])
+        self.assertIn("755.0 MB", listed[0])
+        self.assertTrue(all(self.alive(name) for name in self.children), out)
+        self.assertTrue(out.splitlines()[-1].endswith(
+            "; --end-orphans would end 1 orphaned providers, releasing 755.0 MB of deleted files "
+            "they hold open; nothing was changed."), out)
+
+        code, out, err = self.sweep("--apply", "--end-orphans")
+
+        self.assertEqual(0, code, err)
+        self.assertTrue(self.ended("orphan"), out)
+        for name in ("parent-runs", "cwd-exists", "other-name"):
+            with self.subTest(left=name):
+                self.assertTrue(self.alive(name), out)
+                self.assertNotIn(f"pid {self.children[name].pid} ", out)
+        self.assertEqual(f"sweep_worktrees: removed 0 and kept 0; freed 0 B. --end-orphans ended 1 "
+                         "orphaned providers, releasing 755.0 MB of deleted files they held open.",
+                         out.splitlines()[-1])
+
+    def test_a_ps_that_cannot_answer_ends_nothing_and_says_so(self):
+        self.stub_table()
+        (self.bin / "ps").unlink()
+
+        code, out, err = self.sweep("--apply", "--end-orphans")
+
+        self.assertEqual(0, code, err)
+        self.assertIn("sweep_worktrees: --end-orphans judged no process: ps is not on PATH", out)
+        self.assertTrue(all(self.alive(name) for name in self.children), out)
+
+
+class EachFlagAppliesItsOwnRuleAlone(OrphanCase):
+    """--apply alone stays the removals; --strip-idle and --end-orphans each add their own rule."""
+
+    def test_apply_alone_applies_neither_and_each_flag_applies_only_its_own(self):
+        self.stub_table()
+        idle = self.add("idle", "--detach", self.unmerged)
+
+        def refill():
+            if not (idle / "bin").exists():
+                self.fill(idle)
+            self.set_back(idle)
+
+        # The run that ends the orphan comes last, since an ended process stays ended.
+        for flags, stripped, ended in (((), False, False), (("--strip-idle",), True, False),
+                                       (("--end-orphans",), False, True)):
+            with self.subTest(flags=flags):
+                refill()
+                asked = len(self.ps_calls())
+
+                code, out, err = self.sweep("--apply", *flags)
+
+                self.assertEqual(0, code, err)
+                self.assertEqual(not stripped, (idle / "bin").exists(), out)
+                self.assertEqual(not stripped, (idle / ".terraform").exists(), out)
+                self.assertEqual(ended, not self.alive("orphan"), out)
+                self.assertEqual(ended, len(self.ps_calls()) > asked, self.ps_calls())
+                self.assertEqual(stripped, "--strip-idle" in out.splitlines()[-1], out)
+                self.assertEqual(ended, "--end-orphans" in out.splitlines()[-1], out)
+        self.assertTrue(self.ended("orphan"))
 
 
 class ItRefusesWhereItCannotDecide(Case):
