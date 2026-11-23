@@ -451,12 +451,12 @@ globalThis.agent = mockAgent({ tickets, byId, events, now: () => tick, prompts: 
   }
   if (kind === 'rerun') {
     const projects = JSON.parse(reachLine[id]).projects.map((p) => ({ project: p.project, log: `log-${p.project}`, passed: id === FLAKE_KEPT }))
-    if (id === FLAKE_KEPT) { greens.push({ at: tick, head: RED }); return { ok: true, mergeSha: 'm-kept', headSha: RED, notes: 'passed alone; check green with --skip-tests', projects } }
+    if (id === FLAKE_KEPT) { greens.push({ at: tick, head: RED }); return { ok: true, mergeSha: 'm-kept', headSha: RED, notes: 'passed alone; check green with --skip-tests', lastLine: 'check: pass: companion.', projects } }
     // An answer of ok the script must not keep (#397): tests/e2e did not pass, or every project passed on another head.
-    if (id === FLAKE_CLAIMED) return { ok: true, mergeSha: 'm-claimed', headSha: RED, notes: 'passed alone; check green with --skip-tests', projects: projects.map((p) => ({ ...p, passed: p.project !== 'tests/e2e' })) }
-    if (id === FLAKE_ELSEWHERE) return { ok: true, mergeSha: 'm-elsewhere', headSha: ELSEWHERE, notes: 'passed alone; check green with --skip-tests', projects: projects.map((p) => ({ ...p, passed: true })) }
+    if (id === FLAKE_CLAIMED) return { ok: true, mergeSha: 'm-claimed', headSha: RED, notes: 'passed alone; check green with --skip-tests', lastLine: 'check: pass: companion.', projects: projects.map((p) => ({ ...p, passed: p.project !== 'tests/e2e' })) }
+    if (id === FLAKE_ELSEWHERE) return { ok: true, mergeSha: 'm-elsewhere', headSha: ELSEWHERE, notes: 'passed alone; check green with --skip-tests', lastLine: 'check: pass: companion.', projects: projects.map((p) => ({ ...p, passed: true })) }
     if (id === FLAKE_DIED) return null
-    return { ok: false, mergeSha: '', headSha: '', notes: AGAIN_NOTE, projects }
+    return { ok: false, mergeSha: '', headSha: '', notes: AGAIN_NOTE, lastLine: '', projects }
   }
   if (kind === 'reset') return { ok: true, head: OLD, notes: `${id}: the run branch is at ${OLD}` }
   // The closing check (#629) answers red, the case the report has to carry without resetting any merge.
@@ -2818,7 +2818,9 @@ const forkOf = (prompt) => (/Otherwise fork from [^:]+: forkSha = (\S+?)\. Take 
   }
   // The check prompt's three commands, rendered for the closing check, run against a fake tools/check.sh that prints its
   // verdict only after the first wait has returned: the wait is repeated, ends on the verdict line, and each wait stays
-  // under the Bash tool's 600 s. A fake whose check dies with no verdict ends the wait at once, its last line no verdict.
+  // under the Bash tool's 600 s. A fake whose check dies with no verdict ends the wait at once, its last line no verdict:
+  // its wait is rendered with a bound of 30 s, so only the wait's own process-gone test ends it within the few seconds
+  // allowed, and the test's outer loop, which also asks kill -0, never gets a second wait to stop on.
   const closing = (allPrompts.find((c) => c.label === 'closing') || {}).prompt || ''
   const steps = ['1', '2'].map((n) => (new RegExp(`^ {2}${n}\\. (.+)$`, 'm').exec(closing) || [])[1])
   const wait = (/^ {2}(P=\$\(cat .+)$/m.exec(closing) || [])[1]
@@ -2828,8 +2830,8 @@ const forkOf = (prompt) => (/Otherwise fork from [^:]+: forkSha = (\S+?)\. Take 
   else {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'overnight-gate-'))
     const INT_WT = `${fixture.args.wt}/overnight`, CLOSING_LOG = `${LOG}/closing-check.txt`
-    const render = (cmd, log) => cmd.split(INT_WT).join(dir).split(CLOSING_LOG).join(log).replace(/seq \d+/, 'seq 2').replace(/sleep \d+/, 'sleep 1')
-    for (const [name, body, want] of [['verdict', 'sleep 3; echo "check: pass: fake."', 'check: pass: fake.'], ['dies', 'echo "  build: running"; exit 3', '  build: running']]) {
+    const render = (cmd, log, n = 2) => cmd.split(INT_WT).join(dir).split(CLOSING_LOG).join(log).replace(/seq \d+/, `seq ${n}`).replace(/sleep \d+/, 'sleep 1')
+    for (const [name, body, want, n] of [['verdict', 'sleep 3; echo "check: pass: fake."', 'check: pass: fake.', 2], ['dies', 'echo "  build: running"; exit 3', '  build: running', 30]]) {
       const log = path.join(dir, `${name}.txt`)
       fs.mkdirSync(path.join(dir, 'tools'), { recursive: true })
       fs.writeFileSync(path.join(dir, 'tools', 'check.sh'), `#!/bin/bash\n${body}\n`, { mode: 0o755 })
@@ -2839,9 +2841,10 @@ const forkOf = (prompt) => (/Otherwise fork from [^:]+: forkSha = (\S+?)\. Take 
         if (r.status !== 0) fail(`#1469: the check prompt's command ${render(c, log)} exited ${r.status}: ${r.stderr}`)
         if (Date.now() - t0 > 1500) fail(`#1469: the check prompt's command ${render(c, log)} took ${Date.now() - t0} ms: its call waits for the check instead of starting it`)
       }
-      let last = '', waits = 0
+      let last = '', waits = 0, firstMs = 0
       for (; waits < 6; waits++) {
-        const r = spawnSync('bash', ['-c', render(wait, log)], { encoding: 'utf8', timeout: 20000 })
+        const t0 = Date.now(), r = spawnSync('bash', ['-c', render(wait, log, n)], { encoding: 'utf8', timeout: 45000 })
+        if (!waits) firstMs = Date.now() - t0
         last = String(r.stdout || '').trimEnd().split('\n').pop()
         if (/^check: (pass|fail):/.test(last)) break
         const pid = fs.readFileSync(`${log}.pid`, 'utf8').trim()
@@ -2849,8 +2852,88 @@ const forkOf = (prompt) => (/Otherwise fork from [^:]+: forkSha = (\S+?)\. Take 
       }
       if (last !== want) fail(`#1469: the ${name} check's wait ended on ${JSON.stringify(last)}, not ${JSON.stringify(want)}`)
       if (name === 'verdict' && waits < 1) fail('#1469: the verdict came within the first wait, so the repeat was not exercised')
+      if (name === 'dies' && (waits !== 0 || firstMs > 8000)) fail(`#1469: the wait for a check that died with no verdict ran ${firstMs} ms and ${waits + 1} waits, not one wait of a few seconds: it does not stop when the check's process is gone`)
     }
     fs.rmSync(dir, { recursive: true, force: true })
+  }
+}
+
+// 50, continued. The answers whose ok and verdict line disagree, and the paths the first run never reaches (#1469). One
+//     run of its own, with room for its failures (maxFailures 8). issue-1481 answers ok on a "check: fail:" line and
+//     issue-1482 not ok on a "check: pass:" line: each merge is unverified, so a reset agent puts the branch back.
+//     issue-1483 answers ok naming no merge and no <old>, with no verdict: it fails, and nothing is reset. issue-1484's
+//     gate alone answers ok with no verdict, and issue-1485's implement, which starts only once that answer is read,
+//     forks from no head of it. issue-1487's re-run answers ok, every project passed alone on the gate's head, but its
+//     skip-tests check's last line is no verdict: the merge is not kept, and the reset stops that check from its pid
+//     file. issue-1489's reset agent answers ok on a head that is not <old>: the run branch is not back, so the run halts.
+{
+  const ELSE = 'e'.repeat(40), RUNNING = '  test: Platform.Gateway.Tests (running)'
+  const labels = [], prompts = {}
+  globalThis.args = { ...fixture.args, skills: OTHER_SKILLS, only: null, skip: [], maxParallel: 6, maxFailures: 8 }
+  globalThis.log = () => {}
+  const ids = [1481, 1482, 1483, 1484, 1485, 1487, 1489]
+  const set = ids.map((n) => ({ ...synthetic(n, `issue-${n}`, 'ready-for-agent', [], 1), owner: 'integrator' }))
+  let gateRead = null
+  const gateDone = new Promise((r) => { gateRead = r })
+  let liveWaited = 'not reached'
+  const reach = JSON.stringify({ failedAt: 'tests', verdict: TESTS_FAILED, projects: [{ project: 'tests/Spactl.Tests', reachedBy: [] }], changed: ['tools/bench/report.py'] })
+  globalThis.agent = async (prompt, opts) => {
+    labels.push(opts.label)
+    ;(prompts[opts.label] = prompts[opts.label] || []).push(prompt)
+    const [kind, id] = opts.label.split(':')
+    if (kind === 'collect') return { outcome: 'ok', reason: 'companion', tickets: set.map((t) => ({ ...t })), landed: [], base: 'a'.repeat(40), shell: '3.2', shellCommand: '/bin/bash' }
+    if (kind === 'resume') return id === 'issue-1484' ? { merged: true, mergeSha: '8'.repeat(40), subject: 'Merge task issue-1484: companion', notes: '' } : NOT_MERGED
+    if (kind === 'live') {
+      // issue-1485's implement prompt is built after this answer: hold it until the script has read issue-1484's gate.
+      if (id === 'issue-1485') liveWaited = await Promise.race([gateDone.then(() => sleep(5)).then(() => 'after the gate'), sleep(5000).then(() => 'timed out')])
+      return LIVE_READY
+    }
+    if (kind === 'report') return { questions: 0, mainCheckoutClean: true, leftovers: '', issue: 0, url: '' }
+    if (kind === 'closing') return { ok: true, headSha: 'd'.repeat(40), lastLine: 'check: pass: companion.', notes: '' }
+    if (kind === 'gate') { setTimeout(gateRead, 0); return { ok: true, ran: true, mergeSha: '8'.repeat(40), headSha: `unverified-${id}`, lastLine: RUNNING, notes: '' } }
+    await sleep(2)
+    if (kind === 'implement') return { outcome: 'resolved', branch: `b-${id}`, forkSha: 'f', headSha: 'h', complete: true, outstanding: '', summary: 's', question: '', delegatedDecisions: [], changeRequests: [] }
+    if (kind === 'review') return { outcome: 'committed', headSha: 'h', findingsFixed: [], findingsSkipped: [], summary: 's', question: '', changeRequests: [], changedFiles: [`files/${id}.txt`] }
+    if (kind === 'integrate') {
+      const merged = { mergeSha: `merge-${id}`, notes: 'companion', conflictFiles: [], old: OLD, redHead: '', reach: '' }
+      if (id === 'issue-1481') return { ...merged, ok: true, headSha: `unverified-${id}`, lastLine: TESTS_FAILED }
+      if (id === 'issue-1482') return { ...merged, ok: false, headSha: '', lastLine: 'check: pass: companion.' }
+      if (id === 'issue-1483') return { ok: true, mergeSha: '', notes: 'companion', conflictFiles: [], headSha: `unverified-${id}`, old: '', redHead: '', reach: '', lastLine: '' }
+      if (id === 'issue-1487') return { ok: false, mergeSha: '', notes: TESTS_FAILED, conflictFiles: [], headSha: '', old: OLD, redHead: RED, reach, lastLine: TESTS_FAILED }
+      if (id === 'issue-1489') return { ...merged, ok: true, headSha: `unverified-${id}`, lastLine: RUNNING }
+      return { ok: true, mergeSha: `merge-${id}`, notes: '', conflictFiles: [], headSha: `verified-${id}`, old: '', redHead: '', reach: '', lastLine: 'check: pass: companion.' }
+    }
+    if (kind === 'rerun') return { ok: true, mergeSha: `merge-${id}`, headSha: RED, notes: 'passed alone', lastLine: RUNNING, projects: [{ project: 'tests/Spactl.Tests', log: 'l', passed: true }] }
+    if (kind === 'reset') return id === 'issue-1489' ? { ok: true, head: ELSE, notes: '' } : { ok: true, head: OLD, notes: '' }
+    throw new Error(`unexpected agent label ${opts.label} in the contradiction run`)
+  }
+  const src = fs.readFileSync(scriptPath, 'utf8').replace(/^export const meta/m, 'const meta')
+  let res = null
+  try { res = await new Function('return (async () => {' + src + '\n})()')() } catch (e) { fail(`#1469: the contradiction run threw: ${e && e.message ? e.message : e}`) }
+  if (res) {
+    const reason = (id) => ((res.reasons || []).find((x) => x.id === id) || {})
+    const failedAt = (id, says) => {
+      const r = reason(id)
+      if (r.outcome !== 'failed' || r.stage !== 'integrate' || !String(r.reason || '').includes(says)) fail(`#1469: ${id} does not fail at integrate saying "${says}": ${JSON.stringify(r)}`)
+      if ((res.integrated || []).includes(id)) fail(`#1469: ${id} counts as integrated`)
+    }
+    const resets = (id) => prompts[`reset:${id}`] || []
+    for (const [id, says] of [['issue-1481', 'the agent answered ok on a gate whose last line is'], ['issue-1482', 'the agent answered not ok on a gate whose last line is']]) {
+      failedAt(id, says)
+      if (resets(id).length !== 1 || !resets(id)[0].includes(`reset --hard ${OLD}`)) fail(`#1469: ${id}'s merge, whose ok contradicts its verdict line, launched ${resets(id).length} reset agents to <old>, not one`)
+    }
+    failedAt('issue-1483', 'the answer names no merge and no <old>, so nothing was reset')
+    if (resets('issue-1483').length) fail('#1469: issue-1483 names no merge, yet the script launched a reset for it')
+    failedAt('issue-1484', 'no verdict at integrate')
+    if (liveWaited !== 'after the gate') fail(`#1469: issue-1485's live read was ${liveWaited}, so whether it forks from issue-1484's unverified gate was not exercised`)
+    for (const p of prompts['implement:issue-1485'] || []) if (p.includes('unverified-issue-1484')) fail('#1469: issue-1485 forks from issue-1484\'s head, whose gate alone gave no verdict')
+    if (!(res.integrated || []).includes('issue-1485')) fail(`#1469: issue-1485 did not integrate: ${JSON.stringify(reason('issue-1485'))}`)
+    failedAt('issue-1487', 'its skip-tests check\'s last line is')
+    const flake = (res.flakes || []).find((f) => f.id === 'issue-1487')
+    if (!flake || flake.kept !== false) fail(`#1469: issue-1487's re-run with no verdict line was kept: ${JSON.stringify(flake)}`)
+    if (resets('issue-1487').length !== 1 || !resets('issue-1487')[0].includes(`${LOG}/issue-1487-rerun.txt.pid`)) fail('#1469: the reset of issue-1487\'s re-run does not stop the skip-tests check still running from its pid file')
+    failedAt('issue-1489', `not reset to ${OLD}: the reset agent answered ok on head ${ELSE}`)
+    if (!String(res.halted || '').includes(`not reset to ${OLD}`)) fail(`#1469: issue-1489's reset agent answered ok on ${ELSE}, not <old>, yet the run did not halt: ${JSON.stringify(res.halted)}`)
   }
 }
 
