@@ -985,8 +985,9 @@ def auto_tfvars(directory: pathlib.Path) -> dict[str, str]:
     """The values a root's *.auto.tfvars files set, as Terraform loads them: in lexical order of
     their names, a later file's value for a variable winning
     (https://developer.hashicorp.com/terraform/language/values/variables#variable-definition-precedence).
-    Each value as a string, as a -var carries it. terraform.tfvars, loaded before them, sets none of
-    the variables the scripts pass, so it is not read."""
+    Each value as a string, as a -var carries it. terraform.tfvars, loaded before them, sets the three
+    variables the scripts pass (gateway_image, health_check_path and gateway_writable_root,
+    tools/scripts/poc/platform-tfvars.sh), and a -var overrides it, so it is not read."""
     values: dict[str, str] = {}
     for path in sorted(directory.glob("*.auto.tfvars"), key=lambda p: p.name):
         for line in path.read_text().splitlines():
