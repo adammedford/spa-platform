@@ -1472,7 +1472,96 @@ import shlex  # noqa: E402 -- below the doubles, which start once per call
 import shutil  # noqa: E402
 import subprocess  # noqa: E402
 import tempfile  # noqa: E402
+import threading  # noqa: E402
 import unittest  # noqa: E402
+
+# --- what every case of a run shares (#1474) ------------------------------------------------------
+
+# Where the doubles and the case's python3 keep their imports' bytecode, one directory for the run.
+# The python3 a case runs on the workstation the companions are written on is the Xcode framework's
+# 3.9, and no __pycache__ beside its standard library could be found or written there. That is this
+# machine's measurement, not a documented property of Xcode, which no Apple page found states: on
+# 2026-11-22, `ls` found no lib/python3.9/__pycache__ in the framework, and `python3 -I -S -v -c
+# "import re"` printed "code object from .../re.py" with no "matches" line for a cached file, so
+# each process compiled json, re, pathlib and the rest from source. Timed over 40 runs each, a
+# double took 68 ms, and 32 ms with its bytecode kept. -X pycache_prefix keeps the bytecode here,
+# and -I does not ignore an -X option as it does PYTHONPYCACHEPREFIX
+# (https://docs.python.org/3/using/cmdline.html#cmdoption-X,
+# https://docs.python.org/3/library/sys.html#sys.pycache_prefix). Where a stdlib's bytecode is
+# already cached, as on CI's Linux runner, this costs a directory and changes nothing else: only
+# where bytecode is kept changes, and every process runs the same source.
+BYTECODE = tempfile.TemporaryDirectory(prefix="cell-doubles-bytecode-")
+PYCACHE = f"-X pycache_prefix={shlex.quote(BYTECODE.name)}"
+# How a wrapper runs a file as __main__, with the argument list a run of the file itself would
+# have, from the bytecode kept in BYTECODE: the one home of that, which the doubles' wrappers
+# (case_wrapper) and cell_doubles_tests.py's recorder both run. A file run by name is compiled
+# afresh each time, never cached: Python "always recompiles and does not store the result for the
+# module that's loaded directly from the command line"
+# (https://docs.python.org/3/tutorial/modules.html#compiled-python-files), which for this one cost
+# 6 ms of the 32 a double took. importlib.machinery is the loader the import system itself uses,
+# so it costs no import of its own, as importlib.util's 8 ms would
+# (https://docs.python.org/3/library/importlib.html#importlib.machinery.SourceFileLoader).
+LAUNCH = ("import sys; from importlib.machinery import SourceFileLoader; del sys.argv[0]; "
+          "exec(SourceFileLoader('__main__', sys.argv[0]).get_code('__main__'), "
+          "{'__name__': '__main__', '__file__': sys.argv[0], '__builtins__': __builtins__})")
+
+
+def case_wrapper(script: pathlib.Path, before: list[str], after: list[str] = ()) -> str:
+    """A wrapper for a case's bin, shared by every case of the run: it runs `script` through LAUNCH
+    with `before`, the case's directory, `after` and the call's own arguments. The case is the
+    directory above the bin the wrapper was run from, the one home of that rule: a case's PATH is
+    its bin alone, by absolute path (Case.env), so a call by name runs <case>/bin/<name>, and $0 is
+    that path even through the link to this file. Used for the doubles and for
+    cell_doubles_tests.py's recorder."""
+    def words(values) -> str:
+        return "".join(f" {shlex.quote(str(value))}" for value in values)
+
+    return ('#!/bin/sh\nbin="${0%/*}"\n'
+            f"exec {shlex.quote(os.path.realpath(sys.executable))} -I -S {PYCACHE} -c {shlex.quote(LAUNCH)} "
+            f'{shlex.quote(str(script))}{words(before)} "${{bin%/*}}"{words(after)} "$@"\n')
+
+
+class ToolWrappers:
+    """One wrapper per real tool and per double for the run, which each case's bin links to: each
+    case wrote and ran sixteen of its own, and a newly written executable costs about 35 ms more the
+    first time it runs. That cost is this machine's measurement, not a documented one, as no Apple
+    page found states it: on 2026-11-22 a loop that wrote 50 two-line `#!/bin/sh` wrappers and ran
+    each took 2.11 s the first time and 0.34 s the second, 42 ms against 7 ms a run, while
+    syspolicyd and XprotectService were busy; tools/companion_runner.py's docstring measured 45 ms
+    the same way. A wrapper is read-only, so a write through a case's link fails rather than
+    changing the tool for every case; Case.write_executable replaces the link instead."""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.directory = tempfile.TemporaryDirectory(prefix="cell-doubles-tools-")
+        self.made: dict[tuple[str, str], pathlib.Path] = {}
+
+    def wrapper(self, tool: str, found: str) -> pathlib.Path:
+        options = f" {PYCACHE}" if tool == "python3" else ""
+        return self.made_once(tool, f'#!/bin/sh\nexec {shlex.quote(os.path.realpath(found))}{options} "$@"\n')
+
+    def double(self, name: str) -> pathlib.Path:
+        return self.made_once(name, case_wrapper(pathlib.Path(__file__).resolve(), ["--double", name]))
+
+    def made_once(self, name: str, content: str) -> pathlib.Path:
+        """The wrapper named `name` that holds `content`, written the first time it is asked for.
+        The key is the name and the whole content, so it covers every input a wrapper is made from
+        (the tool's resolved path, the interpreter, the bytecode directory, the script): two asks
+        that differ in any one get two wrappers. Each has a folder of its own, so two of one name
+        never share a path."""
+        with self.lock:
+            key = (name, content)
+            if key not in self.made:
+                folder = pathlib.Path(self.directory.name) / str(len(self.made))
+                folder.mkdir()
+                path = folder / name
+                path.write_text(content)
+                path.chmod(0o555)
+                self.made[key] = path
+            return self.made[key]
+
+
+TOOL_WRAPPERS = ToolWrappers()
 
 
 # --- a case ----------------------------------------------------------------------------------------
@@ -1514,12 +1603,9 @@ class Case:
         for tool in TOOLS:
             found = shutil.which(tool)
             test.assertIsNotNone(found, f"{tool} is required to run this companion and is not on PATH")
-            self.write_executable(tool, f'#!/bin/sh\nexec {shlex.quote(os.path.realpath(found))} "$@"\n')
+            (self.bin / tool).symlink_to(TOOL_WRAPPERS.wrapper(tool, found))
         for name in DOUBLES:
-            self.write_executable(name, (
-                f"#!/bin/sh\nexec {shlex.quote(os.path.realpath(sys.executable))} -I -S "
-                f"{shlex.quote(str(pathlib.Path(__file__).resolve()))} --double {name} "
-                f"{shlex.quote(str(self.dir))} \"$@\"\n"))
+            (self.bin / name).symlink_to(TOOL_WRAPPERS.double(name))
         self.world = world if world is not None else default_world()
         self.save()
         if outputs:
@@ -1552,6 +1638,10 @@ class Case:
 
     def write_executable(self, name: str, content: str):
         path = self.bin / name
+        # A tool's or a double's name is a link to the run's shared wrapper: replaced, never written
+        # through.
+        if path.is_symlink():
+            path.unlink()
         path.write_text(content)
         path.chmod(0o755)
 
