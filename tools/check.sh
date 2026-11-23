@@ -186,8 +186,69 @@ verdict=""
 # The red test companions so far, comma-separated, of each kind (#1472).
 red_tests=""
 red_workflows=""
+# Whether this run holds the Terraform provider cache's lock, which every way out releases (#1502).
+# The Terraform half below says why the lock exists; these two take and release it.
+cache_lock=""
+cache_lock_held=false
+
+# Takes the lock: a directory made with mkdir, which either creates it or fails, atomically, so of
+# two runs only one gets it; macOS has no flock. The holder's pid goes in it, in a file named pid.
+# A lock whose pid no longer runs is taken over, and the run says so. A lock held by a live pid, or
+# one whose pid file is not written yet, which is how a holder's lock looks in the instant between
+# its mkdir and its write, is waited on, with a line at once and every 30 seconds after naming the
+# holder. Only "No such process" from kill -0 means gone: a pid of another user's answers
+# "Operation not permitted", and that one still runs.
+cache_lock_take() {
+  local holder again said_at gone
+  said_at=""
+  while ! mkdir "$cache_lock" 2> /dev/null; do
+    # A mkdir that failed with no lock there is a cache that cannot hold one, not a lock to wait
+    # on; asked twice, since a holder may have released it between the two looks.
+    if [ ! -d "$cache_lock" ]; then
+      mkdir "$cache_lock" 2> /dev/null && break
+      [ -d "$cache_lock" ] || fail "could not make Terraform's provider cache lock $cache_lock."
+    fi
+    holder=""
+    { read -r holder < "$cache_lock/pid"; } 2> /dev/null || holder=""
+    case "$holder" in
+      '' | *[!0-9]*) ;;
+      *)
+        gone="$(kill -0 "$holder" 2>&1)" || true
+        case "$gone" in
+          *"No such process"*)
+            # Read again just before removing it: another run may have taken it over already and
+            # written its own pid, and that lock is live.
+            again=""
+            { read -r again < "$cache_lock/pid"; } 2> /dev/null || again=""
+            if [ "$again" = "$holder" ]; then
+              rm -rf "$cache_lock"
+              echo "$me: took over Terraform's provider cache lock $cache_lock from pid $holder, which no longer runs."
+            fi
+            continue
+            ;;
+        esac
+        ;;
+    esac
+    if [ -z "$said_at" ] || [ $((SECONDS - said_at)) -ge 30 ]; then
+      echo "$me: waiting for Terraform's provider cache lock $cache_lock, held by pid ${holder:-not yet written}."
+      said_at=$SECONDS
+    fi
+    sleep 1
+  done
+  cache_lock_held=true
+  printf '%s\n' "$$" > "$cache_lock/pid" || fail "could not write this run's pid into $cache_lock."
+}
+
+cache_lock_release() {
+  if $cache_lock_held; then
+    cache_lock_held=false
+    rm -rf "$cache_lock" || true
+  fi
+}
+
 on_exit() {
   status=$?
+  cache_lock_release
   if $full && [ "$status" -ne 0 ] && [ -z "$verdict" ]; then
     elapsed_total
     echo "check: fail: stopped with status $status.$(after_reds)" >&2
@@ -195,6 +256,12 @@ on_exit() {
   fi
 }
 trap on_exit EXIT
+# bash 3.2 runs no EXIT trap when a signal it does not trap ends it, and a lock left behind by a
+# killed run would hold every other lane until the takeover below finds its pid gone. Trapped, the
+# signal ends the run through on_exit, as any other stop does.
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 # The elapsed lines (#629): after each step it executes, and after each test companion, the check
 # writes `<me>: elapsed: <step>: <N>s` on a line of its own, and `<me>: elapsed: total: <N>s` just
@@ -694,11 +761,36 @@ elif [ -n "$terraform_bin" ]; then
     echo "$me: tools/preflight.sh says how to install the floor." >&2
   fi
 
+  # The provider cache (#1502). Without one, every init downloads its own copy of every provider
+  # into its directory's .terraform/: on 2026-11-23 an infra worktree held six copies of the AWS
+  # provider, 755 MB each, and 89 worktrees left 3.4 GB free of 460 GB, a full disk that fails
+  # every lane at once. With TF_PLUGIN_CACHE_DIR set, init installs a provider into the cache once
+  # and links each directory's copy to it
+  # (https://developer.hashicorp.com/terraform/cli/config/config-file#provider-plugin-cache). A
+  # value the caller set is used as it is; otherwise the check sets the default, one directory for
+  # every worktree on the machine. tools/preflight.sh names the same directory, by the same rule.
+  # Terraform does not create the directory, so the check does, before the first init.
+  if [ -n "${TF_PLUGIN_CACHE_DIR:-}" ]; then
+    cache_chosen="the caller's TF_PLUGIN_CACHE_DIR"
+  else
+    TF_PLUGIN_CACHE_DIR="$HOME/.terraform.d/plugin-cache"
+    cache_chosen="the default, since TF_PLUGIN_CACHE_DIR was unset"
+  fi
+  export TF_PLUGIN_CACHE_DIR
+  mkdir -p "$TF_PLUGIN_CACHE_DIR" || fail "could not create Terraform's provider cache $TF_PLUGIN_CACHE_DIR."
+  echo "$me: Terraform's provider cache: $TF_PLUGIN_CACHE_DIR, $cache_chosen."
+  # HashiCorp does not promise the cache is safe under concurrent inits, and the overnight lanes
+  # run this check side by side, so one init at a time writes to it: cache_lock_take, near the top,
+  # says how. The lock is held for init alone, the one command that installs into the cache;
+  # validate and `terraform test` read what init linked and run without it.
+  cache_lock="$TF_PLUGIN_CACHE_DIR/.tools-check-init.lock"
+
   quietly "$terraform_bin" fmt -check -recursive infra || fail "terraform fmt -check -recursive infra failed."
 
   for dir in $(find infra -name '*.tf' -not -path '*/.terraform/*' -exec dirname {} \; | sort -u); do
     # init's progress lines stay hidden in both modes. Its errors go to standard error, which the
     # full check shows and the hook, as it always has, does not.
+    cache_lock_take
     if $full; then
       "$terraform_bin" -chdir="$dir" init -backend=false -input=false > /dev/null \
         || fail "terraform init failed in $dir."
@@ -706,6 +798,7 @@ elif [ -n "$terraform_bin" ]; then
       "$terraform_bin" -chdir="$dir" init -backend=false -input=false > /dev/null 2>&1 \
         || fail "terraform init failed in $dir."
     fi
+    cache_lock_release
     quietly "$terraform_bin" -chdir="$dir" validate || fail "terraform validate failed in $dir."
   done
   elapsed "Terraform"

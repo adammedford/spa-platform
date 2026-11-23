@@ -96,7 +96,7 @@ OLDER = "1.10.5"
 
 # The real tools preflight reads its answers with. Every other tool it asks about is a double or
 # absent.
-TOOLS = ("uname", "sed", "head", "tail", "tr", "cut", "awk", "grep", "sort", "dirname", "readlink")
+TOOLS = ("uname", "sed", "head", "tail", "tr", "cut", "awk", "grep", "sort", "dirname", "readlink", "du")
 
 # What the documented recipe, `set -a; . tools/aws-project.env; set +a`, leaves in the two keys the
 # guard reads, printed NUL-separated so a carriage return or a space survives the trip.
@@ -466,6 +466,64 @@ class FloorRowTests(PreflightTestCase):
         self.assertIn(row("MISSING", "Terraform floor",
                           f"{case.repo / '.terraform-version'} does not name one exact version, such as 1.11.0"),
                       lines)
+
+
+CACHE_LABEL = "Terraform provider cache"
+
+
+class ProviderCacheRowTests(PreflightTestCase):
+    """#1502's third box: preflight names the provider cache tools/check.sh will use, the caller's
+    TF_PLUGIN_CACHE_DIR or the default under HOME, with its size, or says it does not exist yet."""
+
+    def default(self, case: Case) -> pathlib.Path:
+        # Typed from #1502, not read from either script.
+        return case.home / ".terraform.d" / "plugin-cache"
+
+    def test_a_cache_that_does_not_exist_yet(self):
+        case = Case(self)
+        # A ready machine stays ready: a cache not made yet is an info row, never a missing one.
+        result = self.preflight(case, env=INTENDED)
+        self.assertReady(result)
+        self.assertIn(row("info", CACHE_LABEL, f"{self.default(case)} does not exist yet; tools/check.sh makes "
+                          "it before its first terraform init"), result.lines)
+        self.assertFalse(self.default(case).exists(), "preflight changes nothing, so it makes no cache")
+
+    def test_a_cache_that_exists_is_named_with_its_size(self):
+        case = Case(self)
+        provider = self.default(case) / "registry.terraform.io" / "hashicorp" / "null" / "terraform-provider-null"
+        provider.parent.mkdir(parents=True)
+        # Three MiB of data, which du counts as 3072 KB or a little more, still 3 MB whole.
+        provider.write_bytes(os.urandom(3 * 1024 * 1024))
+        result = self.preflight(case, env=INTENDED)
+        self.assertReady(result)
+        self.assertIn(row("info", CACHE_LABEL, f"{self.default(case)}, 3 MB, which tools/check.sh shares across "
+                          "worktrees"), result.lines)
+
+    def test_a_small_cache_is_counted_in_kilobytes(self):
+        case = Case(self)
+        self.default(case).mkdir(parents=True)
+        (self.default(case) / "note").write_text("x")
+        kilobytes = subprocess.run(["du", "-sk", str(self.default(case))], capture_output=True, text=True,
+                                   check=True).stdout.split()[0]
+        result = self.preflight(case)
+        self.assertIn(row("info", CACHE_LABEL, f"{self.default(case)}, {kilobytes} KB, which tools/check.sh "
+                          "shares across worktrees"), result.lines)
+
+    def test_the_callers_cache_is_the_one_named(self):
+        case = Case(self)
+        mine = case.dir / "the-callers-cache"
+        for exists in (False, True):
+            with self.subTest(exists=exists):
+                if exists:
+                    mine.mkdir()
+                result = self.preflight(case, env={"TF_PLUGIN_CACHE_DIR": str(mine)})
+                # An empty directory is 0 KB to macOS's du and 4 KB to Linux's, so du says which.
+                kilobytes = (subprocess.run(["du", "-sk", str(mine)], capture_output=True, text=True,
+                                            check=True).stdout.split()[0] if exists else "")
+                detail = (f"{mine}, {kilobytes} KB, which tools/check.sh shares across worktrees" if exists else
+                          f"{mine} does not exist yet; tools/check.sh makes it before its first terraform init")
+                self.assertIn(row("info", CACHE_LABEL, detail), result.lines)
+                self.assertNotIn(str(self.default(case)), result.stdout)
 
 
 class OfflineTests(PreflightTestCase):

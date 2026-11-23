@@ -57,6 +57,7 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import threading
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -93,7 +94,7 @@ REQUIRE_BASH = "SCRIPT_TESTS_REQUIRE_BASH"
 # The real tools the script and the classifier use, reached from the case's bin directory, which
 # is the whole of the case's PATH. find runs dirname itself, through PATH; xargs runs find for the
 # file modes (#205).
-TOOLS = ("git", "find", "xargs", "sort", "head", "dirname", "basename", "grep")
+TOOLS = ("git", "find", "xargs", "sort", "head", "dirname", "basename", "grep", "mkdir", "rm", "sleep")
 
 PORT = "5299"
 
@@ -214,6 +215,13 @@ def floor_binary(home: pathlib.Path) -> pathlib.Path:
 def at_the_floor(me: str, binary: pathlib.Path) -> str:
     """The line that names the floor when the check runs it (#69)."""
     return f"{me}: Terraform {FLOOR} from {binary}: the floor, which CI runs."
+
+
+def the_cache(me: str, home: pathlib.Path) -> str:
+    """The line that names Terraform's provider cache when the caller set none: the default under
+    the case's HOME, typed here from #1502 rather than read from the script (#1502)."""
+    return (f"{me}: Terraform's provider cache: {home / '.terraform.d' / 'plugin-cache'}, "
+            "the default, since TF_PLUGIN_CACHE_DIR was unset.")
 
 
 def as_run_by(name: str, calls: list[list[str]]) -> list[list[str]]:
@@ -427,6 +435,7 @@ class HookTests(CheckTestCase):
         result = case.run(hook=True)
         self.assertEqual(0, result.status, result.stderr)
         self.assertLines([HOOK_BUILD_SKIPPED, at_the_floor("pre-push", case.bin / "terraform"),
+                          the_cache("pre-push", case.home),
                           f"pre-push: {HOOK_RAN}, Terraform {FLOOR} pass."], result.stdout)
         self.assertEqual("", result.stderr)
         self.assertEqual(PYTHON_CHECKS + terraform_checks(), case.calls())
@@ -443,7 +452,8 @@ class HookTests(CheckTestCase):
         case = Case(self, change="infra/roots/a/main.tf", fails_on={"terraform": "validate"})
         result = case.run(hook=True)
         self.assertEqual(1, result.status)
-        self.assertLines([HOOK_BUILD_SKIPPED, at_the_floor("pre-push", case.bin / "terraform")],
+        self.assertLines([HOOK_BUILD_SKIPPED, at_the_floor("pre-push", case.bin / "terraform"),
+                          the_cache("pre-push", case.home)],
                          result.stdout)
         self.assertLines(["terraform double failed: -chdir=infra/modules/m validate",
                           "pre-push: terraform validate failed in infra/modules/m.", HOOK_FIX],
@@ -525,7 +535,7 @@ class HookTests(CheckTestCase):
         self.assertLines(["pre-push: A-05 not checked: no main to diff against.",
                           "pre-push: part-row merges not checked: no main to diff against.",
                           "pre-push: full-landing merges not checked: no main to diff against."], result.stderr)
-        self.assertLines([at_the_floor("pre-push", case.bin / "terraform"),
+        self.assertLines([at_the_floor("pre-push", case.bin / "terraform"), the_cache("pre-push", case.home),
                           f"pre-push: {HOOK_RAN}, the build, Terraform {FLOOR} pass."], result.stdout)
         # No base, so the steering check is handed none and reads every commit HEAD reaches, and the
         # full-landing merges, like the part-row merges, are not judged.
@@ -878,7 +888,7 @@ class BothHalvesTests(CheckTestCase):
         case = Case(self, change="docs/notes.md")
         result = case.run("--both-halves")
         self.assertEqual(0, result.status, result.stderr)
-        self.assertLines([at_the_floor("pre-push", case.bin / "terraform"),
+        self.assertLines([at_the_floor("pre-push", case.bin / "terraform"), the_cache("pre-push", case.home),
                           f"pre-push: {HOOK_RAN}, the build, Terraform {FLOOR} pass."], result.stdout)
         self.assertEqual(PYTHON_CHECKS + BUILD + terraform_checks(), case.calls())
 
@@ -1189,7 +1199,7 @@ class FloorTests(CheckTestCase):
         self.assertLines([f"pre-push: warning: Terraform {LATER} from {case.bin / 'terraform'}, not the "
                           f"floor {FLOOR} that .terraform-version names and CI runs.",
                           "pre-push: tools/preflight.sh says how to install the floor."], result.stderr)
-        self.assertLines([HOOK_BUILD_SKIPPED,
+        self.assertLines([HOOK_BUILD_SKIPPED, the_cache("pre-push", case.home),
                           f"pre-push: {HOOK_RAN}, Terraform {LATER} instead of the floor {FLOOR} pass."],
                          result.stdout)
 
@@ -1237,6 +1247,189 @@ class FloorTests(CheckTestCase):
                     self.assertIn(".terraform-version does not name one exact version, such as 1.11.0, so "
                                   "nothing says which Terraform CI runs.", result.stderr)
                     self.assertEqual(FULL_PYTHON_CHECKS if mode else PYTHON_CHECKS, case.calls())
+
+
+# The lock tools/check.sh holds in the provider cache around each init, typed from #1502's design
+# rather than read from the script.
+CACHE_LOCK = ".tools-check-init.lock"
+
+# A terraform for the provider cache's cases (#1502). It answers `version` with the floor, and
+# appends one line a call to the file it is given, shared by every run that is handed the same file:
+# `<event> <run's pid> <-chdir=dir> cache=<TF_PLUGIN_CACHE_DIR, or unset> made=<yes|no> lock=<yes|no>`,
+# where made says whether the cache directory existed and lock whether the check's lock directory
+# was in it. An init writes `start` before a pause and `end` after it, so overlapping inits show as
+# two starts in a row; an init fails, after its start, while the file `<record>.fail` exists.
+CACHE_DOUBLE = """#!/bin/bash
+record={record}
+case "$*" in
+  version) printf 'Terraform v%s\\non darwin_arm64\\n' {floor}; exit 0 ;;
+esac
+cache="${{TF_PLUGIN_CACHE_DIR-unset}}"
+made=no; [ -d "$cache" ] && made=yes
+lock=no; [ -d "$cache/{lock}" ] && lock=yes
+event="$2"
+line() {{ printf '%s %s %s cache=%s made=%s lock=%s\\n' "$1" "$PPID" "${{2:-}}" "$cache" "$made" "$lock" >> "$record"; }}
+if [ "$event" = init ]; then
+  line start "$1"
+  [ -e "$record.fail" ] && exit 1
+  sleep {pause}
+  line end "$1"
+else
+  line "$event" "$1"
+fi
+exit 0
+"""
+
+
+class ProviderCacheTests(CheckTestCase):
+    """#1502: every init the check runs shares one provider cache, the caller's or the default under
+    HOME, and the inits of every run on the machine write to it one at a time."""
+
+    def cached(self, case: Case, record: pathlib.Path, pause: str = "0.2") -> Case:
+        case.write_executable(case.bin / "terraform", CACHE_DOUBLE.format(
+            record=shlex.quote(str(record)), floor=shlex.quote(FLOOR), lock=CACHE_LOCK, pause=pause))
+        return case
+
+    @staticmethod
+    def events(record: pathlib.Path) -> list[list[str]]:
+        return [line.split(" ") for line in record.read_text().splitlines()] if record.exists() else []
+
+    def test_unset_gives_every_init_the_default_made_before_the_first(self):
+        for mode in ((), ("--full", "--port", PORT)):
+            with self.subTest(mode=mode or "the hook's"):
+                case = Case(self, change="infra/roots/a/main.tf")
+                record = case.dir / "record"
+                self.cached(case, record)
+                result = case.run(*mode)
+                self.assertEqual(0, result.status, result.stdout + result.stderr)
+                default = case.home / ".terraform.d" / "plugin-cache"
+                me = "check" if mode else "pre-push"
+                self.assertIn(the_cache(me, case.home), result.stdout.splitlines())
+                inits = [event for event in self.events(record) if event[0] == "start"]
+                self.assertEqual([f"-chdir={root}" for root in ROOTS], [event[2] for event in inits])
+                for event in inits:
+                    self.assertEqual([f"cache={default}", "made=yes"], event[3:5], event)
+
+    def test_a_value_the_caller_set_reaches_init_unchanged(self):
+        case = Case(self, change="infra/roots/a/main.tf")
+        record = case.dir / "record"
+        self.cached(case, record)
+        # A trailing slash, and no space: the line is split on spaces. Neither is normalised away.
+        mine = str(case.dir / "the-callers-cache") + "/"
+        result = case.run("--full", "--port", PORT, env={"TF_PLUGIN_CACHE_DIR": mine})
+        self.assertEqual(0, result.status, result.stdout + result.stderr)
+        self.assertIn(f"check: Terraform's provider cache: {mine}, the caller's TF_PLUGIN_CACHE_DIR.",
+                      result.stdout.splitlines())
+        calls = self.events(record)
+        self.assertEqual(1 + len(ROOTS) * 3 + len(TEST_DIRS), len(calls), calls)
+        for event in calls:
+            self.assertEqual(f"cache={mine}", event[3], event)
+        self.assertFalse((case.home / ".terraform.d").exists())
+
+    def test_the_lock_is_held_for_init_and_not_for_validate_or_test(self):
+        case = Case(self, change="infra/roots/a/main.tf")
+        record = case.dir / "record"
+        self.cached(case, record)
+        result = case.run("--full", "--port", PORT)
+        self.assertEqual(0, result.status, result.stdout + result.stderr)
+        calls = self.events(record)
+        held = {(event[0], event[2]): event[5] for event in calls}
+        for root in ROOTS:
+            self.assertEqual("lock=yes", held[("start", f"-chdir={root}")])
+            self.assertEqual("lock=no", held[("validate", f"-chdir={root}")])
+        for directory in TEST_DIRS:
+            self.assertEqual("lock=no", held[("test", f"-chdir={directory}")])
+        self.assertFalse((case.home / ".terraform.d" / "plugin-cache" / CACHE_LOCK).exists())
+
+    def test_a_failed_init_releases_the_lock(self):
+        for mode in ((), ("--full", "--port", PORT)):
+            with self.subTest(mode=mode or "the hook's"):
+                case = Case(self, change="infra/roots/a/main.tf")
+                record = case.dir / "record"
+                self.cached(case, record)
+                (case.dir / "record.fail").write_text("")
+                result = case.run(*mode)
+                self.assertEqual(1, result.status, result.stdout + result.stderr)
+                self.assertIn(f"terraform init failed in {ROOTS[0]}.", result.stderr)
+                # The first init started, failed and never ended, and nothing ran after it.
+                self.assertEqual([["start", f"-chdir={ROOTS[0]}"]],
+                                 [[event[0], event[2]] for event in self.events(record) if event[0] != "-check"])
+                self.assertFalse((case.home / ".terraform.d" / "plugin-cache" / CACHE_LOCK).exists())
+
+    def test_two_concurrent_runs_never_init_at_once(self):
+        shared = tempfile.TemporaryDirectory()
+        self.addCleanup(shared.cleanup)
+        cache = pathlib.Path(shared.name).resolve() / "cache"
+        record = pathlib.Path(shared.name).resolve() / "record"
+        cases = [self.cached(Case(self, change="infra/roots/a/main.tf"), record, pause="0.5") for _ in range(2)]
+        results: list[Result | None] = [None, None]
+
+        def run(index: int):
+            results[index] = cases[index].run("--full", "--port", PORT, env={"TF_PLUGIN_CACHE_DIR": str(cache)})
+
+        threads = [threading.Thread(target=run, args=(index,)) for index in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        for result in results:
+            self.assertEqual(0, result.status, result.stdout + result.stderr)
+        inits = [event[0] for event in self.events(record) if event[0] in ("start", "end")]
+        self.assertEqual(len(ROOTS) * 2 * 2, len(inits), inits)
+        # Each start is followed by its own end before the next start: never two inits at once.
+        self.assertEqual(["start", "end"] * len(ROOTS) * 2, inits)
+        runs = {event[1] for event in self.events(record) if event[0] == "start"}
+        self.assertEqual(2, len(runs), "both runs reached their inits")
+
+    def test_a_lock_naming_a_pid_that_no_longer_runs_is_taken_over(self):
+        case = Case(self, change="infra/roots/a/main.tf")
+        record = case.dir / "record"
+        self.cached(case, record)
+        gone = subprocess.Popen(["/bin/sh", "-c", ":"])
+        gone.wait()
+        lock = case.home / ".terraform.d" / "plugin-cache" / CACHE_LOCK
+        lock.mkdir(parents=True)
+        (lock / "pid").write_text(f"{gone.pid}\n")
+        result = case.run("--full", "--port", PORT)
+        self.assertEqual(0, result.status, result.stdout + result.stderr)
+        self.assertIn(f"check: took over Terraform's provider cache lock {lock} from pid {gone.pid}, "
+                      "which no longer runs.", result.stdout.splitlines())
+        self.assertNotIn("waiting for", result.stdout)
+        self.assertFalse(lock.exists())
+
+    def test_a_lock_held_by_a_live_pid_is_waited_on_and_names_its_holder(self):
+        case = Case(self, change="infra/roots/a/main.tf")
+        record = case.dir / "record"
+        self.cached(case, record)
+        lock = case.home / ".terraform.d" / "plugin-cache" / CACHE_LOCK
+        lock.mkdir(parents=True)
+        # This process runs, and holds the lock until the timer releases it.
+        (lock / "pid").write_text(f"{os.getpid()}\n")
+        timer = threading.Timer(3, lambda: shutil.rmtree(lock))
+        timer.start()
+        self.addCleanup(timer.cancel)
+        result = case.run("--full", "--port", PORT)
+        self.assertEqual(0, result.status, result.stdout + result.stderr)
+        lines = result.stdout.splitlines()
+        waiting = f"check: waiting for Terraform's provider cache lock {lock}, held by pid {os.getpid()}."
+        # Said at once, and once only, since the wait is shorter than the 30 seconds between lines.
+        self.assertEqual(1, lines.count(waiting), result.stdout)
+        self.assertNotIn("took over", result.stdout)
+        self.assertEqual(len(ROOTS), len([event for event in self.events(record) if event[0] == "start"]))
+
+    def test_a_cache_that_cannot_hold_the_lock_fails_rather_than_waits(self):
+        case = Case(self, change="infra/roots/a/main.tf")
+        record = case.dir / "record"
+        self.cached(case, record)
+        cache = case.dir / "read-only-cache"
+        cache.mkdir()
+        cache.chmod(0o500)
+        self.addCleanup(cache.chmod, 0o700)
+        result = case.run("--full", "--port", PORT, env={"TF_PLUGIN_CACHE_DIR": str(cache)})
+        self.assertEqual(1, result.status, result.stdout + result.stderr)
+        self.assertEqual(f"check: fail: could not make Terraform's provider cache lock {cache / CACHE_LOCK}.",
+                         result.last_line(result.stderr))
+        self.assertEqual([], [event for event in self.events(record) if event[0] == "start"])
 
 
 class FloorFileTests(CheckTestCase):
