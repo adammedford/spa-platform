@@ -56,6 +56,7 @@ import concurrent.futures
 import http.server
 import importlib.util
 import json
+import operator
 import os
 import pathlib
 import re
@@ -67,7 +68,10 @@ import tempfile
 import threading
 import types
 import unittest
-# Stock unittest's entry for a fixture's outcome, so Concurrently names one as TestSuite does.
+# Stock unittest's entry for a fixture's outcome, so Concurrently names one as TestSuite does. It and
+# the other private names Concurrently reads, TestCase.tearDown_exceptions, _class_cleanups and
+# __unittest_skip__, are CPython's Lib/unittest/suite.py and case.py, read on 3.9.6 and 3.14; TheRunner
+# compares the two runners on whichever interpreter runs it.
 from unittest.suite import _ErrorHolder
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
@@ -1623,9 +1627,9 @@ class TheRunner(unittest.TestCase):
     test turns the run red, a fixture that raises is reported under the fixture's own name, and the
     count, the failures, the errors, the skips and which fixtures ran agree with unittest.TestSuite's."""
 
-    # unittest keeps one list of module cleanups for the process, so the two cases that add or run
-    # them take turns.
-    MODULE_CLEANUPS = threading.Lock()
+    # unittest keeps one list of module cleanups for the process, and on 3.9 one list of class
+    # cleanups for every TestCase, which stock unittest's runs here share: the cases take turns.
+    RUNNERS = threading.Lock()
 
     @staticmethod
     def classes(module: str):
@@ -1682,7 +1686,24 @@ class TheRunner(unittest.TestCase):
             def test_passes(self):
                 pass
 
-        found = [Passing, Failing, SetUpRaises, SetUpSkips, Skipped, TearDownRaises]
+        class CleanupRaises(unittest.TestCase):
+            @classmethod
+            def setUpClass(cls):
+                cls.addClassCleanup(calls.append, "CleanupRaises cleanup")
+                cls.addClassCleanup(operator.truediv, 1, 0)
+
+            def test_passes(self):
+                pass
+
+        class CleansUp(unittest.TestCase):
+            @classmethod
+            def setUpClass(cls):
+                cls.addClassCleanup(calls.append, "CleansUp cleanup")
+
+            def test_before_its_cleanup(self):
+                calls.append("CleansUp test, its cleanup already run" if "CleansUp cleanup" in calls else "CleansUp test")
+
+        found = [Passing, Failing, SetUpRaises, SetUpSkips, Skipped, TearDownRaises, CleanupRaises, CleansUp]
         for cls in found:
             cls.__module__ = module
         return calls, found
@@ -1695,12 +1716,13 @@ class TheRunner(unittest.TestCase):
                 "failures": [str(test) for test, _ in result.failures], "errors": [str(test) for test, _ in result.errors],
                 "skipped": [(str(test), reason) for test, reason in result.skipped]}
 
-    def both(self, module: str, pick=None):
-        """The outcome and the calls of each runner, each on classes of its own."""
+    def both(self, module: str, pick=None, runner=None):
+        """The outcome and the calls of each runner, Concurrently unless named, each on classes of its own."""
         found = []
-        for run in (lambda suite: suite, Concurrently):
-            calls, classes = self.classes(module)
-            found.append((self.outcome(run, pick(classes) if pick else classes), sorted(calls)))
+        with self.RUNNERS:
+            for run in (lambda suite: suite, runner or Concurrently):
+                calls, classes = self.classes(module)
+                found.append((self.outcome(run, pick(classes) if pick else classes), sorted(calls)))
         return found
 
     def module(self, **fixtures) -> str:
@@ -1717,13 +1739,28 @@ class TheRunner(unittest.TestCase):
         self.assertEqual(stock_calls, mine_calls)
         # Not two runners agreeing on nothing: what each case must have reported.
         self.assertFalse(mine["success"])
-        self.assertEqual(6, mine["run"])
-        self.assertEqual(["SetUpRaises cleanup", "TearDownRaises cleanup"], mine_calls)
-        self.assertEqual(3, len(mine["errors"]))
+        self.assertEqual(8, mine["run"])
+        self.assertEqual(["CleansUp cleanup", "CleansUp test", "CleanupRaises cleanup", "SetUpRaises cleanup",
+                          "TearDownRaises cleanup"], mine_calls)
+        self.assertEqual(4, len(mine["errors"]))
         self.assertTrue(mine["errors"][1].startswith("setUpClass (") and mine["errors"][1].endswith("SetUpRaises)"), mine["errors"])
         self.assertTrue(mine["errors"][2].startswith("tearDownClass (") and mine["errors"][2].endswith("TearDownRaises)"), mine["errors"])
+        # A class cleanup that raises is an error of the class's tearDownClass, as unittest reports it.
+        self.assertTrue(mine["errors"][3].startswith("tearDownClass (") and mine["errors"][3].endswith("CleanupRaises)"), mine["errors"])
         self.assertEqual(2, len(mine["failures"]))
         self.assertEqual({"class skipped", "setUpClass skipped"}, {reason for _, reason in mine["skipped"]})
+
+    def test_a_class_whose_setup_raises_runs_its_own_cleanups_and_no_others(self):
+        # One worker opens CleansUp and then SetUpRaises before any test runs, so on Python 3.9, where
+        # every class shares one cleanup list, SetUpRaises' cleanups would run CleansUp's before its test.
+        class OneAtATime(Concurrently):
+            WORKERS = 1
+
+        (stock, stock_calls), (mine, mine_calls) = self.both(f"fargate_runner_probe_{id(self)}_unregistered",
+                                                             lambda classes: [classes[7], classes[2]], OneAtATime)
+        self.assertEqual(stock, mine)
+        self.assertEqual(stock_calls, mine_calls)
+        self.assertEqual(["CleansUp cleanup", "CleansUp test", "SetUpRaises cleanup"], mine_calls)
 
     def test_a_failing_test_alone_turns_the_run_red(self):
         (stock, _), (mine, _) = self.both(f"fargate_runner_probe_{id(self)}_unregistered",
@@ -1739,8 +1776,7 @@ class TheRunner(unittest.TestCase):
             raise RuntimeError("setUpModule raised")
 
         name = self.module(setUpModule=raises, tearDownModule=lambda: torn.append("tearDownModule"))
-        with self.MODULE_CLEANUPS:
-            (stock, stock_calls), (mine, mine_calls) = self.both(name)
+        (stock, stock_calls), (mine, mine_calls) = self.both(name)
         self.assertEqual(stock, mine)
         self.assertEqual(stock_calls, mine_calls)
         self.assertEqual({"run": 0, "success": False, "failures": [], "errors": [f"setUpModule ({name})"], "skipped": []}, mine)
@@ -1751,11 +1787,23 @@ class TheRunner(unittest.TestCase):
             raise RuntimeError("tearDownModule raised")
 
         name = self.module(tearDownModule=raises)
-        with self.MODULE_CLEANUPS:
-            (stock, _), (mine, _) = self.both(name, lambda classes: [classes[0]])
+        (stock, _), (mine, _) = self.both(name, lambda classes: [classes[0]])
         self.assertEqual(stock, mine)
         self.assertEqual([f"tearDownModule ({name})"], mine["errors"])
         self.assertEqual(2, mine["run"])
+
+    def test_a_modules_cleanups_run_last(self):
+        torn = []
+
+        def opens():
+            unittest.addModuleCleanup(torn.append, "module cleanup")
+
+        # With a tearDownModule, since Python 3.9's unittest runs a module's cleanups only after one.
+        name = self.module(setUpModule=opens, tearDownModule=lambda: torn.append("tearDownModule"))
+        (stock, _), (mine, _) = self.both(name, lambda classes: [classes[0]])
+        self.assertEqual(stock, mine)
+        self.assertEqual({"run": 2, "success": False}, {key: mine[key] for key in ("run", "success")})
+        self.assertEqual(["tearDownModule", "module cleanup"] * 2, torn, "each runner ran the cleanup after tearDownModule")
 
     def test_the_flags_it_cannot_keep_are_refused_by_name(self):
         done = subprocess.run([*python(), str(pathlib.Path(__file__).resolve()), "-f", "-b", "-c"],
@@ -1816,9 +1864,10 @@ class Concurrently(unittest.TestSuite):
 
     What it keeps of unittest.TestSuite, which TheRunner holds it to: setUpModule once before
     anything, and on its failure nothing else but the module's cleanups; each class's setUpClass once
-    before its tests and tearDownClass after them, with the class's cleanups after either; no class
-    fixture for a class skipped whole; a setUpClass that raises runs none of its tests, and is an error,
-    or a skip for SkipTest, named "setUpClass (module.Class)", as each other fixture is named;
+    before its tests and tearDownClass after them, with the class's own cleanups after either, and a
+    cleanup that raises an error of that fixture; no class fixture for a class skipped whole; a
+    setUpClass that raises runs none of its tests, and is an error, or a skip for SkipTest, named
+    "setUpClass (module.Class)", as each other fixture is named;
     tearDownModule and the module's cleanups last. Each test reports into a Recorded of its own, and
     everything is replayed in load order onto the run's result, so the output, the count and the
     exit status are unittest's own.
@@ -1893,6 +1942,13 @@ class Concurrently(unittest.TestSuite):
         if getattr(cls, "__unittest_skip__", False):
             return events, "skipped"
         description = f"setUpClass ({cls.__module__}.{cls.__qualname__})"
+        # Python 3.9's unittest keeps one _class_cleanups list on TestCase, shared by every subclass
+        # (Lib/unittest/case.py, 3.9: `_class_cleanups = []` in the class body); 3.11 gives each
+        # subclass its own in TestCase.__init_subclass__. A serial run empties the list before the next
+        # class opens, so the sharing is harmless there; here every class is open at once, and one
+        # class's doClassCleanups would run the others' cleanups before their tests.
+        if "_class_cleanups" not in vars(cls):
+            cls._class_cleanups = []
         if fixture(cls.setUpClass, description, events):
             Concurrently.class_cleanups(cls, description, events)
             return events, "failed"
