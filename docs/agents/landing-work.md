@@ -280,14 +280,18 @@ checkout at `origin/main`, the script says what it would do, deletes nothing and
 with it, it clears what an earlier landing left, by the same rule, and when it deletes anything its
 own last line names that file.
 
-**Before that cleanup, `tools/land.sh` runs `tools/sweep_worktrees.py --apply`** (#1503), which
+**Before that cleanup, `tools/land.sh` runs `tools/sweep_worktrees.py --apply --strip-idle --end-orphans`** (#1503, #1504), which
 removes each linked worktree whose work is on `origin/main`, never with `--force` and never deleting
 its branch, and keeps one that is locked, holds `main`, is the one it runs in, has a change or an
 untracked file, has a commit with no equivalent on `origin/main` or a detached tip that is not its
 ancestor, holds an ignored file no build rebuilds, has a process running in it, sits under the `overnight-<date>` directory of a night whose
 `Overnight <date>` issue does not read closed, or sits on `origin/main`'s first-parent line with
-something in it changed in the last 72 hours; a sweep that fails is said in one line and fails
-nothing, and run with no flag it lists every worktree with its verdict, reason and size.
+something in it changed in the last 72 hours. After the removals it runs two rules: it deletes the
+ignored `.terraform`, `bin` and `obj` directories of each worktree it keeps, other than the one
+holding `main`, in which nothing else has changed for 72 hours and no process runs, and it sends
+SIGTERM to each Terraform provider whose parent is pid 1 and whose working directory is gone. A
+sweep that fails is said in one line and fails nothing, and run with no flag it lists every
+worktree with its verdict, reason and size.
 
 A task is **done** as `GLOSSARY.md` → "Done" defines it.
 
