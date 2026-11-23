@@ -149,7 +149,8 @@ public static class RegistryValidator
         if (!policy.AllowedHostSuffixes.Any(suffix => HostPolicy.EndsWithSuffix(host, suffix)))
         {
             findings.Error(RegistryRules.HostSuffixNotAllowed, $"{at}/host",
-                $"Host '{host}' does not end with a suffix Policy:AllowedHostSuffixes allows.");
+                $"Host '{host}' does not end with a suffix Policy:AllowedHostSuffixes allows. " +
+                "The entry is outside the cell's bounds: a new host suffix is a cell change, made by an operator, not a registry write.");
         }
 
         if (HostPolicy.PortAboveMaximum(host))
@@ -161,7 +162,8 @@ public static class RegistryValidator
         if (!policy.Issuers.ContainsKey(issuer))
         {
             findings.Error(RegistryRules.UnknownIssuer, $"{at}/oauth/issuer",
-                $"Issuer '{issuer}' is not configured under Issuers:{{name}}.");
+                $"Issuer '{issuer}' is not configured under Issuers:{{name}}. " +
+                "The entry is outside the cell's bounds: adding an issuer is widening the bounds, an operator's change, not a registry write.");
         }
 
         Exact(findings, entry["session"]!["lifetimeMinutes"]!, $"{at}/session/lifetimeMinutes", "lifetimeMinutes", "minutes");
@@ -188,7 +190,8 @@ public static class RegistryValidator
         if (fragments.Count > policy.FragmentsPerShell)
         {
             findings.Error(RegistryRules.FragmentsPerShellExceeded, $"{at}/fragments",
-                $"The entry lists {fragments.Count} fragments; Policy:FragmentsPerShell allows {policy.FragmentsPerShell}.");
+                $"The entry lists {fragments.Count} fragments; Policy:FragmentsPerShell allows {policy.FragmentsPerShell}. " +
+                "The entry is outside the cell's bounds: raising the cap is widening the bounds, an operator's change, not a registry write.");
         }
 
         Dictionary<string, int> ids = new(StringComparer.Ordinal);
@@ -243,7 +246,8 @@ public static class RegistryValidator
             if (origin is null || !allowed.Contains(origin))
             {
                 findings.Error(RegistryRules.UpstreamNotAllowed, $"{apiAt}/upstream",
-                    $"Upstream '{upstream}' is not an origin Policy:AllowedUpstreams allows.");
+                    $"Upstream '{upstream}' is not an origin Policy:AllowedUpstreams allows. " +
+                    "The entry is outside the cell's bounds: adding an upstream is widening the bounds, an operator's change, not a registry write.");
                 continue;
             }
 

@@ -235,6 +235,49 @@ public sealed class RegistryValidatorTests
             Examples.RegistryEntry(e => e["oauth"]!["issuer"] = "primary"), "an issuer configuration does not name");
     }
 
+    // ---- The bounds refusals (#1512). Each keeps the fact as its first sentence, then says the entry
+    // is outside the cell's bounds and names the operator's change by its glossary term. The same text
+    // comes back through ValidateAppDefinition, which spactl app add prints, and through a whole
+    // document, which the gateway logs.
+
+    [Theory]
+    [InlineData(RegistryRules.HostSuffixNotAllowed, "/host",
+        "Host 'app1.example.test:8443' does not end with a suffix Policy:AllowedHostSuffixes allows. " +
+        "The entry is outside the cell's bounds: a new host suffix is a cell change, made by an operator, not a registry write.")]
+    [InlineData(RegistryRules.UnknownIssuer, "/oauth/issuer",
+        "Issuer 'primary' is not configured under Issuers:{name}. " +
+        "The entry is outside the cell's bounds: adding an issuer is widening the bounds, an operator's change, not a registry write.")]
+    [InlineData(RegistryRules.UpstreamNotAllowed, "/apis/0/upstream",
+        "Upstream 'http://127.0.0.1:5082' is not an origin Policy:AllowedUpstreams allows. " +
+        "The entry is outside the cell's bounds: adding an upstream is widening the bounds, an operator's change, not a registry write.")]
+    [InlineData(RegistryRules.FragmentsPerShellExceeded, "/fragments",
+        "The entry lists 1 fragments; Policy:FragmentsPerShell allows 0. " +
+        "The entry is outside the cell's bounds: raising the cap is widening the bounds, an operator's change, not a registry write.")]
+    public void A_bounds_refusal_names_the_operators_change_the_same_in_a_document_and_a_definition(string rule, string path, string message)
+    {
+        (Action<JsonObject> change, PlatformPolicy policy) = BoundsCase(rule);
+
+        RegistryIssue logged = Assert.Single(Rejects(Examples.RegistryEntry(change), $"an entry outside the cell's bounds under {rule}", policy).Errors, error => error.Rule == rule);
+        Assert.Equal(("/apps/0" + path, message), (logged.Path, logged.Message));
+
+        JsonObject definition = Examples.Json("app-definition.example.json");
+        change(definition);
+        AppDefinitionValidation printed = RegistryValidator.ValidateAppDefinition(definition.ToJsonString(), policy);
+        RegistryIssue refusal = Assert.Single(printed.Errors, error => error.Rule == rule);
+        Assert.Equal((path, message), (refusal.Path, refusal.Message));
+    }
+
+    /// <summary>One entry change and policy that put the example outside the cell's bounds under <paramref name="rule"/>.</summary>
+    private static (Action<JsonObject> Change, PlatformPolicy Policy) BoundsCase(string rule) => rule switch
+    {
+        RegistryRules.HostSuffixNotAllowed => (e => e["host"] = "app1.example.test:8443", Examples.Policy()),
+        RegistryRules.UnknownIssuer => (e => e["oauth"]!["issuer"] = "primary", Examples.Policy()),
+        RegistryRules.UpstreamNotAllowed => (e => e["apis"]![0]!["upstream"] = "http://127.0.0.1:5082", Examples.Policy()),
+        // The example and the definition each carry one fragment, so a cap of 0 refuses both.
+        RegistryRules.FragmentsPerShellExceeded => (_ => { }, Examples.Policy(p => p with { FragmentsPerShell = 0 })),
+        _ => throw new ArgumentOutOfRangeException(nameof(rule), rule, "not a bounds refusal"),
+    };
+
     [Fact]
     public void A_port_above_65535_is_rejected()
     {
