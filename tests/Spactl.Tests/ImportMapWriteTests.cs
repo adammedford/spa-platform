@@ -71,7 +71,8 @@ public sealed class ImportMapWriteTests : IDisposable
 
         Assert.Equal(1, await Spactl.Run("app", "add", Definition(H1)));
 
-        Assert.Contains(H2, Error, StringComparison.Ordinal);
+        // The removed-hash warning the same write prints names H2 too, so the refusal's own line is pinned.
+        Assert.Contains($"Add {H2} to", Error, StringComparison.Ordinal);
         Assert.Equal(before, await Spactl.Store.TextAsync(Harness.RegistryKey));
     }
 
@@ -104,7 +105,7 @@ public sealed class ImportMapWriteTests : IDisposable
 
         Assert.Equal(1, await Spactl.Run("registry", "apply", Spactl.WriteFile("registry.json", document.ToJsonString())));
 
-        Assert.Contains(H1, Error, StringComparison.Ordinal);
+        Assert.Contains($"Add {H1} to", Error, StringComparison.Ordinal);
         Assert.Equal(versions, Spactl.Store.VersionCount(Harness.RegistryKey));
     }
 
