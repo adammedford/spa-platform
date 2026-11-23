@@ -677,6 +677,20 @@ class StripIdleDeletesTheCachesOfAnIdleKeptWorktree(IdleCase):
         self.assertEqual({str(tree / "bin"), str(tree / ".terraform")},
                          set(self.strip_lines(out, "strip")), out)
 
+    def test_a_change_inside_the_caches_alone_leaves_the_worktree_idle(self):
+        # A build or an init rewrites what is inside bin/ and .terraform/; only a change outside
+        # them, as the ticket words it, makes the worktree busy.
+        tree = self.fill(self.add("rebuilt", "--detach", self.unmerged))
+        self.set_back(tree)
+        for inside in (tree / "bin" / "Gateway.dll", tree / ".terraform" / "providers" / "aws"):
+            os.utime(inside)
+
+        code, out, err = self.sweep("--strip-idle")
+
+        self.assertEqual(0, code, err)
+        self.assertEqual({str(tree / "bin"), str(tree / ".terraform")},
+                         set(self.strip_lines(out, "strip")), out)
+
 
 # The process table the orphan cases stub: ps and lsof doubles answering from the case's fixtures,
 # recording each call, and exiting 97 on any call the sweep was not written to make.
