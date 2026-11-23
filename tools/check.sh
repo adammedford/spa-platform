@@ -35,10 +35,10 @@
 # the same answer from .github/touches.sh, in one step. Neither mode runs tools/check_tests.py,
 # which runs this file and so stays CI's. A red test companion, of either kind, does not stop the
 # check: every companion the change earns runs, each red one is said on a line of its own under its
-# output, `check: the test companion <path> failed.`, and the verdict names every one (#1472), so a
-# reviewer reads one red check rather than re-running the companions after the first by hand. A
-# check that fails after a red companion, through fail() or a stop under set -e, keeps its own
-# reason and adds the companions to it.
+# output, `check: the test companion <path> failed.` or `check: the workflow test companion <path>
+# failed.`, and the verdict names every one (#1472), so a reviewer reads one red check rather than
+# re-running the companions after the first by hand. A check that fails after a red companion,
+# through fail() or a stop under set -e, keeps its own reason and adds the companions to it.
 # Its lines say "check:", and it ends on one line, `check: pass: ...` or `check: fail: ...`,
 # exiting non-zero on failure, so a log's last line is the verdict. Its first two lines name the
 # bash running it and the file-mode mask, so a log can be compared with another machine's (#230).
@@ -990,7 +990,8 @@ fi
 # the script, before any companion runs, so a script cannot lose its companion and stay green. The
 # companions' own output is shown, so a red one's last lines sit above the verdict, and the check
 # runs the rest after a red one, as it does the test companions above (#1472). Only a tracked file
-# directly in the folder is a script or a companion: what sits under fixtures/ is data. Without node the check fails, as the header says of any tool.
+# directly in the folder is a script or a companion: what sits under fixtures/ is data. Without
+# node the check fails, as the header says of any tool.
 if $full; then
   if touches workflows; then
     workflow_scripts=""

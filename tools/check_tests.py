@@ -374,16 +374,17 @@ class Case:
         subprocess.run(["git", *args], cwd=cwd, env=self.env(), check=True, capture_output=True)
 
     def run(self, *args: str, hook: bool = False, through_shebang: bool = False,
-            cwd: pathlib.Path | None = None, umask: int = 0o022, merged: bool = False) -> Result:
+            cwd: pathlib.Path | None = None, umask: int = 0o022, merged: bool = False,
+            env: dict[str, str] | None = None) -> Result:
         # The file-mode mask is the child's own, set between fork and exec, so the cases running
         # at the same time on other threads keep theirs; os.umask would change the whole process's.
         # 022 by default, what a checkout and CI have, whatever mask runs this companion.
         # merged sends standard error to standard output, as a lane's `> log 2>&1` does, so a case
-        # reads the two streams in the order a log holds them.
+        # reads the two streams in the order a log holds them. env adds to the case's own variables.
         target = HOOK if hook else SCRIPT
         command = [str(target), *args] if through_shebang else [BASH, str(target), *args]
-        completed = subprocess.run(command, cwd=cwd or self.work, env=self.env(), umask=umask,
-                                   stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+        completed = subprocess.run(command, cwd=cwd or self.work, env={**self.env(), **(env or {})},
+                                   umask=umask, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                    stderr=subprocess.STDOUT if merged else subprocess.PIPE, timeout=60)
         return Result(completed)
 
@@ -1940,6 +1941,22 @@ class WorkflowCompanionTests(CheckTestCase):
         result = self.full(case)
         self.assertEqual(1, result.status, result.stdout)
         self.assertEqual("check: fail: node is not on PATH. Before it, the test companion tools/thing_tests.py "
+                         "failed.", result.last_line(result.stderr))
+
+    def test_a_stop_under_set_e_after_a_red_companion_keeps_its_status_and_names_the_red_one(self):
+        # Every command after a red companion is guarded today, so the stop is made: BASH_ENV, which a
+        # non-interactive bash reads before the script, shadows echo with one that returns 7 on the
+        # red companion's elapsed line alone, and set -e stops there, outside any fail() (#1487).
+        case = Case(self, extra=SCRIPTS, change=("tools/thing.sh", "tools/other.py"),
+                    fails_on={"python3": "tools/thing_tests.py"})
+        shadow = case.dir / "shadow-echo.sh"
+        shadow.write_text('echo() {\n'
+                          '  case "$*" in "check: elapsed: the test companion tools/thing_tests.py: "*) return 7 ;; esac\n'
+                          '  builtin echo "$@"\n'
+                          '}\n')
+        result = case.run("--full", "--port", PORT, env={"BASH_ENV": str(shadow)})
+        self.assertEqual(1, result.status, result.stdout)
+        self.assertEqual("check: fail: stopped with status 7. Before it, the test companion tools/thing_tests.py "
                          "failed.", result.last_line(result.stderr))
 
     def test_a_script_with_no_companion_fails_naming_the_script(self):
