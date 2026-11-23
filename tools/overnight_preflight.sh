@@ -117,12 +117,13 @@
 #             ticket's Touches paths, read by origin/main's ticket_shape.touches(), makes the ticket
 #             a skip candidate, named with each such file and line. A Touches path names a file, or
 #             a directory with or without its trailing slash, holding every file under it, or a
-#             glob matched against the citing file's path. Such a file is one the move breaks and
-#             the lane may not write: #1349's move of tools/scripts/platform-tfvars.sh broke
-#             citations in tools/wiz_prelude_tests.py its table missed, found mid-lane, and the chain
-#             behind it was lost for the night (#1471).
-#             A Moves line not read whole as such pairs is a skip candidate too, so a path it could
-#             not read is never passed. No line, or `none`, moves nothing.
+#             glob, matched as origin/main's .github/path-ownership.py matches() matches an
+#             OWNERSHIP.md pattern. Such a file is one the move breaks and the lane may not write:
+#             #1349's move of tools/scripts/platform-tfvars.sh broke citations in
+#             tools/wiz_prelude_tests.py its table missed, found mid-lane, and the chain behind it
+#             was lost for the night (#1471). A Moves line not read whole as such pairs is a skip
+#             candidate too, so a path it could not read is never passed. No line, or `none`, moves
+#             nothing.
 #   unblocks  The five open blockers with the most downstream tickets, each counted once however
 #             many paths reach it, transitively over the forecast's known blockedBy edges in
 #             collect's answer, not over every issue in the repository, so no GraphQL walk is made;
@@ -804,14 +805,15 @@ elif [ ! -f "$copy/tools/ticket_shape.py" ]; then
   row fail moves "origin/main has no tools/ticket_shape.py, so no ticket's Touches line was read"
 else
   python3 -I -c '
-import fnmatch, importlib.util, json, pathlib, re, subprocess, sys
+import importlib.util, json, pathlib, re, subprocess, sys
 copy, repo, collect, issues, unread_issues, out = sys.argv[1:]
 try:
     spec = importlib.util.spec_from_file_location("ticket_shape",
                                                   pathlib.Path(copy, "tools", "ticket_shape.py"))
     shape = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(shape)
-    parsed = shape.ownership().rules()
+    owned = shape.ownership()
+    parsed = owned.rules()
 except Exception:
     sys.exit(3)
 
@@ -819,16 +821,16 @@ MOVES = re.compile(r"(?m)^\*\*Moves:\*\*[ \t]*(?P<value>[^\n]*)$")
 PAIR = re.compile(r"([^\s,;]+)\s*(?:->|\u2192)\s*([^\s,;]+)")
 REF = "refs/remotes/origin/main"
 
-def bare(path):
-    return path.strip().lstrip("/")
+def one_line(text):
+    return " ".join(str(text).split())
 
 def inside(hit, paths):
-    # A Touches path names a file, a directory with or without its slash, or a glob.
-    for path in map(bare, paths):
-        if (hit == path or hit.startswith(path.rstrip("/") + "/")
-                or ("*" in path and fnmatch.fnmatchcase(hit, path))):
-            return True
-    return False
+    # A Touches path decides which files the lane may write, so it holds a citing file exactly as
+    # an OWNERSHIP.md pattern holds a changed file: by the matches() of .github/path-ownership.py
+    # on origin/main, the matcher the pre-push hook runs. A directory written without its slash is
+    # read as that directory too, as ticket_shape.owner_of() reads one.
+    return any(owned.matches(path.strip(), hit) or owned.matches(path.strip().rstrip("/") + "/", hit)
+               for path in paths)
 
 tickets = json.load(open(collect))["tickets"]
 ids = {t["issue"]: t["id"] for t in tickets}
@@ -855,8 +857,9 @@ for n in judged:
     touches = shape.touches(body, parsed) or []
     cited = []
     for old, _ in pairs:
+        old = old.lstrip("/")
         found = subprocess.run(["git", "--no-optional-locks", "-C", repo, "grep", "-n", "-z", "-F", "-I",
-                                "-e", bare(old), REF], capture_output=True, text=True)
+                                "-e", old, REF], capture_output=True, text=True)
         if found.returncode > 1:
             problems.append(f"git grep could not search origin/main for #{n}\x27s {old}, "
                             "so it is unjudged")
@@ -869,17 +872,17 @@ for n in judged:
             if not inside(path, touches):
                 hits.append(f"{path}:{number}")
         if hits:
-            cited.append(f"{bare(old)} is cited at " + ", ".join(hits))
+            cited.append(f"{old} is cited at " + ", ".join(hits))
     if cited:
         candidates.append((n, "; ".join(cited)))
 found = ("these move a path cited outside their Touches and are skip candidates: "
          + "; ".join(f"{ids[n]} (#{n}: {what})" for n, what in candidates)) if candidates \
     else "none moves a path cited outside its Touches"
 if problems:
-    print(f"fail\t{len(judged)} ready-for-agent and needs-triage tickets; " + "; ".join(problems)
-          + f"; of the rest, {found}")
+    print("fail\t" + one_line(f"{len(judged)} ready-for-agent and needs-triage tickets; "
+                               + "; ".join(problems) + f"; of the rest, {found}"))
 else:
-    print(f"pass\t{len(judged)} ready-for-agent and needs-triage tickets read; {found}")
+    print("pass\t" + one_line(f"{len(judged)} ready-for-agent and needs-triage tickets read; {found}"))
 pathlib.Path(out).write_text("".join(f"{ids[n]}\t#{n}\n" for n, _ in candidates))
 ' "$copy" "$repo" "$scratch/collect.json" "$scratch/issues" "$scratch/unread-issues" \
     "$scratch/moves-candidates" > "$scratch/moves-row" 2> "$scratch/moves.err"
