@@ -76,6 +76,24 @@ full: each of its areas has an entry, or names the entry that carries it, in GAP
   risk, as P2-10's "Findings closed or accepted in writing" asks; a measurement alone sets no limit
   (#799, Confirm Q22). Open. P2-10 has not landed.
 
+### GAP-30. An entry whose secret cannot be read holds back every later registry change
+
+- **Missing.** No check, at the write or before it, that the task role can read the secret a new
+  or changed entry names. `spactl app add` builds the secret reference from the outputs document
+  and makes no Parameter Store call (`tools/spactl/AppEntry.cs`); #1481 item 5 declined a metadata
+  check there, because it would prove the operator's access and not the task role's. Once a
+  snapshot is live, `src/Platform.Registry/RegistrySource.cs` rejects a whole registry document
+  that names an unreadable secret (`RefreshOutcome.SecretsUnreadable`), keeps the live snapshot and
+  reads the document again on the next poll. At a cold start only the affected apps are left out,
+  unless no app's secret can be read: then the document is not applied and the task stays not ready.
+- **Risk.** On a live cell, one such entry holds back every later registry change, an unrelated
+  release activation or another app's onboarding among them, until the parameter is fixed or the
+  entry removed. `spactl wait` times out, and the gateway logs the rejection.
+- **Found.** #1481, item 9.
+- **Closes with.** Accepted, no plan, reopened by an adopter's report. The recovery is either to fix
+  the parameter so the task role can read it, or to run `spactl app remove` for the entry, then
+  `spactl wait` either way.
+
 ## What a mature release still needs (GAP-3 to GAP-12)
 
 Each is argued in `docs/roadmap.md` → "What a mature release still needs, and nothing has written
