@@ -44,14 +44,20 @@ inside one, which TheSecrecyMatrix proves while checking that no string holds it
 alone proves nothing of a canary that never came in, so TheSecrecyMatrix asserts where each one's
 placeholder lands, and names each source and outcome no path connects.
 
+**The cases run side by side** (#1473): Concurrently, at the foot of this file, runs the loaded
+tests a few at a time with their fixtures' scopes kept, and reports in unittest's own form.
+
 Run: python3 -I tools/bench/fargate_tests.py
 """
 
 from __future__ import annotations
 
+import concurrent.futures
 import http.server
 import importlib.util
 import json
+import operator
+import os
 import pathlib
 import re
 import shutil
@@ -60,7 +66,13 @@ import subprocess
 import sys
 import tempfile
 import threading
+import types
 import unittest
+# Stock unittest's entry for a fixture's outcome, so Concurrently names one as TestSuite does. It and
+# the other private names Concurrently reads, TestCase.tearDown_exceptions, _class_cleanups and
+# __unittest_skip__, are CPython's Lib/unittest/suite.py and case.py, read on 3.9.6 and 3.14; TheRunner
+# compares the two runners on whichever interpreter runs it.
+from unittest.suite import _ErrorHolder
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 SCRIPT = ROOT / "tools" / "bench" / "fargate.py"
@@ -98,6 +110,17 @@ BASTION_TARGET = f"ecs:{CLUSTER}_{task_id(BASTION_N)}_{task_id(BASTION_N)}-3333"
 AUTHORITY = None
 
 
+def python() -> list:
+    """The interpreter every case runs, the script and each double call alike: python3 -I, with the
+    bytecode of what it imports cached under the module's temporary directory (#1473). A case makes
+    up to about 270 calls to the doubles, each a fresh interpreter, and an interpreter whose standard
+    library ships without bytecode in a directory it cannot write, as the Xcode one does, compiles
+    some 47 modules from source on every start: most of the suite's time. -X pycache_prefix holds under -I,
+    which ignores PYTHONPYCACHEPREFIX, and changes where bytecode is kept, not what runs.
+    https://docs.python.org/3/using/cmdline.html#cmdoption-X"""
+    return [sys.executable, "-I", "-X", f"pycache_prefix={pathlib.Path(AUTHORITY) / 'pycache'}"]
+
+
 def setUpModule():
     """A test authority and a wildcard leaf for *.spa-poc.test, as certs.sh issues the real ones."""
     global AUTHORITY
@@ -130,10 +153,24 @@ def tearDownModule():
         shutil.rmtree(AUTHORITY, ignore_errors=True)
 
 
+HANDED_OUT = set()
+HANDED_OUT_LOCK = threading.Lock()
+
+
 def free_port() -> int:
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        return probe.getsockname()[1]
+    """A port nothing listened on when asked, and one free_port gave no other caller in this run: cases
+    run side by side (Concurrently), and two scripts handed the same port would see each other's
+    forward. Every listener this file opens takes its port here, the script's forward and
+    TheOneLiner's endpoint alike. It cannot hold the port: between the answer and the bind, another
+    process, or an outgoing connection's ephemeral port, can still take it."""
+    with HANDED_OUT_LOCK:
+        while True:
+            with socket.socket() as probe:
+                probe.bind(("127.0.0.1", 0))
+                port = probe.getsockname()[1]
+            if port not in HANDED_OUT:
+                HANDED_OUT.add(port)
+                return port
 
 
 class Run:
@@ -181,7 +218,8 @@ def run_case(document: dict, outputs: dict = None, region: str = REGION, extra=(
     bin_dir.mkdir()
     for name in ("aws", "session-manager-plugin"):
         wrapper = bin_dir / name
-        wrapper.write_text(f"#!/bin/sh\nexec '{sys.executable}' -I '{DOUBLES}' {name} '{case}' \"$@\"\n")
+        interpreter = " ".join(f"'{word}'" for word in python())
+        wrapper.write_text(f"#!/bin/sh\nexec {interpreter} '{DOUBLES}' {name} '{case}' \"$@\"\n")
         wrapper.chmod(0o755)
     git = shutil.which("git")
     if git_stdout is not None:
@@ -196,7 +234,7 @@ def run_case(document: dict, outputs: dict = None, region: str = REGION, extra=(
     if region is None:
         env.pop("AWS_REGION")
     env.update(env_changes or {})
-    argv = [sys.executable, "-I", str(repo / "tools" / "bench" / "fargate.py"), "--txt", str(case / txt_name),
+    argv = [*python(), str(repo / "tools" / "bench" / "fargate.py"), "--txt", str(case / txt_name),
             "--json", str(case / "out.json"), "--ca", str(case / ca), "--local-port", str(free_port()),
             "--poll-seconds", "0", "--probe-interval", "0", "--task-timeout", "20", "--health-timeout", "20",
             "--log-timeout", "1", "--probe-attempts", "5", "--forward-timeout", "20", *extra]
@@ -853,7 +891,7 @@ class TheOneLiner(unittest.TestCase):
                 self.end_headers()
                 self.wfile.write(json.dumps(body or {}).encode())
 
-        server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+        server = http.server.HTTPServer(("127.0.0.1", free_port()), Handler)
         threading.Thread(target=server.serve_forever, daemon=True).start()
         self.addCleanup(server.server_close)
         self.addCleanup(server.shutdown)
@@ -1540,7 +1578,7 @@ class TheDoubles(unittest.TestCase):
     def test_an_unknown_call_shape_is_recorded_and_exits_97(self):
         case = pathlib.Path(tempfile.mkdtemp(prefix="fargate-double-"))
         save(case, world())
-        done = subprocess.run([sys.executable, "-I", str(DOUBLES), "aws", str(case),
+        done = subprocess.run([*python(), str(DOUBLES), "aws", str(case),
                                "--region", REGION, "ecs", "delete-service", "--cluster", CLUSTER, "--output", "json"],
                               capture_output=True, text=True, env={"PATH": "/usr/bin:/bin"})
         self.assertEqual(97, done.returncode)
@@ -1550,7 +1588,7 @@ class TheDoubles(unittest.TestCase):
     def double(self, document, *argv):
         case = pathlib.Path(tempfile.mkdtemp(prefix="fargate-double-"))
         save(case, document)
-        return subprocess.run([sys.executable, "-I", str(DOUBLES), "aws", str(case), "--region", REGION, *argv, "--output", "json"],
+        return subprocess.run([*python(), str(DOUBLES), "aws", str(case), "--region", REGION, *argv, "--output", "json"],
                               capture_output=True, text=True, env={"PATH": "/usr/bin:/bin"})
 
     def test_a_session_to_a_gateway_container_is_refused_once_exec_is_off(self):
@@ -1581,5 +1619,400 @@ class TheDoubles(unittest.TestCase):
         self.assertTrue(any(call["credential_env"] for call in run.calls))
 
 
+# --- running the cases side by side ---------------------------------------------------------------
+
+
+class TheRunner(unittest.TestCase):
+    """Concurrently against stock unittest, on small suites whose every outcome is known: a failing
+    test turns the run red, a fixture that raises is reported under the fixture's own name, and the
+    count, the failures, the errors, the skips and which fixtures ran agree with unittest.TestSuite's."""
+
+    # unittest keeps one list of module cleanups for the process, and on 3.9 one list of class
+    # cleanups for every TestCase, which stock unittest's runs here share: the cases take turns.
+    RUNNERS = threading.Lock()
+
+    @staticmethod
+    def classes(module: str):
+        calls = []
+
+        class Passing(unittest.TestCase):
+            def test_passes(self):
+                pass
+
+            def test_one_subtest_fails(self):
+                for i in (1, 2):
+                    with self.subTest(i=i):
+                        self.assertEqual(1, i)
+
+        class Failing(unittest.TestCase):
+            def test_fails(self):
+                self.fail("inner failure")
+
+            def test_raises(self):
+                raise RuntimeError("inner error")
+
+        class SetUpRaises(unittest.TestCase):
+            @classmethod
+            def setUpClass(cls):
+                cls.addClassCleanup(calls.append, "SetUpRaises cleanup")
+                raise RuntimeError("setUpClass raised")
+
+            def test_never_runs(self):
+                calls.append("SetUpRaises test")
+
+        class SetUpSkips(unittest.TestCase):
+            @classmethod
+            def setUpClass(cls):
+                raise unittest.SkipTest("setUpClass skipped")
+
+            def test_never_runs(self):
+                calls.append("SetUpSkips test")
+
+        @unittest.skip("class skipped")
+        class Skipped(unittest.TestCase):
+            @classmethod
+            def setUpClass(cls):
+                calls.append("Skipped setUpClass")
+
+            def test_skipped(self):
+                calls.append("Skipped test")
+
+        class TearDownRaises(unittest.TestCase):
+            @classmethod
+            def tearDownClass(cls):
+                cls.addClassCleanup(calls.append, "TearDownRaises cleanup")
+                raise RuntimeError("tearDownClass raised")
+
+            def test_passes(self):
+                pass
+
+        class CleanupRaises(unittest.TestCase):
+            @classmethod
+            def setUpClass(cls):
+                cls.addClassCleanup(calls.append, "CleanupRaises cleanup")
+                cls.addClassCleanup(operator.truediv, 1, 0)
+
+            def test_passes(self):
+                pass
+
+        class CleansUp(unittest.TestCase):
+            @classmethod
+            def setUpClass(cls):
+                cls.addClassCleanup(calls.append, "CleansUp cleanup")
+
+            def test_before_its_cleanup(self):
+                calls.append("CleansUp test, its cleanup already run" if "CleansUp cleanup" in calls else "CleansUp test")
+
+        found = [Passing, Failing, SetUpRaises, SetUpSkips, Skipped, TearDownRaises, CleanupRaises, CleansUp]
+        for cls in found:
+            cls.__module__ = module
+        return calls, found
+
+    @staticmethod
+    def outcome(run, classes) -> dict:
+        result = unittest.TestResult()
+        run(unittest.TestSuite(unittest.defaultTestLoader.loadTestsFromTestCase(cls) for cls in classes))(result)
+        return {"run": result.testsRun, "success": result.wasSuccessful(),
+                "failures": [str(test) for test, _ in result.failures], "errors": [str(test) for test, _ in result.errors],
+                "skipped": [(str(test), reason) for test, reason in result.skipped]}
+
+    def both(self, module: str, pick=None, runner=None):
+        """The outcome and the calls of each runner, Concurrently unless named, each on classes of its own."""
+        found = []
+        with self.RUNNERS:
+            for run in (lambda suite: suite, runner or Concurrently):
+                calls, classes = self.classes(module)
+                found.append((self.outcome(run, pick(classes) if pick else classes), sorted(calls)))
+        return found
+
+    def module(self, **fixtures) -> str:
+        name = f"fargate_runner_probe_{id(self)}_{len(fixtures)}_{sorted(fixtures)}"
+        sys.modules[name] = types.ModuleType(name)
+        for key, value in fixtures.items():
+            setattr(sys.modules[name], key, value)
+        self.addCleanup(sys.modules.pop, name, None)
+        return name
+
+    def test_every_outcome_and_every_fixture_call_is_stock_unittests(self):
+        (stock, stock_calls), (mine, mine_calls) = self.both(f"fargate_runner_probe_{id(self)}_unregistered")
+        self.assertEqual(stock, mine)
+        self.assertEqual(stock_calls, mine_calls)
+        # Not two runners agreeing on nothing: what each case must have reported.
+        self.assertFalse(mine["success"])
+        self.assertEqual(8, mine["run"])
+        self.assertEqual(["CleansUp cleanup", "CleansUp test", "CleanupRaises cleanup", "SetUpRaises cleanup",
+                          "TearDownRaises cleanup"], mine_calls)
+        self.assertEqual(4, len(mine["errors"]))
+        self.assertTrue(mine["errors"][1].startswith("setUpClass (") and mine["errors"][1].endswith("SetUpRaises)"), mine["errors"])
+        self.assertTrue(mine["errors"][2].startswith("tearDownClass (") and mine["errors"][2].endswith("TearDownRaises)"), mine["errors"])
+        # A class cleanup that raises is an error of the class's tearDownClass, as unittest reports it.
+        self.assertTrue(mine["errors"][3].startswith("tearDownClass (") and mine["errors"][3].endswith("CleanupRaises)"), mine["errors"])
+        self.assertEqual(2, len(mine["failures"]))
+        self.assertEqual({"class skipped", "setUpClass skipped"}, {reason for _, reason in mine["skipped"]})
+
+    def test_a_class_whose_setup_raises_runs_its_own_cleanups_and_no_others(self):
+        # One worker opens CleansUp and then SetUpRaises before any test runs, so on Python 3.9, where
+        # every class shares one cleanup list, SetUpRaises' cleanups would run CleansUp's before its test.
+        class OneAtATime(Concurrently):
+            WORKERS = 1
+
+        (stock, stock_calls), (mine, mine_calls) = self.both(f"fargate_runner_probe_{id(self)}_unregistered",
+                                                             lambda classes: [classes[7], classes[2]], OneAtATime)
+        self.assertEqual(stock, mine)
+        self.assertEqual(stock_calls, mine_calls)
+        self.assertEqual(["CleansUp cleanup", "CleansUp test", "SetUpRaises cleanup"], mine_calls)
+
+    def test_a_failing_test_alone_turns_the_run_red(self):
+        (stock, _), (mine, _) = self.both(f"fargate_runner_probe_{id(self)}_unregistered",
+                                          lambda classes: [classes[1]])
+        self.assertEqual(stock, mine)
+        self.assertEqual({"run": 2, "success": False}, {key: mine[key] for key in ("run", "success")})
+
+    def test_a_module_whose_setup_raises_runs_nothing_more_and_says_so(self):
+        torn = []
+
+        def raises():
+            unittest.addModuleCleanup(torn.append, "module cleanup")
+            raise RuntimeError("setUpModule raised")
+
+        name = self.module(setUpModule=raises, tearDownModule=lambda: torn.append("tearDownModule"))
+        (stock, stock_calls), (mine, mine_calls) = self.both(name)
+        self.assertEqual(stock, mine)
+        self.assertEqual(stock_calls, mine_calls)
+        self.assertEqual({"run": 0, "success": False, "failures": [], "errors": [f"setUpModule ({name})"], "skipped": []}, mine)
+        self.assertEqual(["module cleanup", "module cleanup"], torn, "each runner ran the cleanup and no tearDownModule")
+
+    def test_a_module_whose_teardown_raises_is_an_error_of_its_own(self):
+        def raises():
+            raise RuntimeError("tearDownModule raised")
+
+        name = self.module(tearDownModule=raises)
+        (stock, _), (mine, _) = self.both(name, lambda classes: [classes[0]])
+        self.assertEqual(stock, mine)
+        self.assertEqual([f"tearDownModule ({name})"], mine["errors"])
+        self.assertEqual(2, mine["run"])
+
+    def test_a_modules_cleanups_run_last(self):
+        torn = []
+
+        def opens():
+            unittest.addModuleCleanup(torn.append, "module cleanup")
+
+        # With a tearDownModule, since Python 3.9's unittest runs a module's cleanups only after one.
+        name = self.module(setUpModule=opens, tearDownModule=lambda: torn.append("tearDownModule"))
+        (stock, _), (mine, _) = self.both(name, lambda classes: [classes[0]])
+        self.assertEqual(stock, mine)
+        self.assertEqual({"run": 2, "success": False}, {key: mine[key] for key in ("run", "success")})
+        self.assertEqual(["tearDownModule", "module cleanup"] * 2, torn, "each runner ran the cleanup after tearDownModule")
+
+    def test_the_flags_it_cannot_keep_are_refused_by_name(self):
+        # One quick test named, so that a broken refusal runs it and not the whole file again.
+        done = subprocess.run([*python(), str(pathlib.Path(__file__).resolve()), "-f", "-b", "-c", "TheProse"],
+                              capture_output=True, text=True, timeout=60)
+        self.assertEqual(2, done.returncode, done.stderr)
+        for flag in ("-f/--failfast", "-b/--buffer", "-c/--catch"):
+            self.assertIn(flag, done.stderr)
+        self.assertNotIn("Ran ", done.stderr)
+
+
+class Recorded(unittest.TestResult):
+    """What one test reported, kept to be replayed onto the run's own result in the main thread."""
+
+    def __init__(self):
+        super().__init__()
+        self.events = []
+
+    def __getattribute__(self, name):
+        if name.startswith("add"):
+            events = object.__getattribute__(self, "events")
+            return lambda *args: events.append((name, args))
+        return object.__getattribute__(self, name)
+
+
+def each_test(suite):
+    for item in suite:
+        if isinstance(item, unittest.TestSuite):
+            yield from each_test(item)
+        else:
+            yield item
+
+
+def report(events: list, description: str, exc_info) -> None:
+    """A fixture's outcome as stock unittest reports it: under the fixture's name, a SkipTest a skip."""
+    holder = _ErrorHolder(description)
+    if issubclass(exc_info[0], unittest.SkipTest):
+        events.append(("addSkip", (holder, str(exc_info[1]))))
+    else:
+        events.append(("addError", (holder, exc_info)))
+
+
+def fixture(call, description: str, events: list) -> bool:
+    """Calls a fixture, if there is one, and reports what it raised. True when it raised."""
+    if call is None:
+        return False
+    try:
+        call()
+    except Exception:
+        report(events, description, sys.exc_info())
+        return True
+    return False
+
+
+class Concurrently(unittest.TestSuite):
+    """The loaded tests of one module, run WORKERS at a time (#1473). Each case is a run of fargate.py
+    of up to about 270 calls to the doubles, waiting on a subprocess almost throughout, and no case
+    reads another's directory, port or result, so a serial run spends its time waiting.
+
+    What it keeps of unittest.TestSuite, which TheRunner holds it to: setUpModule once before
+    anything, and on its failure nothing else but the module's cleanups; each class's setUpClass once
+    before its tests and tearDownClass after them, with the class's own cleanups after either, and a
+    cleanup that raises an error of that fixture; no class fixture for a class skipped whole; a
+    setUpClass that raises runs none of its tests, and is an error, or a skip for SkipTest, named
+    "setUpClass (module.Class)", as each other fixture is named;
+    tearDownModule and the module's cleanups last. Each test reports into a Recorded of its own, and
+    everything is replayed in load order onto the run's result, so the output, the count and the
+    exit status are unittest's own.
+
+    What it does not keep: the order in which tests and fixtures run, which is concurrent; what a test
+    prints, which reaches the terminal as it is printed, not beside the test's result; and three of
+    unittest's flags, -f, -b and -c, which Program refuses rather than half honour. A module's cleanups
+    run even when it has no tearDownModule, as Python 3.11's unittest has it and 3.9's does not.
+
+    What TheRunner cannot hold it to: TheRunner reports through this runner too, so a fault that
+    drops the replay itself, every outcome at once, would pass TheRunner with everything else. So the
+    run raises, failing it, unless every event recorded was replayed, every test that ran recorded at
+    least one, and the result holds one more failure, error or skip for each one replayed."""
+
+    # One worker drives one case, a chain of subprocesses one at a time, so it holds about one core,
+    # and the run cannot finish before its longest chain, a ten-restart case of about 12 s. On the
+    # 12-core Mac this was written on, two runs each under the load of other lanes (load average 48
+    # to 90, #1473), the suite took 90 and 40 s with 4 workers, 37 and 49 s with 8, 59 and 33 s with
+    # 12: under that noise no count beat 8, and the cap leaves cores to the lanes beside it.
+    WORKERS = min(8, os.cpu_count() or 1)
+
+    def __init__(self, suite):
+        super().__init__()
+        self.tests = list(each_test(suite))
+        names = sorted({type(test).__module__ for test in self.tests})
+        if len(names) > 1:
+            raise ValueError(f"Concurrently runs one module's tests, and was given {names}")
+
+    def run(self, result, debug=False):
+        if not self.tests:
+            return result
+        name = type(self.tests[0]).__module__
+        module = sys.modules.get(name)
+
+        replayed = [0]
+        held = ("failures", "errors", "skipped", "expectedFailures", "unexpectedSuccesses")
+        before = sum(len(getattr(result, entries)) for entries in held)
+
+        def replay(events):
+            for method, args in events:
+                getattr(result, method)(*args)
+                replayed[0] += 1
+
+        if module is not None:
+            opening = []
+            if fixture(getattr(module, "setUpModule", None), f"setUpModule ({name})", opening):
+                fixture(unittest.case.doModuleCleanups, f"setUpModule ({name})", opening)
+                replay(opening)
+                return result
+        classes = list(dict.fromkeys(type(test) for test in self.tests))
+        with concurrent.futures.ThreadPoolExecutor(self.WORKERS) as pool:
+            opened = dict(zip(classes, pool.map(self.set_up, classes)))
+            recorded = list(pool.map(lambda test: None if opened[type(test)][1] == "failed" else self.one(test), self.tests))
+            closed = dict(zip(classes, pool.map(lambda cls: self.tear_down(cls) if opened[cls][1] == "up" else [], classes)))
+        last = {type(test): index for index, test in enumerate(self.tests)}
+        begun = set()
+        for index, (test, events) in enumerate(zip(self.tests, recorded)):
+            cls = type(test)
+            if cls not in begun:
+                begun.add(cls)
+                replay(opened[cls][0])
+            if events is not None:
+                result.startTest(test)
+                replay(events)
+                result.stopTest(test)
+            if last[cls] == index:
+                replay(closed[cls])
+        closing = []
+        if module is not None:
+            fixture(getattr(module, "tearDownModule", None), f"tearDownModule ({name})", closing)
+            fixture(unittest.case.doModuleCleanups, f"tearDownModule ({name})", closing)
+            replay(closing)
+        silent = [str(test) for test, events in zip(self.tests, recorded) if events == []]
+        lists = [events for events, _ in opened.values()] + [events for events in recorded if events] + list(closed.values())
+        expected = sum(len(events) for events in lists + [closing])
+        # Each of these adds one entry to a TestResult, and addSubTest one when the subtest failed;
+        # addSuccess, and 3.12's addDuration, leave none.
+        adding = ("addFailure", "addError", "addSkip", "addExpectedFailure", "addUnexpectedSuccess")
+        outcomes = sum(1 for events in lists + [closing] for method, args in events
+                       if method in adding or (method == "addSubTest" and args[2] is not None))
+        grown = sum(len(getattr(result, entries)) for entries in held) - before
+        if silent or replayed[0] != expected or grown != outcomes:
+            raise RuntimeError(f"Concurrently replayed {replayed[0]} of {expected} events, and the result holds {grown} "
+                               f"of {outcomes} outcomes; tests that reported nothing: {silent}")
+        return result
+
+    @staticmethod
+    def set_up(cls):
+        """The class's opening events, and "skipped", "failed" or "up"."""
+        events = []
+        if getattr(cls, "__unittest_skip__", False):
+            return events, "skipped"
+        description = f"setUpClass ({cls.__module__}.{cls.__qualname__})"
+        # Python 3.9's unittest keeps one _class_cleanups list on TestCase, shared by every subclass
+        # (Lib/unittest/case.py, 3.9: `_class_cleanups = []` in the class body); 3.11 gives each
+        # subclass its own in TestCase.__init_subclass__. A serial run empties the list before the next
+        # class opens, so the sharing is harmless there; here every class is open at once, and one
+        # class's doClassCleanups would run the others' cleanups before their tests.
+        if "_class_cleanups" not in vars(cls):
+            cls._class_cleanups = []
+        if fixture(cls.setUpClass, description, events):
+            Concurrently.class_cleanups(cls, description, events)
+            return events, "failed"
+        return events, "up"
+
+    @staticmethod
+    def tear_down(cls):
+        events = []
+        description = f"tearDownClass ({cls.__module__}.{cls.__qualname__})"
+        fixture(cls.tearDownClass, description, events)
+        Concurrently.class_cleanups(cls, description, events)
+        return events
+
+    @staticmethod
+    def class_cleanups(cls, description: str, events: list) -> None:
+        cls.doClassCleanups()
+        for exc_info in cls.tearDown_exceptions:
+            report(events, description, exc_info)
+
+    @staticmethod
+    def one(test):
+        recorded = Recorded()
+        test(recorded)
+        return recorded.events
+
+
+class Runner(unittest.TextTestRunner):
+    def run(self, test):
+        return super().run(Concurrently(test))
+
+
+class Program(unittest.TestProgram):
+    """unittest.main with Runner, refusing the flags Concurrently cannot keep: -f stops at the first
+    failure, but the tests after it have already run; -b swaps sys.stdout, which the threads share;
+    -c's handler stops a serial run between tests, which this one does not have."""
+
+    def runTests(self):
+        refused = [flag for flag, given in (("-f/--failfast", self.failfast), ("-b/--buffer", self.buffer),
+                                            ("-c/--catch", self.catchbreak)) if given]
+        if refused:
+            sys.stderr.write(f"fargate_tests.py: {', '.join(refused)} refused: the cases run side by side (Concurrently)\n")
+            sys.exit(2)
+        super().runTests()
+
+
 if __name__ == "__main__":
-    unittest.main()
+    Program(testRunner=Runner)

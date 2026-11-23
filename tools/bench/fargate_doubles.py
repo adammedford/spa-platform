@@ -6,9 +6,10 @@ bin/session-manager-plugin run it as
 
     python3 -I tools/bench/fargate_doubles.py <aws|session-manager-plugin> <case dir> <args>
 
-A file of its own so that each call, of about 270 in a ten-restart case, starts in a few tens of
-milliseconds: it imports only what a double needs. fargate_tests.py's docstring says what the
-world holds and why the doubles take this shape.
+with -X pycache_prefix added (fargate_tests.py's python() says why). A file of its own so that each
+call, of about 270 in a ten-restart case, starts in a few tens of milliseconds: it imports only what
+a double needs, and what only the port forward needs, ssl, socket and signal, only there (#1473).
+fargate_tests.py's docstring says what the world holds and why the doubles take this shape.
 """
 
 from __future__ import annotations
@@ -17,9 +18,6 @@ import json
 import os
 import pathlib
 import re
-import signal
-import socket
-import ssl
 import sys
 import time
 
@@ -545,6 +543,9 @@ def answer_plugin(case: pathlib.Path, argv: list) -> int:
 
 def serve_forward(case: pathlib.Path, request: dict) -> int:
     """The load balancer through the hop: TLS under the test authority, every request the challenge."""
+    import signal
+    import socket
+    import ssl
     port = int(request["Parameters"]["localPortNumber"][0])
     hop = int(request["Target"].split("_")[1], 16)
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
