@@ -131,6 +131,7 @@ READER = ROOT / "tools" / "review_record.py"
 CITATION = ROOT / "tools" / "decision_citation.py"
 ANSWERS = ROOT / "tools" / "overnight_answers.py"
 CLEANUP = ROOT / "tools" / "prune_branches.py"
+SWEEP = ROOT / "tools" / "sweep_worktrees.py"
 BASH = "/bin/bash"
 REQUIRE_BASH = "SCRIPT_TESTS_REQUIRE_BASH"
 
@@ -430,20 +431,31 @@ PYTHON_DOUBLE = """#!/bin/bash
 # then the review record reader beside it, then the overnight answers reader beside it (#531),
 # and each of those calls goes to the real interpreter in every case, so the readers under test
 # are the real ones. After the merge it derives
-# the roadmap from the repository root and then, for a merge into main only, runs the branch cleanup
-# beside it, and each of those calls is recorded with the directory it ran in. Where the merge
-# fails, both are unexpected: a case that reaches them has gone past a merge that should have
-# stopped it. Where the merge goes through, the roadmap goes to the real interpreter, over the
-# copies of its inputs the case's clone holds, and the cleanup deletes nothing and prints nothing,
-# since tools/prune_branches_tests.py runs the real one. The reader's arguments after its path are
-# its own to check (#488: `--pr <number> --head <head>`), and its gh calls reach the gh double.
+# the roadmap from the repository root and then, for a merge into main only, runs the worktree sweep
+# and the branch cleanup beside it (#1503), and each of those calls is recorded with the directory
+# it ran in. Where the merge fails, all three are unexpected: a case that reaches them has gone past
+# a merge that should have stopped it. Where the merge goes through, the roadmap goes to the real
+# interpreter, over the copies of its inputs the case's clone holds, and the sweep and the cleanup
+# remove nothing and print nothing, since tools/sweep_worktrees_tests.py and
+# tools/prune_branches_tests.py run the real ones; a case that writes $dir/sweep-fails has the
+# sweep print a line and exit 3, and one that writes $dir/real-cleanup hands both to the real
+# interpreter. The reader's arguments after its path are its own to check (#488:
+# `--pr <number> --head <head>`), and its gh calls reach the gh double.
 if [ "$#" -ge 2 ] && [ "$1" = -I ] && {{ [ "$2" = {reader} ] || [ "$2" = {citation} ] || [ "$2" = {answers} ]; }}; then exec {python} "$@"; fi
 n=0
 while [ -e {log}/python3-call-$n ]; do n=$((n + 1)); done
 printf '%s\\0' "$(pwd -P)" "$@" > {log}/python3-call-$n
 if {past_merge}; then
   if [ "$#" -eq 2 ] && [ "$1" = -I ] && [ "$2" = tools/roadmap.py ]; then exec {python} "$@"; fi
-  if [ "$#" -eq 3 ] && [ "$1" = -I ] && [ "$2" = {cleanup} ] && [ "$3" = --delete ]; then exit 0; fi
+  if [ "$#" -eq 3 ] && [ "$1" = -I ] && [ "$2" = {sweep} ] && [ "$3" = --apply ]; then
+    [ ! -e {dir}/real-cleanup ] || exec {python} "$@"
+    [ ! -e {dir}/sweep-fails ] || {{ echo "sweep double: could not judge the worktrees" >&2; exit 3; }}
+    exit 0
+  fi
+  if [ "$#" -eq 3 ] && [ "$1" = -I ] && [ "$2" = {cleanup} ] && [ "$3" = --delete ]; then
+    [ ! -e {dir}/real-cleanup ] || exec {python} "$@"
+    exit 0
+  fi
 fi
 : > {log}/python3-unexpected
 printf 'python3 double: unexpected call, recorded as python3-call-%s\\n' "$n" >&2
@@ -593,12 +605,14 @@ class Case:
             search_fails=shlex.quote(search_fails)))
 
     def write_python3(self, *, past_merge: bool):
-        """Writes the python3 double, which answers the roadmap and the cleanup only `past_merge`."""
+        """Writes the python3 double, which answers the roadmap, the sweep and the cleanup only
+        `past_merge`."""
         self.write_executable("python3", PYTHON_DOUBLE.format(
             log=shlex.quote(str(self.log)), reader=shlex.quote(str(READER)),
             citation=shlex.quote(str(CITATION)), answers=shlex.quote(str(ANSWERS)),
             python=shlex.quote(os.path.realpath(sys.executable)),
-            past_merge="true" if past_merge else "false", cleanup=shlex.quote(str(CLEANUP))))
+            past_merge="true" if past_merge else "false", cleanup=shlex.quote(str(CLEANUP)),
+            sweep=shlex.quote(str(SWEEP)), dir=shlex.quote(str(self.dir))))
 
     def env(self, **extra: str) -> dict[str, str]:
         env = {"PATH": str(self.bin), "HOME": str(self.home), "GIT_CONFIG_NOSYSTEM": "1",
@@ -747,6 +761,13 @@ class MergingCase(Case):
 
     def worktree_head(self) -> str:
         return self.git_out("rev-parse", "HEAD", cwd=self.work).strip()
+
+
+class SpareBranchCase(MergingCase):
+    """A MergingCase whose pull request comes from a task/ branch, the kind the cleanup reads, with
+    no id in its name, so the cleanup's rules on its worktree and its work alone decide it."""
+
+    BRANCH = "task/spare-change"
 
 
 class LandTestCase(unittest.TestCase):
@@ -1388,8 +1409,16 @@ class PostMergeTests(LandTestCase):
     def roadmap_call(self, case: MergingCase) -> list[str]:
         return [str(case.work), "-I", "tools/roadmap.py"]
 
+    def sweep_call(self, case: MergingCase) -> list[str]:
+        return [str(case.work), "-I", str(SWEEP), "--apply"]
+
     def cleanup_call(self, case: MergingCase) -> list[str]:
         return [str(case.work), "-I", str(CLEANUP), "--delete"]
+
+    def after_merge(self, case: MergingCase) -> list[list[str]]:
+        """What python3 runs once a merge into main is in: the roadmap, then the worktree sweep,
+        then the branch cleanup, in that order (#1503)."""
+        return [self.roadmap_call(case), self.sweep_call(case), self.cleanup_call(case)]
 
     def assertMergedOnOrigin(self, case: MergingCase, merge: Commit, subject: str, body: str = BODY):
         """The premise: the double merged as GitHub would, the pinned head onto the base it found,
@@ -1439,7 +1468,7 @@ class PostMergeTests(LandTestCase):
                                          cwd=case.work, env=case.env(), capture_output=True,
                                          text=True)
                 self.assertEqual(0, current.returncode, current.stdout)
-                self.assertPython3Calls(case, [self.roadmap_call(case), self.cleanup_call(case)])
+                self.assertPython3Calls(case, self.after_merge(case))
 
     def test_blocks_that_did_not_move_end_the_landing_with_no_commit_and_no_push(self):
         case = MergingCase(self)
@@ -1454,7 +1483,7 @@ class PostMergeTests(LandTestCase):
         # Fast-forwarded onto the merge, with nothing committed on top and nothing left changed.
         self.assertEqual(merge.sha, case.worktree_head())
         self.assertEqual("", case.status())
-        self.assertPython3Calls(case, [self.roadmap_call(case), self.cleanup_call(case)])
+        self.assertPython3Calls(case, self.after_merge(case))
 
     def test_a_worktree_that_cannot_fast_forward_onto_the_merge_is_refused(self):
         # A commit made in the landing worktree while gh merges: afterwards the worktree and the
@@ -1492,6 +1521,64 @@ class PostMergeTests(LandTestCase):
         self.assertEqual({"main": case.base_tip, "release": refresh.sha,
                           MergingCase.BRANCH: case.head}, case.origin_refs())
         self.assertPython3Calls(case, [self.roadmap_call(case)])
+
+    def test_the_sweep_runs_before_the_cleanup_and_one_that_fails_fails_nothing(self):
+        # The sweep comes between the roadmap and the cleanup, so a branch whose worktree it has
+        # just removed reaches the cleanup free (#1503). One that exits non-zero is said in one
+        # line, and the landing, whose merge has happened, still ends as it would have.
+        for fails in (False, True):
+            with self.subTest(sweep_fails=fails):
+                case = MergingCase(self)
+                if fails:
+                    (case.dir / "sweep-fails").write_text("")
+                result = case.run(PR, *case.with_body, "--subject", self.NAMES_NO_ROW)
+                self.assertEqual(0, result.status, result.stderr)
+                self.assertPython3Calls(case, self.after_merge(case))
+                said = "land: the worktree sweep exited 3, so worktrees whose work is on main may remain"
+                self.assertEqual(fails, said in result.stdout, result.stdout)
+                self.assertEqual(fails, "sweep double: could not judge the worktrees" in result.stderr,
+                                 result.stderr)
+                self.assertIn("--- removing the worktrees whose work is on main\n"
+                              + (said + "; the landing has happened. Run tools/sweep_worktrees.py "
+                                 "to see what it keeps and why.\n" if fails else "")
+                              + "--- deleting the branches this landing finished\n", result.stdout)
+                self.assertTrue(result.stdout.endswith(
+                    "land: the generated blocks did not move, so there is nothing to refresh.\n"
+                    "land: the main checkout, " + str(case.work) + ", is not on main (it is on a "
+                    "detached HEAD), so no fast-forward is given; moving it is yours.\n"
+                    "--- removing the worktrees whose work is on main\n"
+                    + (said + "; the landing has happened. Run tools/sweep_worktrees.py to see what "
+                       "it keeps and why.\n" if fails else "")
+                    + "--- deleting the branches this landing finished\n"), result.stdout)
+
+    def test_a_branch_whose_worktree_the_sweep_removed_is_deleted_by_the_cleanup(self):
+        # The real sweep and the real cleanup, one after the other: the pull request's branch is
+        # checked out in a linked worktree of the clone, which keeps it from the cleanup until the
+        # sweep has removed that worktree, its work being on main once the merge is in.
+        case = SpareBranchCase(self)
+        (case.dir / "real-cleanup").write_text("")
+        lsof = shutil.which("lsof") or "/usr/sbin/lsof"
+        runner.link_tool(case.bin / "lsof", os.path.realpath(lsof))
+        branch = SpareBranchCase.BRANCH
+        case.git("fetch", "-q", "origin", f"{branch}:{branch}", cwd=case.work)
+        spare = case.dir / "spare"
+        case.git("worktree", "add", "-q", str(spare), branch, cwd=case.work)
+
+        result = case.run(PR, *case.with_body, "--subject", self.NAMES_NO_ROW)
+
+        self.assertEqual(0, result.status, result.stdout + result.stderr)
+        self.assertPython3Calls(case, self.after_merge(case))
+        self.assertFalse(spare.exists(), result.stdout)
+        lines = result.stdout.splitlines()
+        swept = [n for n, line in enumerate(lines) if f"  {spare}  " in line]
+        self.assertEqual(1, len(swept), result.stdout)
+        self.assertTrue(lines[swept[0]].startswith("removed "), result.stdout)
+        removed = result.stdout.index(f"  {spare}  ")
+        deleted = result.stdout.index(f"deleted  local   {branch}  ")
+        self.assertLess(removed, deleted, result.stdout)
+        self.assertIn(f"deleted  origin  {branch}  ", result.stdout)
+        self.assertEqual("", case.git_out("branch", "--list", branch, cwd=case.work))
+        self.assertNotIn(branch, case.origin_refs())
 
 
 class ClosesTests(LandTestCase):
