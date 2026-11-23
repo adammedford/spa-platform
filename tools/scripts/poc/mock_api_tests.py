@@ -9,7 +9,7 @@ next apply loads it and an older images.auto.tfvars's value loses. It applies no
 the world they share and the universal every run holds (no output names the account id) are
 tools/scripts/cell_doubles.py's.
 
-Checkout inputs: infra/envs/poc/cell.env infra/envs/poc/outputs-fields.json
+Checkout inputs: infra/envs/poc/cell.env infra/envs/poc/outputs-fields.json .gitignore */.gitignore
 
 Run: python3 -I tools/scripts/poc/mock_api_tests.py
 """
@@ -19,6 +19,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import pathlib
+import subprocess
 import sys
 
 _spec = importlib.util.spec_from_file_location("cell_doubles", pathlib.Path(__file__).resolve().parent.parent / "cell_doubles.py")
@@ -82,8 +83,13 @@ class TheMockApiIsBuiltPushedAndRecorded(cell.CompanionTestCase):
         name = cell.mock_api_tfvars_name()
         self.assertTrue(name.endswith(".auto.tfvars"), name)
         self.assertEqual(["images.auto.tfvars", name], sorted(["images.auto.tfvars", name]))
-        # Git ignores it with every *.tfvars: the digest's repository carries the account id.
-        self.assertTrue(name.endswith(".tfvars"))
+        # Git ignores it, since the digest's repository carries the account id. check-ignore reads the
+        # checkout's ignore files for a path whether or not it exists, and --no-index answers as they
+        # read even if some checkout tracked the file by mistake.
+        ignored = subprocess.run(["git", "-C", str(cell.ROOT), "check-ignore", "--no-index", "-q",
+                                  f"{PLATFORM}/{name}"], capture_output=True, text=True)
+        self.assertEqual(0, ignored.returncode,
+                         f"git does not ignore {PLATFORM}/{name}; one `git add .` commits it")
 
     def test_an_older_images_auto_tfvars_s_mock_api_image_loses_to_it(self):
         # An images.auto.tfvars written before #1349 still sets mock_api_image until the next
