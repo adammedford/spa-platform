@@ -1328,6 +1328,49 @@ class MovesTests(PreflightTestCase):
                               f"new path pairs: {said})", result.row("moves")[1])
                 self.assertEqual(["issue-12"], result.arguments()["skip"])
 
+    def test_a_cited_line_holding_a_form_feed_is_named_by_its_file_and_line(self):
+        case = Case(self)
+        # A form feed is a line break to str.splitlines() and not to git grep.
+        land_on_origin(case, {**CITED, "docs/paged.md": "Page one.\fThen tools/cell/old.sh.\n"})
+        case.issue(12, "ready-for-agent", moving("`tools/cell/`, `tools/old_tests.py`, `docs/runbook.md`",
+                                                 "`tools/cell/old.sh` -> `tools/cell/poc/old.sh`"))
+        result = case.run()
+        self.assertOnlyFails(result)
+        self.assertEqual(("pass", "4 ready-for-agent and needs-triage tickets read; these move a path "
+                                  "cited outside their Touches and are skip candidates: issue-12 (#12: "
+                                  "tools/cell/old.sh is cited at docs/paged.md:1)"), result.row("moves"))
+
+    def test_an_issue_gh_cannot_read_fails_the_line_and_the_rest_are_still_judged(self):
+        case = Case(self)
+        land_on_origin(case, CITED)
+        (case.canned / "issue-11.json").unlink()
+        case.issue(12, "ready-for-agent", moving("`tools/cell/`", "`tools/cell/old.sh` -> `tools/cell/poc/old.sh`"))
+        result = case.run()
+        self.assertOnlyFails(result, "shape", "adr", "decision", "moves")
+        self.assertEqual(("fail", "4 ready-for-agent and needs-triage tickets; gh could not read #11, so its "
+                                  "Moves line is unjudged; of the rest, these move a path cited outside their "
+                                  "Touches and are skip candidates: issue-12 (#12: tools/cell/old.sh is cited "
+                                  "at docs/runbook.md:1, tools/old_tests.py:2)"), result.row("moves"))
+        self.assertEqual(["issue-12"], result.arguments()["skip"])
+
+    def test_a_git_grep_that_fails_fails_the_line(self):
+        case = Case(self)
+        land_on_origin(case, CITED)
+        case.issue(12, "ready-for-agent", moving("`tools/cell/`", "`tools/cell/old.sh` -> `tools/cell/poc/old.sh`"))
+        # git as the script reaches it, failing its grep alone with git's fatal exit, 128.
+        git = case.bin / "git"
+        real = os.path.realpath(shutil.which("git"))
+        git.unlink()
+        git.write_text("#!/bin/sh\nfor word in \"$@\"; do\n  if [ \"$word\" = grep ]; then\n"
+                       "    echo 'fatal: unable to read tree' >&2; exit 128\n  fi\ndone\n"
+                       f"exec '{real}' \"$@\"\n")
+        git.chmod(0o755)
+        result = case.run()
+        self.assertOnlyFails(result, "moves")
+        self.assertEqual(("fail", "4 ready-for-agent and needs-triage tickets; git grep could not search "
+                                  "origin/main for #12's tools/cell/old.sh, so it is unjudged; of the rest, "
+                                  "none moves a path cited outside its Touches"), result.row("moves"))
+
 
 class UnblocksTests(PreflightTestCase):
     """#663: the unblocks line names the five open blockers with the most downstream tickets over the
