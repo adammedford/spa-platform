@@ -1000,7 +1000,10 @@ class TunnelRefusesWithoutTheOutputsDocument(CompanionTestCase):
         world = default_world()
         world["outputs"] = None
         result = self.refused(Case(self, world=world), f"there is no {OUTPUTS}")
-        self.assertIn("tools/scripts/seed.sh", result.stderr)
+        # How the document is written, which holds for every cell, and not the proof cell's own
+        # script (#1349).
+        self.assertIn("written from the cell's roots' outputs after an apply", result.stderr)
+        self.assertNotIn("seed.sh", result.stderr)
 
     def test_a_document_for_another_region(self):
         world = default_world()
@@ -1022,8 +1025,10 @@ class TunnelRefusesWithoutTheOutputsDocument(CompanionTestCase):
         world["outputs"]["ecsBastionService"] = None
         result = self.refused(Case(self, world=world), "names no ecsBastionService")
         line = result.stderr.strip().splitlines()[-1]
-        for fragment in ("bastion = true", "apply", "tools/scripts/seed.sh", "deploy.sh", "rollback.sh"):
+        for fragment in ("bastion = true", "apply", "rewrite the document from the roots' outputs", "deploy.sh",
+                         "rollback.sh"):
             self.assertIn(fragment, line)
+        self.assertNotIn("seed.sh", line)
 
     def test_no_option_steps_round_the_document(self):
         for option in ("--cell", "--cluster", "--service", "--alb"):

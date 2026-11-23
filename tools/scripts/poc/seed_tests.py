@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Test companion for tools/scripts/seed.sh and tools/scripts/cell_documents.py. Owner: workstream 1.
+"""Test companion for tools/scripts/poc/seed.sh and tools/scripts/cell_documents.py. Owner: workstream 1.
 
 Task 1.7 (#58): "Seeding publishes the fixture releases and writes the first registry through
 spactl." The doubles, the world they share and the universal every run holds (no output names the
@@ -11,20 +11,22 @@ file and field map, cell-common.sh's write_outputs run through a driver of the c
 the reference scripts' sources may not name. Those cases read the files below, so a change to one
 runs this companion.
 
-Checkout inputs: tools/scripts/*.sh tools/scripts/cell_documents.py infra/envs/poc/cell.env infra/envs/poc/outputs-fields.json
+Checkout inputs: tools/scripts/*.sh tools/scripts/poc/*.sh tools/scripts/cell_documents.py infra/envs/poc/cell.env infra/envs/poc/outputs-fields.json
 
-Run: python3 -I tools/scripts/seed_tests.py
+Run: python3 -I tools/scripts/poc/seed_tests.py
 """
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 import json
 import pathlib
 import re
 import sys
+import tempfile
 
-_spec = importlib.util.spec_from_file_location("cell_doubles", pathlib.Path(__file__).resolve().parent / "cell_doubles.py")
+_spec = importlib.util.spec_from_file_location("cell_doubles", pathlib.Path(__file__).resolve().parent.parent / "cell_doubles.py")
 cell = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(cell)
 # The fields the scripts write, from the field map they write them from (the proof cell's, which
@@ -34,7 +36,7 @@ WRITTEN_FIELDS = sorted(entry["field"] for entry in cell.field_map()["fields"] i
 
 import unittest  # noqa: E402
 
-SCRIPT = "seed.sh"
+SCRIPT = "poc/seed.sh"
 # Read from the fixtures, never typed here: the seed is every definition in fixtures/apps/.
 APPS = sorted(path.stem for path in (cell.ROOT / "fixtures" / "apps").glob("*.json"))
 
@@ -637,11 +639,37 @@ set +a
 exec /bin/bash "$(dirname -- "$0")/$1"
 """
 
-# The reference scripts: every file of tools/scripts/ but the proof cell's three, the doubles and
-# the companions, which follow their scripts (the #1335 spec's table).
-EXEMPT = ("seed.sh", "certs.sh", "platform-tfvars.sh", "cell_doubles.py")
+# The reference scripts: every file of tools/scripts/ but the doubles and the companions, which
+# follow their scripts (the #1335 spec's table). The proof cell's scripts are under tools/scripts/poc/
+# since #1349, so where a script sits says whether it is a reference.
+EXEMPT = ("cell_doubles.py",)
 REFERENCE = sorted(path for path in cell.SCRIPTS.iterdir()
                    if path.is_file() and path.name not in EXEMPT and not path.name.endswith("_tests.py"))
+# The proof cell's scripts, which moved to tools/scripts/poc/ (#1349).
+PROOF_CELL = ("seed.sh", "certs.sh", "platform-tfvars.sh")
+
+
+def manual(path: pathlib.Path) -> str:
+    """What a shell script's --help prints: its header from line 3 to the Owner line."""
+    lines = path.read_text().splitlines()[2:]
+    end = next(index for index, line in enumerate(lines) if line.startswith("# Owner:"))
+    return "\n".join(lines[: end + 1])
+
+
+def messages(path: pathlib.Path) -> list[str]:
+    """What a reference script can print, as source: for a shell script every line that is not a
+    comment, and its manual, which --help prints; for a Python one every string constant but the
+    docstrings."""
+    if path.suffix == ".py":
+        tree = ast.parse(path.read_text())
+        docstrings = {id(node.body[0].value) for node in ast.walk(tree)
+                      if isinstance(node, (ast.Module, ast.FunctionDef, ast.ClassDef, ast.AsyncFunctionDef))
+                      and node.body and isinstance(node.body[0], ast.Expr)
+                      and isinstance(node.body[0].value, ast.Constant)}
+        return [node.value for node in ast.walk(tree)
+                if isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in docstrings]
+    code = [line for line in path.read_text().splitlines() if not line.lstrip().startswith("#")]
+    return code + ([manual(path)] if path.read_text().startswith("#!") else [])
 
 
 def driven(test, world: dict | None = None, **env: str | None):
@@ -659,7 +687,7 @@ class TheProofCellsEntryFile(cell.CompanionTestCase):
         self.assertEqual(sorted(cell.ENTRY_NAMES), sorted(values))
         self.assertEqual(cell.CELL, values["SPA_CELL"])
         # The domain certs.sh issues for, read from it rather than typed here.
-        certs = re.search(r'^DOMAIN="\$\{SPA_CERT_DOMAIN:-([^}]*)\}"', (cell.SCRIPTS / "certs.sh").read_text(), re.M)
+        certs = re.search(r'^DOMAIN="\$\{SPA_CERT_DOMAIN:-([^}]*)\}"', (cell.SCRIPTS / "poc" / "certs.sh").read_text(), re.M)
         self.assertEqual(certs[1], values["SPA_CERT_DOMAIN"])
         roots = values["SPA_ROOTS"].split(":")
         self.assertEqual(["idp", "apps", "platform"], [root.rsplit("/", 1)[-1] for root in roots])
@@ -827,6 +855,40 @@ class TheReferenceScriptsNameNoCell(unittest.TestCase):
                 text = path.read_text()
                 self.assertNotRegex(text, r"spa-platform\s+profile")
                 self.assertNotIn("aws-project.env", text)
+
+    def test_the_proof_cell_s_scripts_and_companions_are_under_poc_and_not_beside_the_references(self):
+        # #1349's move: where a script sits tells a reader whether it is a reference.
+        for name in PROOF_CELL + ("seed_tests.py", "certs_tests.py", "platform_tfvars_tests.py"):
+            with self.subTest(name):
+                self.assertTrue((cell.SCRIPTS / "poc" / name).is_file())
+                self.assertFalse((cell.SCRIPTS / name).exists())
+
+    def test_no_reference_script_names_a_proof_cell_script_at_tools_scripts(self):
+        # #1349: a citation of a moved script follows it to tools/scripts/poc/.
+        for path in REFERENCE:
+            with self.subTest(path.name):
+                self.assertNotRegex(path.read_text(), r"tools/scripts/(seed|certs|platform-tfvars)\.sh")
+
+    def test_no_message_of_a_reference_script_names_seed_sh(self):
+        # #1349: an adopter has no seed.sh. What deploy.sh refuses an empty registry with names
+        # spactl, and what the outputs document's readers refuse its absence with says how it is
+        # written.
+        for path in REFERENCE:
+            with self.subTest(path.name):
+                self.assertEqual([], [text for text in messages(path) if "seed.sh" in text])
+
+    def test_the_message_reader_sees_code_strings_and_the_manual_and_not_comments(self):
+        # The reader above, on a script and a module of its own, so that a reader that saw nothing
+        # would not pass it.
+        with tempfile.TemporaryDirectory() as scratch:
+            shell = pathlib.Path(scratch) / "x.sh"
+            shell.write_text('#!/bin/bash\n#\n# x.sh -- run seed.sh\n# Owner: w\n\n# seed.sh, a comment\nfail "seed.sh"\n')
+            found = messages(shell)
+            self.assertEqual(['fail "seed.sh"'], [text for text in found if "seed.sh" in text and "Owner" not in text])
+            self.assertEqual(1, len([text for text in found if "run seed.sh" in text]))
+            module = pathlib.Path(scratch) / "x.py"
+            module.write_text('"""seed.sh"""\ndef f():\n    """seed.sh"""\n    raise Refused("run seed.sh")\n')
+            self.assertEqual(["run seed.sh"], [text for text in messages(module) if "seed.sh" in text])
 
     def test_cell_common_defines_no_mock_api_container(self):
         text = (cell.SCRIPTS / "cell-common.sh").read_text()

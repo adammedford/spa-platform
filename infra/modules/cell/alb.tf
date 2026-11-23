@@ -14,13 +14,13 @@ locals {
   lb_name = "spa-${var.cell}"
 }
 
-# The certificate tools/scripts/certs.sh imported. Terraform does not create it, it
+# The certificate tools/scripts/poc/certs.sh imported. Terraform does not create it, it
 # finds it: by domain name.
 #
 # The Cell tag prevents a lookup from selecting another cell's certificate. Tags
 # are exact-match filters, not merely returned metadata:
 # https://registry.terraform.io/providers/hashicorp/aws/6.68.0/docs/data-sources/acm_certificate
-# Key types mirror tools/scripts/certs.sh's lookup, including a future non-RSA leaf.
+# Key types mirror tools/scripts/poc/certs.sh's lookup, including a future non-RSA leaf.
 # A lookup that finds nothing fails the plan: the listener needs the certificate.
 data "aws_acm_certificate" "wildcard" {
   domain      = "*.${var.certificate_domain}"

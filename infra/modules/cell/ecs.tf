@@ -7,7 +7,8 @@
 #
 # The service starts on the public sample image and the health check follows the image: / for the
 # sample and /readyz for the gateway (health_check_path). A gateway started against an empty bucket
-# never becomes ready, which is why deploy.sh refuses to run before seed.sh.
+# never becomes ready, which is why deploy.sh refuses to run before an app is published to the
+# registry (spactl release publish, then spactl app add).
 
 locals {
   # contracts/infra-outputs.example.json fixes these three names: ecsCluster is spa-{cell},

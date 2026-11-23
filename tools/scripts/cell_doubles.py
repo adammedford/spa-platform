@@ -912,16 +912,22 @@ def terraform_double(argv: list[str], case: pathlib.Path) -> int:
             if root != "platform" or "-input=false" not in rest or not any(t.startswith("-out=") for t in rest):
                 raise Unexpected(f"terraform plan {rest}")
             plan = next(t for t in rest if t.startswith("-out="))[len("-out="):]
-            pathlib.Path(plan).write_text(json.dumps(variables))
+            # What the plan applies: the root's *.auto.tfvars, then each -var over them, as Terraform
+            # loads them (auto_tfvars). The record keeps the -var values alone, which are what the
+            # script passed.
+            effective = {**auto_tfvars(directory), **variables}
+            record["effective"] = effective
+            pathlib.Path(plan).write_text(json.dumps({"vars": variables, "effective": effective}))
             # The task definition's container_definitions as a real plan shows them: the mock API's
             # environment carries both apps' client ids (MockApi__App1Client and MockApi__App2Client
-            # in infra/modules/cell/ecs.tf), which the platform root reads from the apps root's state
-            # and the scripts never pass, and the module's variable for them is not sensitive (#251).
+            # in infra/envs/poc/platform/main.tf), which the platform root reads from the apps root's
+            # state and the scripts never pass, and the variable for them is not sensitive (#251). A
+            # replaced task definition shows every container, the mock API's whichever image moved.
             clients = (world["roots"]["apps"] or {}).get("clients", {})
             sys.stdout.write(f"  # module.cell.aws_ecs_task_definition.gateway must be replaced\n"
-                             f"      ~ image = \"{variables.get('gateway_image')}\"\n")
-            if variables.get("mock_api_image"):
-                sys.stdout.write(f"      ~ image = \"{variables['mock_api_image']}\"\n")
+                             f"      ~ image = \"{effective.get('gateway_image')}\"\n")
+            if effective.get("mock_api_image"):
+                sys.stdout.write(f"      ~ image = \"{effective['mock_api_image']}\"\n")
                 for app, name in (("app1", "MockApi__App1Client"), ("app2", "MockApi__App2Client")):
                     if app in clients:
                         sys.stdout.write(f"          + {{ name = \"{name}\", value = \"{clients[app]['clientId']}\" }},\n")
@@ -932,8 +938,10 @@ def terraform_double(argv: list[str], case: pathlib.Path) -> int:
             plan = rest[-1]
             if root != "platform" or "-input=false" not in rest or "-auto-approve" in rest:
                 raise Unexpected(f"terraform apply {rest}: the saved plan is what is applied")
-            variables = json.loads(pathlib.Path(plan).read_text())
-            record["vars"] = variables
+            saved = json.loads(pathlib.Path(plan).read_text())
+            variables = saved["effective"]
+            record["vars"] = saved["vars"]
+            record["effective"] = variables
             if world["faults"].get("apply"):
                 sys.stderr.write("Error: creating ECS Task Definition: ClientException\n")
                 status = 1
@@ -957,6 +965,36 @@ def terraform_double(argv: list[str], case: pathlib.Path) -> int:
     log(case, record)
     save_world(case, world)
     return status
+
+
+def mock_api_tfvars_name() -> str:
+    """The name of the file tools/scripts/poc/mock-api.sh writes mock_api_image to in the platform
+    root, read from the script rather than typed (#1349)."""
+    found = re.search(r'^MOCK_API_TFVARS_NAME="([^"/]+)"$', (SCRIPTS / "poc" / "mock-api.sh").read_text(), re.M)
+    if not found:
+        raise AssertionError("tools/scripts/poc/mock-api.sh sets no MOCK_API_TFVARS_NAME")
+    return found[1]
+
+
+# One assignment of a *.auto.tfvars file as the scripts write them: a name, and a quoted string or a
+# bare true or false.
+_ASSIGNMENT = re.compile(r'^\s*([A-Za-z_][A-Za-z0-9_-]*)\s*=\s*(?:"([^"]*)"|(true|false))\s*$')
+
+
+def auto_tfvars(directory: pathlib.Path) -> dict[str, str]:
+    """The values a root's *.auto.tfvars files set, as Terraform loads them: in lexical order of
+    their names, a later file's value for a variable winning
+    (https://developer.hashicorp.com/terraform/language/values/variables#variable-definition-precedence).
+    Each value as a string, as a -var carries it. terraform.tfvars, loaded before them, sets the three
+    variables the scripts pass (gateway_image, health_check_path and gateway_writable_root,
+    tools/scripts/poc/platform-tfvars.sh), and a -var overrides it, so it is not read."""
+    values: dict[str, str] = {}
+    for path in sorted(directory.glob("*.auto.tfvars"), key=lambda p: p.name):
+        for line in path.read_text().splitlines():
+            found = _ASSIGNMENT.match(line)
+            if found:
+                values[found[1]] = found[2] if found[2] is not None else found[3]
+    return values
 
 
 def world_root(case: pathlib.Path) -> pathlib.Path:

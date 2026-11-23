@@ -43,7 +43,7 @@ public sealed class CellOnboarding(Cell cell, CellAws aws, ICommandRunner runner
         {
             // The clean-up never writes the outputs document (workstream 1's scripts do), so it cannot make this pass.
             throw new InvalidOperationException(
-                $"the infrastructure outputs document already names a client for {appId}, so the apps root's plan cannot show its onboarding. Once the clean-up has taken {appId} off, write the document again from the roots' outputs, as tools/scripts/seed.sh's first step does, then run again.");
+                $"the infrastructure outputs document already names a client for {appId}, so the apps root's plan cannot show its onboarding. Once the clean-up has taken {appId} off, write the document again from the roots' outputs, as tools/scripts/poc/seed.sh's first step does, then run again.");
         }
 
         if ((await aws.LiveRegistryAsync(ct)).AppIds.Contains(appId))

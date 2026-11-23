@@ -284,7 +284,9 @@ class LogsRefuses(cell.CompanionTestCase):
                 self.assertEqual([], case.calls("aws"))
 
     def test_no_outputs_document(self):
-        case, _ = self.refused("seed.sh", outputs=False)
+        # How the document is written, and not the proof cell's own script (#1349).
+        case, result = self.refused("written from the cell's roots' outputs after an apply", outputs=False)
+        self.assertNotIn("seed.sh", result.stderr)
         self.assertEqual([], case.aws("logs tail"))
 
     def test_a_read_aws_refuses_names_its_code_and_no_message(self):

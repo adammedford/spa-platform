@@ -146,7 +146,7 @@ BASTION_CONTAINER = "bastion"
 NO_BASTION = ("infra/envs/poc/outputs.json names no ecsBastionService, so the cell has no bastion for the port forward's hop "
               "(#1167): no task of the gateway's service can carry a session, since #787 turns its ECS Exec off. Set "
               "bastion = true and bastion_image in infra/envs/poc/platform/terraform.tfvars, apply that root, and rewrite "
-              "the document with tools/scripts/seed.sh.")
+              "the document with tools/scripts/poc/seed.sh.")
 NO_EXEC = "no session: ECS Exec is off on the gateway's task (#787), so no metadata read was sent"
 
 EXIT_CLEAN, EXIT_USAGE, EXIT_BREACH, EXIT_INCOMPLETE = 0, 2, 3, 4
@@ -625,18 +625,18 @@ class Aws:
 
 def read_outputs(region: str) -> dict:
     if not OUTPUTS_FILE.is_file():
-        raise Refused("there is no infra/envs/poc/outputs.json. Run tools/scripts/seed.sh first: it writes it from the three roots.")
+        raise Refused("there is no infra/envs/poc/outputs.json. Run tools/scripts/poc/seed.sh first: it writes it from the three roots.")
     try:
         document = json.loads(OUTPUTS_FILE.read_text())
     except (OSError, ValueError):
-        raise Refused("infra/envs/poc/outputs.json is not JSON. Run tools/scripts/seed.sh again.")
+        raise Refused("infra/envs/poc/outputs.json is not JSON. Run tools/scripts/poc/seed.sh again.")
     if not isinstance(document, dict) or document.get("region") != region:
-        raise Refused(f"infra/envs/poc/outputs.json is not for {region}. Run tools/scripts/seed.sh again to rewrite it from the three roots.")
+        raise Refused(f"infra/envs/poc/outputs.json is not for {region}. Run tools/scripts/poc/seed.sh again to rewrite it from the three roots.")
     names = {}
     for field in ("ecsCluster", "ecsService", "logGroup", "albDnsName", "gatewayImage"):
         value = document.get(field)
         if not isinstance(value, str) or not value:
-            raise Refused(f"infra/envs/poc/outputs.json gives no {field} for {region}. Run tools/scripts/seed.sh again.")
+            raise Refused(f"infra/envs/poc/outputs.json gives no {field} for {region}. Run tools/scripts/poc/seed.sh again.")
         names[field] = value
     if not IMAGE_DIGEST.fullmatch(names["gatewayImage"].partition("@")[2]):
         raise Refused("infra/envs/poc/outputs.json's gatewayImage is not pinned by digest.")
@@ -1289,7 +1289,7 @@ def main(argv: List[str]) -> int:
             raise Refused("no Region in AWS_REGION or AWS_DEFAULT_REGION. set -a; . tools/aws-project.env; set +a")
         names = read_outputs(region)
         if not pathlib.Path(options.ca).is_file():
-            raise Refused("no authority at --ca. Run tools/scripts/certs.sh issue, or fetch-ca on a second workstation.")
+            raise Refused("no authority at --ca. Run tools/scripts/poc/certs.sh issue, or fetch-ca on a second workstation.")
         if _listening(options.local_port):
             raise Refused(f"something already listens on 127.0.0.1:{options.local_port}. Stop it, or pass --local-port.")
     except Refused as refusal:

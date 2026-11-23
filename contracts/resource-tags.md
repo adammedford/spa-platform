@@ -17,7 +17,7 @@ that string.
 
 | Tag | Value | Applied to |
 | --- | --- | --- |
-| `Platform` | `spa-platform` | Every resource in `infra/envs/poc/{idp,apps,platform}`, the wildcard certificate `tools/scripts/certs.sh` imports to ACM, and the data-protection key ring parameters the gateway writes |
+| `Platform` | `spa-platform` | Every resource in `infra/envs/poc/{idp,apps,platform}`, the wildcard certificate `tools/scripts/poc/certs.sh` imports to ACM, and the data-protection key ring parameters the gateway writes |
 | `Cell` | the cell name, e.g. `poc` | The same resources |
 | `ManagedBy` | `terraform`; `certs.sh` for the certificate; `gateway` for the key ring parameters under `/spa-platform/<cell>/data-protection/` (#274) | The same resources |
 
@@ -113,4 +113,4 @@ Workstream 1 files a change request in that case rather than letting the gap sit
 | Workstream 6 | Runs `verify-teardown.sh` as P-05 (#63), and cites it in the teardown note in task 6.7 (#62) |
 
 A change of value is a one-line edit in `local.tags` per root and in `PLATFORM_TAG_VALUE` in
-`tools/scripts/certs.sh` — cheap before the first apply, and a change request after it.
+`tools/scripts/poc/certs.sh` — cheap before the first apply, and a change request after it.

@@ -17,7 +17,7 @@ public static class RawClient
     /// <summary>
     /// A client for <paramref name="endpoint"/> (<c>127.0.0.1:port</c>). Without
     /// <paramref name="validate"/> the certificate is validated as the machine's trust store says, which
-    /// is what the cell's needs: it chains to the authority <c>tools/scripts/certs.sh</c> installed.
+    /// is what the cell's needs: it chains to the authority <c>tools/scripts/poc/certs.sh</c> installed.
     /// </summary>
     public static HttpClient To(string endpoint, RemoteCertificateValidationCallback? validate = null)
     {

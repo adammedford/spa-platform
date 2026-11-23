@@ -861,7 +861,7 @@ run "the_gateway_s_tmp_is_the_task_s_one_writable_path" {
 # nginx-unprivileged, runs as uid 101 and keeps its temp files under /tmp, which on the read-only
 # root is the task volume ECS gives "0755 and the owner as root": #787's Docker stand-in showed it
 # exit at start on "mkdir() /tmp/proxy_temp ... Permission denied". gateway_writable_root = true,
-# which tools/scripts/platform-tfvars.sh writes beside the sample's pin, gives the gateway's
+# which tools/scripts/poc/platform-tfvars.sh writes beside the sample's pin, gives the gateway's
 # container the shape it had before #787: a writable root, no /tmp volume and no mount, so /tmp is
 # the image's own directory. The capabilities and the init process (#786) and Exec off are not part
 # of it. The run on the default inputs above holds the read-only shape; this one holds the switch.

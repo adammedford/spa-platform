@@ -28,7 +28,7 @@
 **/TestResults
 **/*.trx
 
-# The local certificate authority and its keys (tools/scripts/certs.sh). Never send a private key.
+# The local certificate authority and its keys (tools/scripts/poc/certs.sh). Never send a private key.
 .certs
 **/*.pem
 **/*.key
