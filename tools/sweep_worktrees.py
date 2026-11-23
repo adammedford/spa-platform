@@ -107,6 +107,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import math
 import os
 import pathlib
 import re
@@ -637,6 +638,10 @@ def end(orphan: Orphan) -> str:
     return ""
 
 
+def many(count: int, one: str, more: str) -> str:
+    return f"{count} {one if count == 1 else more}"
+
+
 def main(argv: list[str]) -> int:
     # No abbreviations: argparse would otherwise read a typo such as --appl as --apply
     # (https://docs.python.org/3/library/argparse.html#allow-abbrev), and that flag removes.
@@ -659,7 +664,9 @@ def main(argv: list[str]) -> int:
                         help="list, and with --apply send SIGTERM to, each Terraform provider "
                              "whose parent is pid 1 and whose working directory is gone")
     arguments = parser.parse_args(argv)
-    if arguments.idle_hours < 0:
+    # float() reads "nan" and "inf" too, and a nan compares false with every quiet time, which
+    # would make each kept worktree idle.
+    if not math.isfinite(arguments.idle_hours) or arguments.idle_hours < 0:
         parser.error("--idle-hours takes a number of hours, 0 or more")
     counting = arguments.apply and not arguments.verbose
 
@@ -739,10 +746,12 @@ def main(argv: list[str]) -> int:
             print(f"{word:<8} {human(freed_here if word == 'left' else cache.size):>9}  "
                   f"{cache.path}  {reason}")
         if arguments.apply:
-            clauses.append(f"--strip-idle stripped {stripped} cache directories, freeing "
-                           f"{human(stripped_bytes)}.")
+            clauses.append(f"--strip-idle stripped "
+                           f"{many(stripped, 'cache directory', 'cache directories')}, "
+                           f"freeing {human(stripped_bytes)}.")
         else:
-            clauses.append(f"--strip-idle would strip {len(caches)} cache directories, freeing "
+            clauses.append(f"--strip-idle would strip "
+                           f"{many(len(caches), 'cache directory', 'cache directories')}, freeing "
                            f"{human(sum(cache.size for cache in caches))}")
     if arguments.end_orphans:
         found, why = orphans(after)
@@ -765,10 +774,12 @@ def main(argv: list[str]) -> int:
                   f"{orphan.executable}  {reason}")
         unknown = "" if sizes is not None else ", lsof unable to say how much"
         if arguments.apply:
-            clauses.append(f"--end-orphans ended {ended} orphaned providers, releasing "
+            clauses.append(f"--end-orphans ended "
+                           f"{many(ended, 'orphaned provider', 'orphaned providers')}, releasing "
                            f"{human(ended_bytes)} of deleted files they held open{unknown}.")
         else:
-            clauses.append(f"--end-orphans would end {len(found)} orphaned providers, releasing "
+            clauses.append(f"--end-orphans would end "
+                           f"{many(len(found), 'orphaned provider', 'orphaned providers')}, releasing "
                            f"{human(sum((sizes or {}).values()))} of deleted files they hold "
                            f"open{unknown}")
 

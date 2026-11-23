@@ -88,6 +88,14 @@ exec {lsof} "$@"
 """
 
 
+# The lsof the strip race case puts first: it adds a file in the worktree's bin/ to the index, then
+# runs the real lsof, so bin/ is a candidate when listed and tracked when its deletion comes.
+RACING_ADD = """#!/bin/sh
+git -C {tree} add -f bin/Gateway.dll
+exec {lsof} "$@"
+"""
+
+
 class Case(unittest.TestCase):
     """One throwaway origin and clone whose main holds a merge, a cherry-pick and a first-parent
     line, so a worktree's tip can come in by each of the three ways."""
@@ -627,6 +635,35 @@ class StripIdleDeletesTheCachesOfAnIdleKeptWorktree(IdleCase):
                 self.assertTrue((tree / "bin" / "Gateway.dll").exists(), out)
                 self.assertTrue((tree / ".terraform" / "providers" / "aws").exists(), out)
 
+    def test_a_cache_git_stops_listing_before_its_turn_is_left(self):
+        # The racing lsof, run once the candidates are listed, adds a file in bin/ to the index, so
+        # git no longer lists bin/ as wholly ignored when its deletion comes.
+        idle = self.fill(self.add("idle", "--detach", self.unmerged))
+        self.set_back(idle)
+        (self.bin / "lsof").unlink()
+        (self.bin / "lsof").write_text(RACING_ADD.format(tree=shlex.quote(str(idle)),
+                                                         lsof=shlex.quote(self.lsof)))
+        (self.bin / "lsof").chmod(0o755)
+
+        code, out, err = self.sweep("--apply", "--strip-idle")
+
+        self.assertEqual(0, code, err)
+        left = self.strip_lines(out, "left")
+        self.assertEqual({str(idle / "bin")}, set(left), out)
+        self.assertIn("git no longer lists it as an ignored directory", left[str(idle / "bin")][1])
+        self.assertTrue((idle / "bin" / "Gateway.dll").exists(), out)
+        self.assertFalse((idle / ".terraform").exists(), out)
+
+    def test_an_idle_hours_that_is_no_number_of_hours_is_refused(self):
+        tree = self.fill(self.add("idle", "--detach", self.unmerged))
+        self.set_back(tree)
+        for value in ("-1", "nan", "inf"):
+            with self.subTest(value=value):
+                code, _, err = self.sweep("--apply", "--strip-idle", "--idle-hours", value)
+                self.assertEqual(2, code, err)
+                self.assertIn("--idle-hours takes a number of hours, 0 or more", err)
+                self.assertTrue((tree / "bin" / "Gateway.dll").exists())
+
     def test_idle_hours_sets_the_quiet_time(self):
         # Nothing in the worktree is older than this run, so only --idle-hours 0 makes it idle.
         tree = self.fill(self.add("recent", "--detach", self.unmerged))
@@ -650,6 +687,7 @@ while [ -e "$log/ps-call-$n" ]; do n=$((n + 1)); done
 printf '%s\\0' "$@" > "$log/ps-call-$n"
 [ "$*" = "-A -o pid=,ppid=,lstart=,comm=" ] || {{ echo "ps double: unexpected call" >&2; exit 97; }}
 /bin/cat -- {fixtures}/ps.txt
+[ ! -e {fixtures}/ps-fails ] || exit 1
 """
 
 LSOF_DOUBLE = """#!/bin/bash
@@ -667,7 +705,7 @@ START = "Mon Nov 16 00:02:11 2026"
 
 
 class OrphanCase(IdleCase):
-    """Four real child processes, each named in a stubbed process table as something else: so the
+    """Five real child processes, each named in a stubbed process table as something else: so the
     sweep's SIGTERM reaches a process this case owns, and the table says what the rule judges."""
 
     def stub_table(self):
@@ -685,13 +723,16 @@ class OrphanCase(IdleCase):
                 ("orphan", 1, f"{gone}/.terraform/providers/terraform-provider-x_v5", gone),
                 ("parent-runs", 4242, f"{gone}/.terraform/providers/terraform-provider-x_v5", gone),
                 ("cwd-exists", 1, f"{there}/.terraform/providers/terraform-provider-x_v5", there),
-                ("other-name", 1, "/usr/local/bin/terraform", gone)):
+                ("other-name", 1, "/usr/local/bin/terraform", gone),
+                # lsof names no working directory for it, so nothing says it is gone.
+                ("no-cwd-row", 1, f"{gone}/.terraform/providers/terraform-provider-x_v5", None)):
             child = subprocess.Popen(["/bin/sleep", "300"])
             self.addCleanup(child.wait)
             self.addCleanup(child.kill)
             self.children[name] = child
             rows.append(f"{child.pid:>5} {ppid:>5} {START}     {executable}\n")
-            cwds.append(f"p{child.pid}\nfcwd\nn{cwd}\n")
+            if cwd is not None:
+                cwds.append(f"p{child.pid}\nfcwd\nn{cwd}\n")
         (self.fixtures / "ps.txt").write_text("".join(rows))
         (self.fixtures / "cwd.txt").write_text("".join(cwds))
         (self.fixtures / "held.txt").write_text(
@@ -728,19 +769,19 @@ class EndOrphansEndsAProviderWhoseTerraformHasGone(OrphanCase):
         self.assertIn("755.0 MB", listed[0])
         self.assertTrue(all(self.alive(name) for name in self.children), out)
         self.assertTrue(out.splitlines()[-1].endswith(
-            "; --end-orphans would end 1 orphaned providers, releasing 755.0 MB of deleted files "
+            "; --end-orphans would end 1 orphaned provider, releasing 755.0 MB of deleted files "
             "they hold open; nothing was changed."), out)
 
         code, out, err = self.sweep("--apply", "--end-orphans")
 
         self.assertEqual(0, code, err)
         self.assertTrue(self.ended("orphan"), out)
-        for name in ("parent-runs", "cwd-exists", "other-name"):
+        for name in ("parent-runs", "cwd-exists", "other-name", "no-cwd-row"):
             with self.subTest(left=name):
                 self.assertTrue(self.alive(name), out)
                 self.assertNotIn(f"pid {self.children[name].pid} ", out)
         self.assertEqual(f"sweep_worktrees: removed 0 and kept 0; freed 0 B. --end-orphans ended 1 "
-                         "orphaned providers, releasing 755.0 MB of deleted files they held open.",
+                         "orphaned provider, releasing 755.0 MB of deleted files they held open.",
                          out.splitlines()[-1])
 
     def test_a_ps_that_cannot_answer_ends_nothing_and_says_so(self):
@@ -751,6 +792,36 @@ class EndOrphansEndsAProviderWhoseTerraformHasGone(OrphanCase):
 
         self.assertEqual(0, code, err)
         self.assertIn("sweep_worktrees: --end-orphans judged no process: ps is not on PATH", out)
+        self.assertTrue(all(self.alive(name) for name in self.children), out)
+
+    def test_a_ps_that_prints_its_table_and_exits_non_zero_ends_nothing(self):
+        self.stub_table()
+        (self.fixtures / "ps-fails").write_text("")
+
+        code, out, err = self.sweep("--apply", "--end-orphans")
+
+        self.assertEqual(0, code, err)
+        self.assertIn("sweep_worktrees: --end-orphans judged no process: ps exited 1", out)
+        self.assertTrue(all(self.alive(name) for name in self.children), out)
+
+
+class AnLsofThatCannotAnswerStripsAndEndsNothing(OrphanCase):
+
+    def test_both_rules_say_so_and_change_nothing(self):
+        self.stub_table()
+        (self.bin / "lsof").unlink()
+        (self.bin / "lsof").write_text("#!/bin/sh\nexit 1\n")
+        (self.bin / "lsof").chmod(0o755)
+        idle = self.fill(self.add("idle", "--detach", self.unmerged))
+        self.set_back(idle)
+
+        code, out, err = self.sweep("--apply", "--strip-idle", "--end-orphans")
+
+        self.assertEqual(0, code, err)
+        self.assertIn("sweep_worktrees: --strip-idle judged no worktree: lsof exited 1", out)
+        self.assertIn("sweep_worktrees: --end-orphans judged no process: lsof exited 1", out)
+        self.assertTrue((idle / "bin" / "Gateway.dll").exists(), out)
+        self.assertTrue((idle / ".terraform" / "providers" / "aws").exists(), out)
         self.assertTrue(all(self.alive(name) for name in self.children), out)
 
 
