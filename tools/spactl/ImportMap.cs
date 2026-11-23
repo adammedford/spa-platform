@@ -22,6 +22,13 @@ internal static class ImportMap
     private const string ScriptClose = "</script";
     private const string CommentOpen = "<!--";
 
+    /// <summary>
+    /// The elements whose content the tokenizer reads as text, never as tags, with scripting on
+    /// (https://html.spec.whatwg.org/multipage/parsing.html#parsing-html-fragments).
+    /// </summary>
+    private static readonly ImmutableArray<string> RawTextElements =
+        ["title", "textarea", "style", "xmp", "iframe", "noembed", "noframes", "noscript", "plaintext"];
+
     /// <summary>The three hash algorithms CSP's hash-source grammar names, by their source prefix.</summary>
     private static readonly ImmutableArray<(string Prefix, Func<byte[], byte[]> Hash)> Algorithms =
     [
@@ -43,13 +50,10 @@ internal static class ImportMap
         int at = 0;
         while (true)
         {
-            int? next = NextScriptTag(html, at, out bool commentNamesMap);
-            if (commentNamesMap)
+            int? next = NextScriptTag(html, at, out string? skippedRefusal);
+            if (skippedRefusal is not null)
             {
-                // The scan ends a comment where the tokenizer would, but it cannot tell a comment from
-                // "<!--" in the text of a <style> or a <title>, so text it skips as a comment must not
-                // hold a map a browser could run.
-                return Scan.Refused("a comment names importmap, and the scan cannot tell whether a browser reads it as one.", cspMeta);
+                return Scan.Refused(skippedRefusal, cspMeta);
             }
 
             if (next is not int start)
@@ -64,7 +68,7 @@ internal static class ImportMap
             }
 
             string tag = html[start..(close + 1)];
-            int bodyEnd = html.IndexOf(ScriptClose, close + 1, StringComparison.OrdinalIgnoreCase);
+            int bodyEnd = ScriptEnd(html, close + 1);
             if (string.Equals(tag, StartTag, StringComparison.Ordinal))
             {
                 if (map is not null)
@@ -178,26 +182,68 @@ internal static class ImportMap
     }
 
     /// <summary>
-    /// The next <c>&lt;script</c> start tag at or after <paramref name="from"/>, matched as a tag name and
-    /// outside a comment: a comment's text is never a tag, so a <c>&lt;script</c> in one must not make the
-    /// scan skip a real map after it as script data
-    /// (https://html.spec.whatwg.org/multipage/parsing.html#comment-start-state).
-    /// <paramref name="commentNamesMap"/> is set, and the search stops, at a skipped comment whose text
-    /// names importmap.
+    /// The index of the <c>&lt;/script</c> end tag that ends script data at or after
+    /// <paramref name="from"/>, or -1 when none does: the name must be followed by whitespace,
+    /// <c>/</c> or <c>&gt;</c>, so <c>&lt;/scriptx</c> is data
+    /// (https://html.spec.whatwg.org/multipage/parsing.html#script-data-end-tag-name-state).
     /// </summary>
-    private static int? NextScriptTag(string html, int from, out bool commentNamesMap)
+    private static int ScriptEnd(string html, int from)
     {
-        commentNamesMap = false;
+        int index = from;
+        while (html.IndexOf(ScriptClose, index, StringComparison.OrdinalIgnoreCase) is var end and >= 0)
+        {
+            int after = end + ScriptClose.Length;
+            if (after < html.Length && IsTagNameEnd(html[after]))
+            {
+                return end;
+            }
+
+            index = after;
+        }
+
+        return -1;
+    }
+
+    /// <summary>
+    /// The next <c>&lt;script</c> start tag at or after <paramref name="from"/>, matched as a tag name and
+    /// outside a comment or a raw-text element: their text is never a tag, so a <c>&lt;script</c> in
+    /// one must not make the scan skip a real map after it as script data
+    /// (https://html.spec.whatwg.org/multipage/parsing.html#comment-start-state,
+    /// https://html.spec.whatwg.org/multipage/parsing.html#rawtext-state).
+    /// <paramref name="skippedRefusal"/> is set, and the search stops, at skipped text a browser could
+    /// read as markup holding a map.
+    /// </summary>
+    private static int? NextScriptTag(string html, int from, out string? skippedRefusal)
+    {
+        skippedRefusal = null;
         int index = from;
         while (html.IndexOf(ScriptOpen, index, StringComparison.OrdinalIgnoreCase) is var script and >= 0)
         {
             int comment = html.IndexOf(CommentOpen, index, StringComparison.Ordinal);
-            if (comment >= 0 && comment < script)
+            (int rawText, string? name) = NextRawText(html, index, script);
+            if (comment >= 0 && comment < script && (name is null || comment < rawText))
             {
                 index = CommentEnd(html, comment);
                 if (html.AsSpan(comment, index - comment).Contains("importmap", StringComparison.OrdinalIgnoreCase))
                 {
-                    commentNamesMap = true;
+                    // Text the scan skips as a comment must not hold a map a browser could run.
+                    skippedRefusal = "a comment names importmap, and the scan cannot tell whether a browser reads it as one.";
+                    return null;
+                }
+
+                continue;
+            }
+
+            if (name is not null)
+            {
+                index = RawTextEnd(html, rawText, name);
+                ReadOnlySpan<char> text = html.AsSpan(rawText, index - rawText);
+                if (text.Contains(ScriptOpen, StringComparison.OrdinalIgnoreCase)
+                    || text.Contains("importmap", StringComparison.OrdinalIgnoreCase))
+                {
+                    // Inside <svg> or <math> the same element's content is markup, and a tag such as <p>
+                    // returns to HTML, so the text skipped as raw must hold no script and no map.
+                    skippedRefusal = $"a <{name}> holds '<script' or names importmap, and the scan cannot tell whether a browser reads it as text.";
                     return null;
                 }
 
@@ -205,7 +251,7 @@ internal static class ImportMap
             }
 
             int after = script + ScriptOpen.Length;
-            if (after >= html.Length || html[after] is ' ' or '\t' or '\n' or '\f' or '\r' or '/' or '>')
+            if (after >= html.Length || IsTagNameEnd(html[after]))
             {
                 return script;
             }
@@ -215,6 +261,52 @@ internal static class ImportMap
 
         return null;
     }
+
+    /// <summary>The first raw-text start tag at or after <paramref name="from"/> and before <paramref name="before"/>, with its name.</summary>
+    private static (int At, string? Name) NextRawText(string html, int from, int before)
+    {
+        (int at, string? found) = (before, null);
+        foreach (string name in RawTextElements)
+        {
+            int index = from;
+            while (html.IndexOf("<" + name, index, StringComparison.OrdinalIgnoreCase) is var open and >= 0 && open < at)
+            {
+                int after = open + 1 + name.Length;
+                if (after < html.Length && IsTagNameEnd(html[after]))
+                {
+                    (at, found) = (open, name);
+                    break;
+                }
+
+                index = after;
+            }
+        }
+
+        return (at, found);
+    }
+
+    /// <summary>
+    /// Where the raw-text element opened at <paramref name="open"/> ends: after its end tag, or at the end
+    /// of the document when it has none, which is always so for <c>&lt;plaintext&gt;</c>.
+    /// </summary>
+    private static int RawTextEnd(string html, int open, string name)
+    {
+        string close = "</" + name;
+        int index = open + 1 + name.Length;
+        while (html.IndexOf(close, index, StringComparison.OrdinalIgnoreCase) is var end and >= 0)
+        {
+            index = end + close.Length;
+            if (index < html.Length && IsTagNameEnd(html[index]))
+            {
+                return index;
+            }
+        }
+
+        return html.Length;
+    }
+
+    /// <summary>Whether a character ends a tag name: whitespace, <c>/</c> or <c>&gt;</c>.</summary>
+    private static bool IsTagNameEnd(char c) => c is ' ' or '\t' or '\n' or '\f' or '\r' or '/' or '>';
 
     /// <summary>
     /// Where the comment opened at <paramref name="open"/> ends, as the tokenizer ends it: <c>&lt;!--&gt;</c>

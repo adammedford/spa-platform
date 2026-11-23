@@ -189,15 +189,24 @@ public sealed class ImportMapTests : IDisposable
 
     [Theory]
     [InlineData("<!-- {0} -->")]
-    [InlineData("<style>a::before {{ content: \"<!--\" }}</style>{0}")]
     public async Task Text_the_scan_skips_as_a_comment_is_refused_when_it_names_importmap(string around)
     {
-        // A browser reads no "<!--" inside a <style> as a comment, so there the map is live; the scan
-        // cannot tell the two apart, and refuses both rather than skip a map.
+        // Text the scan skips as a comment must hold no map a browser could run, so it refuses rather
+        // than skip one. A "<!--" inside raw text is no comment: see the test after this one.
         string html = Html(string.Format(System.Globalization.CultureInfo.InvariantCulture, around, FragmentWorld.ImportMapTag(Map)));
 
         Assert.Equal(1, await Validate(html, FragmentWorld.HashSource(Map)));
         Assert.Contains("a comment names importmap", Error, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_comment_open_inside_raw_text_does_not_hide_the_map_after_it()
+    {
+        // A browser reads no "<!--" inside a <style> as a comment, so the map after it is live and checked.
+        string map = FragmentWorld.Map("m3");
+
+        Assert.Equal(1, await Validate(Html("<style>a::before { content: \"<!--\" }</style>" + FragmentWorld.ImportMapTag(map) + "-->"), FragmentWorld.HashSource(Map)));
+        Assert.Contains($"Add {FragmentWorld.HashSource(map)} to", Error, StringComparison.Ordinal);
     }
 
     [Theory]
@@ -209,6 +218,37 @@ public sealed class ImportMapTests : IDisposable
 
         Assert.Equal(1, await Validate(Html(comment + FragmentWorld.ImportMapTag(map) + "-->"), FragmentWorld.HashSource(Map)));
         Assert.Contains($"Add {FragmentWorld.HashSource(map)} to", Error, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("<title><script></title>{0}")]
+    [InlineData("<textarea><script></textarea>{0}")]
+    [InlineData("<style><script></style>{0}")]
+    [InlineData("<noscript><script></noscript>{0}")]
+    public async Task A_script_tag_inside_raw_text_is_refused_rather_than_read_as_script_data(string around)
+    {
+        // A browser reads a <script inside a raw-text element as text, so the map after it is live
+        // (https://html.spec.whatwg.org/multipage/parsing.html#rawtext-state). Read as a classic script,
+        // its data would run to the map's end tag and hide the map; inside <svg> the same text is markup.
+        // The scan refuses it, as the review's probe of this input (#1486) asked.
+        string map = FragmentWorld.Map("m9");
+        string html = Html(string.Format(System.Globalization.CultureInfo.InvariantCulture, around, FragmentWorld.ImportMapTag(map)));
+
+        Assert.Equal(1, await Validate(html, FragmentWorld.HashSource(Map)));
+        Assert.Contains("holds '<script' or names importmap", Error, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("</scriptx")]
+    [InlineData("</SCRIPT-")]
+    public async Task A_map_ends_at_an_end_tag_not_at_a_longer_name(string notAnEndTag)
+    {
+        // Script data ends at "</script" followed by whitespace, '/' or '>' only
+        // (https://html.spec.whatwg.org/multipage/parsing.html#script-data-end-tag-name-state), so
+        // the whole body is the map a browser runs, and its hash is the one that admits it.
+        string map = "{\"imports\":{\"lib\":\"/assets/" + notAnEndTag + ".js\"}}";
+
+        Assert.Equal(0, await Validate(Html(FragmentWorld.ImportMapTag(map)), FragmentWorld.HashSource(map)));
     }
 
     [Fact]
