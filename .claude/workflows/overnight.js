@@ -137,9 +137,17 @@ const HOUSE = `House rules (unattended; nobody will answer questions tonight):
 // once, for the closing check after every lane has settled. --port is the lane's own, for the smoke test. Its last line is its verdict. skipTests is the re-run's after a local check red on
 // test projects the ticket cannot reach (#375): those projects have just passed alone, and the rest of the check,
 // which stopped at the suite, still has to run.
-const GATE = ({ dir, log, kind, fork, port, skipTests }) => `THE CHECK (${kind}). Run it as ONE Bash call with a 600000 ms timeout, output to ${log}:
-  cd ${dir} && { echo "HEAD=$(git -C ${dir} rev-parse HEAD)"; tools/check.sh --full --base ${fork} --port ${port}${skipTests ? ' --skip-tests' : ''}; } > ${log} 2>&1; tail -25 ${log}
-Green means the last line of ${log} starts "check: pass:". Run the command exactly as written; if the check itself fails to run, report that, do not repair it. This is the only full build-and-suite run: do not run \`dotnet build\` or the full suite any other way. Per-project runs (\`dotnet test --project tests/<X>.Tests\`) are fine while working. To learn what the check does, read its header only, \`sed -n 1,60p tools/check.sh\`, not the whole file.`
+// A full check runs longer than the Bash tool's 600 s limit (#1469: 1064 s on 2026-11-22), so it starts detached, with
+// its pid beside its log, and the agent waits in Bash calls each bounded under that limit until the log's last line is
+// a verdict or the check's process is gone. The rm runs on its own, before the start: chained with && it would go to the
+// background with the check and could delete the pid file the start has just written. The braces background the nohup
+// alone: `cd && nohup ... &` backgrounds the whole list, whose subshell holds the call's output open until the check ends.
+const GATE = ({ dir, log, kind, fork, port, skipTests }) => `THE CHECK (${kind}). It runs longer than one Bash call may (600 s), so start it detached and wait for its verdict, output to ${log}. Three Bash calls, each exactly as written:
+  1. rm -f ${log} ${log}.pid
+  2. cd ${dir} && { nohup bash -c '{ echo "HEAD=$(git -C ${dir} rev-parse HEAD)"; tools/check.sh --full --base ${fork} --port ${port}${skipTests ? ' --skip-tests' : ''}; } > ${log} 2>&1' < /dev/null > /dev/null 2>&1 & echo $! > ${log}.pid; }
+  3. The wait, with a 600000 ms timeout; it returns within 560 s:
+  P=$(cat ${log}.pid); for i in $(seq 54); do case "$(tail -n 1 ${log} 2>/dev/null)" in "check: pass:"*|"check: fail:"*) break;; esac; kill -0 $P 2>/dev/null || break; sleep 10; done; tail -25 ${log}
+Repeat call 3 until the last line of ${log} starts "check: pass:" or "check: fail:", however many times that takes: a full check runs twenty minutes and more. Never return while the check is running and its log has no verdict line: an answer given before the verdict is no gate, and where the script judges a gate from its last line (integrate, the re-run, the gate alone and the closing check) it keeps nothing on one with no verdict (#1469). When call 3 returns, the last line is no verdict, and \`kill -0 $(cat ${log}.pid)\` fails, the check stopped without one: the check failed to run. Green means the last line of ${log} starts "check: pass:", and only that line judges it. Run the commands exactly as written; if the check itself fails to run, report that, do not repair it. This is the only full build-and-suite run: do not run \`dotnet build\` or the full suite any other way. Per-project runs (\`dotnet test --project tests/<X>.Tests\`) are fine while working. To learn what the check does, read its header only, \`sed -n 1,60p tools/check.sh\`, not the whole file.`
 
 // How a lane ticks or unticks acceptance boxes: the body is the spec and must otherwise stay byte-identical.
 const TICK = (t, verb) => `To ${verb} acceptance boxes, edit the issue body and nothing else in it: \`cd ${REPO} && gh issue view ${t.issue} --json body --jq .body > ${LOG}/${t.id}-body.md\`, change only the \`- [ ]\` / \`- [x]\` markers of the lines concerned (no other byte of the file), then \`cd ${REPO} && gh issue edit ${t.issue} --body-file ${LOG}/${t.id}-body.md\`.`
@@ -270,19 +278,24 @@ const INT = {
     // gate ran on; and tools/test_reach.py's one line of output, unchanged, "" when it did not run or failed. The
     // script reads these to decide whether the failed test projects are re-run; "" everywhere else.
     old: { type: 'string' }, redHead: { type: 'string' }, reach: { type: 'string' },
+    // The last line of the integrate log, unchanged, "" when no gate ran or was on record (#1469). The script judges
+    // the gate from it, not from ok: a merge kept needs ok and "check: pass:".
+    lastLine: { type: 'string' },
   },
-  required: ['ok', 'mergeSha', 'notes', 'conflictFiles', 'headSha', 'old', 'redHead', 'reach'],
+  required: ['ok', 'mergeSha', 'notes', 'conflictFiles', 'headSha', 'old', 'redHead', 'reach', 'lastLine'],
 }
 // The re-run of a gate red on test projects the ticket's change cannot reach (#375).
 const RERUN = {
   type: 'object',
   properties: {
     ok: { type: 'boolean' }, mergeSha: { type: 'string' }, headSha: { type: 'string' }, notes: { type: 'string' },
+    // The last line of the skip-tests log, unchanged, "" when that check did not run (#1469): the keep rule reads it.
+    lastLine: { type: 'string' },
     projects: { type: 'array', items: { type: 'object', properties: {
       project: { type: 'string' }, log: { type: 'string' }, passed: { type: 'boolean' },
     }, required: ['project', 'log', 'passed'] } },
   },
-  required: ['ok', 'mergeSha', 'headSha', 'notes', 'projects'],
+  required: ['ok', 'mergeSha', 'headSha', 'notes', 'lastLine', 'projects'],
 }
 // Putting the run branch back after a re-run whose merge the script did not keep (#397). ok: the branch is at the old
 // head on return; head: its sha then.
@@ -314,8 +327,9 @@ const LIVE = {
 // already records a pass on a head holding the merge, true when the gate ran now; headSha the head it passed on.
 const GATED = {
   type: 'object',
-  properties: { ok: { type: 'boolean' }, ran: { type: 'boolean' }, mergeSha: { type: 'string' }, headSha: { type: 'string' }, notes: { type: 'string' } },
-  required: ['ok', 'ran', 'mergeSha', 'headSha', 'notes'],
+  // lastLine: the integrate log's last line, unchanged, which the script judges the gate from (#1469)
+  properties: { ok: { type: 'boolean' }, ran: { type: 'boolean' }, mergeSha: { type: 'string' }, headSha: { type: 'string' }, lastLine: { type: 'string' }, notes: { type: 'string' } },
+  required: ['ok', 'ran', 'mergeSha', 'headSha', 'lastLine', 'notes'],
 }
 // The closing check (#629): ok as the agent read it, the head it ran on, and its log's last line unchanged; the
 // script reads the verdict from that line.
@@ -582,7 +596,7 @@ Integration worktree ${INT_WT} (branch ${INT_BRANCH}). The resume probe found ta
 STEP 0 — durable state: if \`git -C ${INT_WT} rev-parse -q --verify MERGE_HEAD\` succeeds, \`git -C ${INT_WT} merge --abort\`. If \`git -C ${INT_WT} merge-base --is-ancestor ${probe.mergeSha} HEAD\` fails, the merge is not on the branch the worktree holds: change nothing, and return ok false, ran false, headSha "", notes "${probe.mergeSha} is not on ${INT_BRANCH} at <HEAD>".
 ${GATE_ALONE(t, probe.mergeSha)}
 
-Return ok, ran, mergeSha (${probe.mergeSha}), headSha and notes.`
+Return ok, ran, mergeSha (${probe.mergeSha}), headSha, lastLine (the last line of ${LOG}/${t.id}-integrate.txt, unchanged; "" when no gate ran or was on record) and notes. The script judges the gate from lastLine (#1469), so never return while the check is still running.`
 
 // How an integrate agent's notes open when tools/landing_subjects.py --subject-for chose no subject (#1052): no merge
 // was made and no gate ran, so the log must not call it a red gate.
@@ -598,7 +612,7 @@ The reviewer's summary: ${rev.summary}
 Findings the review fixed: ${(rev.findingsFixed || []).join(' | ') || 'none'}.
 These, the task branch's own commit messages and the gate logs under ${LOG} are the merge body's sources.${impl.complete ? '' : ` For the "Outstanding test ids:" line, read the issue body's acceptance list alone: \`cd ${REPO} && gh issue view ${t.issue} --json body --jq .body | awk '/^## /{p=($0 ~ /^## Acceptance/)} p'\`; an unticked box naming a test id is outstanding.`}
 
-STEP 0 — durable state: if \`git -C ${INT_WT} rev-parse -q --verify MERGE_HEAD\` succeeds, \`git -C ${INT_WT} merge --abort\`. If \`git -C ${INT_WT} merge-base --is-ancestor ${impl.branch} HEAD\` succeeds, the merge is already in, and STEP 1 and STEP 2 do not run: <merge> is ${MERGE_OF(impl.branch)}, never the run branch's latest merge, which may be another ticket's (#712). Follow THE GATE ALONE below for <merge>, and return what it returns, with mergeSha <merge>, conflictFiles [], and old, redHead and reach "", so a red gate there is never re-run or reset by the script.
+STEP 0 — durable state: if \`git -C ${INT_WT} rev-parse -q --verify MERGE_HEAD\` succeeds, \`git -C ${INT_WT} merge --abort\`. If \`git -C ${INT_WT} merge-base --is-ancestor ${impl.branch} HEAD\` succeeds, the merge is already in, and STEP 1 and STEP 2 do not run: <merge> is ${MERGE_OF(impl.branch)}, never the run branch's latest merge, which may be another ticket's (#712). Follow THE GATE ALONE below for <merge>, and return what it returns, with mergeSha <merge>, conflictFiles [], lastLine as the return line below gives it, and old, redHead and reach "", so a red gate there is never re-run or reset by the script.
 ${GATE_ALONE(t, '<merge>')}
 
 STEP 1 — merge. Record old=\`git -C ${INT_WT} rev-parse HEAD\`. ${impl.complete ? `The lane is complete, but its ticket is not its row (#388): before writing the message, ask the subject's head of the run branch as it stands, \`cd ${INT_WT} && python3 -I tools/landing_subjects.py --subject-for ${t.id} --ticket ${t.issue}\`. <head> is its last line after "landing-subjects: subject: ", taken as printed: "Merge task ${t.id}" when nothing more is owed; "Merge part of task ${t.id}" while an open part ticket declares itself part of the row, each named on a "landing-subjects: open part: " line; or "Merge tasks ${t.id} and <row>" when this ticket is the last open part of a row landed in part, which names the row (#388 Q6). The integration gate's tools/landing_subjects.py holds a full subject this question would not have given, so never write one it did not give. When it exits non-zero it chose no subject, and a full subject must not stand in for the answer it could not give (#871, #1052): write no message, merge nothing, leave ${INT_BRANCH} at <old>, and return ok=false, mergeSha "", conflictFiles [], headSha, old, redHead and reach "", and notes that begin "${NO_SUBJECT}" and quote its last line. The ticket fails at integrate, and its task branch stays for a later run to merge.\n` : ''}The merge message is the one docs/agents/landing-work.md "Land it" gives:
@@ -612,7 +626,7 @@ STEP 2 — the integrate step's local check, judged against the merge's first pa
 ${GATE({ dir: INT_WT, log: `${LOG}/${t.id}-integrate.txt`, kind: 'integration', fork: '<old>', port: PORT(t.n) })}
 Red: first record what the script's re-run rule reads (#375), before anything moves: redHead is the sha after "HEAD=" on the first line of ${LOG}/${t.id}-integrate.txt, and <merge> is STEP 1's merge commit (\`git -C ${INT_WT} rev-list --merges --first-parent -n 1 <redHead>\`). Run \`cd ${INT_WT} && python3 -I tools/test_reach.py --log ${LOG}/${t.id}-integrate.txt --base <old> --head <merge>\` and return the one line it prints on standard output, unchanged, as reach; when it exits non-zero, reach is "" and notes quote its last line of standard error. It judges which failed test projects the ticket's merge could reach; you judge nothing from it. Then \`git -C ${INT_WT} reset --hard <old>\` and return ok=false with the failing lines, old and redHead. Do not fix code here, and re-run nothing: whether the failed projects are re-run is the script's decision, made after you return.
 
-Return ok, mergeSha (the merge commit, or "" on failure), notes, conflictFiles, headSha (when green, the sha after "HEAD=" on the first line of ${LOG}/${t.id}-integrate.txt, the head the gate passed on; "" otherwise), old (<old> of STEP 1; "" when the merge was not made), redHead and reach (as the red path says; "" when the gate was green or never ran).`
+Return ok, mergeSha (the merge commit, or "" on failure), notes, conflictFiles, headSha (when green, the sha after "HEAD=" on the first line of ${LOG}/${t.id}-integrate.txt, the head the gate passed on; "" otherwise), old (<old> of STEP 1; "" when the merge was not made), redHead and reach (as the red path says; "" when the gate was green or never ran), and lastLine (the last line of ${LOG}/${t.id}-integrate.txt, unchanged, whenever the gate ran or THE GATE ALONE found it on record; "" when no gate ran). The script judges the gate from lastLine (#1469): a merge whose lastLine does not start "check: pass:" is not kept, so never return while the check is still running.`
 
 // A gate red on test projects the ticket's change cannot reach (#375). On 2026-10-24 #305 changed Python under
 // tools/bench/ alone and was reset because 30 Spactl.Tests tests failed with #373's RefResolutionException, as #150
@@ -637,7 +651,10 @@ ${GATE({ dir: INT_WT, log: `${LOG}/${t.id}-rerun.txt`, kind: 'integration, the s
 STEP 4 — the verdict. Green, every project passed and the check's last line starts "check: pass:": the merge stays; mergeSha is \`git -C ${INT_WT} rev-list --merges --first-parent -n 1 HEAD\`. Red, any project failed again or the check is red: \`git -C ${INT_WT} reset --hard ${red.old}\`, and notes begin "re-run failed: " and name each project that failed again with its log, or quote the check's last line. Do not fix code here.
 STEP 5 — record it on the issue: one comment headed "## Flake at integrate" (\`cd ${REPO} && gh issue comment ${t.issue} --body-file - <<'EOF' ... EOF\`): each project, its re-run log and whether it passed alone; the first gate's log ${LOG}/${t.id}-integrate.txt; the skip-tests log ${LOG}/${t.id}-rerun.txt and its last line, or that it did not run; and whether the merge stayed or the re-run failed and ${INT_BRANCH} was reset to ${red.old}.
 
-Return ok, mergeSha ("" when red), headSha (${red.redHead} when green, "" otherwise), notes, projects (one per project above: project, log, passed).`
+Return ok, mergeSha ("" when red), headSha (${red.redHead} when green, "" otherwise), notes, lastLine (the last line of ${LOG}/${t.id}-rerun.txt, unchanged; "" when STEP 3 did not run) and projects (one per project above: project, log, passed). The script keeps the merge only on a lastLine that starts "check: pass:" (#1469), so never return while the check is still running.`
+
+// Stopping a check started detached (#1469), its process tree from the pid file beside its log; nothing when it is gone.
+const STOP_CHECK = (pidFile) => `\`P=$(cat ${pidFile} 2>/dev/null); kt(){ for c in $(pgrep -P $1); do kt $c; done; kill -TERM $1 2>/dev/null; }; [ -n "$P" ] && kill -0 $P 2>/dev/null && kt $P; echo "pid=$P"\``
 
 // The script keeps a re-run's merge on its own reading of the answer (#397): every failed project recorded as passed
 // alone, on the gate's head. When it keeps none although the re-run agent answered ok, or the agent died, the merge
@@ -648,10 +665,25 @@ ${HOUSE}
 
 Integration worktree ${INT_WT} (branch ${INT_BRANCH}). The merge's gate, ${LOG}/${t.id}-integrate.txt, failed on test projects the change cannot reach, and their re-run did not show each one passed alone on the gate's head ${red.redHead}: ${why}. So the script keeps no merge, and the re-run may have left it on ${INT_BRANCH}. Re-run, fix and judge nothing here.
 
+STEP 0 — stop the re-run's check if it still runs, so nothing builds in ${INT_WT} after you return (#1469): ${STOP_CHECK(`${LOG}/${t.id}-rerun.txt.pid`)}.
 STEP 1 — if \`git -C ${INT_WT} merge-base --is-ancestor ${red.old} HEAD\` succeeds (it does when HEAD is ${red.old} itself), everything after ${red.old} is this ticket's merge and what followed it under the lock: \`git -C ${INT_WT} reset --hard ${red.old}\`. Otherwise change nothing, and return ok=false with notes "${INT_BRANCH} is at <HEAD>, which does not descend from ${red.old}".
 STEP 2 — record it on the issue: one comment headed "## Flake at integrate: merge not kept" (\`cd ${REPO} && gh issue comment ${t.issue} --body-file - <<'EOF' ... EOF\`): why the script kept no merge (the reason above), that it overrides any "## Flake at integrate" comment the re-run posted, and whether ${INT_BRANCH} was put back to ${red.old}, found there, or left where it was.
 
 Return ok (true when ${INT_BRANCH} is at ${red.old} on return), head (\`git -C ${INT_WT} rev-parse HEAD\` on return) and notes.`
+
+// Putting the run branch back after an integrate that made a merge and returned with no verdict from its gate (#1469):
+// the check may still be running in the integration worktree, so it is stopped first, or the next merge's check would
+// run beside it there. The script keeps no merge it has no verdict for.
+const unverifiedResetPrompt = (t, out, why) => `Put ${INT_BRANCH} back to the head it had before ticket ${t.n}'s merge (task ${t.id}, issue #${t.issue}). You are the only integrator running: the integration lock the gate held is held for you (#1469).
+${HOUSE}
+
+Integration worktree ${INT_WT} (branch ${INT_BRANCH}). The integrate step merged ${out.mergeSha || 'the ticket'} on ${out.old} and returned without a verdict from its gate, ${LOG}/${t.id}-integrate.txt: ${why}. So the script keeps no merge. Re-run, fix and judge nothing here.
+
+STEP 0 — stop the check if it still runs, so nothing builds in ${INT_WT} after you return: ${STOP_CHECK(`${LOG}/${t.id}-integrate.txt.pid`)}.
+STEP 1 — if \`git -C ${INT_WT} merge-base --is-ancestor ${out.old} HEAD\` succeeds (it does when HEAD is ${out.old} itself), everything after ${out.old} is this ticket's merge and what followed it under the lock: \`git -C ${INT_WT} reset --hard ${out.old}\`. Otherwise change nothing, and return ok=false with notes "${INT_BRANCH} is at <HEAD>, which does not descend from ${out.old}".
+STEP 2 — record it on the issue: one comment headed "## Integration gate: no verdict" (\`cd ${REPO} && gh issue comment ${t.issue} --body-file - <<'EOF' ... EOF\`): that the gate's log ended with no verdict line (quote its last line, or say it was empty), whether a running check was stopped, and whether ${INT_BRANCH} was put back to ${out.old}, found there, or left where it was.
+
+Return ok (true when ${INT_BRANCH} is at ${out.old} on return), head (\`git -C ${INT_WT} rev-parse HEAD\` on return) and notes.`
 
 // The closing check (#629 Q15, Q18). Each integrate step's local check judges its merge alone, against the merge's
 // first parent, which gives up one proof: that a later merge did not break a companion an earlier merge earned without
@@ -1197,8 +1229,39 @@ const rerunRule = (out) => {
   return { projects: [...new Set(ps.map((p) => p.project))] }
 }
 
-// The keep rule (#397): a re-run's merge stays only when the agent answered ok on the gate's own head and its record
-// shows every project the rule re-ran as passed alone. The agent's ok alone is not enough: its prompt ties ok to
+// The verdict rule (#1469): the script, not the agent's ok, judges an integrate's gate, from the log's last line the
+// agent returns, as closeRun does. Green is ok with "check: pass:"; red is not ok with "check: fail:", whose agent reset
+// the branch itself and which the re-run rule reads. Any other answer after a merge was made (old a sha, no conflict)
+// is unverified: no verdict, or one the ok contradicts. Returns {why, reset} for an unverified merge, reset true when
+// the answer names the <old> to put the branch back to, and {} otherwise. STEP 0's merge, already on the branch when
+// integrate began, comes with no <old>: the script resets nothing there, as it resets no red gate alone (#712). A
+// not-ok answer with no merge (a conflict, a refused subject, a dead agent) is for the other paths; an ok one that names
+// no merge is judged like any other, and fails with nothing reset.
+const PASS = /^check: pass:/
+const verdictRule = (out) => {
+  if (!out || (out.conflictFiles || []).length || String(out.notes || '').startsWith(NO_SUBJECT)) return {}
+  const reset = SHA.test(out.old || '')
+  // An answer that names no merge and no <old> made none here only when it is not ok: an ok answer claims a green gate,
+  // and needs its pass line like any other (a check fails closed, CODING_STANDARDS.md).
+  if (!reset && !out.mergeSha && !out.ok) return {}
+  const line = String(out.lastLine || '')
+  const verdict = (/^check: (pass|fail):/.exec(line) || [])[1]
+  if (verdict === 'pass' && out.ok) return {}
+  if (verdict === 'fail' && !out.ok) return {}
+  const quoted = line ? `"${line}"` : 'nothing'
+  if (!verdict) return { why: `the gate gave no verdict: its log's last line is ${quoted}, and the agent answered ${out.ok ? 'ok' : 'not ok'}`, reset }
+  return { why: `the agent answered ${out.ok ? 'ok' : 'not ok'} on a gate whose last line is ${quoted}`, reset }
+}
+
+// How a reset agent's answer reads (#397, #1469): back only when it answered ok on the old head itself.
+const readReset = (rs, old) => {
+  const back = !!(rs && rs.ok && rs.head === old)
+  return { back, said: back ? `${INT_BRANCH} reset to ${old}`
+    : `${INT_BRANCH} not reset to ${old}: ${!rs ? 'the reset agent died' : rs.ok ? `the reset agent answered ok on head ${rs.head || '""'}` : rs.notes}` }
+}
+
+// The keep rule (#397): a re-run's merge stays only when the agent answered ok on the gate's own head, its record
+// shows every project the rule re-ran as passed alone, and its skip-tests check's last line is a pass (#1469). The agent's ok alone is not enough: its prompt ties ok to
 // those passes, but an answer that contradicts itself keeps nothing, since a check fails closed (CODING_STANDARDS.md).
 // projects is the script's list, each with passed as the agent recorded it. Returns {kept} or {why} not.
 const keepRule = (rr, red, projects) => {
@@ -1207,6 +1270,8 @@ const keepRule = (rr, red, projects) => {
   const notPassed = projects.filter((p) => !p.passed).map((p) => p.project)
   if (notPassed.length) return { why: `the re-run agent answered ok, but by its own record ${notPassed.join(', ')} did not pass alone` }
   if (rr.headSha !== red.redHead) return { why: `the re-run agent answered ok on head ${rr.headSha || '""'}, not the gate's head ${red.redHead}` }
+  // The skip-tests check judged from its last line, not from the agent's ok (#1469): it may have answered while it ran.
+  if (!PASS.test(rr.lastLine || '')) return { why: `the re-run agent answered ok, but its skip-tests check's last line is ${rr.lastLine ? `"${rr.lastLine}"` : 'nothing'}, no pass` }
   return { kept: true }
 }
 
@@ -1218,10 +1283,13 @@ const gateAlone = async (t, probe, at) => {
   at.stage = 'integrate'
   const g = await serial(() => withSlot(async () => {
     const out = await ask(gatePrompt(t, probe), { label: `gate:${t.id}`, phase: 'Integrate', schema: GATED })
-    if (out && out.ok && out.ran && out.headSha) verifiedTip = out.headSha
+    if (out && out.ok && PASS.test(out.lastLine || '') && out.ran && out.headSha) verifiedTip = out.headSha
     return out
   }))
   if (!g || !g.ok) return fail(t, 'integrate', { why: g ? g.notes : 'the gate agent died', resumed: probe })
+  // The script's verdict, not the agent's ok (#1469): an ok with no pass line resets nothing, as a red gate alone
+  // resets nothing the script judges, and the merge stays on the run branch unverified.
+  if (!PASS.test(g.lastLine || '')) return fail(t, 'integrate', { why: `no verdict at integrate: the gate agent answered ok, but its log's last line is ${g.lastLine ? `"${g.lastLine}"` : 'nothing'}; ${probe.mergeSha} stays on ${INT_BRANCH}, unverified (#712)`, resumed: probe })
   const complete = !/^Merge part of task/.test(probe.subject)
   results[t.id] = { stage: 'integrated', outcome: complete ? 'integrated' : 'partial', mergeSha: probe.mergeSha,
     outstanding: complete ? '' : `its merge ${probe.mergeSha} is "Merge part of task": the Outstanding lines are in that merge's body`,
@@ -1252,6 +1320,22 @@ const finish = async (t, impl, at) => {
     const merge = (retry, head, r) => serial(() => withSlot(async () => {
       let out = await ask(integratePrompt(t, head, r, retry), { label: `integrate:${t.id}`, phase: 'Integrate', schema: INT })
         .catch(mayHold('integrate died on the limit mid-merge', (e) => e.died))
+      // A merge with no verdict is reset before anything else reads the answer (#1469): it is never re-run as a flake,
+      // and its head never becomes the verified tip.
+      const unverified = verdictRule(out)
+      if (unverified.why && !unverified.reset) {
+        log(`${t.id}: its merge, already on ${INT_BRANCH}, has no verdict from the integration gate: ${unverified.why}; nothing reset (#1469, #712)`)
+        const where = out.mergeSha ? `${out.mergeSha} was already on ${INT_BRANCH} and stays there, unverified (#712)` : `the answer names no merge and no <old>, so nothing was reset`
+        return { ...out, ok: false, headSha: '', notes: `no verdict at integrate: ${unverified.why}. ${where}. ${out.notes}` }
+      }
+      if (unverified.why) {
+        log(`${t.id}: merged with no verdict from the integration gate: ${unverified.why}; resetting ${INT_BRANCH} to ${out.old} (#1469)`)
+        const rs = await ask(unverifiedResetPrompt(t, out, unverified.why), { label: `reset:${t.id}`, phase: 'Integrate', schema: RESET })
+          .catch(mayHold(`merged with no verdict; the limit stopped the reset to ${out.old}`, () => true))
+        const { back, said } = readReset(rs, out.old)
+        if (!back && !halted) { halted = `${said}, after ${t.id}'s merge with no verdict; no new tickets started`; log(halted) }
+        return { ...out, ok: false, headSha: '', notes: `no verdict at integrate: ${unverified.why}. ${said}. ${out.notes}` }
+      }
       const rule = rerunRule(out)
       if (rule.projects) {
         log(`${t.id}: integration gate red on ${rule.projects.join(', ')}, which its change cannot reach; re-running them once, alone (#375)`)
@@ -1272,9 +1356,8 @@ const finish = async (t, impl, at) => {
           const rs = await ask(resetPrompt(t, out, keep.why), { label: `reset:${t.id}`, phase: 'Integrate', schema: RESET })
             .catch(mayHold(`re-run not kept; the limit stopped the reset to ${out.old}`, () => true))
           // The reset is read from the head it reports, not from its ok alone, as the keep rule reads the re-run (#397).
-          const back = !!(rs && rs.ok && rs.head === out.old)
-          flake.reset = back ? `${INT_BRANCH} reset to ${out.old}`
-            : `${INT_BRANCH} not reset to ${out.old}: ${!rs ? 'the reset agent died' : rs.ok ? `the reset agent answered ok on head ${rs.head || '""'}` : rs.notes}`
+          const { back, said } = readReset(rs, out.old)
+          flake.reset = said
           // A run branch that may hold a merge the run reports failed is no base to start more tickets on.
           if (!back && !halted) { halted = `${flake.reset}, after ${t.id}'s re-run was not kept; no new tickets started`; log(halted) }
         } else log(`flake: ${t.id} ${rule.projects.join(', ')} -> ${kept ? 'passed alone, merge kept' : 're-run failed, reset'}`)
