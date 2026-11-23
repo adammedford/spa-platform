@@ -19,6 +19,9 @@ here once, through tools/companion_runner.py as it runs on its own, with its bin
 recorder: this file in `--record` mode, which runs the real double with the same arguments,
 environment and standard input, passes its standard error and exit status through unchanged, and
 gives the script its standard output byte for byte, after copying it to the companion's harvest.
+The double runs in the recorder's own process, as `cell_doubles.py --double aws` runs, rather than
+in a second one, and the companions' suites run three at a time (#1474). With cell_doubles.py's
+shared wrappers and kept bytecode, those took this run from 216 s to about 50 s under load.
 
 **What is credential-shaped is read from the call, not guessed from the value.** A canary has no
 shape of its own ("teardownsecret/abc+def"), so a value counts by the AWS operation that answered
@@ -38,30 +41,55 @@ Run: python3 -I tools/scripts/cell_doubles_tests.py
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import pathlib
-import subprocess
 import sys
+from importlib.machinery import SourceFileLoader
 
 HERE = pathlib.Path(__file__).resolve().parent
 
 
-def record(double: str, harvest: str, args: list[str]) -> int:
-    """The recorder that stands in a case's bin/aws: the real double, its standard output copied."""
-    completed = subprocess.run([double, *args], stdout=subprocess.PIPE)
-    sys.stdout.buffer.write(completed.stdout)
-    sys.stdout.buffer.flush()
-    with open(harvest, "a") as handle:
-        handle.write(json.dumps({"argv": args, "stdout": completed.stdout.decode(errors="replace")}) + "\n")
-    return completed.returncode
+def record(doubles: str, case: str, harvest: str, args: list[str]) -> int:
+    """The recorder that stands in a case's bin/aws: the real double, its standard output copied.
+
+    The double is cell_doubles.py's `--double aws <case>` with the call's arguments, run as its
+    __main__ in this process: the same code a case's own bin/aws starts, reading the same
+    environment and standard input and writing the same standard error, without a second
+    interpreter for each call. Its standard output is held and given to the script whole once the
+    double has ended, raised or not. Loaded as a case's bin/aws loads it (cell_doubles.LAUNCH), from
+    the bytecode kept with the case's (cell_doubles.PYCACHE)."""
+    real = sys.stdout
+    held = io.BytesIO()
+    text = io.TextIOWrapper(held, encoding=real.encoding, errors=real.errors, write_through=True)
+    sys.stdout = text
+    sys.argv[1:] = ["--double", "aws", case, *args]
+    status = 0
+    try:
+        code = SourceFileLoader("__main__", doubles).get_code("__main__")
+        exec(code, {"__name__": "__main__", "__file__": doubles, "__builtins__": __builtins__})
+    except SystemExit as stop:
+        # The double ends by sys.exit with its status, as a process's would be read.
+        status = 0 if stop.code is None else stop.code
+    finally:
+        text.flush()
+        stdout = held.getvalue()
+        # Detached, so that the wrapper, once collected, cannot close what it wrapped.
+        text.detach()
+        sys.stdout = real
+        real.buffer.write(stdout)
+        real.buffer.flush()
+        with open(harvest, "a") as handle:
+            handle.write(json.dumps({"argv": args, "stdout": stdout.decode(errors="replace")}) + "\n")
+    return status
 
 
 if __name__ == "__main__" and sys.argv[1:2] == ["--record"]:
-    sys.exit(record(sys.argv[2], sys.argv[3], sys.argv[4:]))
+    sys.exit(record(sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5:]))
 
-import importlib.util  # noqa: E402 -- below the recorder, which starts once per call
-import io  # noqa: E402
+import concurrent.futures  # noqa: E402 -- below the recorder, which starts once per call
+import importlib.util  # noqa: E402
 import re  # noqa: E402
 import shlex  # noqa: E402
 import tempfile  # noqa: E402
@@ -168,19 +196,25 @@ class Harvest:
         spec.loader.exec_module(self.module)
         cell = self.module.cell
         self.secrets = tuple(cell.SECRETS)
-        harvest = self.file
+        # One recorder for the companion's cases, which each case's bin/aws links to, and which
+        # takes the case from the path it was run by, as cell_doubles.py's own double wrappers do
+        # and for their reason: a newly written executable's first run costs a case 35 ms (#1474).
+        recorder = directory / f"{path.stem}-aws"
+        recorder.write_text(
+            '#!/bin/sh\nbin="${0%/*}"\n'
+            f"exec {shlex.quote(os.path.realpath(sys.executable))} -I -S {cell.PYCACHE} "
+            f"{shlex.quote(str(pathlib.Path(__file__).resolve()))} --record "
+            f"{shlex.quote(str(pathlib.Path(cell.__file__).resolve()))} \"${{bin%/*}}\" "
+            f"{shlex.quote(str(self.file))} \"$@\"\n")
+        recorder.chmod(0o555)
         constructed = cell.Case.__init__
         self.installed = 0
 
         def recorded(case, *args, **kwargs):
             constructed(case, *args, **kwargs)
             self.installed += 1
-            double = case.dir / "aws-double"
-            (case.bin / "aws").rename(double)
-            case.write_executable("aws", (
-                f"#!/bin/sh\nexec {shlex.quote(os.path.realpath(sys.executable))} -I -S "
-                f"{shlex.quote(str(pathlib.Path(__file__).resolve()))} --record {shlex.quote(str(double))} "
-                f"{shlex.quote(str(harvest))} \"$@\"\n"))
+            (case.bin / "aws").unlink()
+            (case.bin / "aws").symlink_to(recorder)
 
         cell.Case.__init__ = recorded
         runner = load_runner()
@@ -208,16 +242,33 @@ def load_runner():
     return runner
 
 
-_HARVESTS: dict[str, Harvest] = {}
+_HARVESTS: dict[str, concurrent.futures.Future] = {}
 _LOCK = threading.Lock()
 _SCRATCH = tempfile.TemporaryDirectory(prefix="cell-doubles-harvest-")
+# How many companions' suites run at once (#1474). Each runs its own cases on
+# tools/companion_runner.py's threads, up to one per CPU and at most 8, and its cases spend their
+# time in child processes, so the suites one at a time left most of the machine idle: 216 s of
+# them under load on 2026-11-22. On the 12-core Mac it was measured on, two, three, four and eight
+# at once all passed and took 53 to 64 s under a load average of 20 to 60, CPU-bound alike; three
+# keeps the cases running together near two per CPU, so deploy_tests.py's wall-clock bounds (its
+# five-second wait for a closed port) keep their margin.
+AT_ONCE = 3
+_POOL = concurrent.futures.ThreadPoolExecutor(max_workers=AT_ONCE)
 
 
 def harvest(path: pathlib.Path) -> Harvest:
+    """The companion's harvest, once it has run. The first call starts every companion's, the
+    longest suites first, by their text's length, so the shorter ones fill in beside them; a harvest
+    that raised raises here, in the subTest of whichever case asks for it."""
     with _LOCK:
+        if not _HARVESTS:
+            directory = pathlib.Path(_SCRATCH.name)
+            for found in sorted(companions(), key=lambda held: -held.stat().st_size):
+                _HARVESTS[found.name] = _POOL.submit(Harvest, found, directory)
         if path.name not in _HARVESTS:
-            _HARVESTS[path.name] = Harvest(path, pathlib.Path(_SCRATCH.name))
-        return _HARVESTS[path.name]
+            _HARVESTS[path.name] = _POOL.submit(Harvest, path, pathlib.Path(_SCRATCH.name))
+        future = _HARVESTS[path.name]
+    return future.result()
 
 
 def scripts_calling(name: str) -> list[str]:
