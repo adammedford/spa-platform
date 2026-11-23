@@ -1313,6 +1313,26 @@ class MovesTests(PreflightTestCase):
                                           "path cited outside its Touches"), result.row("moves"))
                 self.assertEqual([], result.arguments()["skip"])
 
+    def test_an_old_path_cited_only_in_the_read_only_archives_passes(self):
+        # Adam's decision on #1471: no lane can write .scratch/ or docs/plan/, so a citation there
+        # would keep the ticket a candidate with no fix.
+        case = Case(self)
+        land_on_origin(case, {**CITED,
+                              ".scratch/overnight/issues/33-old.md": "Ran tools/cell/old.sh.\n",
+                              "docs/plan/03-workstreams-and-tasks.md": "| tools/cell/old.sh |\n",
+                              "docs/planned.md": "Run tools/cell/old.sh.\n"})
+        case.issue(12, "ready-for-agent", moving(
+            "`tools/cell/`, `tools/old_tests.py`, `docs/runbook.md`",
+            "`tools/cell/old.sh` -> `tools/cell/poc/old.sh`"))
+        result = case.run()
+        self.assertOnlyFails(result)
+        # docs/planned.md shares docs/plan's prefix but is not under it, so it is still a hit.
+        self.assertEqual(("pass", "4 ready-for-agent and needs-triage tickets read; these move a path "
+                                  "cited outside their Touches and are skip candidates: issue-12 (#12: "
+                                  "tools/cell/old.sh is cited at docs/planned.md:1)"),
+                         result.row("moves"))
+        self.assertEqual(["issue-12"], result.arguments()["skip"])
+
     def test_a_moves_line_not_read_whole_as_pairs_is_a_skip_candidate(self):
         # No arrow at all, and a path left outside every pair: a.sh would go unsearched.
         for moves, said in (("`tools/cell/old.sh` to `tools/new.sh`", "tools/cell/old.sh to tools/new.sh"),

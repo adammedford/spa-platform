@@ -121,7 +121,9 @@
 #             OWNERSHIP.md pattern. Such a file is one the move breaks and the lane may not write:
 #             #1349's move of tools/scripts/platform-tfvars.sh broke citations in
 #             tools/wiz_prelude_tests.py its table missed, found mid-lane, and the chain behind it
-#             was lost for the night (#1471). A Moves line not read whole as such pairs is a skip
+#             was lost for the night (#1471). A hit under the read-only archives .scratch/ and
+#             docs/plan/ is not one: no lane writes them, so it would hold the ticket with no fix
+#             (Adam's decision on #1471). A Moves line not read whole as such pairs is a skip
 #             candidate too, so a path it could not read is never passed. No line, or `none`, moves
 #             nothing.
 #   unblocks  The five open blockers with the most downstream tickets, each counted once however
@@ -820,6 +822,9 @@ except Exception:
 MOVES = re.compile(r"(?m)^\*\*Moves:\*\*[ \t]*(?P<value>[^\n]*)$")
 PAIR = re.compile(r"([^\s,;]+)\s*(?:->|\u2192)\s*([^\s,;]+)")
 REF = "refs/remotes/origin/main"
+# The read-only archives: no lane writes them, so a citation there is no file the move breaks
+# (the decision Adam gave on #1471).
+ARCHIVES = (".scratch/", "docs/plan/")
 
 def one_line(text):
     return " ".join(str(text).split())
@@ -869,7 +874,7 @@ for n in judged:
         for record in filter(None, found.stdout.split("\n")):
             path, number = record.split("\0")[:2]
             path = path[len(REF) + 1:]
-            if not inside(path, touches):
+            if not path.startswith(ARCHIVES) and not inside(path, touches):
                 hits.append(f"{path}:{number}")
         if hits:
             cited.append(f"{old} is cited at " + ", ".join(hits))
