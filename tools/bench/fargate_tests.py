@@ -1806,7 +1806,8 @@ class TheRunner(unittest.TestCase):
         self.assertEqual(["tearDownModule", "module cleanup"] * 2, torn, "each runner ran the cleanup after tearDownModule")
 
     def test_the_flags_it_cannot_keep_are_refused_by_name(self):
-        done = subprocess.run([*python(), str(pathlib.Path(__file__).resolve()), "-f", "-b", "-c"],
+        # One quick test named, so that a broken refusal runs it and not the whole file again.
+        done = subprocess.run([*python(), str(pathlib.Path(__file__).resolve()), "-f", "-b", "-c", "TheProse"],
                               capture_output=True, text=True, timeout=60)
         self.assertEqual(2, done.returncode, done.stderr)
         for flag in ("-f/--failfast", "-b/--buffer", "-c/--catch"):
@@ -1878,7 +1879,9 @@ class Concurrently(unittest.TestSuite):
     run even when it has no tearDownModule, as Python 3.11's unittest has it and 3.9's does not.
 
     What TheRunner cannot hold it to: TheRunner reports through this runner too, so a fault that
-    drops the replay itself, every outcome at once, passes TheRunner with everything else."""
+    drops the replay itself, every outcome at once, would pass TheRunner with everything else. So the
+    run raises, failing it, unless every event recorded was replayed, every test that ran recorded at
+    least one, and the result holds one more failure, error or skip for each one replayed."""
 
     # One worker drives one case, a chain of subprocesses one at a time, so it holds about one core,
     # and the run cannot finish before its longest chain, a ten-restart case of about 12 s. On the
@@ -1900,9 +1903,14 @@ class Concurrently(unittest.TestSuite):
         name = type(self.tests[0]).__module__
         module = sys.modules.get(name)
 
+        replayed = [0]
+        held = ("failures", "errors", "skipped", "expectedFailures", "unexpectedSuccesses")
+        before = sum(len(getattr(result, entries)) for entries in held)
+
         def replay(events):
             for method, args in events:
                 getattr(result, method)(*args)
+                replayed[0] += 1
 
         if module is not None:
             opening = []
@@ -1928,11 +1936,23 @@ class Concurrently(unittest.TestSuite):
                 result.stopTest(test)
             if last[cls] == index:
                 replay(closed[cls])
+        closing = []
         if module is not None:
-            closing = []
             fixture(getattr(module, "tearDownModule", None), f"tearDownModule ({name})", closing)
             fixture(unittest.case.doModuleCleanups, f"tearDownModule ({name})", closing)
             replay(closing)
+        silent = [str(test) for test, events in zip(self.tests, recorded) if events == []]
+        lists = [events for events, _ in opened.values()] + [events for events in recorded if events] + list(closed.values())
+        expected = sum(len(events) for events in lists + [closing])
+        # Each of these adds one entry to a TestResult, and addSubTest one when the subtest failed;
+        # addSuccess, and 3.12's addDuration, leave none.
+        adding = ("addFailure", "addError", "addSkip", "addExpectedFailure", "addUnexpectedSuccess")
+        outcomes = sum(1 for events in lists + [closing] for method, args in events
+                       if method in adding or (method == "addSubTest" and args[2] is not None))
+        grown = sum(len(getattr(result, entries)) for entries in held) - before
+        if silent or replayed[0] != expected or grown != outcomes:
+            raise RuntimeError(f"Concurrently replayed {replayed[0]} of {expected} events, and the result holds {grown} "
+                               f"of {outcomes} outcomes; tests that reported nothing: {silent}")
         return result
 
     @staticmethod
