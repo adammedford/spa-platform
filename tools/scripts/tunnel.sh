@@ -50,8 +50,8 @@
 # Run it as the operator's own session, with credentials for the account the cell is in and
 # AWS_REGION set to the cell's Region, once the outputs document is written. It reads the entry
 # value SPA_OUTPUTS_FILE and, with --keepalive, SPA_CERT_DOMAIN, which have no default
-# (cell-common.sh's header), and refuses, exit 2, when one it needs is unset. It needs the AWS CLI v2, the Session Manager plugin and
-# python3, and curl with --keepalive.
+# (cell-common.sh's header), and refuses, exit 2, when one it needs is unset. It needs the AWS CLI
+# v2, the Session Manager plugin and python3, and curl with --keepalive.
 #
 # It never prints the account id: of a task it names only the id, never the ARN. The session's own
 # stderr goes through the same rule as its reads: an AWS error reaches the terminal as its code
