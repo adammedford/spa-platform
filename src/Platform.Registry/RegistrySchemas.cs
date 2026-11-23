@@ -18,9 +18,11 @@ internal sealed record SchemaFailure(string InstanceLocation, string Keyword, st
 /// <c>$id</c> (<c>app-definition</c> reaches into <c>registry.schema.json#/$defs</c>), so every one
 /// must be registered before any is evaluated: contracts/README.md, "Using the schemas".
 ///
-/// The only file that touches the schema engine, so swapping the engine is a change here and nowhere
-/// else. Which engine is decided: JsonSchema.Net 8.0.5, running in the gateway process through this
-/// project (docs/dependencies.md -> "Decided", D-1, which records what would reopen it).
+/// The only file that calls the schema engine. <see cref="PlatformConfiguration"/> reads the shape of
+/// its results, the evaluation path of a <see cref="SchemaFailure"/> and a JsonSchema.Net 8.0.5 quirk in
+/// its absolute locations, so swapping the engine is a change here and there. Which engine is
+/// decided: JsonSchema.Net 8.0.5, running in the gateway process through this project
+/// (docs/dependencies.md -> "Decided", D-1, which records what would reopen it).
 /// </summary>
 internal static class RegistrySchemas
 {

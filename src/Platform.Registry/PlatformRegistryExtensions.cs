@@ -84,8 +84,7 @@ public static class PlatformRegistryExtensions
     /// before the throw: the console logger writes from a background queue, and its processor's
     /// <c>Dispose</c> drains that queue before it returns
     /// (https://github.com/dotnet/runtime/blob/v10.0.0/src/libraries/Microsoft.Extensions.Logging.Console/src/ConsoleLoggerProcessor.cs),
-    /// so the lines reach stdout before the process ends; the gateway run of #1400 shows them there. A
-    /// valid configuration builds nothing.
+    /// so the lines reach stdout before the process ends. A valid configuration builds nothing.
     /// </summary>
     private static void RefuseAnInvalidConfiguration(IHostApplicationBuilder builder)
     {

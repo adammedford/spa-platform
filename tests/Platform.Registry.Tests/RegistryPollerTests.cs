@@ -1,5 +1,6 @@
 using System.Text;
 using Amazon.S3;
+using Amazon.SimpleSystemsManagement;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -49,12 +50,12 @@ public sealed class RegistryPollerTests
     }
 
     [Fact]
-    public void With_no_registry_configuration_the_registration_refuses_and_builds_no_client()
+    public void With_no_registry_configuration_the_registration_refuses_and_registers_no_client()
     {
         // Until ADR-0042 a gateway with no Registry:* started, kept /readyz at 503 and polled nothing.
-        // Now the registration refuses it, naming each key, before any SDK client is built: the
-        // client's constructor throws with no region configured (seen on SDK 4.0.101.6).
-        int clients = 0;
+        // Now the registration refuses it, naming each key, before it registers any SDK client: the
+        // client's constructor throws with no region configured (seen on SDK 4.0.101.6). No client is
+        // registered, so none can be built; a refusal moved after the registrations leaves both here.
         CapturedLog logs = new();
         HostApplicationBuilder builder = Builder(logs, configured: true);
         builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
@@ -62,11 +63,6 @@ public sealed class RegistryPollerTests
             ["Registry:Bucket"] = null,
             ["Registry:Key"] = null,
             ["Registry:PollSeconds"] = null,
-        });
-        builder.Services.AddSingleton<IAmazonS3>(_ =>
-        {
-            Interlocked.Increment(ref clients);
-            throw new InvalidOperationException("no region");
         });
 
         InvalidOperationException refusal = Assert.Throws<InvalidOperationException>(() => builder.AddPlatformRegistry());
@@ -78,7 +74,8 @@ public sealed class RegistryPollerTests
             logs.Lines
                 .Where(line => line.Category == PlatformRegistryExtensions.ConfigurationCategory)
                 .Select(line => line.State.Single(pair => pair.Key == "Keyword").Value?.ToString()));
-        Assert.Equal(0, clients);
+        Assert.DoesNotContain(builder.Services, service => service.ServiceType == typeof(IAmazonS3));
+        Assert.DoesNotContain(builder.Services, service => service.ServiceType == typeof(IAmazonSimpleSystemsManagement));
     }
 
     [Fact]
