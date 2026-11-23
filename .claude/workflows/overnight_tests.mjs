@@ -72,7 +72,11 @@
 // quoted, or with a . or .. segment), a waiter or a predecessor with no readable Touches path, and a forecast that
 // did not run keep the edge until settle; a release before the lane is free costs no wait; and two predecessors are
 // judged edge by edge, the waiter starting at its last release or settle, reported per predecessor, its wait clocked to
-// that point and its fork the last verified tip. Every house-rules prompt sends docker to ~/.docker/bin before an agent may call it
+// that point and its fork the last verified tip. One more holds the lanes whose implement check's last line is red and
+// whose own change request blocks them (#1470): neither gets a review or integrate agent, each names its request, the
+// report lists it under that request, its dependant skips at once naming it, and neither counts as a failure; a red
+// check whose request blocks nothing or another ticket, a green check with a self-blocking request, and a self-blocking
+// request with no verdict line keep today's routing. Every house-rules prompt sends docker to ~/.docker/bin before an agent may call it
 // absent (#742). No agent, gh or git call is made.
 import fs from 'node:fs'
 import os from 'node:os'
@@ -1232,10 +1236,12 @@ for (const c of allPrompts.filter((x) => x.label.startsWith('review:'))) {
   // CONFLICT_ALWAYS's three entries come only from the impl, rev1 and rev its failed result keeps, and
   // REQUEST_DECIDED's only from a grill that carried a decision, so a list that drops either kind fails here.
   const conflict = { id: CONFLICT_ALWAYS, issue: byId[CONFLICT_ALWAYS].issue }
+  // No lane of this run is held (#1470), so every request reads held false; the held-lane run below proves true.
+  const notHeld = { held: false }
   const want = {
-    filed: [{ id: AFTER_CLOSE.id, issue: AFTER_CLOSE.issue, ...FILED }, { ...conflict, ...KEPT_IMPL }],
-    edges: [{ id: TRIAGED.id, issue: TRIAGED.issue, ...EDGE }, { ...conflict, ...KEPT_REV }, { ...conflict, ...KEPT_REV1 }],
-    queued: [{ id: HELD_BY, issue: byId[HELD_BY].issue, ...QUEUED }],
+    filed: [{ id: AFTER_CLOSE.id, issue: AFTER_CLOSE.issue, ...FILED, ...notHeld }, { ...conflict, ...KEPT_IMPL, ...notHeld }],
+    edges: [{ id: TRIAGED.id, issue: TRIAGED.issue, ...EDGE, ...notHeld }, { ...conflict, ...KEPT_REV, ...notHeld }, { ...conflict, ...KEPT_REV1, ...notHeld }],
+    queued: [{ id: HELD_BY, issue: byId[HELD_BY].issue, ...QUEUED, ...notHeld }],
     awaiting: [{ id: REQUEST_HUMAN.id, issue: REQUEST_HUMAN.issue, title: REQUEST_HUMAN.title, draftDecision: DRAFT_URL }],
     decided: [{ id: REQUEST_DECIDED.id, issue: REQUEST_DECIDED.issue, title: REQUEST_DECIDED.title, decided: DECIDED_LINE }],
   }
@@ -2934,6 +2940,92 @@ const forkOf = (prompt) => (/Otherwise fork from [^:]+: forkSha = (\S+?)\. Take 
     if (resets('issue-1487').length !== 1 || !resets('issue-1487')[0].includes(`${LOG}/issue-1487-rerun.txt.pid`)) fail('#1469: the reset of issue-1487\'s re-run does not stop the skip-tests check still running from its pid file')
     failedAt('issue-1489', `not reset to ${OLD}: the reset agent answered ok on head ${ELSE}`)
     if (!String(res.halted || '').includes(`not reset to ${OLD}`)) fail(`#1469: issue-1489's reset agent answered ok on ${ELSE}, not <old>, yet the run did not halt: ${JSON.stringify(res.halted)}`)
+  }
+}
+
+// 51. A lane whose implement check is red and whose own change request blocks it stops after implement (#1470). On
+//     2026-11-22 #1349's implementer returned resolved, partial, with change request #1466 blocking #1349, on a red
+//     check; the run still reviewed and integrated it, each a full red check, while three tickets waited behind it.
+//     The script now routes on the check log's last line, which the implementer returns as lastLine, and on its
+//     changeRequests, not on its outcome. One short run, with every review and integrate mocked green, so a lane the
+//     rule does not stop integrates: issue-1491 (resolved, its filed request blocking it) and issue-1495 (failed, its
+//     queued request blocking it) are held, launch no review or integrate agent, name the request in their result and
+//     count as no failure (maxFailures 1); issue-1492, blocked by issue-1491, is skipped naming issue-1491 and its
+//     request, with no implement of its own. Today's routing is kept for a red check whose request blocks nothing
+//     (issue-1493), a red check whose request blocks another ticket (issue-1496), a green check with a self-blocking
+//     request (issue-1494), and a self-blocking request with no verdict line (issue-1497): each is reviewed and
+//     integrated. The report's summary marks the held lanes' requests held, and its prompt says how to list them.
+{
+  const RED_LINE = 'check: fail: the test companion tools/wiz_prelude_tests.py failed.'
+  const SELF = { number: 1466, title: 'Give the wiz prelude its fixture path', blocking: 1491, queued: 0, filed: true }
+  const SELF_QUEUED = { number: 0, title: 'Name the held lane in the glossary', blocking: 1495, queued: 2, filed: false }
+  const NOTHING = { number: 1467, title: 'A request that blocks nothing', blocking: 0, queued: 0, filed: true }
+  const OTHER = { number: 1468, title: 'A request that blocks another ticket', blocking: 1492, queued: 0, filed: false }
+  const GREEN_SELF = { number: 1469, title: 'A request a green lane needs', blocking: 1494, queued: 0, filed: true }
+  const SILENT_SELF = { number: 1470, title: 'A request a lane with no verdict needs', blocking: 1497, queued: 0, filed: true }
+  const IMPL_OF = {
+    'issue-1491': { outcome: 'resolved', complete: false, lastLine: RED_LINE, changeRequests: [SELF] },
+    'issue-1495': { outcome: 'failed', complete: false, lastLine: RED_LINE, changeRequests: [SELF_QUEUED] },
+    'issue-1493': { outcome: 'resolved', complete: true, lastLine: RED_LINE, changeRequests: [NOTHING] },
+    'issue-1496': { outcome: 'resolved', complete: true, lastLine: RED_LINE, changeRequests: [OTHER] },
+    'issue-1494': { outcome: 'resolved', complete: false, lastLine: 'check: pass: companion.', changeRequests: [GREEN_SELF] },
+    'issue-1497': { outcome: 'resolved', complete: false, changeRequests: [SILENT_SELF] },
+  }
+  const HELD_IDS = ['issue-1491', 'issue-1495'], KEPT_IDS = ['issue-1493', 'issue-1496', 'issue-1494', 'issue-1497']
+  const labels = [], prompts = {}
+  globalThis.args = { ...fixture.args, skills: OTHER_SKILLS, only: null, skip: [], maxParallel: 6, maxFailures: 1 }
+  globalThis.log = () => {}
+  const set = [1491, 1492, 1493, 1494, 1495, 1496, 1497].map((n) => ({ ...synthetic(n, `issue-${n}`, 'ready-for-agent', n === 1492 ? ['issue-1491'] : [], 1), owner: 'integrator' }))
+  globalThis.agent = async (prompt, opts) => {
+    labels.push(opts.label)
+    ;(prompts[opts.label] = prompts[opts.label] || []).push(prompt)
+    const [kind, id] = opts.label.split(':')
+    if (kind === 'collect') return { outcome: 'ok', reason: 'companion', tickets: set.map((t) => ({ ...t })), landed: [], base: 'a'.repeat(40), shell: '3.2', shellCommand: '/bin/bash' }
+    if (kind === 'resume') return NOT_MERGED
+    if (kind === 'live') return LIVE_READY
+    if (kind === 'report') return { questions: 0, mainCheckoutClean: true, leftovers: '', issue: 0, url: '' }
+    if (kind === 'closing') return { ok: true, headSha: CLOSING_TIP, lastLine: 'check: pass: companion.', notes: '' }
+    await sleep(2)
+    if (kind === 'implement') return { branch: `b-${id}`, forkSha: 'f', headSha: 'h', outstanding: '', summary: 's', question: '', delegatedDecisions: [], changedFiles: [`files/${id}.txt`], ...(IMPL_OF[id] || { outcome: 'resolved', complete: true, lastLine: 'check: pass: companion.', changeRequests: [] }) }
+    if (kind === 'review') return { outcome: 'committed', headSha: 'h', findingsFixed: [], findingsSkipped: [], summary: 's', question: '', changeRequests: [], changedFiles: [`files/${id}.txt`] }
+    if (kind === 'integrate') return { ok: true, mergeSha: `merge-${id}`, notes: '', conflictFiles: [], headSha: `verified-${id}`, old: '', redHead: '', reach: '', lastLine: 'check: pass: companion.' }
+    throw new Error(`unexpected agent label ${opts.label} in the held-lane run`)
+  }
+  const src = fs.readFileSync(scriptPath, 'utf8').replace(/^export const meta/m, 'const meta')
+  let res = null
+  try { res = await new Function('return (async () => {' + src + '\n})()')() } catch (e) { fail(`#1470: the held-lane run threw: ${e && e.message ? e.message : e}`) }
+  if (res) {
+    const reason = (id) => ((res.reasons || []).find((x) => x.id === id) || {})
+    for (const [id, names] of [['issue-1491', '#1466'], ['issue-1495', SELF_QUEUED.title]]) {
+      const after = labels.filter((l) => l.endsWith(`:${id}`) && /^(review|integrate|resolve|rerun|reset|gate):/.test(l))
+      if (after.length) fail(`#1470: ${id}, red at implement and blocked by its own change request, still launched ${after.join(', ')}`)
+      const r = reason(id)
+      if (r.outcome !== 'held' || r.stage !== 'implement' || !String(r.reason || '').includes(names)) fail(`#1470: ${id} is not held at implement naming ${names}: ${JSON.stringify(r)}`)
+      if (!(res.held || []).includes(id)) fail(`#1470: ${id} is missing from the return value's held list: ${JSON.stringify(res.held)}`)
+      if ((res.failed || []).includes(id) || (res.integrated || []).includes(id) || (res.partial || []).includes(id)) fail(`#1470: ${id}, held, is also listed as failed, integrated or partial`)
+    }
+    if (res.halted) fail(`#1470: two held lanes halted a run with maxFailures 1, so a hold counted as a failure: ${JSON.stringify(res.halted)}`)
+    const down = reason('issue-1492')
+    if (down.outcome !== 'skipped' || !String(down.reason || '').includes('issue-1491') || !String(down.reason || '').includes('#1466')) fail(`#1470: issue-1492, blocked by the held issue-1491, is not skipped naming it and its request: ${JSON.stringify(down)}`)
+    if (labels.some((l) => l === 'implement:issue-1492')) fail('#1470: issue-1492 was implemented although its blocker was held')
+    for (const id of KEPT_IDS) {
+      if (!labels.includes(`review:${id}`) || !labels.includes(`integrate:${id}`)) fail(`#1470: ${id} lost today's routing: its agents were ${labels.filter((l) => l.endsWith(`:${id}`)).join(', ')}`)
+      if (![...(res.integrated || []), ...(res.partial || [])].includes(id)) fail(`#1470: ${id} did not integrate: ${JSON.stringify(reason(id))}`)
+    }
+    const ip = (prompts['implement:issue-1491'] || [])[0] || ''
+    if (!ip.includes('lastLine') || !ip.includes(`${LOG}/issue-1491-implement.txt`)) fail('#1470: the implement prompt does not ask for lastLine, the last line of its check log')
+    const rp = (prompts.report || [])[0] || ''
+    const summary = JSON.parse((/^Run results \(JSON\): (.*)$/m.exec(rp) || [, 'null'])[1])
+    if (!summary) fail('#1470: the held-lane run built no report prompt')
+    else {
+      const all = [...summary.changeRequests.filed, ...summary.changeRequests.edges, ...summary.changeRequests.queued]
+      const held = (c) => (all.find((x) => x.number === c.number && x.title === c.title) || {}).held
+      for (const c of [SELF, SELF_QUEUED]) if (held(c) !== true) fail(`#1470: the report's change requests do not mark "${c.title}" as holding its lane: ${JSON.stringify(all)}`)
+      for (const c of [NOTHING, OTHER, GREEN_SELF, SILENT_SELF]) if (held(c) !== false) fail(`#1470: the report's change requests mark "${c.title}" held, or drop it: ${JSON.stringify(all)}`)
+      const listed = (summary.held || []).map((h) => h.id).sort()
+      if (JSON.stringify(listed) !== JSON.stringify([...HELD_IDS].sort())) fail(`#1470: the report's held list is ${JSON.stringify(summary.held)}, not ${HELD_IDS.join(', ')}`)
+    }
+    if (!rp.includes('"held" is true') || !rp.includes('failed (held on #')) fail('#1470: the report prompt does not say how a held lane is listed under its request and in the Tickets table')
   }
 }
 
