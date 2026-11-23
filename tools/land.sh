@@ -102,10 +102,11 @@
 # So: merge with --merge-queue off and the subject the pull request body asks for, fetch the merge
 # commit, run tools/roadmap.py on it, and push the refresh as its own commit when the blocks moved.
 # The refresh is a separate commit on purpose -- it is generated, and a reviewer should be able to
-# see that nothing else rode in with it. Then, for a merge into main, tools/prune_branches.py beside
-# this script deletes the branches the merge finished and counts the ones it keeps by reason (#71,
-# #524), and when it deleted any, this script's last line names the file of the commands that
-# restore them (#115).
+# see that nothing else rode in with it. Then, for a merge into main, tools/sweep_worktrees.py
+# beside this script removes the linked worktrees whose work is on main (#1503), and
+# tools/prune_branches.py beside it deletes the branches the merge finished and counts the ones it
+# keeps by reason (#71, #524), and when it deleted any, this script's last line names the file of
+# the commands that restore them (#115).
 # Just before the cleanup it names the repository's main checkout, says whether it is behind the
 # merge, and prints the fast-forward to run there when docs/agents/landing-work.md allows one; it
 # never moves that checkout itself (#281). Its companion, tools/prune_branches_tests.py, runs this
@@ -611,12 +612,27 @@ name_main_checkout() {
   printf '      git -C %q merge --ff-only origin/main\n' "$target"
 }
 
+# Before the branch cleanup, the worktree sweep beside this script removes the linked worktrees whose
+# work is on main (#1503), so a branch whose worktree has just gone can go in the same run: the
+# cleanup keeps every branch a worktree holds. What keeps a worktree is the sweep's seven rules, in
+# its header. Its output reaches the terminal as it comes, before the cleanup's, so the line naming
+# the restore file stays last. A sweep that exits non-zero is said in one line and fails nothing,
+# because the merge has already happened; worktrees it left are a disk cost, not a wrong merge.
+sweep_worktrees() {
+  local swept=0
+  echo "--- removing the worktrees whose work is on main"
+  python3 -I "$here/sweep_worktrees.py" --apply || swept=$?
+  [ "$swept" -eq 0 ] \
+    || echo "land: the worktree sweep exited $swept, so worktrees whose work is on main may remain; the landing has happened. Run tools/sweep_worktrees.py to see what it keeps and why."
+}
+
 restore_file_line="prune_branches: these commands are also in "
 pruned=0
 restore_file=""
 prune_finished() {
   [ "$base" = main ] || return 0
   name_main_checkout
+  sweep_worktrees
   echo "--- deleting the branches this landing finished"
   listing="$(python3 -I "$here/prune_branches.py" --delete)" || pruned=$?
   [ -z "$listing" ] || printf '%s\n' "$listing"
