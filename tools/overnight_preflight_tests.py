@@ -110,9 +110,9 @@ TOOLS = ("git", "ps", "tar", "mktemp", "mkdir", "rm")
 
 # The lines, by name, in the order the ticket gives them.
 LINES = ["fetch", "tracked", "workflow", "run", "shell", "forecast", "demoted", "claims", "shape",
-         "adr", "decision", "unblocks"]
+         "adr", "decision", "moves", "unblocks"]
 # The lines that fail with the forecast, since each reads collect's answer.
-WITH_FORECAST = ("forecast", "claims", "shape", "adr", "decision", "unblocks")
+WITH_FORECAST = ("forecast", "claims", "shape", "adr", "decision", "moves", "unblocks")
 
 LIST_TRIAGE = ["issue", "list", "--state", "open", "--label", "needs-triage", "--limit", "500",
                "--json", "number"]
@@ -497,7 +497,7 @@ class CleanStartTests(PreflightTestCase):
         result = case.run()
         self.assertOrder(result)
         self.assertOnlyFails(result)
-        self.assertEqual(14, len(result.lines), result.stdout)
+        self.assertEqual(15, len(result.lines), result.stdout)
         repo = str(case.checkout)
         wt = str(case.home / ".worktrees" / f"overnight-{DATE}")
         self.assertEqual({"repo": repo, "date": DATE, "wt": wt, "maxParallel": 4, "skip": []},
@@ -1011,7 +1011,7 @@ class ShapeTests(PreflightTestCase):
         case.issue(358, "needs-triage", "**Touches:** none\n")
         result = case.run()
         # The adr and decision lines read the same issues, so #11 is unread on each (#663).
-        self.assertOnlyFails(result, "shape", "adr", "decision")
+        self.assertOnlyFails(result, "shape", "adr", "decision", "moves")
         self.assertEqual("4 ready-for-agent and needs-triage tickets; gh could not read #11, so those "
                          "are unjudged; of the rest, these fail and are skip candidates: 6.9 (#358: "
                          "owner-line)", result.row("shape")[1])
@@ -1039,7 +1039,7 @@ class ShapeTests(PreflightTestCase):
         case.git("pull", "-q", "--ff-only", cwd=case.checkout)
         result = case.run()
         # The adr and decision lines import the same check, so they cannot judge either (#663).
-        self.assertOnlyFails(result, "shape", "adr", "decision")
+        self.assertOnlyFails(result, "shape", "adr", "decision", "moves")
         self.assertEqual("origin/main has no tools/ticket_shape.py, so no ticket was judged",
                          result.row("shape")[1])
 
@@ -1239,6 +1239,157 @@ class DecisionTests(PreflightTestCase):
         self.assertOnlyFails(result, "adr", "decision")
         self.assertIn("origin/main's tools/decision_citation.py or tools/ticket_shape.py could not be "
                       "loaded", result.row("decision")[1])
+
+
+def moving(touches: str, moves: str, owner: str = "integrator") -> str:
+    """A body ticket_shape.py passes whose Touches line is `touches` and whose Moves line is `moves`."""
+    return (f"**Owner:** {owner}\n**Touches:** {touches}\n**Moves:** {moves}\n\n"
+            "## Acceptance criteria\n\n- [ ] A test proves it\n")
+
+
+def land_on_origin(case: Case, files: dict[str, str]):
+    """Commits `files` on origin/main and brings the main checkout up to it, so the fetch line passes."""
+    for path, text in files.items():
+        (case.pusher / path).parent.mkdir(parents=True, exist_ok=True)
+        (case.pusher / path).write_text(text)
+    case.git("add", "-A", cwd=case.pusher)
+    case.git("commit", "-q", "-m", "Cite a path", cwd=case.pusher)
+    case.git("push", "-q", "origin", "main", cwd=case.pusher)
+    case.git("pull", "-q", "--ff-only", cwd=case.checkout)
+
+
+# Origin's files for the moves line (#1471): the script a ticket moves, which cites itself, and two
+# files that cite it from elsewhere.
+CITED = {
+    "tools/cell/old.sh": "#!/usr/bin/env bash\n# tools/cell/old.sh prints the cell.\n",
+    "tools/old_tests.py": "\"\"\"Tests.\"\"\"\nSCRIPT = 'tools/cell/old.sh'\n",
+    "docs/runbook.md": "Run tools/cell/old.sh first.\n",
+}
+
+
+class MovesTests(PreflightTestCase):
+    """#1471: a ticket whose **Moves:** old path origin/main cites outside its Touches is a skip
+    candidate, named with each citing file and line, so a move that breaks another owner's file is
+    caught before launch, not mid-lane."""
+
+    def test_an_old_path_cited_outside_the_touches_is_a_skip_candidate_naming_each_file_and_line(self):
+        case = Case(self)
+        land_on_origin(case, CITED)
+        case.issue(12, "ready-for-agent", moving("`tools/cell/old.sh`, `tools/cell/poc/old.sh`",
+                                                 "`tools/cell/old.sh` -> `tools/cell/poc/old.sh`"))
+        fixture = case.dir / "fixture.json"
+        result = case.run("--fixture", str(fixture), DATE)
+        self.assertOrder(result)
+        self.assertOnlyFails(result)
+        self.assertEqual(("pass", "4 ready-for-agent and needs-triage tickets read; these move a path "
+                                  "cited outside their Touches and are skip candidates: issue-12 (#12: "
+                                  "tools/cell/old.sh is cited at docs/runbook.md:1, tools/old_tests.py:2)"),
+                         result.row("moves"))
+        self.assertEqual(["issue-12"], result.arguments()["skip"])
+        self.assertEqual(["issue-12"], json.loads(fixture.read_text())["args"]["skip"])
+        # The moves line names it, not the shape line.
+        self.assertNotIn("issue-12", result.row("shape")[1])
+
+    def test_a_ticket_with_no_moves_line_passes_listing_none(self):
+        case = Case(self)
+        land_on_origin(case, CITED)
+        result = case.run()
+        self.assertOnlyFails(result)
+        self.assertEqual(("pass", "4 ready-for-agent and needs-triage tickets read; none moves a path "
+                                  "cited outside its Touches"), result.row("moves"))
+        self.assertEqual([], result.arguments()["skip"])
+
+    def test_an_old_path_cited_only_inside_the_touches_passes_a_directory_holding_its_files(self):
+        for directory in ("`tools/cell/`", "`tools/cell`", "`tools/cell/*`"):
+            with self.subTest(directory=directory):
+                case = Case(self)
+                land_on_origin(case, CITED)
+                case.issue(12, "ready-for-agent", moving(
+                    f"{directory}, `tools/old_tests.py`, `docs/runbook.md`",
+                    "`tools/cell/old.sh` -> `tools/cell/poc/old.sh`"))
+                result = case.run()
+                self.assertOnlyFails(result)
+                self.assertEqual(("pass", "4 ready-for-agent and needs-triage tickets read; none moves a "
+                                          "path cited outside its Touches"), result.row("moves"))
+                self.assertEqual([], result.arguments()["skip"])
+
+    def test_an_old_path_cited_only_in_the_read_only_archives_passes(self):
+        # Adam's decision on #1471: no lane can write .scratch/ or docs/plan/, so a citation there
+        # would keep the ticket a candidate with no fix.
+        case = Case(self)
+        land_on_origin(case, {**CITED,
+                              ".scratch/overnight/issues/33-old.md": "Ran tools/cell/old.sh.\n",
+                              "docs/plan/03-workstreams-and-tasks.md": "| tools/cell/old.sh |\n",
+                              "docs/planned.md": "Run tools/cell/old.sh.\n"})
+        case.issue(12, "ready-for-agent", moving(
+            "`tools/cell/`, `tools/old_tests.py`, `docs/runbook.md`",
+            "`tools/cell/old.sh` -> `tools/cell/poc/old.sh`"))
+        result = case.run()
+        self.assertOnlyFails(result)
+        # docs/planned.md shares docs/plan's prefix but is not under it, so it is still a hit.
+        self.assertEqual(("pass", "4 ready-for-agent and needs-triage tickets read; these move a path "
+                                  "cited outside their Touches and are skip candidates: issue-12 (#12: "
+                                  "tools/cell/old.sh is cited at docs/planned.md:1)"),
+                         result.row("moves"))
+        self.assertEqual(["issue-12"], result.arguments()["skip"])
+
+    def test_a_moves_line_not_read_whole_as_pairs_is_a_skip_candidate(self):
+        # No arrow at all, and a path left outside every pair: a.sh would go unsearched.
+        for moves, said in (("`tools/cell/old.sh` to `tools/new.sh`", "tools/cell/old.sh to tools/new.sh"),
+                            ("`tools/a.sh`, `tools/cell/old.sh` -> `tools/cell/poc/`",
+                             "tools/a.sh, tools/cell/old.sh -> tools/cell/poc/")):
+            with self.subTest(moves=moves):
+                case = Case(self)
+                land_on_origin(case, CITED)
+                case.issue(12, "ready-for-agent", moving("`tools/`", moves))
+                result = case.run()
+                self.assertOnlyFails(result)
+                self.assertIn("skip candidates: issue-12 (#12: its Moves line is not read as old path -> "
+                              f"new path pairs: {said})", result.row("moves")[1])
+                self.assertEqual(["issue-12"], result.arguments()["skip"])
+
+    def test_a_cited_line_holding_a_form_feed_is_named_by_its_file_and_line(self):
+        case = Case(self)
+        # A form feed is a line break to str.splitlines() and not to git grep.
+        land_on_origin(case, {**CITED, "docs/paged.md": "Page one.\fThen tools/cell/old.sh.\n"})
+        case.issue(12, "ready-for-agent", moving("`tools/cell/`, `tools/old_tests.py`, `docs/runbook.md`",
+                                                 "`tools/cell/old.sh` -> `tools/cell/poc/old.sh`"))
+        result = case.run()
+        self.assertOnlyFails(result)
+        self.assertEqual(("pass", "4 ready-for-agent and needs-triage tickets read; these move a path "
+                                  "cited outside their Touches and are skip candidates: issue-12 (#12: "
+                                  "tools/cell/old.sh is cited at docs/paged.md:1)"), result.row("moves"))
+
+    def test_an_issue_gh_cannot_read_fails_the_line_and_the_rest_are_still_judged(self):
+        case = Case(self)
+        land_on_origin(case, CITED)
+        (case.canned / "issue-11.json").unlink()
+        case.issue(12, "ready-for-agent", moving("`tools/cell/`", "`tools/cell/old.sh` -> `tools/cell/poc/old.sh`"))
+        result = case.run()
+        self.assertOnlyFails(result, "shape", "adr", "decision", "moves")
+        self.assertEqual(("fail", "4 ready-for-agent and needs-triage tickets; gh could not read #11, so its "
+                                  "Moves line is unjudged; of the rest, these move a path cited outside their "
+                                  "Touches and are skip candidates: issue-12 (#12: tools/cell/old.sh is cited "
+                                  "at docs/runbook.md:1, tools/old_tests.py:2)"), result.row("moves"))
+        self.assertEqual(["issue-12"], result.arguments()["skip"])
+
+    def test_a_git_grep_that_fails_fails_the_line(self):
+        case = Case(self)
+        land_on_origin(case, CITED)
+        case.issue(12, "ready-for-agent", moving("`tools/cell/`", "`tools/cell/old.sh` -> `tools/cell/poc/old.sh`"))
+        # git as the script reaches it, failing its grep alone with git's fatal exit, 128.
+        git = case.bin / "git"
+        real = os.path.realpath(shutil.which("git"))
+        git.unlink()
+        git.write_text("#!/bin/sh\nfor word in \"$@\"; do\n  if [ \"$word\" = grep ]; then\n"
+                       "    echo 'fatal: unable to read tree' >&2; exit 128\n  fi\ndone\n"
+                       f"exec '{real}' \"$@\"\n")
+        git.chmod(0o755)
+        result = case.run()
+        self.assertOnlyFails(result, "moves")
+        self.assertEqual(("fail", "4 ready-for-agent and needs-triage tickets; git grep could not search "
+                                  "origin/main for #12's tools/cell/old.sh, so it is unjudged; of the rest, "
+                                  "none moves a path cited outside its Touches"), result.row("moves"))
 
 
 class UnblocksTests(PreflightTestCase):
@@ -1451,7 +1602,7 @@ class FixtureTests(PreflightTestCase):
         }, json.loads(fixture.read_text()))
         self.assertNotIn("standingAnswer", fixture.read_text())
         # The stdout contract holds: the verdict, then the arguments, last.
-        self.assertEqual(14, len(result.lines), result.stdout)
+        self.assertEqual(15, len(result.lines), result.stdout)
         self.assertIn(f"overnight_preflight: wrote the forecast fixture {fixture}", result.stderr)
 
     def test_the_shape_and_claims_lines_candidates_are_in_the_written_skip(self):
