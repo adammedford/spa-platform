@@ -53,14 +53,13 @@ export const meta = {
 // most one queue agent (none with a list), then per pull request one inventory, one body agent per
 // flagged body, a comment or a COMMENTED review from an account of the repository whose body
 // RECORD_TEST flags (#1018, #1073), and a fresh one for each read again after a copy short or long
-// or a return of an error or nothing, up to BODY_READS reads of a body in all (#1423, #1522), one range agent when an earlier head carries a record, two axes,
-// up to maxMutationsPerPr mutations, one verdict and one post: 6 + the cap + the flagged bodies and their re-reads
+// or a return of an error or nothing, up to BODY_READS reads of a body in all (#1423, #1522), one
+// range agent when an earlier head carries a record, two axes, up to maxMutationsPerPr mutations, one verdict and one post: 6 + the cap + the flagged bodies and their re-reads
 // each, 9 + those with the defaults, beside the run's launch and queue agents. RECORD_TEST
 // also flags a sentence quoting a record, so the flagged bodies can outnumber the records. A pull
 // request whose commit messages run past MESSAGES_AT_ONCE characters adds one message agent per
 // batch of that size, and one per read of a batch again, up to MESSAGE_READS reads in all ("Commit
-// messages past one return" below); most add none. The
-// return's agents is the count that ran, beside the date, the base tip the run saw and the log
+// messages past one return" below); most add none. The return's agents is the count that ran, beside the date, the base tip the run saw and the log
 // directory. A wide queue is kept under a session's guideline by naming pull requests or lowering the
 // cap.
 //
@@ -263,8 +262,9 @@ const SKIP_RECORDED = A.skipRecorded !== false
 // The characters of commit messages one agent is asked to copy into one return: the inventory when
 // every message fits, otherwise a message agent per batch. #796's body agents each returned a body
 // of 11 to 21 KB whole (#1018), but on 2026-11-24 returns of 10,043 and 14,990 characters came back
-// as stand-ins (#1522), so a batch holds at most 8,000: under the smaller of those, at the cost of
-// about twice the message agents on a long landing, each still re-read up to MESSAGE_READS times.
+// as stand-ins (#1522), so a batch is kept under the smaller of those, at the cost of about twice
+// the message agents on a long landing. A body is one return at any size, so bodies are covered only
+// by being read again (BODY_READS).
 const MESSAGES_AT_ONCE = 8000
 // The run's directory under the git-ignored scratch log (.gitignore: .scratch/*/log/). It is the only
 // place the run writes in the main checkout, apart from git's own bookkeeping for fetches and worktrees.

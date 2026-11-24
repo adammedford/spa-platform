@@ -3041,8 +3041,8 @@ try {
   // returned {"messages":[],"error":"PLACEHOLDER"}, in two runs, and each review failed at the
   // inventory. A batch whose first read returns that, nothing, a throw, a message left out or short,
   // and whose second read comes back whole, is taken: the review is recorded, which needs the ticket
-  // only commit 70's message names, that message read twice under a label and OUTPUT FILE of its own, every other
-  // batch once. A batch that never comes back whole fails at the inventory after the bound, its
+  // only commit 70's message names, that message read twice under a label and OUTPUT FILE of its
+  // own, every other batch once. A batch that never comes back whole fails at the inventory after the bound, its
   // reason naming the batch's first sha and the last read's error, and nothing runs after it.
   checks++
   {
@@ -3066,8 +3066,8 @@ try {
       const r = resultOf(1175, await execute(env))
       if (r.outcome !== 'recorded') fail(`#1522 a batch whose first read returns ${what}: outcome ${r.outcome} at ${JSON.stringify(r.stage)}, expected recorded`)
       if (env.messageReads.get(target) !== 2) fail(`#1522 a batch whose first read returns ${what}: ${target} read ${env.messageReads.get(target)} time(s), expected 2`)
-      const once = C1175.filter((s) => !batch.asked.some((c) => c.sha === s)).filter((s) => env.messageReads.has(s) && env.messageReads.get(s) !== 1)
-      if (once.length) fail(`#1522 a batch whose first read returns ${what}: commits of other batches read again: ${once.join(', ')}`)
+      const readAgain = C1175.filter((s) => !batch.asked.some((c) => c.sha === s)).filter((s) => env.messageReads.has(s) && env.messageReads.get(s) !== 1)
+      if (readAgain.length) fail(`#1522 a batch whose first read returns ${what}: commits of other batches read again: ${readAgain.join(', ')}`)
       const again = env.calls.filter((c) => c === `inventory:1175:messages:${index}:read-2`)
       const p = env.prompts[again[0]] || ''
       if (again.length !== 1 || !p.includes(`OUTPUT FILE: ${env.repo}/.scratch/review-queue/log/2026-10-21/pr-1175/messages-${index}-read-2.json`) || !p.includes('This is read 2')) fail(`#1522 a batch whose first read returns ${what}: second-read agents ${JSON.stringify(again)}, expected one with an OUTPUT FILE of its own that says it is read 2`)
