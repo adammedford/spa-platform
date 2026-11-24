@@ -1634,7 +1634,8 @@ const readMessages = async (n, inv) => {
     return { b, read }
   }))
   for (const [i, batch] of batches.entries()) {
-    const { b, read } = got[i]
+    // parallel() makes a task that dies a null (#1076): a batch with no read at all.
+    const { b, read } = got[i] || { b: null, read: new Map() }
     if (read.size === batch.length) continue
     const named = batch.length > 1 ? `the commit messages of ${batch[0].sha} and the ${batch.length - 1} after it` : `the commit message of ${batch[0].sha}`
     if (!b || !Array.isArray(b.messages)) return `the message agent for ${named} returned nothing in ${MESSAGE_READS} reads`
