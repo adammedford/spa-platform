@@ -1,23 +1,24 @@
 # Deploy the gateway
 
-Put a new build of the gateway and the mock API into the cell. The Gateway lever of
-`docs/plan/05-infrastructure-and-cost.md`, Deployment and rollback: "`deploy.sh` builds, pushes,
-applies the new digest and checks that the running task has it". Task 6.9 exercises this note.
+Put a new build of the gateway into a running cell: `deploy.sh` builds the gateway's image, pushes
+it, applies its digest and checks that the running task has it. It builds, pushes and applies the
+gateway image only. An image the cell runs beside the gateway is that cell's to build, and the apply
+leaves it at what the platform root's tfvars hold.
 
 **It signs every user of every app out** (Phase 1 sessions live in the task's memory). If the change
 is a SPA release, a registry entry, a client or a secret, use that lever instead: none of them needs
 a deployment.
 
 Start with the operator session in [README.md](README.md). Docker Desktop must be running, with
-buildx (decision D-2 in `docs/dependencies.md`), and unless `--url` is given the readiness wait's
-tunnel needs the Session Manager plugin installed and the cell's bastion: its hop is the bastion's
-task, never a gateway task (#1168), and the platform root declares that task only with
-`bastion = true` (README.md, "Waiting for the gateway: the tunnel").
+buildx, and unless `--url` is given the readiness wait's tunnel needs the Session Manager plugin
+installed and the cell's bastion: its hop is the bastion's task, never a gateway task, and the
+platform root declares that task only with `bastion = true` (README.md, "Waiting for the gateway:
+the tunnel").
 
-Docker Desktop must also use the containerd image store. Step 2 builds each image with
+Docker Desktop must also use the containerd image store. Step 2 builds the image with
 `--sbom=true --provenance=mode=max`, and those attestations make the pushed tag an image index.
 The classic image store cannot hold an image index, so with it Docker's default builder, the docker
-driver, fails the build and nothing is pushed (`tools/scripts/deploy.sh`'s header, #783;
+driver, fails the build and nothing is pushed (`tools/scripts/deploy.sh`'s header;
 https://docs.docker.com/build/metadata/attestations/). Turn it on before you run `deploy.sh`:
 Docker Desktop, Settings, General, **Use containerd for pulling and storing images**, then Apply
 (https://docs.docker.com/desktop/features/containerd/). Images in the classic store are hidden
@@ -40,12 +41,14 @@ detail):
    because a gateway started against an empty registry never becomes ready and the deployment would
    fail its health checks. Nothing is built before this. It keeps the registry's revision for
    step 5.
-2. It builds both images for ARM64 and pushes each under a tag of its own (the repositories' tags are
-   immutable), then takes each digest from ECR.
-3. It plans and applies `infra/envs/poc/platform` with both digests and the health check on
-   `/readyz`, and records them in `images.auto.tfvars` there, so every later apply of that root
-   passes the same digests back and never moves the image (plan row 1.7).
-4. It rewrites `infra/envs/poc/outputs.json` from the three roots.
+2. It builds the gateway's image for ARM64 and pushes it under a tag of its own (the repositories'
+   tags are immutable), then takes its digest from ECR. It builds no other image.
+3. It plans and applies the platform root, `$SPA_PLATFORM_ROOT`, with the gateway's digest and the
+   health check on `/readyz`, and records them in `images.auto.tfvars` there, so every later apply
+   of that root passes the same digest back and never moves the image. It passes no other
+   container's image.
+4. It rewrites the outputs document, `$SPA_OUTPUTS_FILE`, from the roots on `$SPA_ROOTS`, in order,
+   through the field map `$SPA_FIELD_MAP`.
 5. It waits for a stable service, then asserts that the primary deployment completed on the applied
    task definition, that every running task's gateway is the digest it pushed, that each running
    task's own target is healthy on `/readyz` and every other target healthy or draining, and that
@@ -56,9 +59,10 @@ detail):
    the cell's bastion task, on a free ephemeral local port the system picks, and closes it when the
    wait ends, pass, fail or Ctrl-C. An operator's tunnel on 8443 is left alone.
 
-`tools/scripts/deploy.sh --url https://app1.spa-poc.test:9443` names an origin this workstation
-already reaches for the wait to read through instead, and then it opens no tunnel and needs no
-bastion.
+With your own tunnel running, `tools/scripts/deploy.sh --url "$ORIGIN"` names an origin this
+workstation already reaches, the app's, from its definition's `host` (README.md, "Before any note:
+the operator session"), for the wait to read through instead, and then it opens no tunnel and needs
+no bastion.
 
 Without `--url` it needs the bastion, and it never turns the bastion on or off: when the outputs
 document names no bastion it refuses before anything is built, exit 2, with a line naming
@@ -67,8 +71,8 @@ document names no bastion it refuses before anything is built, exit 2, with a li
 the same line, before it opens a tunnel.
 
 Exit 0 means the new gateway runs steady and healthy. Exit 1 names the step that failed; exit 2
-means it did not start (a usage error, a missing tool, no Region, no credentials, no outputs
-document, or one that names no bastion without `--url`).
+means it did not start (a usage error, an entry value unset, a missing tool, no Region, no
+credentials, no outputs document, or one that names no bastion without `--url`).
 
 Then check it yourself from the workstation, through a tunnel of your own: the one `deploy.sh`
 opened is closed by the time it exits. The tunnel's hop is the bastion's task, which the deployment
@@ -85,32 +89,14 @@ Every user signs in again on their next request.
 
 - **Before the apply** (steps 1 and 2): nothing the cell runs changed (step 2 may have pushed an
   image to ECR, under a tag of its own, which nothing uses). Fix the cause and run it again.
-  A step-1 refusal means the registry is empty: run `tools/scripts/seed.sh`.
+  A step-1 refusal means the registry is empty: publish an app with `spactl`, its release and then
+  its entry, with the platform configuration (`$CONFIG`) the README builds, and run it again:
+
+  ```bash
+  spactl release publish "$APP" <release directory> <release> --outputs "$SPA_OUTPUTS_FILE"
+  spactl app add "$APP_DEFINITION" --release <release> --outputs "$SPA_OUTPUTS_FILE" --config "$CONFIG"
+  ```
+
 - **The apply or after it** (steps 3 to 5): the deployment circuit breaker rolls a deployment whose
-  tasks fail their health checks back to the previous task definition on its own
-  (`docs/plan/05-infrastructure-and-cost.md`). If the service is steady but on the wrong gateway,
-  or you want the previous one back, use [rollback.md](rollback.md).
-
-## The first deployment of a new cell
-
-The order matters once, because each step feeds the next (`docs/plan/05-infrastructure-and-cost.md`,
-First deployment):
-
-1. `tools/scripts/certs.sh`, then the bootstrap root (`infra/bootstrap/README.md`).
-2. The identity root, then the apps root: `terraform -chdir=infra/envs/poc/idp apply`, then
-   `terraform -chdir=infra/envs/poc/apps apply`. Cognito now has the two clients.
-3. The platform root on the sample image: `terraform -chdir=infra/envs/poc/platform apply`, whose
-   health check is `/` for the sample. Before it, set `bastion = true` and `bastion_image`, the
-   sample image pinned by digest as `gateway_image` is, in that root's `terraform.tfvars`
-   (`terraform.tfvars.example` has both lines): the bastion is the tunnel's hop, and without it
-   `tunnel.sh` refuses and `deploy.sh` exits 2 unless `--url` names an origin this workstation
-   already reaches. The bastion task runs, and is billed, until an apply sets it back to false.
-4. `tools/scripts/seed.sh` publishes the fixture releases and writes the first registry through
-   `spactl`, and writes the outputs document, which names the bastion. `deploy.sh` refuses to run
-   before it.
-5. `tools/scripts/deploy.sh`, as above; no tunnel need be running, since its readiness wait opens
-   its own through the bastion. The target turns healthy only once `/readyz` reports a snapshot. While the service
-   settles, the sample task's target shows as draining and fails the new `/readyz` check;
-   `deploy.sh` tolerates that (#207).
-6. After `deploy.sh` exits 0, your own check: `tools/scripts/tunnel.sh`, then
-   `tools/scripts/verify-tunnel.sh /healthz` in a second terminal.
+  tasks fail their health checks back to the previous task definition on its own. If the service is
+  steady but on the wrong gateway, or you want the previous one back, use [rollback.md](rollback.md).

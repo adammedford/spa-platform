@@ -1,9 +1,7 @@
 # Roll the gateway back
 
-Put the previous gateway image back. The Gateway lever's rollback in
-`docs/plan/05-infrastructure-and-cost.md`, Deployment and rollback: "`rollback.sh` applies the
-digest of the previous task definition. The deployment circuit breaker also rolls back on failed
-health checks."
+Put the previous gateway image back: `rollback.sh` applies the gateway image of the previous task
+definition. The deployment circuit breaker also rolls back on failed health checks.
 
 **It signs every user of every app out**, as a deployment does: it is one.
 
@@ -15,8 +13,8 @@ ECS's deployment circuit breaker already rolls back a deployment whose tasks fai
 checks. Look at what the service runs before rolling anything back:
 
 ```bash
-CLUSTER="$(python3 -I tools/scripts/cell_documents.py field infra/envs/poc/outputs.json ecsCluster "$AWS_REGION")"
-SERVICE="$(python3 -I tools/scripts/cell_documents.py field infra/envs/poc/outputs.json ecsService "$AWS_REGION")"
+CLUSTER="$(python3 -I tools/scripts/cell_documents.py field "$SPA_OUTPUTS_FILE" ecsCluster "$AWS_REGION")"
+SERVICE="$(python3 -I tools/scripts/cell_documents.py field "$SPA_OUTPUTS_FILE" ecsService "$AWS_REGION")"
 aws ecs describe-services --region "$AWS_REGION" --cluster "$CLUSTER" --services "$SERVICE" \
   --query 'services[0].deployments[].[status, rolloutState, taskDefinition]' --output text | sed 's#arn:.*task-definition/##'
 ```
@@ -28,13 +26,14 @@ account id. `rollback.sh` is for a gateway that runs steady and healthy and is s
 
 ```bash
 tools/scripts/rollback.sh                    # the previous gateway image
-tools/scripts/rollback.sh --to-revision 7    # the images of revision 7 of the task definition family
+tools/scripts/rollback.sh --to-revision 7    # the gateway image of revision 7 of the task definition family
 ```
 
 The previous gateway is the newest revision below the running one whose gateway image differs: an
 apply that changed something else made a revision with the same image, and going back to it would
-change nothing. The mock API image of that revision comes with it, since the two were deployed
-together. The script looks back twenty revisions.
+change nothing. It moves the gateway's image only: an image the cell runs beside the gateway, a
+mock API for one, stays at what the platform root's tfvars hold, whatever that revision ran. The
+script looks back twenty revisions.
 
 It refuses, with exit 1:
 
@@ -46,13 +45,14 @@ It refuses, with exit 1:
 - without `--to-revision`, when none of the twenty revisions below the running one has another
   gateway image: there is nothing to roll back to.
 
-Then it does what `deploy.sh` does after its push: it applies the platform root with those digests
-and the `/readyz` health check, records them in `images.auto.tfvars`, rewrites
-`infra/envs/poc/outputs.json`, waits for a stable service and asserts the running digest and the
-targets' health as `deploy.sh`'s step 5 does, tolerating the previous task's draining target
-([deploy.md](deploy.md), steps 3 to 5). It stops there: the readiness wait that ends `deploy.sh`'s
-step 5, reading each task's revision through a tunnel of its own, is not part of a rollback, so
-`rollback.sh` opens no tunnel, needs no Session Manager plugin and needs no tunnel running.
+Then it does what `deploy.sh` does after its push: it applies the platform root,
+`$SPA_PLATFORM_ROOT`, with that digest and the `/readyz` health check, records them in
+`images.auto.tfvars`, rewrites the outputs document, `$SPA_OUTPUTS_FILE`, waits for a stable
+service and asserts the running digest and the targets' health as `deploy.sh`'s step 5 does,
+tolerating the previous task's draining target ([deploy.md](deploy.md), steps 3 to 5). It stops
+there: the readiness wait that ends `deploy.sh`'s step 5, reading each task's revision through a
+tunnel of its own, is not part of a rollback, so `rollback.sh` opens no tunnel, needs no Session
+Manager plugin and needs no tunnel running.
 
 Afterwards, check it yourself through `tools/scripts/tunnel.sh`. Its hop is the cell's bastion task
 ([README.md](README.md), "Waiting for the gateway: the tunnel"), which a rollback does not replace,
