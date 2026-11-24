@@ -130,6 +130,7 @@ function run(scriptArgs, served, behave = {}) {
   const byId = new Map()
   const servedAt = new Map()   // id -> the one endpoint that serves it, as ghEndpoint below reads a prompt
   const bodyReads = new Map()  // a body's URL -> how many body agents read it (#1423)
+  const messageReads = new Map()  // a commit's sha -> how many message agents read it (#1522)
   const projected = (trim, at) => (e) => {
     if (!ids.has(e)) { ids.set(e, ids.size + 1); byId.set(ids.get(e), e) }
     servedAt.set(ids.get(e), `${at}/${ids.get(e)}`)
@@ -197,7 +198,8 @@ function run(scriptArgs, served, behave = {}) {
       // it, or what behave.bodies says of its URL: 'null' for an agent that dies returning nothing,
       // { throws } for one that dies throwing that value, whose message the harness wrote and so need
       // not name the URL (#1076), a function of the body for the body it returns instead, or { error }
-      // for a gh it cannot reach, with the whole body beside it when whole is true. An array says one
+      // for a gh it cannot reach, with the whole body beside it when whole is true, or the stand-in
+      // beside it when standIn is given (#1522). An array says one
       // of those per read of that body, in the order the agents ran, its last entry for every read
       // past its end (#1423); bodyReads counts the reads of each URL.
       const e = byId.get(Number(opts.label.split(':')[3]))
@@ -213,28 +215,36 @@ function run(scriptArgs, served, behave = {}) {
       // https://docs.github.com/rest/pulls/reviews#get-a-review-for-a-pull-request and
       // https://docs.github.com/rest/issues/comments#get-an-issue-comment.
       if (ghEndpoint(prompt) !== servedAt.get(ids.get(e))) return { body: '', error: 'gh: Not Found (HTTP 404)' }
-      if (b && b.error) return { body: b.whole ? e.body : '', error: b.error }
+      if (b && b.error) return { body: b.whole ? e.body : (b.standIn ?? ''), error: b.error }
       return { body: typeof b === 'function' ? b(e.body) : e.body, error: '' }
     }
     if (kind === 'inventory' && opts.label.split(':')[2] === 'messages') {
       // A message agent: the commits its prompt lists, each with its message as the pull request
       // holds it, or what behave.messages says of a sha: 'null' for an agent that dies returning
       // nothing, { throws } for one that dies throwing that value, { error } for a commit it cannot
-      // read, 'missing' for an entry it leaves out, or a function of the message for what it returns
-      // instead.
+      // read, with no entry at all when none is true, as a stand-in return gives (#1522), 'missing' for
+      // an entry it leaves out, or a function of the message for what it returns instead. An array
+      // says one of those per read of that sha, its last entry for every read past its end, as
+      // behave.bodies does; messageReads counts the reads of each sha.
       const asked = [...prompt.matchAll(/^COMMIT: ([0-9a-f]{40}) (\d+)$/gm)].map((m) => ({ sha: m[1], length: Number(m[2]) }))
       batches.push({ n: Number(n), label: opts.label, asked })
-      const says = asked.map((c) => (behave.messages || {})[c.sha])
+      const says = asked.map((c) => {
+        messageReads.set(c.sha, (messageReads.get(c.sha) || 0) + 1)
+        const said = (behave.messages || {})[c.sha]
+        return Array.isArray(said) ? said[Math.min(messageReads.get(c.sha), said.length) - 1] : said
+      })
       for (const b of says) {
         if (b && b.throws !== undefined) throw b.throws
         if (b === 'null') return null
       }
+      const error = (says.find((b) => b && b.error) || { error: '' }).error
+      if (says.some((b) => b && b.error && b.none)) return { messages: [], error }
       const held = (s) => (served[n].commitMessages.find((c) => c.sha === s) || {}).message
       const messages = asked.filter((c, i) => says[i] !== 'missing').map((c) => {
-        const b = (behave.messages || {})[c.sha]
+        const b = says[asked.indexOf(c)]
         return { sha: c.sha, message: typeof b === 'function' ? b(held(c.sha)) : held(c.sha) }
       })
-      return { messages, error: (says.find((b) => b && b.error) || { error: '' }).error }
+      return { messages, error }
     }
     if (kind === 'inventory') {
       const inv = served[n]
@@ -294,7 +304,7 @@ function run(scriptArgs, served, behave = {}) {
     }
     throw new Error(`unexpected agent label ${opts.label}`)
   }
-  return { repo, wt: args.wt, calls, posted, mutations, prompts, git, flight, events, batches, bodyReads }
+  return { repo, wt: args.wt, calls, posted, mutations, prompts, git, flight, events, batches, bodyReads, messageReads }
 }
 
 // A stubbed gh shared across runs. failPost: GitHub cannot be reached at posting time. headNow: the
@@ -2695,6 +2705,41 @@ try {
     }
   }
 
+  // A read whose agent returns an error is read again, as a short copy is (#1522). On 2026-11-24 the
+  // body agent for #1521's 10,043-character record wrote its OUTPUT FILE whole and returned
+  // {"body":"FILE","error":"PLACEHOLDER"}, and the review failed at the inventory. A first read that
+  // returns that stand-in, nothing, or throws, and a second read whole, is taken: the review is
+  // recorded and the body read exactly twice, the second prompt naming no count the first never had.
+  // A body that errors on every read fails at the inventory after the bound, its reason naming the
+  // URL and the last read's error.
+  checks++
+  {
+    const target = RECORDS796[3].html_url
+    const firsts = {
+      'a stand-in error': { error: 'PLACEHOLDER', standIn: 'FILE' },
+      'nothing': 'null',
+      'a throw': { throws: new Error('the agent was killed') },
+    }
+    for (const [what, first] of Object.entries(firsts)) {
+      env = run({ prs: [796], maxMutationsPerPr: 20 }, SERVED796, { followUps: { 796: CARRIED796 }, bodies: { [target]: [first, (b) => b] } })
+      result = await execute(env)
+      const r = resultOf(796, result)
+      if (r.outcome !== 'recorded') fail(`#1522 a body whose first read returns ${what}: outcome ${r.outcome} at ${JSON.stringify(r.stage)}, expected recorded`)
+      if (env.bodyReads.get(target) !== 2) fail(`#1522 a body whose first read returns ${what}: read ${env.bodyReads.get(target)} time(s), expected 2`)
+      const again = env.calls.filter((c) => /^inventory:796:body:\d+:read-2$/.test(c))
+      const p = env.prompts[again[0]] || ''
+      if (again.length !== 1 || !p.includes('This is read 2') || /ran (null|undefined|NaN|\d+) characters/.test(p)) fail(`#1522 a body whose first read returns ${what}: second-read agents ${JSON.stringify(again)}, expected one whose prompt says it is read 2 and names no count of a copy`)
+    }
+    env = run({ prs: [796], maxMutationsPerPr: 20 }, SERVED796, { followUps: { 796: CARRIED796 }, bodies: { [target]: [{ error: 'PLACEHOLDER', standIn: 'FILE' }, { error: 'gh: HTTP 502' }] } })
+    result = await execute(env)
+    const r = resultOf(796, result)
+    const stage = String(r.stage)
+    if (r.outcome !== 'failed' || !stage.startsWith('inventory: ') || !stage.includes(target) || !stage.includes('gh: HTTP 502')) fail(`#1522 a body that errors on every read: outcome ${r.outcome} at ${JSON.stringify(r.stage)}, expected failed at the inventory naming ${target} and the last read's error`)
+    if (env.bodyReads.get(target) !== 3) fail(`#1522 a body that errors on every read: read ${env.bodyReads.get(target)} time(s) before failing, expected the bound, 3`)
+    const after = env.calls.filter((c) => !c.startsWith('inventory:') && c !== 'launch')
+    if (after.length || env.posted.length) fail(`#1522 a body that errors on every read: ${after.join(', ') || 'nothing'} ran after the inventory and ${env.posted.length} comment(s) were posted, expected none`)
+  }
+
   // The script's trim, and the jq on each of the inventory's two lists, strip one class of characters
   // (#1072): spaces, tabs, carriage returns and newlines, in any run, and nothing else. The tails below
   // are that class written down here, and each reaches the script as a body ending in it, so the class
@@ -2820,7 +2865,7 @@ try {
   // batches that keep the commits' order and hold no more than the prompt's sum each. What only the
   // messages hold is then read: the ticket the description closes, named by one non-merge commit, and
   // a date later than the run's in the last commit's message.
-  const M1175 = 16000
+  const M1175 = 8000
   const C1175 = Array.from({ length: 79 }, (_, i) => (i + 1).toString(16).padStart(40, 'a'))
   const LATE1175 = 'Verified green on 2026-10-22 by the check.'
   const T1175 = '#' + 77   // the ticket the description closes, spelled as the closes check's h() spells one
@@ -2989,6 +3034,80 @@ try {
     env = run({ prs: [1175] }, served1175(), { messages: { [target]: (m) => m.replace(/[ \t\r\n]+$/, '') } })
     const r = resultOf(1175, await execute(env))
     if (r.outcome !== 'recorded') fail(`a message returned without its final newline: outcome ${r.outcome} at ${JSON.stringify(r.stage)}, expected recorded`)
+  }
+
+  // A batch whose agent returns a stand-in is read again by a fresh agent (#1522). On 2026-11-24 the
+  // message agent for #1521's twelve messages 14060e03..d7dbee13 wrote messages-1.json whole and
+  // returned {"messages":[],"error":"PLACEHOLDER"}, in two runs, and each review failed at the
+  // inventory. A batch whose first read returns that, nothing, a throw, a message left out or short,
+  // and whose second read comes back whole, is taken: the review is recorded, which needs the ticket
+  // only commit 70's message names, that message read twice under a label and OUTPUT FILE of its own, every other
+  // batch once. A batch that never comes back whole fails at the inventory after the bound, its
+  // reason naming the batch's first sha and the last read's error, and nothing runs after it.
+  checks++
+  {
+    // Commit 70 alone names the ticket the description closes, so a review recorded read it whole.
+    const target = C1175[70]
+    env = run({ prs: [1175] }, served1175())
+    await execute(env)
+    const batch = env.batches.find((b) => b.asked.some((c) => c.sha === target)) || { label: '', asked: [{}] }
+    const first = batch.asked[0].sha
+    const index = batch.label.split(':')[3]
+    if (batch.asked.length < 2 || first === target) fail(`#1522 the batch holding ${target} holds ${batch.asked.length} message(s) and opens with it, expected it inside a batch of several`)
+    const firsts = {
+      'a stand-in error': { error: 'PLACEHOLDER', none: true },
+      'nothing': 'null',
+      'a throw': { throws: new Error('the agent was killed') },
+      'the message left out': 'missing',
+      'the message short': (m) => m.slice(0, 40),
+    }
+    for (const [what, b] of Object.entries(firsts)) {
+      env = run({ prs: [1175] }, served1175(), { messages: { [target]: [b, (m) => m] } })
+      const r = resultOf(1175, await execute(env))
+      if (r.outcome !== 'recorded') fail(`#1522 a batch whose first read returns ${what}: outcome ${r.outcome} at ${JSON.stringify(r.stage)}, expected recorded`)
+      if (env.messageReads.get(target) !== 2) fail(`#1522 a batch whose first read returns ${what}: ${target} read ${env.messageReads.get(target)} time(s), expected 2`)
+      const once = C1175.filter((s) => !batch.asked.some((c) => c.sha === s)).filter((s) => env.messageReads.has(s) && env.messageReads.get(s) !== 1)
+      if (once.length) fail(`#1522 a batch whose first read returns ${what}: commits of other batches read again: ${once.join(', ')}`)
+      const again = env.calls.filter((c) => c === `inventory:1175:messages:${index}:read-2`)
+      const p = env.prompts[again[0]] || ''
+      if (again.length !== 1 || !p.includes(`OUTPUT FILE: ${env.repo}/.scratch/review-queue/log/2026-10-21/pr-1175/messages-${index}-read-2.json`) || !p.includes('This is read 2')) fail(`#1522 a batch whose first read returns ${what}: second-read agents ${JSON.stringify(again)}, expected one with an OUTPUT FILE of its own that says it is read 2`)
+    }
+    env = run({ prs: [1175] }, served1175(), { messages: { [target]: [{ error: 'PLACEHOLDER', none: true }, { error: 'git: object not found' }] } })
+    const r = resultOf(1175, await execute(env))
+    const stage = String(r.stage)
+    if (r.outcome !== 'failed' || !stage.startsWith('inventory: ') || !stage.includes(first) || !stage.includes('git: object not found')) fail(`#1522 a batch that errors on every read: outcome ${r.outcome} at ${JSON.stringify(r.stage)}, expected failed at the inventory naming ${first} and the last read's error`)
+    if (env.messageReads.get(target) !== 3) fail(`#1522 a batch that errors on every read: ${target} read ${env.messageReads.get(target)} time(s) before failing, expected the bound, 3`)
+    const after = env.calls.filter((c) => !c.startsWith('inventory:') && c !== 'launch')
+    if (after.length || env.posted.length) fail(`#1522 a batch that errors on every read: ${after.join(', ') || 'nothing'} ran after the inventory and ${env.posted.length} comment(s) were posted, expected none`)
+  }
+
+  // Each return is kept small enough to be copied whole (#1522). The returns that came back as
+  // stand-ins on 2026-11-24 held 10,043 and 14,990 characters, so a batch holds at most 8,000: #1521's
+  // twelve messages at 14060e03, by the lengths its inventory counted (.scratch/review-queue/log/
+  // 2026-11-24/pr-1521/inventory.json), are read in two batches of at most that, in order, and the
+  // review is recorded. The size is written here and not read from the prompt, so a script back at
+  // 16,000 fails it.
+  checks++
+  {
+    const MOST = 8000
+    const M1521 = [
+      ['14060e0346fef5f3f5cecd9d79054a99031a2159', 1, 547], ['1edab222f4a16bb5667894a86a4d5fa1526bee1d', 2, 1475],
+      ['c806e3381fba9a73b8179353ee9294f236b453c3', 1, 661], ['4b57e913a46b0371c02bdbb5f4dc6c3a828ccba0', 1, 1337],
+      ['72b8786be284848b35bb4d674c3f7d7db38a6256', 1, 1674], ['ee672d685dc53c5a5c7fc3c558c988d8fe569f34', 2, 1545],
+      ['5a4c992e314fcf0594f8f82307193c6a74c84927', 1, 641], ['4f2f6bf591122de0f52014efdfe73082769179c7', 2, 1800],
+      ['ca14107cce296fecab7caefef597f72a9a292b40', 1, 1840], ['ed0c70c6f75840fb21de6662e94b19ffef01aaac', 2, 1023],
+      ['ae9e5bf85bed436afbf5a4471f8cd98aceb6489e', 1, 1218], ['d7dbee13f3816126fa7417430c6367453fd4b290', 2, 1229],
+    ].map(([s, parents, length]) => ({ sha: s, parents, message: `Commit ${s.slice(0, 8)}: ${'x'.repeat(length - 17)}\n` }))
+    const total = M1521.reduce((sum, c) => sum + lengthOf(c), 0)
+    if (total !== 14990) fail(`#1521's messages: the fixture runs ${total} characters, expected the 14,990 the inventory counted`)
+    const served = { 1521: pr(1521, ['docs/z.md'], { head: M1521[0].sha, commits: M1521.map((c) => c.sha), commitMessages: M1521 }) }
+    env = run({ prs: [1521] }, served, { inventoryMessages: (list) => list.map((c) => ({ ...c, message: '' })) })
+    const r = resultOf(1521, await execute(env))
+    if (r.outcome !== 'recorded') fail(`#1521's messages: outcome ${r.outcome} at ${JSON.stringify(r.stage)}, expected recorded`)
+    const sizes = env.batches.map((b) => b.asked.reduce((sum, c) => sum + c.length, 0))
+    const asked = env.batches.flatMap((b) => b.asked.map((c) => c.sha))
+    if (sizes.length !== 2 || sizes.some((s) => s > MOST) || JSON.stringify(asked) !== JSON.stringify(M1521.map((c) => c.sha))) fail(`#1521's messages: read in batches of ${JSON.stringify(sizes)} characters asking for ${asked.length} commit(s), expected two of at most ${MOST}, the twelve in order`)
+    if (!(env.prompts['inventory:1521'] || '').includes(`at most ${MOST},`)) fail(`#1521's messages: the inventory prompt does not return messages inline only up to ${MOST} characters`)
   }
 
   // The record's compact shape (#967). The verdict prompt asks for the Spec table of three columns,
