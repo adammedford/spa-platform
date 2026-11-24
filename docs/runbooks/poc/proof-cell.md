@@ -10,11 +10,10 @@ reference note it goes with. Owner: workstream 6.
 
 #244 and the sitting C posts are where the notes are walked on the deployed proof cell and where
 each walk is recorded, not here. A note that has not been walked, or has changed since its walk, is
-the scripts' sequence written down, not a sequence that has been run. Deploy, gateway rollback,
-teardown and secret rotation changed their command sequence when the reference notes and this note
-were split (#1356), so their walks at the commits on #244 do not stand for the notes as they are:
-each is walked again at the next sitting C, secret rotation across its reference note and this
-note together.
+the scripts' sequence written down, not a sequence that has been run. A walk stands for the note at
+the commit it names: deploy, gateway rollback, teardown and secret rotation changed their command
+sequence when the reference notes and this note were split (#1356), and secret rotation is walked
+across its reference note and this note together.
 
 ## Session setup
 

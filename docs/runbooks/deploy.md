@@ -59,10 +59,10 @@ detail):
    the cell's bastion task, on a free ephemeral local port the system picks, and closes it when the
    wait ends, pass, fail or Ctrl-C. An operator's tunnel on 8443 is left alone.
 
-With your own tunnel running, `tools/scripts/deploy.sh --url "$ORIGIN"` names an origin this
-workstation already reaches, the app's, from its definition's `host` (README.md, "Before any note:
-the operator session"), for the wait to read through instead, and then it opens no tunnel and needs
-no bastion.
+`tools/scripts/deploy.sh --url <origin>` names an origin this workstation already reaches for the
+wait to read through instead, and then `deploy.sh` opens no tunnel of its own and needs no bastion.
+Through a tunnel you run yourself, that origin is the app's, `$ORIGIN` (README.md, "Before any
+note: the operator session").
 
 Without `--url` it needs the bastion, and it never turns the bastion on or off: when the outputs
 document names no bastion it refuses before anything is built, exit 2, with a line naming
