@@ -90,11 +90,12 @@ Every user signs in again on their next request.
 - **Before the apply** (steps 1 and 2): nothing the cell runs changed (step 2 may have pushed an
   image to ECR, under a tag of its own, which nothing uses). Fix the cause and run it again.
   A step-1 refusal means the registry is empty: publish an app with `spactl`, its release and then
-  its entry, with the platform configuration (`$CONFIG`) the README builds, and run it again:
+  its entry, with the platform configuration (`$CONFIG`) the README builds, `RELEASE` set to the
+  release's name and `RELEASE_DIRECTORY` to the directory of its built files, and run it again:
 
   ```bash
-  spactl release publish "$APP" <release directory> <release> --outputs "$SPA_OUTPUTS_FILE"
-  spactl app add "$APP_DEFINITION" --release <release> --outputs "$SPA_OUTPUTS_FILE" --config "$CONFIG"
+  spactl release publish "$APP" "$RELEASE_DIRECTORY" "$RELEASE" --outputs "$SPA_OUTPUTS_FILE"
+  spactl app add "$APP_DEFINITION" --release "$RELEASE" --outputs "$SPA_OUTPUTS_FILE" --config "$CONFIG"
   ```
 
 - **The apply or after it** (steps 3 to 5): the deployment circuit breaker rolls a deployment whose
