@@ -122,6 +122,15 @@ aws cognito-idp list-user-pool-client-secrets --region "$AWS_REGION" \
 
 The last line prints `1`. Cognito refuses to delete a client's last secret.
 
+### Checks for the first walk (#244)
+
+These rest on reading, not on a run, and the first walk settles them:
+
+- that `terraform apply -refresh-only` in the apps root moves the parameter's `version` in state
+  although the value is ignored, and that its plan shows nothing else;
+- that a plain `terraform plan` in the apps root after step 7 is empty, with the client's original
+  secret deleted.
+
 ## Teardown's leftovers
 
 After [teardown.md](../teardown.md). The teardown role's trust allows only the principals in the
@@ -143,5 +152,6 @@ that is where its removal runs from.
 ### Build it again
 
 "The first deployment" above. With the bootstrap and the workstation's certificate authority kept,
-its step 1 is only `tools/scripts/poc/certs.sh import`, and its step 2 is already done: the teardown
-deleted the certificate from ACM, and the listener finds it there by its domain name.
+its step 1 is only `tools/scripts/poc/certs.sh import`, since the teardown deleted the certificate
+from ACM and the listener finds it there by its domain name, and its step 2 is already done, since
+the bootstrap root was kept.

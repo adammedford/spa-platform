@@ -13,8 +13,7 @@ the one principal the bucket policy lets delete a release (ADR-0014).
 ## 1. Run it
 
 ```bash
-tools/scripts/teardown.sh --yes                       # the entry file's cell, $SPA_CELL
-tools/scripts/teardown.sh --yes --cell "$SPA_CELL"    # or name the cell
+tools/scripts/teardown.sh --yes             # the entry file's cell, $SPA_CELL; --cell names it
 ```
 
 In order, and it stops at the first that fails (its header has the detail):
