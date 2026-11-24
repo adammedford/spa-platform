@@ -238,6 +238,64 @@ public sealed class ImportMapTests : IDisposable
         Assert.Contains("holds '<script' or names importmap", Error, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task A_raw_text_element_naming_importmap_is_refused_even_before_an_admitted_map()
+    {
+        // The second half of the raw-text refusal: text skipped as raw must not name a map either,
+        // since inside <svg> or <math> it is markup (#1486's review).
+        Assert.Equal(1, await Validate(Html("<title>importmap</title>" + FragmentWorld.ImportMapTag(Map)), FragmentWorld.HashSource(Map)));
+        Assert.Contains("<title> holds '<script' or names importmap", Error, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_plaintext_runs_to_the_end_of_the_document_so_a_map_after_it_is_refused()
+    {
+        // Nothing ends <plaintext>, not even </plaintext>
+        // (https://html.spec.whatwg.org/multipage/parsing.html#plaintext-state), so the map after it is
+        // text a browser never runs, and the scan, skipping it as raw text, refuses it.
+        Assert.Equal(1, await Validate(Html("<plaintext></plaintext>" + FragmentWorld.ImportMapTag(Map)), FragmentWorld.HashSource(Map)));
+        Assert.Contains("<plaintext> holds '<script' or names importmap", Error, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("<div title=\"<script>\"></div>{0}", "<div>")]
+    [InlineData("<div title='<script>'></div>{0}", "<div>")]
+    [InlineData("<div title=<script>></div>{0}", "<div>")]
+    [InlineData("<div <script>></div>{0}", "<div>")]
+    [InlineData("</div title=\"<script>\">{0}", "</div>")]
+    [InlineData("<title></title x=\"<script>\">{0}", "</title>")]
+    [InlineData("<script></script x=\"<script>\">{0}", "</script>")]
+    public async Task A_script_tag_inside_another_tag_is_refused_rather_than_read_as_script_data(string around, string tag)
+    {
+        // A browser reads a '<script' inside another start or end tag as part of that tag, so the map
+        // after it is live (https://html.spec.whatwg.org/multipage/parsing.html#before-attribute-value-state).
+        // Read as a classic script, its data would run to the map's end tag and hide the map; the
+        // review's probe of the first input (#1486) exited 0.
+        string map = FragmentWorld.Map("m9");
+        string html = Html(string.Format(System.Globalization.CultureInfo.InvariantCulture, around, FragmentWorld.ImportMapTag(map)));
+
+        Assert.Equal(1, await Validate(html, FragmentWorld.HashSource(Map)));
+        Assert.Contains($"a {tag} tag holds '<script'", Error, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("<!x <script>>{0}")]
+    [InlineData("<?<script>>{0}")]
+    [InlineData("<!doctype <script>>{0}")]
+    [InlineData("</ <script>>{0}")]
+    [InlineData("<!x importmap>{0}")]
+    public async Task A_script_tag_inside_a_bogus_comment_or_doctype_is_refused_rather_than_read_as_script_data(string around)
+    {
+        // A bogus comment or a doctype ends at the first '>'
+        // (https://html.spec.whatwg.org/multipage/parsing.html#bogus-comment-state), so a '<script' in
+        // one is text and the map after it is live.
+        string map = FragmentWorld.Map("m9");
+        string html = Html(string.Format(System.Globalization.CultureInfo.InvariantCulture, around, FragmentWorld.ImportMapTag(map)));
+
+        Assert.Equal(1, await Validate(html, FragmentWorld.HashSource(Map)));
+        Assert.Contains("construct holds '<script' or names importmap", Error, StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData("</scriptx")]
     [InlineData("</SCRIPT-")]

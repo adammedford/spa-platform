@@ -61,7 +61,7 @@ internal static class ImportMap
                 break;
             }
 
-            int close = TagEnd(html, start);
+            int close = TagEnd(html, start + ScriptOpen.Length);
             if (close < 0)
             {
                 return Scan.Refused("a <script tag is never closed with '>'.", cspMeta);
@@ -101,8 +101,9 @@ internal static class ImportMap
                 return Scan.Refused("a <script tag contains '&', which could spell an import map the scan cannot read.", cspMeta);
             }
 
-            // A script element's content is script data up to its end tag, never markup.
-            at = bodyEnd < 0 ? close + 1 : bodyEnd + ScriptClose.Length;
+            // A script element's content is script data up to its end tag, never markup; the walk goes
+            // on at the end tag, whose attributes it reads as any tag's.
+            at = bodyEnd < 0 ? close + 1 : bodyEnd;
         }
 
         return new Scan(map, null, cspMeta);
@@ -205,26 +206,27 @@ internal static class ImportMap
     }
 
     /// <summary>
-    /// The next <c>&lt;script</c> start tag at or after <paramref name="from"/>, matched as a tag name and
-    /// outside a comment or a raw-text element: their text is never a tag, so a <c>&lt;script</c> in
-    /// one must not make the scan skip a real map after it as script data
-    /// (https://html.spec.whatwg.org/multipage/parsing.html#comment-start-state,
-    /// https://html.spec.whatwg.org/multipage/parsing.html#rawtext-state).
+    /// The next <c>&lt;script</c> start tag at or after <paramref name="from"/>, found by walking the
+    /// markup in document order as the tokenizer does: a comment, a raw-text element's text, another
+    /// tag's attributes, an end tag's attributes, and a bogus comment or doctype are never a tag, so a
+    /// <c>&lt;script</c> in one must not make the scan skip a real map after it as script data
+    /// (https://html.spec.whatwg.org/multipage/parsing.html#data-state,
+    /// https://html.spec.whatwg.org/multipage/parsing.html#comment-start-state,
+    /// https://html.spec.whatwg.org/multipage/parsing.html#rawtext-state,
+    /// https://html.spec.whatwg.org/multipage/parsing.html#bogus-comment-state).
     /// <paramref name="skippedRefusal"/> is set, and the search stops, at skipped text a browser could
-    /// read as markup holding a map.
+    /// read as markup holding a map: the scan refuses it rather than trust its own reading.
     /// </summary>
     private static int? NextScriptTag(string html, int from, out string? skippedRefusal)
     {
         skippedRefusal = null;
         int index = from;
-        while (html.IndexOf(ScriptOpen, index, StringComparison.OrdinalIgnoreCase) is var script and >= 0)
+        while (html.IndexOf('<', index) is var open and >= 0)
         {
-            int comment = html.IndexOf(CommentOpen, index, StringComparison.Ordinal);
-            (int rawText, string? name) = NextRawText(html, index, script);
-            if (comment >= 0 && comment < script && (name is null || comment < rawText))
+            if (html.AsSpan(open).StartsWith(CommentOpen, StringComparison.Ordinal))
             {
-                index = CommentEnd(html, comment);
-                if (html.AsSpan(comment, index - comment).Contains("importmap", StringComparison.OrdinalIgnoreCase))
+                index = CommentEnd(html, open);
+                if (html.AsSpan(open, index - open).Contains("importmap", StringComparison.OrdinalIgnoreCase))
                 {
                     // Text the scan skips as a comment must not hold a map a browser could run.
                     skippedRefusal = "a comment names importmap, and the scan cannot tell whether a browser reads it as one.";
@@ -234,71 +236,101 @@ internal static class ImportMap
                 continue;
             }
 
-            if (name is not null)
+            bool endTag = open + 1 < html.Length && html[open + 1] == '/';
+            int nameStart = open + (endTag ? 2 : 1);
+            if (nameStart >= html.Length || !char.IsAsciiLetter(html[nameStart]))
             {
-                index = RawTextEnd(html, rawText, name);
-                ReadOnlySpan<char> text = html.AsSpan(rawText, index - rawText);
-                if (text.Contains(ScriptOpen, StringComparison.OrdinalIgnoreCase)
-                    || text.Contains("importmap", StringComparison.OrdinalIgnoreCase))
+                if (endTag && nameStart < html.Length && html[nameStart] == '>')
                 {
-                    // Inside <svg> or <math> the same element's content is markup, and a tag such as <p>
-                    // returns to HTML, so the text skipped as raw must hold no script and no map.
-                    skippedRefusal = $"a <{name}> holds '<script' or names importmap, and the scan cannot tell whether a browser reads it as text.";
+                    index = nameStart + 1;
+                    continue;
+                }
+
+                if (!endTag && (open + 1 >= html.Length || html[open + 1] is not ('!' or '?')))
+                {
+                    // A '<' that opens no tag is text.
+                    index = open + 1;
+                    continue;
+                }
+
+                // <!x, <?x, </ x and a doctype end at the first '>', quoted or not.
+                int bogusClose = html.IndexOf('>', open);
+                index = bogusClose < 0 ? html.Length : bogusClose + 1;
+                ReadOnlySpan<char> bogus = html.AsSpan(open + 1, index - open - 1);
+                if (bogus.Contains(ScriptOpen, StringComparison.OrdinalIgnoreCase)
+                    || bogus.Contains("importmap", StringComparison.OrdinalIgnoreCase))
+                {
+                    skippedRefusal = "a '<!' or '<?' construct holds '<script' or names importmap, and the scan cannot tell how a browser reads it.";
                     return null;
                 }
 
                 continue;
             }
 
-            int after = script + ScriptOpen.Length;
-            if (after >= html.Length || IsTagNameEnd(html[after]))
+            int nameEnd = nameStart;
+            while (nameEnd < html.Length && !IsTagNameEnd(html[nameEnd]))
             {
-                return script;
+                nameEnd++;
             }
 
-            index = after;
+            string name = html[nameStart..nameEnd];
+            if (!endTag && string.Equals(name, "script", StringComparison.OrdinalIgnoreCase))
+            {
+                return open;
+            }
+
+            int close = TagEnd(html, nameEnd);
+            index = close < 0 ? html.Length : close + 1;
+            if (html.AsSpan(open + 1, index - open - 1).Contains(ScriptOpen, StringComparison.OrdinalIgnoreCase))
+            {
+                // A browser reads a '<script' inside another tag as part of that tag, an attribute or
+                // its value, so the map after it is live.
+                skippedRefusal = $"a <{(endTag ? "/" : "")}{name}> tag holds '<script', and the scan cannot tell whether a browser reads it as a tag.";
+                return null;
+            }
+
+            if (!endTag && RawTextElements.FirstOrDefault(element => string.Equals(element, name, StringComparison.OrdinalIgnoreCase)) is { } rawText)
+            {
+                int textEnd = RawTextEnd(html, index, rawText);
+                ReadOnlySpan<char> text = html.AsSpan(index, textEnd - index);
+                if (text.Contains(ScriptOpen, StringComparison.OrdinalIgnoreCase)
+                    || text.Contains("importmap", StringComparison.OrdinalIgnoreCase))
+                {
+                    // Inside <svg> or <math> the same element's content is markup, and a tag such as <p>
+                    // returns to HTML, so the text skipped as raw must hold no script and no map.
+                    skippedRefusal = $"a <{rawText}> holds '<script' or names importmap, and the scan cannot tell whether a browser reads it as text.";
+                    return null;
+                }
+
+                // The walk goes on at the end tag, whose attributes it reads as any tag's.
+                index = textEnd;
+            }
         }
 
         return null;
     }
 
-    /// <summary>The first raw-text start tag at or after <paramref name="from"/> and before <paramref name="before"/>, with its name.</summary>
-    private static (int At, string? Name) NextRawText(string html, int from, int before)
+    /// <summary>
+    /// Where the text of the raw-text element whose start tag ends before <paramref name="from"/> ends:
+    /// at the <c>&lt;</c> of its end tag, or at the end of the document when it has none, which is
+    /// always so for <c>&lt;plaintext&gt;</c>, since nothing ends it
+    /// (https://html.spec.whatwg.org/multipage/parsing.html#plaintext-state).
+    /// </summary>
+    private static int RawTextEnd(string html, int from, string name)
     {
-        (int at, string? found) = (before, null);
-        foreach (string name in RawTextElements)
+        if (string.Equals(name, "plaintext", StringComparison.Ordinal))
         {
-            int index = from;
-            while (html.IndexOf("<" + name, index, StringComparison.OrdinalIgnoreCase) is var open and >= 0 && open < at)
-            {
-                int after = open + 1 + name.Length;
-                if (after < html.Length && IsTagNameEnd(html[after]))
-                {
-                    (at, found) = (open, name);
-                    break;
-                }
-
-                index = after;
-            }
+            return html.Length;
         }
 
-        return (at, found);
-    }
-
-    /// <summary>
-    /// Where the raw-text element opened at <paramref name="open"/> ends: after its end tag, or at the end
-    /// of the document when it has none, which is always so for <c>&lt;plaintext&gt;</c>.
-    /// </summary>
-    private static int RawTextEnd(string html, int open, string name)
-    {
         string close = "</" + name;
-        int index = open + 1 + name.Length;
+        int index = from;
         while (html.IndexOf(close, index, StringComparison.OrdinalIgnoreCase) is var end and >= 0)
         {
             index = end + close.Length;
             if (index < html.Length && IsTagNameEnd(html[index]))
             {
-                return index;
+                return end;
             }
         }
 
@@ -339,15 +371,15 @@ internal static class ImportMap
     }
 
     /// <summary>
-    /// The index of the <c>&gt;</c> that ends the start tag at <paramref name="start"/>, or -1 when none
-    /// does: a <c>&gt;</c> inside a quoted attribute value does not end it, so
+    /// The index of the <c>&gt;</c> that ends the tag whose name ends at <paramref name="from"/>, or -1 when
+    /// none does: a <c>&gt;</c> inside a quoted attribute value does not end it, so
     /// <c>&lt;script data-x="&gt;" type="importmap"&gt;</c> is one tag that names importmap
     /// (https://html.spec.whatwg.org/multipage/parsing.html#before-attribute-value-state).
     /// </summary>
-    private static int TagEnd(string html, int start)
+    private static int TagEnd(string html, int from)
     {
         bool afterEquals = false;
-        for (int index = start + ScriptOpen.Length; index < html.Length; index++)
+        for (int index = from; index < html.Length; index++)
         {
             char c = html[index];
             if (c == '>')
