@@ -1494,8 +1494,9 @@ class CompanionTests(CheckTestCase):
         real = [path for path in tracked if re.search(r"[_-]tests\.py$", path)]
         self.assertIn("tools/land_tests.py", real)
         folders = {path.rsplit("/", 1)[0] for path in real}
-        # The files Case links to the real ones, which a case must not change; .github/touches.sh is
-        # the only one with a companion, and its rule is tools/land.sh's.
+        # The files Case links to the real ones, which a case must not change. Two have a companion
+        # this case cannot reach, because it changes neither script: .github/touches.sh, whose rule
+        # is tools/land.sh's, and tools/smoke.sh, whose tools/smoke_tests.py came with #1401.
         linked = {".github/touches.sh", "tools/check.sh", "tools/terraform-floor.sh", "tools/smoke.sh"}
         beside = [path for path in tracked
                   if path.rsplit("/", 1)[0] in folders and path not in linked]
@@ -1516,7 +1517,8 @@ class CompanionTests(CheckTestCase):
             with self.subTest(scriptless=path):
                 self.assertNotEqual([], declared_inputs((ROOT / path).read_text(encoding="utf-8")),
                                     f"{path} has no script, so only a Checkout inputs line earns it")
-        expected = sorted(set(real) - {"tools/check_tests.py", ".github/touches_tests.py"} - scriptless)
+        expected = sorted(set(real) - {"tools/check_tests.py", ".github/touches_tests.py",
+                                       "tools/smoke_tests.py"} - scriptless)
         self.assertEqual([companion(path) for path in expected],
                          companions_run(case))
 

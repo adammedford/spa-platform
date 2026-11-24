@@ -149,12 +149,13 @@ cached options.
 its secrets cannot be read. At a cold start there is none, so affected apps are left out and
 reported and the rest go live.
 
-**App definition** — a registry entry without `clientId`, `clientSecretRef` and `release`. Terraform
-reads it to create the OAuth client; `spactl app add` completes it from the infrastructure outputs.
-So each app is described once.
+**App definition** — a registry entry without `clientId`, `clientSecretRef` and `release`. Whatever
+registers the client reads it; `spactl app add` completes it from the infrastructure outputs. So each
+app is described once.
 
 **Platform configuration** — settings from the task environment (`Policy:*`, `Issuers:*`,
-`Registry:*`) that bound what any registry entry may say. A registry writer cannot widen them.
+`Registry:*`) that bound what any registry entry may say. A registry writer cannot widen them; an
+operator does, by widening the bounds.
 
 **Release** — an S3 prefix, `apps/{appId}/releases/{release}/`, or a fragment's `apps/{appId}/fragments/{fragmentId}/releases/{release}/`, in which each key is written once. A
 release can gain a key, but outside teardown it never changes or loses one. The registry names the
@@ -169,6 +170,17 @@ _Avoid_: "release" on its own when one object is meant.
 _Avoid_: "the bucket" where the state bucket could be meant; "assets bucket".
 
 **Fragment activation** — making a fragment release the live one, by one registry change; it applies to requests that follow it, not to documents already loaded. _Avoid_: "swap".
+
+**Onboarding** — the steps that make a new app, or a new fragment of a live shell, servable in a running cell: its client at the identity provider, its secret in the store, its `clients` entry in the infrastructure outputs, its first release and its registry entry. It ends when every instance reports the registry revision that adds it. It needs no restart and stays inside the platform configuration; an app that needs more first needs widening the bounds. Activating a new release of an existing fragment is fragment activation, not onboarding.
+_Avoid_: "provisioning"; "registration", which is the client's step at the provider.
+
+**Removal** — the inverse of onboarding. The registry entry, or the fragment, goes first, and the client, the secret and the `clients` entry go only once every instance reports the revision without it. It needs no restart and never narrows the bounds.
+_Avoid_: "offboarding", "deprovisioning".
+
+**Widening the bounds** — changing a cell's platform configuration so that a registry entry may name a new upstream or issuer, or a shell may hold more fragments. It is an operator's change, applied as a new task definition by a deployment, never a registry write. A new host suffix is a cell change, not a widening (ADR-0010).
+_Avoid_: "reconfigure", which also covers `Registry:*`.
+
+**Narrowing the bounds** — the inverse of widening the bounds, done only on purpose. It is never a step of removal.
 
 **Entry module** — a fragment's one ES module at the root of its release, at a name constant across releases, which the shell loads by its URL. _Avoid_: "remote entry", "bundle".
 

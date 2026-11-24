@@ -5,6 +5,13 @@
 # as environment variables (#544, ADR-0042): a gateway that validates its configuration at start-up
 # refuses to start with none.
 #
+# It starts the gateway twice. The first run serves, and the five probes below prove it. The second
+# (#1401, ADR-0042 decision 2) starts the same environment with Session__MaxSessions=0, which the
+# schema refuses, and expects the process to exit non-zero within the start-up wait with a log that
+# names Session:MaxSessions. The suite proves that refusal only against doubles; this is the one
+# place the real process meets a refused configuration. Its lines name a key and an exit status,
+# never a configured value, so it never prints the refused gateway's log.
+#
 # Nothing else proves it: the suite never starts the gateway, so a composition root that throws, or
 # a settings file the configuration binder rejects, builds and tests clean. Both have happened.
 # CI runs this after its Release build; run it locally after a build of the same configuration.
@@ -93,3 +100,40 @@ expect nope.example      /readyz        503
 expect nope.example      /              404
 expect app1.spa-poc.test /              404
 expect app1.spa-poc.test /assets/app.js 404
+
+# The refusal case. The serving gateway stops first, so the refused one cannot fail on a port in use
+# instead of on its configuration. Session__MaxSessions=0 comes after the example's pairs, and env
+# sets its pairs in order, so it replaces the example's 10000. The start-up wait is the first run's
+# 30 seconds. A failure says which of the three expectations it broke; the refused gateway's log is
+# not printed, because a gateway that does not refuse may log what it was configured with.
+kill "$gateway" 2> /dev/null || true
+wait "$gateway" 2> /dev/null || true
+
+env "${aws_off[@]}" "${config[@]}" Session__MaxSessions=0 ASPNETCORE_HTTP_PORTS="$port" dotnet "$out/Gateway.dll" > "$out/refused.log" 2>&1 &
+gateway=$!
+
+refusal_failed() {
+  echo "::error::With Session__MaxSessions=0 the gateway $1, expected it to refuse to start (ADR-0042)"
+  exit 1
+}
+
+# A refusal ends in an unhandled exception, which aborts the process, and bash reports the aborted
+# job on stderr with the command's text. The block's stderr is discarded so that line never prints.
+status=0
+{
+  for _ in $(seq 1 30); do
+    if ! kill -0 "$gateway"; then break; fi
+    sleep 1
+  done
+  if kill -0 "$gateway"; then
+    refusal_failed "was still running after the 30-second start-up wait"
+  fi
+  wait "$gateway" || status=$?
+} 2> /dev/null
+if [ "$status" -eq 0 ]; then
+  refusal_failed "exited with status 0"
+fi
+if ! grep -qF 'Session:MaxSessions' "$out/refused.log"; then
+  refusal_failed "exited with status $status and its log does not name Session:MaxSessions"
+fi
+echo "  Session__MaxSessions=0 -> exit $status, log names Session:MaxSessions"
