@@ -77,7 +77,9 @@
 // report lists it under that request, its dependant skips at once naming it, and neither counts as a failure; a red
 // check whose request blocks nothing or another ticket, a green check with a self-blocking request, and a self-blocking
 // request with no verdict line keep today's routing. Every house-rules prompt sends docker to ~/.docker/bin before an agent may call it
-// absent (#742). No agent, gh or git call is made.
+// absent (#742). No prompt names run_in_background or asks for a sub-agent, since a workflow agent has no Agent
+// tool, and every review prompt asks for the Standards and Spec axes in turn, as two reports (#1475). No agent, gh or git
+// call is made.
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -2597,7 +2599,7 @@ const forkOf = (prompt) => (/Otherwise fork from [^:]+: forkSha = (\S+?)\. Take 
   }
 }
 
-// 50. No prompt asks for a tool its agent lacks (#1475). A workflow agent has no Agent tool, yet on 2026-11-22 the
+// 54. No prompt asks for a tool its agent lacks (#1475). A workflow agent has no Agent tool, yet on 2026-11-22 the
 //     implement and review prompts told it to launch sub-agents with run_in_background: false, and the #1349 and
 //     #1350 reviewers each said "No sub-agent tool was available" before doing both axes themselves. No prompt names
 //     run_in_background or asks to launch, spawn or start a sub-agent, and every review prompt, the second review
@@ -2619,7 +2621,7 @@ const forkOf = (prompt) => (/Otherwise fork from [^:]+: forkSha = (\S+?)\. Take 
       if (!c.prompt.slice(at, c.prompt.indexOf(')', at) + 1).endsWith(OVERRIDE)) fail(`#1475: the ${c.label} prompt calls the ${name} skill without the override that keeps its agent steps in the session`)
     }
   }
-  const AXES_SENTENCE ='You have no Agent tool, so the skill\'s two sub-agents cannot run here: do the Standards axis yourself and write its report, then the Spec axis and its report, and keep the two reports separate in your record.'
+  const AXES_SENTENCE = 'You have no Agent tool, so the skill\'s two sub-agents cannot run here: do the Standards axis yourself and write its report, then the Spec axis and its report, and keep the two reports separate in your record.'
   const reviews = allPrompts.filter((c) => c.label.startsWith('review:'))
   if (!reviews.length) fail('#1475: no review prompt was rendered, so the axes check read nothing')
   if (!reviews.some((c) => c.prompt.includes('This is the second review (#279)'))) fail('#1475: no second review was rendered, so the axes check did not read one')
