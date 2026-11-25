@@ -73,6 +73,13 @@ public sealed record GatewayHarnessOptions
     /// </summary>
     public TimeProvider? Clock { get; init; }
 
+    /// <summary>
+    /// The test identity provider's clock alone, in place of <see cref="Clock"/> there, or null for
+    /// <see cref="Clock"/>. A <see cref="HoldingClock"/> here holds the provider's delays until a test
+    /// releases them, while the gateway's own timers run (#1007, F-35).
+    /// </summary>
+    public TimeProvider? IdpClock { get; init; }
+
     /// <summary>More gateway configuration, applied over the harness's own. A null value removes nothing: it sets an empty value.</summary>
     public IReadOnlyDictionary<string, string?> Configuration { get; init; } = new Dictionary<string, string?>();
 

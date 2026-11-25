@@ -99,7 +99,7 @@ public sealed class GatewayHarness : IAsyncDisposable
     }
 
     /// <summary>Builds the next host's factory over the harness's shared parts; set once in <see cref="StartAsync"/>.</summary>
-    private Func<int, (GatewayFactory Factory, string? Instance, ParameterStoreStub? Store)> newHost = null!;
+    private Func<int, (GatewayFactory Factory, string? Instance, ParameterStoreStub? Store, HostSessionStore? Sessions)> newHost = null!;
 
     private int nextTarget = -1;
 
@@ -174,7 +174,7 @@ public sealed class GatewayHarness : IAsyncDisposable
     {
         options ??= new GatewayHarnessOptions();
 
-        TestIdentityProvider idp = new(options.Clock);
+        TestIdentityProvider idp = new(options.IdpClock ?? options.Clock);
         idp.EndSessionStyle = options.Profile == "cognito" ? EndSessionStyle.Cognito : EndSessionStyle.Standard;
         await idp.StartAsync(ct);
 
@@ -250,7 +250,7 @@ public sealed class GatewayHarness : IAsyncDisposable
         RecordingRefreshLeases? leases = cell && !options.RefreshLeasesPerHost ? new RecordingRefreshLeases(options.Clock ?? TimeProvider.System) : null;
         ParameterStoreStub? sharedParameterStore = options.KeyRing == KeyRingSharing.OneParameterStore ? new ParameterStoreStub() : null;
 
-        (GatewayFactory, string?, ParameterStoreStub?) NewHost(int index)
+        (GatewayFactory, string?, ParameterStoreStub?, HostSessionStore?) NewHost(int index)
         {
             string? instance = cell ? options.InstanceIds[index] : null;
             ParameterStoreStub? parameterStore = options.KeyRing switch
@@ -260,11 +260,12 @@ public sealed class GatewayHarness : IAsyncDisposable
                 _ => null,
             };
 
-            GatewayFactory hostFactory = new(settings, services => ConfigureHost(services, instance, parameterStore));
-            return (hostFactory, instance, parameterStore);
+            HostSessionStore? sessions = instance is null ? null : new HostSessionStore(sessionStore!);
+            GatewayFactory hostFactory = new(settings, services => ConfigureHost(services, instance, parameterStore, sessions));
+            return (hostFactory, instance, parameterStore, sessions);
         }
 
-        void ConfigureHost(IServiceCollection services, string? instance, ParameterStoreStub? parameterStore)
+        void ConfigureHost(IServiceCollection services, string? instance, ParameterStoreStub? parameterStore, HostSessionStore? sessions)
         {
             if (parameterStore is not null)
             {
@@ -302,7 +303,7 @@ public sealed class GatewayHarness : IAsyncDisposable
                 // (plan rows P2-1 and P2-3), and the instance id /readyz names (change request P2-5,
                 // decision 2: the harness injects a deterministic id through test services).
                 services.RemoveAll<ISessionStore>();
-                services.AddSingleton<ISessionStore>(sessionStore!);
+                services.AddSingleton<ISessionStore>(sessions!);
                 services.RemoveAll<IRefreshLeases>();
                 services.AddSingleton<IRefreshLeases>(leases ?? new RecordingRefreshLeases(options.Clock ?? TimeProvider.System));
                 services.RemoveAll<GatewayInstance>();
@@ -393,8 +394,8 @@ public sealed class GatewayHarness : IAsyncDisposable
             throw new InvalidOperationException($"the harness has instance ids for {Options.InstanceIds.Count} hosts.");
         }
 
-        (GatewayFactory factory, string? instance, ParameterStoreStub? parameterStore) = newHost(hosts.Count);
-        GatewayHost host = new(instance, factory, parameterStore);
+        (GatewayFactory factory, string? instance, ParameterStoreStub? parameterStore, HostSessionStore? sessions) = newHost(hosts.Count);
+        GatewayHost host = new(instance, factory, parameterStore) { SessionStore = sessions };
         hosts.Add(host);
         host.StartServer();
 
@@ -754,6 +755,45 @@ public sealed class GatewayHarness : IAsyncDisposable
     }
 
     private readonly Dictionary<string, int> rotations = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Rotates one fragment of a shell onto a new client while the gateway runs: a new client at the
+    /// provider with its own callback and secret, and the fragment's item naming it in a new registry
+    /// revision, its release kept. The old client stays registered at the provider, as in
+    /// <see cref="RotateClientAsync"/>. <see cref="HarnessApp.Fragment"/> names the new client afterwards.
+    /// </summary>
+    public async Task<(HarnessFragment Before, HarnessFragment After, RefreshOutcome Outcome)> RotateFragmentClientAsync(
+        string appId, string fragmentId, CancellationToken ct = default)
+    {
+        HarnessApp app = App(appId);
+        HarnessFragment before = app.Fragment(fragmentId);
+        string key = appId + "/" + fragmentId;
+        int rotation = rotations.TryGetValue(key, out int done) ? done + 1 : 1;
+        rotations[key] = rotation;
+        HarnessFragment after = before with
+        {
+            ClientId = ClientIdFor(appId, fragmentId) + "-r" + rotation.ToString(CultureInfo.InvariantCulture),
+            ClientSecret = "secret-" + appId + "-" + fragmentId + "-" + Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(16)),
+            SecretRef = $"ssm:/spa-platform/harness/apps/{appId}/fragments/{fragmentId}/client-secret:{rotation + 1}",
+        };
+        Idp.AddClient(
+            after.ClientId,
+            after.ClientSecret,
+            app.Url("/signin-oidc/" + fragmentId).ToString(),
+            [app.Url("/signout-callback-oidc").ToString(), app.Url("/").ToString()]);
+        Secrets[after.SecretRef] = after.ClientSecret;
+        apps[appId] = app with { Fragments = [.. app.Fragments.Select(f => f.FragmentId == fragmentId ? after : f)] };
+
+        RefreshOutcome outcome = await UpdateRegistryAsync(next =>
+        {
+            JsonObject item = next["apps"]!.AsArray().OfType<JsonObject>()
+                .Single(entry => entry["appId"]?.GetValue<string>() == appId)["fragments"]!.AsArray().OfType<JsonObject>()
+                .Single(fragment => fragment["fragmentId"]?.GetValue<string>() == fragmentId);
+            item["oauth"]!["clientId"] = after.ClientId;
+            item["oauth"]!["clientSecretRef"] = after.SecretRef;
+        }, ct);
+        return (before, after, outcome);
+    }
 
     /// <summary>
     /// The registry entry for an app: its fixture definition, with what onboarding fills in (the release,
