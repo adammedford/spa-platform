@@ -256,12 +256,8 @@ on_exit() {
   fi
 }
 trap on_exit EXIT
-# bash 3.2 runs no EXIT trap when a signal it does not trap ends it, and a lock left behind by a
-# killed run would hold every other lane until the takeover below finds its pid gone. Trapped, the
-# signal ends the run through on_exit, as any other stop does.
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+# A run ended by HUP, INT or TERM goes through on_exit too: bash, 3.2 among them, runs the EXIT trap
+# when a fatal signal ends it (measured on 3.2.57, #1502), so a killed run leaves no lock behind.
 
 # The elapsed lines (#629): after each step it executes, and after each test companion, the check
 # writes `<me>: elapsed: <step>: <N>s` on a line of its own, and `<me>: elapsed: total: <N>s` just

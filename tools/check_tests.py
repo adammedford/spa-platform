@@ -53,11 +53,13 @@ import pathlib
 import re
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
 import textwrap
 import threading
+import time
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -1430,6 +1432,31 @@ class ProviderCacheTests(CheckTestCase):
         self.assertEqual(f"check: fail: could not make Terraform's provider cache lock {cache / CACHE_LOCK}.",
                          result.last_line(result.stderr))
         self.assertEqual([], [event for event in self.events(record) if event[0] == "start"])
+
+    def test_a_run_ended_by_a_signal_during_init_releases_the_lock(self):
+        # A hung-up terminal or a kill ends the whole process group, as here, and a lock left behind
+        # would stall every other lane until a takeover found its pid gone. SIGINT is left out: a
+        # runner started in the background, as the overnight gate starts the check, ignores it.
+        for signum in (signal.SIGHUP, signal.SIGTERM):
+            with self.subTest(signal=signum.name):
+                case = Case(self, change="infra/roots/a/main.tf")
+                record = case.dir / "record"
+                self.cached(case, record, pause="30")
+                lock = case.home / ".terraform.d" / "plugin-cache" / CACHE_LOCK
+                run = subprocess.Popen([BASH, str(SCRIPT), "--full", "--port", PORT], cwd=case.work,
+                                       env=case.env(), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                       stderr=subprocess.PIPE, start_new_session=True)
+                self.addCleanup(lambda run=run: run.poll() is None and os.killpg(run.pid, signal.SIGKILL))
+                deadline = time.monotonic() + 20
+                while not any(event[0] == "start" for event in self.events(record)):
+                    self.assertLess(time.monotonic(), deadline, "the first init never started")
+                    time.sleep(0.05)
+                self.assertTrue(lock.is_dir(), "the lock is held while init runs")
+                os.killpg(run.pid, signum)
+                _, stderr = run.communicate(timeout=20)
+                # The run ends through its EXIT trap, which bash runs for a fatal signal too.
+                self.assertNotEqual(0, run.returncode, stderr)
+                self.assertFalse(lock.exists())
 
 
 class FloorFileTests(CheckTestCase):
