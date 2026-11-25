@@ -31,6 +31,12 @@ namespace Platform.Telemetry;
 /// instruments; change request contracts/changes/issue-381-object-read-refusal.md, items 5 and 6).
 /// Unlike <c>rule</c> and <c>session_ref</c>, the line carries the field only when a read was refused
 /// (#429), so a line for any other request is the one it was before.
+///
+/// <c>fragment_id</c> is read the same way and written on the same terms: the id of the
+/// <see cref="IFragmentFeature"/> host resolution pinned for a request under a fragment the entry
+/// lists, on the line and as a tag of <c>gateway.requests</c> and <c>security.rejections</c>, and left
+/// off every other line and point, so no value an unchecked path segment supplied reaches either
+/// (contracts/telemetry.md; #961, #1007).
 /// </summary>
 internal sealed class RequestTelemetry
 {
@@ -89,6 +95,7 @@ internal sealed class RequestTelemetry
         string? readRefused = fields.ReadRefused;
         IAppFeature? resolved = context.Features.Get<IAppFeature>();
         string? appId = resolved?.App.AppId;
+        string? fragmentId = context.Features.Get<IFragmentFeature>()?.Fragment.FragmentId;
         long? revision = resolved?.Snapshot.Revision;
         string route = RouteOf(context.Request.Path);
 
@@ -103,17 +110,33 @@ internal sealed class RequestTelemetry
             span.SetTag("route", route);
         }
 
-        requests.Add(1,
-            new KeyValuePair<string, object?>("app_id", appId),
-            new KeyValuePair<string, object?>("route", route),
-            new KeyValuePair<string, object?>("status", status));
+        TagList requestTags = new()
+        {
+            { "app_id", appId },
+            { "route", route },
+            { "status", status },
+        };
+        if (fragmentId is not null)
+        {
+            requestTags.Add("fragment_id", fragmentId);
+        }
+
+        requests.Add(1, requestTags);
 
         // contracts/telemetry.md -> The instruments: this stage is the one owner of this count.
         if (rule is not null)
         {
-            rejections.Add(1,
-                new KeyValuePair<string, object?>("rule", rule),
-                new KeyValuePair<string, object?>("app_id", appId));
+            TagList rejectionTags = new()
+            {
+                { "rule", rule },
+                { "app_id", appId },
+            };
+            if (fragmentId is not null)
+            {
+                rejectionTags.Add("fragment_id", fragmentId);
+            }
+
+            rejections.Add(1, rejectionTags);
         }
 
         // contracts/telemetry.md -> The instruments: from the field the line logs, and before the line's
@@ -128,7 +151,7 @@ internal sealed class RequestTelemetry
         if (logger.IsEnabled(LogLevel.Information))
         {
             logger.Log(LogLevel.Information, new EventId(1, "Request"),
-                new RequestLine(appId, revision, route, fields, status, Math.Round(elapsed.TotalMilliseconds, 2)),
+                new RequestLine(appId, fragmentId, revision, route, fields, status, Math.Round(elapsed.TotalMilliseconds, 2)),
                 exception: null, static (_, _) => "request");
         }
     }
@@ -163,15 +186,17 @@ internal sealed class RequestTelemetry
     /// <summary>
     /// The line's fields, as structured state the formatter writes field by field. <c>read_refused</c>
     /// sits beside <c>rule</c> and <c>session_ref</c>, the feature's other two fields, and only on a line
-    /// whose read was refused: a null is left out rather than written, as #429 asks.
+    /// whose read was refused: a null is left out rather than written, as #429 asks. <c>fragment_id</c>
+    /// follows <c>app_id</c>, as the "Log fields" row orders them, on the same terms.
     /// </summary>
     private sealed class RequestLine(
-        string? appId, long? revision, string route, IRequestTelemetryFeature telemetry, int status, double durationMs)
+        string? appId, string? fragmentId, long? revision, string route, IRequestTelemetryFeature telemetry, int status, double durationMs)
         : IReadOnlyList<KeyValuePair<string, object?>>
     {
         private readonly KeyValuePair<string, object?>[] fields =
         [
             new("app_id", appId),
+            .. fragmentId is not null ? [new KeyValuePair<string, object?>("fragment_id", fragmentId)] : (KeyValuePair<string, object?>[])[],
             new("registry_rev", revision),
             new("route", route),
             new("rule", telemetry.Rule),

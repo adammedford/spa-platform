@@ -101,7 +101,8 @@ public sealed class TelemetryHost : IAsyncDisposable
         bool telemetry = true,
         IDictionary<string, string?>? configuration = null,
         string unknownHostRule = "host.unknown",
-        string appId = AppId)
+        string appId = AppId,
+        IEnumerable<FragmentDefinition>? fragments = null)
     {
         EchoUpstream echo = new();
         EchoUpstreamListener listener = await echo.ListenAsync(ct);
@@ -110,7 +111,8 @@ public sealed class TelemetryHost : IAsyncDisposable
         List<Metric> metrics = [];
         // The app host resolution pins. Overridable so a metric test can pick out its own points by
         // app_id among the instruments every host in the test process reports to.
-        AppDefinition entry = TestApps.Entry(appId);
+        // Its fragments, if any, are what the host-resolution stand-in pins IFragmentFeature for.
+        AppDefinition entry = TestApps.Entry(appId, fragments: fragments);
 
         StageHost host;
         try
@@ -197,6 +199,17 @@ public sealed class TelemetryHost : IAsyncDisposable
             }
 
             context.Features.Set<IAppFeature>(SettableAppFeature.For(entry));
+
+            // And, as the real stage pins it, the fragment of a request under /fragments/{fragmentId}/
+            // when the entry lists that fragment, and nothing for an id it does not list
+            // (contracts/pipeline.md, stage 4).
+            if (context.Request.Path.StartsWithSegments(PlatformPaths.Fragments, out PathString rest)
+                && rest.Value?.Split('/', StringSplitOptions.RemoveEmptyEntries) is [{ } fragmentId, ..]
+                && entry.Fragments.Any(fragment => string.Equals(fragment.FragmentId, fragmentId, StringComparison.Ordinal)))
+            {
+                context.Features.Set<IFragmentFeature>(SettableFragmentFeature.For(entry, fragmentId));
+            }
+
             await next(context);
         });
 
