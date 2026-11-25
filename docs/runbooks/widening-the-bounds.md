@@ -2,8 +2,8 @@
 
 Change a cell's platform configuration so that a registry entry may name an upstream or an issuer
 the cell does not admit yet, or so that a shell may list more fragments than the cell allows.
-Onboarding stays inside the bounds and needs no restart: an app that needs more than they allow
-needs this note first, and onboarding starts once it is done.
+Onboarding stays inside the bounds (`GLOSSARY.md` → "Onboarding"), so an app that needs more than
+they allow needs this note first, and onboarding starts once it is done.
 
 **Widening is a deployment, never a registry write.** The bounds are settings in the gateway task's
 environment. The cell module, `infra/modules/cell`, sets `Policy__*` and `Issuers__*` on the task
@@ -28,7 +28,9 @@ Start with the operator session in [README.md](README.md).
 The platform root, `$SPA_PLATFORM_ROOT`, sets these inputs; `contracts/platform-config.schema.json`
 is the shape of what they become. A fragment's client belongs to its shell's issuer, so a fragment
 never needs a new issuer, but a fragment that calls a new upstream, or one past the cap, needs this
-note as an app does.
+note as an app does. A cell's first fragment needs a gateway build that serves fragments and a
+registry document that declares `schemaVersion: 2` (ADR-0038). That is a one-way precondition of
+the cell, not a widening, and narrowing never undoes it.
 
 **A new issuer is checked before it goes in**, against the issuer section of the identity provider
 contract, `contracts/identity-provider-contract.md` → "The issuer": its discovery document, its
@@ -36,18 +38,29 @@ signing keys, its access and ID tokens, its revocation endpoint and how it ends 
 profile. The gateway trusts every issuer in the configuration to sign users in, and nothing in
 this note checks the issuer for you.
 
+A new issuer puts no secret in the task definition. Each client under it is an app's or a
+fragment's, and its secret reaches the gateway as every client's does: through that app's `clients`
+entry in the outputs document and the parameter the entry names, at onboarding.
+
 ## A new host suffix is not a widening
 
-A host outside the cell's suffixes needs DNS and a certificate in a zone the cell does not have.
+A host under a suffix the cell does not list in `Policy:AllowedHostSuffixes` needs DNS and a
+certificate in a zone the cell does not have.
 Under ADR-0010's assumption A1, an app's host is a single-label name under the cell's one zone,
 behind one wildcard certificate and one wildcard record, so a new suffix is a change to the cell
 itself, not to its platform configuration. This note has no procedure for it.
 
 ## The order
 
-1. **Apply the changed task definition.** Change the input in the platform root, then deploy as
-   [deploy.md](deploy.md) has it, from the commit of the gateway the cell already runs, so that
-   the deployment carries no change to the gateway's code beside the bounds. Its apply writes the new task definition.
+1. **Apply the changed task definition.** Change the input in the platform root's
+   `terraform.tfvars`, then deploy as [deploy.md](deploy.md) has it, from the commit of the gateway
+   the cell already runs, so that the deployment carries no change to the gateway's code beside the
+   bounds. Its apply writes the new task definition:
+
+   ```bash
+   tools/scripts/deploy.sh
+   ```
+
 2. **Wait until every task runs it.** `deploy.sh`'s exit 0 is that wait: the primary deployment
    completed on the applied task definition, and every running task is healthy on it. Until then,
    a task on the old task definition still holds the old bounds. It rejects a registry document
@@ -58,7 +71,11 @@ itself, not to its platform configuration. This note has no procedure for it.
    bounds, and `spactl` would refuse the entry the cell now admits.
 4. **Then run `spactl app validate` and onboarding**, with the rebuilt `$CONFIG`. `app validate`
    checks the app's definition against the new bounds offline, before any work at the identity
-   provider.
+   provider:
+
+   ```bash
+   spactl app validate "$APP_DEFINITION" --config "$CONFIG"
+   ```
 
 ## Narrowing the bounds
 

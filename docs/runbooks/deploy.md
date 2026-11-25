@@ -14,6 +14,10 @@ leaves it at what the platform root's tfvars hold.
 - **Two tasks with the durable session store** (`multi_task = true`, `session_store = "dynamodb"`):
   a rolling deployment signs no one out. Sessions live in DynamoDB under the shared key ring, so a
   task of either build reads them (`g6-continuity`).
+- **One task with the durable session store** (`multi_task = false`, `session_store = "dynamodb"`),
+  which the module also accepts: by the same mechanism no one is signed out, since the new task
+  starts and reads the stored sessions before the old one stops (`deployment_minimum_healthy_percent`
+  100 in `infra/modules/cell/ecs.tf`). No gate has proved this shape.
 
 If the change is a SPA release, a registry entry, a client or a secret, use that lever instead: none
 of them needs a deployment.
