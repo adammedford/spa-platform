@@ -94,6 +94,54 @@ full: each of its areas has an entry, or names the entry that carries it, in GAP
   the parameter so the task role can read it, or to run `spactl app remove` for the entry, then
   `spactl wait` either way.
 
+### GAP-31. The fragment boundary is logical, not isolation
+
+- **Missing.** A shell and its fragments are scripts of one origin, the shell's host. The gateway
+  gives each fragment its own client, token set, release and API routes, but in the browser the
+  scripts cannot be told apart: one fragment's code can call another's namespace, its APIs among
+  them, and the shell's (`contracts/http-contract.md` → "Fragments").
+- **Risk.** A fragment's code, or a dependency it loads, reaches every other unit on the page. The
+  per-fragment client bounds what the gateway forwards for a route, not what a script on the page
+  can request.
+- **Found.** The fragments spec, #961, "Out of Scope".
+- **Closes with.** Accepted. Cross-origin iframes, one origin per fragment, would isolate; nothing
+  plans them.
+
+### GAP-32. At most 20 managed-login clients per Cognito pool
+
+- **Missing.** Cognito allows 20 managed-login branding styles per user pool, one per app client for
+  that client's life, so a cell's pool can give managed login to at most 20 clients across every
+  app, shells and fragments together. A shell with five fragments uses six.
+- **Risk.** A cell on the `cognito` profile runs out of managed-login clients well before it runs
+  out of hosts, and the twenty-first client cannot be onboarded with managed login.
+- **Found.** The fragments spec, #961, "The registry entry and the app definition", which keeps the
+  count out of the contract.
+- **Closes with.** Accepted: a fact of the `cognito` profile, not a limit of the contract. Another
+  pool per cell, or another provider profile, lifts it.
+
+### GAP-33. A removed or rotated fragment's tokens are not revoked
+
+- **Missing.** Logout revokes each token set through its own current client. A set no current
+  credential can revoke is dropped unrevoked and logged: a removed fragment's, a rotated client's
+  (outcomes `no_scheme` and `client_changed`, `contracts/telemetry.md`), a superseded successor's,
+  and a set a callback could not deliver (`contracts/http-contract.md` → "Logout").
+- **Risk.** Each such token lives at the provider until it expires: 780 minutes for a refresh token
+  on poc (`infra/envs/poc/apps/main.tf`, the longest session plus an hour). A token copied before
+  the change stays usable that long.
+- **Found.** The fragments spec, #961, "Out of Scope", and its logout rule.
+- **Closes with.** Deferred, open: a revocation by the old client's credential at removal or
+  rotation, which no ticket carries yet.
+
+### GAP-34. Secret rotation assumes one secret per app
+
+- **Missing.** [secret-rotation.md](runbooks/secret-rotation.md) and the tooling it runs rotate the
+  secret of an app's client. A shell with fragments has one client per fragment, each with its own
+  secret, and no step rotates a fragment's.
+- **Risk.** A fragment's secret is rotated by hand, or not at all.
+- **Found.** The fragments spec, #961, "Out of Scope".
+- **Closes with.** Deferred, open: a per-fragment rotation in the runbook and its tooling, which no
+  ticket carries yet.
+
 ## What a mature release still needs (GAP-3 to GAP-12)
 
 Each is argued in `docs/roadmap.md` → "What a mature release still needs, and nothing has written

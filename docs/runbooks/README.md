@@ -13,10 +13,17 @@ disagree the header wins and the note is wrong: fix the note.
 | Roll the gateway back | [rollback.md](rollback.md) | Gateway | As Deploy: on one task with sessions in memory, every user of every app; on two tasks with the durable session store, no one |
 | Roll a release back | [release-rollback.md](release-rollback.md) | SPA release | No one |
 | Roll the registry back | [registry-rollback.md](registry-rollback.md) | Registry | Only users of an app the rollback removes or moves to another client |
+| Publish, activate or roll back a fragment | [fragments.md](fragments.md) | Fragment release | No one |
 | Rotate a client secret | [secret-rotation.md](secret-rotation.md) | Registry | No one |
 | End every session for an app | [end-app-sessions.md](end-app-sessions.md) | Registry | Every user of that app, and only that app |
 | Widen or narrow the bounds | [widening-the-bounds.md](widening-the-bounds.md) | Gateway | As Deploy: on one task with sessions in memory, every user of every app; on two tasks with the durable session store, no one |
 | Tear the cell down | [teardown.md](teardown.md) | Infrastructure | Everyone; nothing is left |
+
+A fragment is added to a shell, removed from it, or moved to another client with `spactl app add`,
+the registry lever, which signs no one out of the shell. A fragment added or moved reads
+`loginRequired` in each open session until its user signs in to it; a removed fragment's tokens are
+dropped, unrevoked (`docs/gaps.md`, GAP-33). The first fragment in a cell needs the fragments build
+first ([deploy.md](deploy.md)).
 
 Whom a gateway deployment signs out depends on the cell's shape, which the cell module's
 `multi_task` and `session_store` inputs choose: everyone on one task with sessions in memory, no one
