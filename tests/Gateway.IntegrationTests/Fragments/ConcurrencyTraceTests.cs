@@ -80,12 +80,31 @@ public sealed class ConcurrencyTraceTests
     }
 
     /// <summary>
+    /// Trace 2: A refreshes orders while B's fallback callback signs in to it again, on one record. Each
+    /// ordering of the two writes is a case: the callback first, Trace 2(i), or the refresh first,
+    /// Trace 2(ii). In both the callback wins and its set, F', is the one the record keeps.
+    /// </summary>
+    [Theory]
+    [InlineData("callback first")]
+    [InlineData("refresh first")]
+    public async Task G9_O7_trace_2(string first)
+    {
+        if (first == "callback first")
+        {
+            await CallbackWritesFirstAsync();
+        }
+        else
+        {
+            await RefreshWritesFirstAsync();
+        }
+    }
+
+    /// <summary>
     /// Trace 2(i): B's fallback callback writes v8 <c>{F'}</c> first; A's refresh replace loses, its
     /// re-read shows F', not the F0 it presented, so A is superseded and drops F1. Winner: the callback;
     /// record v8; A answers 200 with F''s token; B lands on <c>returnUrl</c>.
     /// </summary>
-    [Fact]
-    public async Task G9_O7_trace_2i()
+    private static async Task CallbackWritesFirstAsync()
     {
         // Mutation that turns it red: re-applying whatever the winner holds writes F1 over F', so the
         // record's version and orders' token fail.
@@ -120,8 +139,7 @@ public sealed class ConcurrencyTraceTests
     /// unconditionally within <c>MergeBudget</c>: v9 <c>{F'}</c>. Winner: the callback; A 200 (F1), B lands on
     /// <c>returnUrl</c>; F1 orphaned.
     /// </summary>
-    [Fact]
-    public async Task G9_O7_trace_2ii()
+    private static async Task RefreshWritesFirstAsync()
     {
         // Mutation that turns it red: a callback that drops its set on a lost replace (MergeBudget 1)
         // leaves F1 in the record, so the version and orders' token fail.
