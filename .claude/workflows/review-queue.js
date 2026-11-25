@@ -1548,7 +1548,7 @@ const TRAILING_SPACE = /[ \t\r\n]+$/
 const codePoints = (s) => Array.from(s.replace(TRAILING_SPACE, '')).length
 // What a read's agent gave in place of the text it was asked for, for the next read's prompt to
 // name: an error, nothing, or a copy of `got` characters where `want` were counted.
-const missedBy = (b, got, want) => (!b || got === null ? 'returned nothing' : b.error ? `returned the error ${JSON.stringify(b.error)} in place of it` : `ran ${got} characters, not ${want}`)
+const missedBy = (b, got, want) => (b && b.error ? `returned the error ${JSON.stringify(b.error)} in place of it` : !b || got === null ? 'returned nothing' : `ran ${got} characters, not ${want}`)
 const readBodies = async (n, inv) => {
   const wanted = [
     ...(inv.comments || []).map((e) => ({ e, review: false })),
