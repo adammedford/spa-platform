@@ -10,15 +10,15 @@ namespace Gateway.SecurityTests.Fragments;
 
 /// <summary>
 /// What the composed fragment rows of this suite share: a login to a shell, the step a chain stops at,
-/// the session record's version and the token an upstream saw. A copy of the integration suite's
-/// helpers (tests/Gateway.IntegrationTests/Fragments/Fragments.cs), since a test project references
-/// no other.
+/// the session record's version and the token an upstream saw. The requests the integration suite
+/// makes the same way are the harness's (<see cref="FragmentRequests"/>); these wrap them with this
+/// suite's cancellation.
 /// </summary>
 internal static class FragmentLogins
 {
     /// <summary>A navigation to the shell's <c>/bff/login</c> with <paramref name="returnUrl"/>, followed to its end.</summary>
     public static Task<BrowserResponse> LoginAsync(TestBrowser browser, HarnessApp shell, string returnUrl = "/") =>
-        browser.NavigateAsync(shell.Url("/bff/login?returnUrl=" + Uri.EscapeDataString(returnUrl)), ct: Suite.Ct);
+        FragmentRequests.LoginAsync(browser, shell, returnUrl, Suite.Ct);
 
     /// <summary>
     /// Signs <paramref name="browser"/> in to the shell and stops at the first <c>/bff/chain</c> step,
@@ -47,26 +47,8 @@ internal static class FragmentLogins
     /// Calls the echo API through the shell's route (<paramref name="fragmentId"/> null) or a
     /// fragment's, and returns the bearer token the echo upstream received.
     /// </summary>
-    public static async Task<string> TokenAtEchoAsync(GatewayHarness harness, TestBrowser browser, HarnessApp shell, string? fragmentId)
-    {
-        string marker = "/items/" + Guid.NewGuid().ToString("N");
-        string route = fragmentId is null ? "/api/echo" : $"/fragments/{fragmentId}/api/echo";
-        BrowserResponse response = await browser.GetAsync(shell.Url(route + marker).ToString(), ct: Suite.Ct);
-        Assert.True(response.StatusCode == HttpStatusCode.OK, $"the echo call through {route} answered {response}: {response.Body}");
-
-        EchoedRequest received = Assert.Single(harness.Echo.Requests, request => request.Path == marker);
-        string bearer = received.Headers["Authorization"].Single();
-        return bearer["Bearer ".Length..];
-    }
-
-    /// <summary>One string claim of a JWT's payload, read without validating it: the upstream validated it.</summary>
-    public static string ClaimOf(string jwt, string claim)
-    {
-        string payload = jwt.Split('.')[1].Replace('-', '+').Replace('_', '/');
-        payload = payload.PadRight(payload.Length + ((4 - (payload.Length % 4)) % 4), '=');
-        using JsonDocument document = JsonDocument.Parse(Encoding.UTF8.GetString(Convert.FromBase64String(payload)));
-        return document.RootElement.GetProperty(claim).GetString()!;
-    }
+    public static Task<string> TokenAtEchoAsync(GatewayHarness harness, TestBrowser browser, HarnessApp shell, string? fragmentId) =>
+        FragmentRequests.BearerAtEchoAsync(harness, browser, shell, fragmentId, Suite.Ct);
 
     /// <summary>A string property of a JSON response body, or null when it has none.</summary>
     public static string? Property(BrowserResponse response, string name)

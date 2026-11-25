@@ -37,8 +37,9 @@ public sealed record GatewayHarnessOptions
         },
     };
 
-    /// <summary>The fragment ids of <c>fixtures/fragments/shell.json</c>, in its order.</summary>
-    public static IReadOnlyList<string> ShellFragmentIds { get; } = ["orders", "reports", "order-history", "report-archive", "alerts", "profile"];
+    /// <summary>The fragment ids of <c>fixtures/fragments/shell.json</c>, in its order, read from the file.</summary>
+    public static IReadOnlyList<string> ShellFragmentIds { get; } =
+        [.. FixtureFiles.AppDefinition("shell")["fragments"]!.AsArray().Select(fragment => fragment!["fragmentId"]!.GetValue<string>())];
 
     /// <summary>The release every app is published under.</summary>
     public string Release { get; init; } = "2026-10-10.1";

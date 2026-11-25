@@ -1,4 +1,3 @@
-using System.Text;
 using System.Text.Json;
 using Gateway.TestHarness;
 using Platform.Testing;
@@ -10,7 +9,7 @@ internal static class Fragments
 {
     /// <summary>A navigation to the shell's <c>/bff/login</c> with <paramref name="returnUrl"/>, followed to its end.</summary>
     public static Task<BrowserResponse> LoginAsync(TestBrowser browser, HarnessApp shell, string returnUrl, CancellationToken ct) =>
-        browser.NavigateAsync(shell.Url("/bff/login?returnUrl=" + Uri.EscapeDataString(returnUrl)), ct: ct);
+        FragmentRequests.LoginAsync(browser, shell, returnUrl, ct);
 
     /// <summary><c>GET /bff/session</c> on the shell's host, as the reference client reads it.</summary>
     public static async Task<JsonElement> SessionAsync(TestBrowser browser, HarnessApp shell, CancellationToken ct)
@@ -41,27 +40,6 @@ internal static class Fragments
     /// fragment's, and returns the <c>client_id</c> of the bearer token the echo upstream received.
     /// </summary>
     public static async Task<string> ClientIdAtEchoAsync(
-        GatewayHarness harness, TestBrowser browser, HarnessApp shell, string? fragmentId, CancellationToken ct)
-    {
-        string marker = "/items/" + Guid.NewGuid().ToString("N");
-        string route = fragmentId is null ? "/api/echo" : $"/fragments/{fragmentId}/api/echo";
-        BrowserResponse response = await browser.GetAsync(shell.Url(route + marker).ToString(), ct: ct);
-        if (response.StatusCode != System.Net.HttpStatusCode.OK)
-        {
-            throw new InvalidOperationException($"the echo call through {route} answered {response}: {response.Body}");
-        }
-
-        EchoedRequest received = Assert.Single(harness.Echo.Requests, request => request.Path == marker);
-        string bearer = received.Headers["Authorization"].Single();
-        return ClaimOf(bearer["Bearer ".Length..], "client_id");
-    }
-
-    /// <summary>One string claim of a JWT's payload, read without validating it: the upstream validated it.</summary>
-    public static string ClaimOf(string jwt, string claim)
-    {
-        string payload = jwt.Split('.')[1].Replace('-', '+').Replace('_', '/');
-        payload = payload.PadRight(payload.Length + ((4 - (payload.Length % 4)) % 4), '=');
-        using JsonDocument document = JsonDocument.Parse(Encoding.UTF8.GetString(Convert.FromBase64String(payload)));
-        return document.RootElement.GetProperty(claim).GetString()!;
-    }
+        GatewayHarness harness, TestBrowser browser, HarnessApp shell, string? fragmentId, CancellationToken ct) =>
+        FragmentRequests.ClaimOf(await FragmentRequests.BearerAtEchoAsync(harness, browser, shell, fragmentId, ct), "client_id");
 }

@@ -128,19 +128,27 @@ public sealed class FragmentTelemetryTests
 
         string[] lines = [.. harness.Log.Rendered, .. harness.Log.Lines.Select(line => line.Text)];
         Assert.NotEmpty(lines);
+        Assert.Empty(Leaks(lines, values));
+
+        // The search can fail: a line made to hold any one of the values, inside other text, is a leak.
+        Assert.All(values, value => Assert.NotEmpty(Leaks(["request " + value + " seen"], values)));
+    }
+
+    /// <summary>
+    /// Each place a value appears in a line, named by the value's position and the line's length, never by
+    /// the value: a test's output is a log too.
+    /// </summary>
+    private static List<string> Leaks(IReadOnlyList<string> lines, IReadOnlyList<string> values)
+    {
         List<string> leaks = [];
         foreach (string line in lines)
         {
-            // Named by kind and position, never by value: a test's output is a log too.
             leaks.AddRange(values.Select((value, index) => (value, index))
                 .Where(pair => line.Contains(pair.value, StringComparison.Ordinal))
                 .Select(pair => $"value #{pair.index} at {line.IndexOf(pair.value, StringComparison.Ordinal)} of a {line.Length}-character line"));
         }
 
-        Assert.Empty(leaks);
-
-        // The search can fail: the same values in a line made to hold one are found.
-        Assert.Contains(values, value => ("request " + values[^1] + " seen").Contains(value, StringComparison.Ordinal));
+        return leaks;
     }
 
     /// <summary>Sends one request and returns the request line it produced, the last in the harness's log.</summary>

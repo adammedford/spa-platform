@@ -70,8 +70,9 @@ tools/scripts/verify-tunnel.sh /healthz
 
 A gateway build from before #961's fragments work refuses a `schemaVersion: 2` document by its
 version, and `spactl` never lowers the version once a fragment is written: it writes 2 with the
-first fragment, and refuses any write, `registry rollback` included, that declares less than the
-live document. So once a cell's registry declares 2, a gateway rolled back past the fragments build
+first fragment, refuses a `registry apply` whose document declares less than the live one, and has
+`registry rollback` keep the live version, so restoring an earlier revision's content from before the
+fragments still writes 2. So once a cell's registry declares 2, a gateway rolled back past the fragments build
 starts with no snapshot it can read, and its `/readyz` never reports a revision. Removing every
 fragment does not help; the version stays 2.
 

@@ -33,7 +33,11 @@ public sealed class ImportMapCheckTests
         // A map the entry's script-src does not list: the same map naming another chunk.
         string otherMap = index.Replace("ui.748e4831.js", "ui.0000beef.js", StringComparison.Ordinal);
         string missing = HashSource(MapOf(otherMap));
-        Assert.DoesNotContain(missing, harness.RegistryDocument.ToJsonString(), StringComparison.Ordinal);
+        // Read from the entry's parsed script-src, not the serialized document, which escapes the quotes
+        // and the plus a hash source holds and so could never contain it.
+        string[] listed = [.. harness.RegistryDocument["apps"]![0]!["csp"]!["script-src"]!.AsArray().Select(source => source!.GetValue<string>())];
+        Assert.NotEmpty(listed);
+        Assert.DoesNotContain(missing, listed);
 
         // A second map after the first.
         string twoMaps = index.Replace("</head>", StartTag + "{\"imports\":{}}</script>\n</head>", StringComparison.Ordinal);

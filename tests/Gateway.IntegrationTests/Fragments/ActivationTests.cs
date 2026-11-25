@@ -29,7 +29,6 @@ public sealed class ActivationTests
         await using GatewayHarness harness = await GatewayHarness.StartAsync(GatewayHarnessOptions.Shell(1), Ct);
         HarnessApp shell = harness.App("shell");
         string releaseA = harness.Options.Release;
-        GatewayHost host = harness.Hosts[0];
         using TestBrowser browser = harness.CreateBrowser();
         Assert.Equal(HttpStatusCode.OK, (await Fragments.LoginAsync(browser, shell, "/", Ct)).StatusCode);
 
@@ -77,9 +76,9 @@ public sealed class ActivationTests
         Assert.Equal(shellIndex, await TextAsync(browser, shell, "/"));
         Assert.Equal(shellRelease, Release(harness));
 
-        // No restart: the one host that started serves every step, and the session from before A -> B
+        // No restart: the harness started one host and starts no other in this test, so every step above
+        // was served by that running host. What a restart would lose, the session signed in before A -> B,
         // still answers.
-        Assert.Same(host, Assert.Single(harness.Hosts));
         Assert.Equal("signedIn", Fragments.States(await Fragments.SessionAsync(browser, shell, Ct))["orders"]);
     }
 

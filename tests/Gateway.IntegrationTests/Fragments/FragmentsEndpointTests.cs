@@ -19,9 +19,10 @@ public sealed class FragmentsEndpointTests
     public async Task G9_bff_fragments_lists_each_fragment_s_id_and_entry_url_to_a_session_only_with_no_store()
     {
         // Mutation that turns it red: an entryUrl built from the release path (or the default entry for
-        // every fragment) fails the reports item, whose entry is main.js; dropping the no-store header
-        // fails the Cache-Control check.
-        await using GatewayHarness harness = await GatewayHarness.StartAsync(GatewayHarnessOptions.Shell(2), Ct);
+        // every fragment) fails the reports item, whose entry is main.js; listing the fragments sorted by
+        // fragmentId fails the order, since the registry lists order-history after orders and reports and
+        // an ordinal sort puts it first; dropping the no-store header fails the Cache-Control check.
+        await using GatewayHarness harness = await GatewayHarness.StartAsync(GatewayHarnessOptions.Shell(3), Ct);
         HarnessApp shell = harness.App("shell");
 
         using TestBrowser anonymous = harness.CreateBrowser();
@@ -39,7 +40,9 @@ public sealed class FragmentsEndpointTests
         using JsonDocument body = JsonDocument.Parse(listed.Body);
         (string, string)[] items = [.. body.RootElement.GetProperty("fragments").EnumerateArray()
             .Select(item => (item.GetProperty("fragmentId").GetString()!, item.GetProperty("entryUrl").GetString()!))];
-        Assert.Equal([("orders", "/fragments/orders/entry.js"), ("reports", "/fragments/reports/main.js")], items);
+        Assert.Equal(
+            [("orders", "/fragments/orders/entry.js"), ("reports", "/fragments/reports/main.js"), ("order-history", "/fragments/order-history/entry.js")],
+            items);
         Assert.All(items, item => Assert.DoesNotContain(harness.Options.Release, item.Item2, StringComparison.Ordinal));
 
         // The listed entry resolves to the live release's bytes.

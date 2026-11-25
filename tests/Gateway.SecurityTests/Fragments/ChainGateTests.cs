@@ -128,8 +128,10 @@ public sealed class ChainGateTests
             // other-session continuation with a 302 to the provider; one that skips the expiry check
             // does the same on the expired one; one that reads c under no app purpose does so on the
             // other-app one. Each fails the Location assertion, naming its case.
-            Assert.True(response.StatusCode == HttpStatusCode.Redirect, $"{name}: {response}");
-            Assert.True(response.Header("Location") == "/", $"{name}: Location {response.Header("Location")}");
+            // The messages name the status and the Location's path, never the URL's query: under a mutation
+            // the Location is the provider's authorize URL, whose state a test's output must not carry.
+            Assert.True(response.StatusCode == HttpStatusCode.Redirect, $"{name}: {(int)response.StatusCode}");
+            Assert.True(response.Header("Location") == "/", $"{name}: Location {PathOf(response.Header("Location"))}");
             Assert.True(response.Body.Length == 0, $"{name}: a problem body {response.Body}");
             Assert.True(await Observed.RuleOfOneRequestAsync(harness, before, Suite.Ct) == RuleIds.AuthChain, $"{name}: rule");
             Assert.True(metrics.Sum("security.rejections", ("rule", RuleIds.AuthChain)) == counted + 1, $"{name}: security.rejections");
@@ -171,5 +173,17 @@ public sealed class ChainGateTests
         Assert.Equal(shell.ClientId, SignedIn.Query(authorize, "client_id"));
         Assert.Equal(shell.Url("/signin-oidc").ToString(), SignedIn.Query(authorize, "redirect_uri"));
         Assert.DoesNotContain(shell.Fragment("orders").ClientId, response.Header("Location")!, StringComparison.Ordinal);
+    }
+
+    /// <summary>A Location's scheme, host and path, with its query and fragment left out.</summary>
+    private static string PathOf(string? location)
+    {
+        if (location is null)
+        {
+            return "(none)";
+        }
+
+        int end = location.IndexOfAny(['?', '#']);
+        return end < 0 ? location : location[..end];
     }
 }

@@ -55,7 +55,10 @@ public sealed class AssetClaimTests
 
         // A fragment's namespace.
         Assert.Equal(0, (await PublishFragmentAsync(harness, "2026-11-06.1", A)).Exit);
+        await ActivateFragmentAsync(harness, "2026-11-06.1");
+        Assert.Equal(A, await ServedAsync(browser, harness, "/fragments/orders/assets/x.js"));
         Assert.Equal(0, (await PublishFragmentAsync(harness, "2026-11-06.2", x: null)).Exit);
+        await ActivateFragmentAsync(harness, "2026-11-06.2");
         (int fragmentRefused, _, string fragmentError) = await PublishFragmentAsync(harness, "2026-11-06.3", B);
         Assert.Equal(1, fragmentRefused);
         Assert.Contains("claimed by release 2026-11-06.1", fragmentError, StringComparison.Ordinal);

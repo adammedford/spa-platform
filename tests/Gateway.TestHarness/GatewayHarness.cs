@@ -191,11 +191,8 @@ public sealed class GatewayHarness : IAsyncDisposable
         FakeClientSecretSource secrets = new();
         CapturedLog log = new();
 
-        Dictionary<string, string> upstreams = new(StringComparer.Ordinal)
-        {
-            ["orders"] = FetchMetadata.Origin(mockApi.BaseAddressOf("orders")),
-            ["reports"] = FetchMetadata.Origin(mockApi.BaseAddressOf("reports")),
-        };
+        Dictionary<string, string> upstreams = MockApiListeners.ToDictionary(
+            name => name, name => FetchMetadata.Origin(mockApi.BaseAddressOf(name)), StringComparer.Ordinal);
         if (options.EchoApi is { } echoApi)
         {
             upstreams[echoApi] = FetchMetadata.Origin(echoListener.BaseAddress);
@@ -968,7 +965,11 @@ public sealed class GatewayHarness : IAsyncDisposable
         return app;
     }
 
-    /// <summary>The mock API's listeners, by the API names the fixture definitions give them.</summary>
+    /// <summary>
+    /// The mock API's listeners, by the API names the fixture definitions give them
+    /// (<c>MockApiOptions.Default</c>): each is an upstream of the cell, and admits the clients of the apps
+    /// and fragments whose entries name it.
+    /// </summary>
     private static readonly string[] MockApiListeners = ["orders", "reports"];
 
     /// <summary>

@@ -43,8 +43,8 @@ public sealed class CrossClientTests
         string shellToken = await FragmentLogins.TokenAtEchoAsync(harness, browser, shell, fragmentId: null);
         string fragmentToken = await FragmentLogins.TokenAtEchoAsync(harness, browser, shell, "orders");
         Assert.NotEqual(shellToken, fragmentToken);
-        Assert.Equal(shell.ClientId, FragmentLogins.ClaimOf(shellToken, "client_id"));
-        Assert.Equal(orders.ClientId, FragmentLogins.ClaimOf(fragmentToken, "client_id"));
+        Assert.Equal(shell.ClientId, FragmentRequests.ClaimOf(shellToken, "client_id"));
+        Assert.Equal(orders.ClientId, FragmentRequests.ClaimOf(fragmentToken, "client_id"));
     }
 
     /// <summary>

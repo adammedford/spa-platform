@@ -98,15 +98,7 @@ public sealed class CspMergeTests
             .Select(directive => directive.Split(' ', StringSplitOptions.RemoveEmptyEntries))
             .ToDictionary(parts => parts[0], parts => parts[1..], StringComparer.Ordinal);
 
-    /// <summary>
-    /// N-36 (#1007, part of #961 -> "Composition"): a fragment's <c>csp</c> extends only <c>script-src</c>,
-    /// <c>style-src</c>, <c>img-src</c>, <c>font-src</c> and <c>connect-src</c>, and its <c>script-src</c>
-    /// carries no <c>'strict-dynamic'</c>, nonce or hash, because the one policy it joins is the whole host's.
-    /// A registry write that breaks either rule is refused by <c>spactl registry apply</c>, and the same
-    /// document written past spactl is rejected by the gateway's own read: in both cases the live document
-    /// stays.
-    /// </summary>
-
+    /// <summary>The rows N-36 refuses: a directive outside the five, then script-src sources a fragment may not add.</summary>
     public static TheoryData<string, string> Widenings => new()
     {
         { "frame-ancestors", "'self'" },
@@ -119,6 +111,14 @@ public sealed class CspMergeTests
         { "script-src", "'sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU='" },
     };
 
+    /// <summary>
+    /// N-36 (#1007, part of #961 -> "Composition"): a fragment's <c>csp</c> extends only <c>script-src</c>,
+    /// <c>style-src</c>, <c>img-src</c>, <c>font-src</c> and <c>connect-src</c>, and its <c>script-src</c>
+    /// carries no <c>'strict-dynamic'</c>, nonce or hash, because the one policy it joins is the whole host's.
+    /// A registry write that breaks either rule is refused by <c>spactl registry apply</c>, and the same
+    /// document written past spactl is rejected by the gateway's own read: in both cases the live document
+    /// stays.
+    /// </summary>
     [Theory]
     [MemberData(nameof(Widenings))]
     public async Task G9_a_fragment_csp_outside_the_five_directives_or_with_strict_dynamic_a_nonce_or_a_hash_is_refused(string directive, string source)
