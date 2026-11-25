@@ -432,7 +432,8 @@ PYTHON_DOUBLE = """#!/bin/bash
 # and each of those calls goes to the real interpreter in every case, so the readers under test
 # are the real ones. After the merge it derives
 # the roadmap from the repository root and then, for a merge into main only, runs the worktree sweep
-# and the branch cleanup beside it (#1503), and each of those calls is recorded with the directory
+# with its two cache and process rules (#1503, #1504) and the branch cleanup beside it, and each of
+# those calls is recorded with the directory
 # it ran in. Where the merge fails, all three are unexpected: a case that reaches them has gone past
 # a merge that should have stopped it. Where the merge goes through, the roadmap goes to the real
 # interpreter, over the copies of its inputs the case's clone holds, and the sweep and the cleanup
@@ -447,7 +448,7 @@ while [ -e {log}/python3-call-$n ]; do n=$((n + 1)); done
 printf '%s\\0' "$(pwd -P)" "$@" > {log}/python3-call-$n
 if {past_merge}; then
   if [ "$#" -eq 2 ] && [ "$1" = -I ] && [ "$2" = tools/roadmap.py ]; then exec {python} "$@"; fi
-  if [ "$#" -eq 3 ] && [ "$1" = -I ] && [ "$2" = {sweep} ] && [ "$3" = --apply ]; then
+  if [ "$#" -eq 5 ] && [ "$1" = -I ] && [ "$2" = {sweep} ] && [ "$3 $4 $5" = "--apply --strip-idle --end-orphans" ]; then
     [ ! -e {dir}/real-cleanup ] || exec {python} "$@"
     [ ! -e {dir}/sweep-fails ] || {{ echo "sweep double: could not judge the worktrees" >&2; exit 3; }}
     exit 0
@@ -1410,7 +1411,8 @@ class PostMergeTests(LandTestCase):
         return [str(case.work), "-I", "tools/roadmap.py"]
 
     def sweep_call(self, case: MergingCase) -> list[str]:
-        return [str(case.work), "-I", str(SWEEP), "--apply"]
+        # Both of #1504's rules, after the removals: an idle worktree's caches, an orphaned provider.
+        return [str(case.work), "-I", str(SWEEP), "--apply", "--strip-idle", "--end-orphans"]
 
     def cleanup_call(self, case: MergingCase) -> list[str]:
         return [str(case.work), "-I", str(CLEANUP), "--delete"]

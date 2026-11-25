@@ -6,7 +6,8 @@ namespace Spactl;
 /// <summary>
 /// spactl's commands (plan row 2.6; docs/plan/05-infrastructure-and-cost.md, "Deployment and rollback"):
 /// <c>registry validate</c>, <c>registry apply</c>, <c>registry rollback</c>, <c>release publish</c>,
-/// <c>release activate</c>, <c>app add</c>, <c>app remove</c> and <c>wait</c>.
+/// <c>release activate</c>, <c>fragment publish</c>, <c>fragment activate</c>, <c>app add</c>,
+/// <c>app remove</c> and <c>wait</c>.
 ///
 /// Exit codes: 0 done, 1 refused (the reason is on standard error, and nothing was written that the
 /// reason names), 2 a command line spactl cannot run.
@@ -20,7 +21,10 @@ public static class SpactlApp
           spactl registry rollback [--to-revision <N>] --config <platform-config.json>
           spactl release publish   <appId> <directory> <release>
           spactl release activate  <appId> <release> --config <platform-config.json>
-          spactl app add           <definition.json> [--release <release>] --config <platform-config.json>
+          spactl fragment publish  <appId> <fragmentId> <directory> <release> [--entry <file>]
+          spactl fragment activate <appId> <fragmentId> <release> --config <platform-config.json>
+          spactl app add           <definition.json> [--release <release>]
+                                   [--fragment-release <fragmentId=release,...>] --config <platform-config.json>
           spactl app remove        <appId> --config <platform-config.json>
           spactl wait              --url <gateway origin> --revision <N> [--instances <id,id,...>]
                                    [--timeout <seconds>]
@@ -41,7 +45,9 @@ public static class SpactlApp
         ["registry rollback"] = [.. Bucket, "--config", "--to-revision"],
         ["release publish"] = [.. Bucket],
         ["release activate"] = [.. Bucket, "--config"],
-        ["app add"] = [.. Bucket, "--config", "--release"],
+        ["fragment publish"] = [.. Bucket, "--entry"],
+        ["fragment activate"] = [.. Bucket, "--config"],
+        ["app add"] = [.. Bucket, "--config", "--release", "--fragment-release"],
         ["app remove"] = [.. Bucket, "--config"],
         ["wait"] = ["--url", "--revision", "--instances", "--timeout"],
     };
@@ -64,6 +70,8 @@ public static class SpactlApp
                 "registry rollback" => await commands.RegistryRollbackAsync(ct),
                 "release publish" => await commands.ReleasePublishAsync(ct),
                 "release activate" => await commands.ReleaseActivateAsync(ct),
+                "fragment publish" => await commands.FragmentPublishAsync(ct),
+                "fragment activate" => await commands.FragmentActivateAsync(ct),
                 "app add" => await commands.AppAddAsync(ct),
                 "app remove" => await commands.AppRemoveAsync(ct),
                 "wait" => await commands.WaitAsync(ct),

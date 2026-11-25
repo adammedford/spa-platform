@@ -50,11 +50,13 @@ internal sealed class Commands(Arguments arguments, SpactlEnvironment environmen
         if (arguments.Has("--offline"))
         {
             // The document and the policy only: no live revision to exceed, and no bucket to find the
-            // release prefixes in. Useful in a pull request; apply makes every check again.
+            // release prefixes, the fragment entry files or the shells' import maps in. Useful in a pull
+            // request; apply makes every check again.
             RegistryValidation validation = Validate(document, policy, liveRevision: null);
             await Out.WriteLineAsync(
                 $"Valid offline: revision {validation.Revision}, {validation.Apps.Length} app(s). " +
-                "The live revision and the release prefixes were not checked.");
+                "The live revision and the release prefixes were not checked, and neither the entry file check " +
+                "nor the import-map check ran: both need the bucket.");
             return 0;
         }
 
@@ -121,6 +123,7 @@ internal sealed class Commands(Arguments arguments, SpactlEnvironment environmen
 
         long? restored = RevisionOf(earlier);
         earlier["revision"] = live.Revision!.Value + 1;
+        KeepSchemaVersion(earlier, live.Document);
         int result = await CheckAndWriteAsync(earlier.ToJsonString(Indented), live, policy, write: true, ct);
         await Out.WriteLineAsync($"Rolled back to the content of revision {restored}.");
         return result;
@@ -130,14 +133,11 @@ internal sealed class Commands(Arguments arguments, SpactlEnvironment environmen
 
     /// <summary>
     /// Uploads a directory as <c>apps/{appId}/releases/{release}/</c>, every object written once
-    /// (contracts/s3-layout.md, "A release prefix is written once"; ADR-0009): the store sends
-    /// <c>If-None-Match: *</c> in a single-part upload.
+    /// (contracts/s3-layout.md, "Each key under a release is written once"; ADR-0009), through
+    /// <see cref="PublishAsync"/>.
     ///
-    /// <c>index.html</c> goes last. The prefix check that <c>activate</c>, <c>app add</c> and
-    /// <c>apply</c> make looks for it, so a publish that stops part way leaves a prefix nothing can
-    /// activate. An object already present with the same bytes counts as published, so a publish that
-    /// stopped can be run again; one with other bytes refuses the whole release, because the bucket
-    /// denies deletes under <c>apps/</c> and that release name is spent.
+    /// <c>index.html</c> goes last. The prefix check every registry write makes looks for it, so a
+    /// publish that stops part way leaves a prefix nothing can activate.
     /// </summary>
     public async Task<int> ReleasePublishAsync(CancellationToken ct)
     {
@@ -152,17 +152,76 @@ internal sealed class Commands(Arguments arguments, SpactlEnvironment environmen
         }
 
         string root = Path.GetFullPath(directory);
-        List<string> files = [.. Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)
-            .Select(file => Path.GetRelativePath(root, file).Replace(Path.DirectorySeparatorChar, '/'))
-            .Order(StringComparer.Ordinal)];
+        List<string> files = ReleaseFiles(root);
         if (!files.Remove("index.html"))
         {
             throw new RefusedException($"{directory} has no index.html, which every release requires (contracts/s3-layout.md).");
         }
 
         files.Add("index.html");
+        return await PublishAsync(AppNamespace(appId), release, root, files, ct);
+    }
 
-        string prefix = ReleasePrefix(appId, release);
+    /// <summary>
+    /// Uploads a directory as <c>apps/{appId}/fragments/{fragmentId}/releases/{release}/</c>, as
+    /// <see cref="ReleasePublishAsync"/> uploads a shell's, with the entry file in the place of
+    /// <c>index.html</c> (contracts/s3-layout.md, "A fragment release is complete when its entry file
+    /// exists"). It reads no registry, so a fragment's owner can publish before the fragment is
+    /// onboarded, and a top-level <c>api/</c> is refused because <c>/fragments/{fragmentId}/api/**</c>
+    /// is the fragment's APIs and maps to no key (<see cref="PlatformPaths.IsPublishableInFragment"/>).
+    /// </summary>
+    public async Task<int> FragmentPublishAsync(CancellationToken ct)
+    {
+        IReadOnlyList<string> operands = arguments.Operands(2, 4, "fragment publish <appId> <fragmentId> <directory> <release> [--entry <file>]");
+        string appId = AppId(operands[0]);
+        string fragmentId = FragmentId(operands[1]);
+        string directory = operands[2];
+        string release = Release(operands[3]);
+        string entry = arguments.Option("--entry") ?? PlatformPaths.DefaultEntry;
+        if (!PlatformPaths.IsEntryName(entry))
+        {
+            throw new UsageException(
+                $"'{entry}' is not an entry file name: one .js file at the release root, at most " +
+                $"{PlatformPaths.EntryMaxLength} characters (registry.schema.json#/$defs/entry).");
+        }
+
+        if (!Directory.Exists(directory))
+        {
+            throw new RefusedException($"No directory at {directory}.");
+        }
+
+        string root = Path.GetFullPath(directory);
+        List<string> files = ReleaseFiles(root);
+        if (!files.Remove(entry))
+        {
+            throw new RefusedException($"{directory} has no {entry}, the entry file a fragment release requires (contracts/s3-layout.md).");
+        }
+
+        if (files.FirstOrDefault(file => !PlatformPaths.IsPublishableInFragment(file)) is { } reserved)
+        {
+            throw new RefusedException(
+                $"{directory} has {reserved} under a top-level api/: /fragments/{fragmentId}/api/ is reserved for the " +
+                "fragment's APIs and maps to no release key (contracts/s3-layout.md). Nothing was written.");
+        }
+
+        files.Add(entry);
+        return await PublishAsync(FragmentNamespace(appId, fragmentId), release, root, files, ct);
+    }
+
+    /// <summary>
+    /// Writes <paramref name="files"/> under <c>{ns}releases/{release}/</c> in their order, the last
+    /// being the file whose presence marks the release complete, every object written once: the store
+    /// sends <c>If-None-Match: *</c> in a single-part upload. An object already present with the same
+    /// bytes counts as published, so a publish that stopped can be run again; one with other bytes
+    /// refuses the whole release, because the bucket denies deletes under <c>apps/</c> and that release
+    /// name is spent.
+    ///
+    /// Each <c>assets/</c> file is claimed first (<see cref="ClaimAsync"/>), so an <c>assets/</c> URL
+    /// names the same bytes in every release of its namespace.
+    /// </summary>
+    private async Task<int> PublishAsync(string ns, string release, string root, List<string> files, CancellationToken ct)
+    {
+        string prefix = ns + "releases/" + release + "/";
         IObjectStore objects = Store();
         int written = 0;
         int unchanged = 0;
@@ -170,6 +229,11 @@ internal sealed class Commands(Arguments arguments, SpactlEnvironment environmen
         {
             string key = prefix + file;
             byte[] bytes = await File.ReadAllBytesAsync(Path.Combine(root, file), ct);
+            if (file.StartsWith(AssetsPrefix, StringComparison.Ordinal))
+            {
+                await ClaimAsync(objects, ns, file, release, bytes, written, ct);
+            }
+
             if (await objects.PutAsync(key, new MemoryStream(bytes, writable: false), ifMatch: null, ct))
             {
                 written++;
@@ -189,6 +253,61 @@ internal sealed class Commands(Arguments arguments, SpactlEnvironment environmen
         await Out.WriteLineAsync(
             $"Published {prefix}: {written} object(s) written, {unchanged} already present and identical.");
         return 0;
+    }
+
+    /// <summary>
+    /// Creates the write-once claim <c>{ns}claims/{file}</c> for one <c>assets/</c> file, body
+    /// <c>{"sha256", "release"}</c>, with <c>If-None-Match: *</c>, before the file is written
+    /// (contracts/s3-layout.md, "An assets/ URL names the same bytes in its namespace"). Of two racing
+    /// publishers exactly one create succeeds. A claim already there with the same digest lets the
+    /// publish go on, which is how a stopped publish resumes and how a later release reuses an
+    /// unchanged chunk; one with another digest refuses the release before its object is written. A
+    /// claim that cannot be read back after its create was refused is answered "run the command
+    /// again". A key published before claims existed has none, so its first claim is made now: there
+    /// is no backfill.
+    /// </summary>
+    private static async Task ClaimAsync(IObjectStore objects, string ns, string file, string release, byte[] bytes, int written, CancellationToken ct)
+    {
+        string claimKey = ns + "claims/" + file;
+        string digest = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(bytes));
+        byte[] claim = Utf8.GetBytes(new JsonObject { ["sha256"] = digest, ["release"] = release }.ToJsonString());
+        if (await objects.PutAsync(claimKey, new MemoryStream(claim, writable: false), ifMatch: null, ct))
+        {
+            return;
+        }
+
+        StoredObject? stored = await objects.GetAsync(claimKey, ifNoneMatch: null, ct);
+        if (stored?.Body is not { } body)
+        {
+            throw new RefusedException(
+                $"The claim at {claimKey} was refused but could not be read back: run the command again. " +
+                $"{written} object(s) of this run were written.");
+        }
+
+        JsonObject? held;
+        await using (body)
+        {
+            try
+            {
+                held = await JsonNode.ParseAsync(body, cancellationToken: ct) as JsonObject;
+            }
+            catch (JsonException)
+            {
+                held = null;
+            }
+        }
+
+        string? heldDigest = held?["sha256"] is JsonValue value && value.TryGetValue(out string? text) ? text : null;
+        if (string.Equals(heldDigest, digest, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        string holder = held?["release"] is JsonValue named && named.TryGetValue(out string? name) ? $"release {name}" : "an unreadable claim";
+        throw new RefusedException(
+            $"{ns}releases/{release}/{file} is refused: {ns}{file} is claimed by {holder} at {claimKey} with other bytes, " +
+            "and an assets/ URL names the same bytes in every release (contracts/s3-layout.md). Give the changed " +
+            $"file a new name. Nothing was written for that key; {written} object(s) of this run were written.");
     }
 
     /// <summary>
@@ -214,6 +333,36 @@ internal sealed class Commands(Arguments arguments, SpactlEnvironment environmen
         }, createIfAbsent: false, ct);
     }
 
+    /// <summary>
+    /// Points one fragment of a live entry at a published release: a change to that fragment's
+    /// <c>release</c> and nothing else, so the shell's release and every policy the entry sends stay
+    /// as they are (contracts/s3-layout.md, "a fragment's activation leaves its shell's release
+    /// alone"). Rolling a fragment back is the same command with the earlier release; there is no
+    /// fragment rollback command. Like every write it goes through <see cref="CheckAndWriteAsync"/>,
+    /// which checks every entry and every fragment of the document, not only this one.
+    /// </summary>
+    public async Task<int> FragmentActivateAsync(CancellationToken ct)
+    {
+        IReadOnlyList<string> operands = arguments.Operands(2, 3, "fragment activate <appId> <fragmentId> <release> --config <platform-config.json>");
+        string appId = AppId(operands[0]);
+        string fragmentId = FragmentId(operands[1]);
+        string release = Release(operands[2]);
+
+        return await ChangeAsync(apps =>
+        {
+            JsonObject entry = Find(apps, appId) ?? throw new RefusedException($"The live registry has no app '{appId}'.");
+            JsonObject fragment = FindFragment(entry, fragmentId)
+                ?? throw new RefusedException($"The live entry of '{appId}' has no fragment '{fragmentId}'. Add it with app add first.");
+            if (fragment["release"]?.GetValue<string>() == release)
+            {
+                return null;
+            }
+
+            fragment["release"] = release;
+            return $"Activated release {release} of fragment {fragmentId} of {appId}.";
+        }, createIfAbsent: false, ct);
+    }
+
     // ---- app ------------------------------------------------------------------------------------
 
     /// <summary>
@@ -226,13 +375,19 @@ internal sealed class Commands(Arguments arguments, SpactlEnvironment environmen
     /// An appId the registry already holds is replaced in place, so the secret-rotation runbook
     /// (docs/plan/05-infrastructure-and-cost.md, "Rotating a client secret") is this same command run
     /// after the parameter version rises.
+    ///
+    /// Each fragment is completed the same way, from the outputs' <c>clients.{appId}.fragments.{fragmentId}</c>,
+    /// and its release from <c>--fragment-release id=rel,id=rel</c> or the live entry's fragment of that
+    /// id: a fragment new to the entry must be named there, and a live fragment's release it does not
+    /// name is kept (contracts/app-definition.schema.json, the fragment definition).
     /// </summary>
     public async Task<int> AppAddAsync(CancellationToken ct)
     {
-        string path = arguments.Operands(2, 1, "app add <definition.json> [--release <release>] --config <platform-config.json>")[0];
+        string path = arguments.Operands(2, 1, "app add <definition.json> [--release <release>] [--fragment-release <id=release,...>] --config <platform-config.json>")[0];
         string text = ReadFile(path);
         PlatformPolicy policy = Policy();
         string? release = arguments.Option("--release") is { } value ? Release(value) : null;
+        Dictionary<string, string> named = arguments.Option("--fragment-release") is { } listed ? FragmentReleases(listed) : [];
 
         AppDefinitionValidation validation = RegistryValidator.ValidateAppDefinition(text, policy);
         Warn(validation.Warnings);
@@ -247,13 +402,36 @@ internal sealed class Commands(Arguments arguments, SpactlEnvironment environmen
             ?? throw new RefusedException(
                 $"The infrastructure outputs name no client for '{appId}'. Apply the apps root, which creates it, then run app add again.");
 
+        IReadOnlyList<string> fragmentIds = AppEntry.FragmentIds(definition);
+        if (fragmentIds.FirstOrDefault(id => client["fragments"]?[id] is not JsonObject) is { } unknown)
+        {
+            throw new RefusedException(
+                $"The infrastructure outputs name no client for fragment '{unknown}' of '{appId}' " +
+                $"(clients.{appId}.fragments.{unknown}). Apply the apps root, which creates it, then run app add again.");
+        }
+
+        if (named.Keys.FirstOrDefault(id => !fragmentIds.Contains(id, StringComparer.Ordinal)) is { } stray)
+        {
+            throw new RefusedException($"--fragment-release names '{stray}', which {path} has no fragment for.");
+        }
+
         return await ChangeAsync(apps =>
         {
             JsonObject? existing = Find(apps, appId);
             string entryRelease = release
                 ?? existing?["release"]?.GetValue<string>()
                 ?? throw new RefusedException($"--release is required: the live registry has no app '{appId}' yet.");
-            JsonObject entry = AppEntry.Complete(definition, client, entryRelease);
+            Dictionary<string, string> fragmentReleases = new(StringComparer.Ordinal);
+            foreach (string fragmentId in fragmentIds)
+            {
+                fragmentReleases[fragmentId] = named.GetValueOrDefault(fragmentId)
+                    ?? (existing is null ? null : FindFragment(existing, fragmentId))?["release"]?.GetValue<string>()
+                    ?? throw new RefusedException(
+                        $"Fragment '{fragmentId}' is new to the entry of '{appId}': name its release with " +
+                        $"--fragment-release {fragmentId}=<release>.");
+            }
+
+            JsonObject entry = AppEntry.Complete(definition, client, entryRelease, fragmentReleases);
             if (existing is null)
             {
                 apps.Add(entry);
@@ -401,6 +579,7 @@ internal sealed class Commands(Arguments arguments, SpactlEnvironment environmen
         }
 
         document["revision"] = (live.Revision ?? 0) + 1;
+        KeepSchemaVersion(document, live.Document);
         int result = await CheckAndWriteAsync(document.ToJsonString(Indented), live, policy, write: true, ct);
         await Out.WriteLineAsync(done);
         return result;
@@ -410,45 +589,179 @@ internal sealed class Commands(Arguments arguments, SpactlEnvironment environmen
     /// Every check a registry document must pass before it is written, then, when
     /// <paramref name="write"/>, the write: conditional on the live object's ETag, or create-only when
     /// there is no live object (<see cref="IObjectStore.PutAsync"/>). Throws when refused.
+    ///
+    /// The checks run on the proposed document, every shell and every fragment of it, not only the one
+    /// a command changed, so a write never leaves a live entry the gateway cannot serve
+    /// (contracts/s3-layout.md, "A fragment release is complete when its entry file exists"; the
+    /// fragments spec, #961, "The import map").
     /// </summary>
     private async Task<int> CheckAndWriteAsync(string document, LiveDocument live, PlatformPolicy policy, bool write, CancellationToken ct)
     {
         RegistryValidation validation = Validate(document, policy, live.Revision);
+        JsonObject proposed = JsonNode.Parse(document)!.AsObject();
 
-        // The release prefix exists in S3: contracts/README.md gives this rule to spactl alone. A prefix
-        // exists when its index.html does, the one object contracts/s3-layout.md requires.
+        // registry.schema.json#/properties/schemaVersion: "spactl writes 2 on a document's first fragment
+        // and never lowers it". Every command that builds a document keeps it (KeepSchemaVersion);
+        // registry apply writes the operator's file as written, so a file that declares less is refused
+        // rather than rewritten.
+        if (live.Document is { } current && SchemaVersionOf(proposed) < SchemaVersionOf(current))
+        {
+            throw new RefusedException(
+                $"Refused: the document declares schemaVersion {SchemaVersionOf(proposed)}, below the live registry's " +
+                $"{SchemaVersionOf(current)}, and spactl never lowers it (registry.schema.json#/properties/schemaVersion). " +
+                "Nothing was written.");
+        }
+
         IObjectStore objects = Store();
         List<string> missing = [];
+        List<string> maps = [];
         foreach (AppDefinition app in validation.Apps)
         {
+            // The release prefix exists in S3: contracts/README.md gives this rule to spactl alone. A
+            // prefix exists when its index.html does, the one object contracts/s3-layout.md requires.
+            // The same read gives the document the import-map check scans.
             string prefix = ReleasePrefix(app.AppId, app.Release);
-            if (!await ExistsAsync(objects, prefix + "index.html", ct))
+            string? index = await ReadTextAsync(objects, prefix + "index.html", ct);
+            if (index is null)
             {
                 missing.Add($"{prefix} (release {app.Release} of {app.AppId}) has no index.html: publish it first.");
             }
+
+            // Only the entry file of a fragment is read, never its index.html: the shell's document is
+            // the one the browser loads, and the one place an import map may be.
+            foreach (FragmentDefinition fragment in app.Fragments)
+            {
+                string key = FragmentReleasePrefix(app.AppId, fragment.FragmentId, fragment.Release) + fragment.Entry;
+                if (!await ExistsAsync(objects, key, ct))
+                {
+                    missing.Add(
+                        $"{key} (release {fragment.Release} of fragment {fragment.FragmentId} of {app.AppId}): " +
+                        "no entry file: publish it first.");
+                }
+            }
+
+            if (index is not null)
+            {
+                CheckImportMap(app, index, policy, live.Document, maps);
+            }
         }
 
-        if (missing.Count > 0)
+        if (missing.Count > 0 || maps.Count > 0)
         {
-            throw new RefusedException("Refused: " + string.Join(Environment.NewLine + "  ", ["a release prefix does not exist.", .. missing]));
+            List<string> reasons = [];
+            if (missing.Count > 0)
+            {
+                reasons.Add("a release is not published.");
+                reasons.AddRange(missing);
+            }
+
+            if (maps.Count > 0)
+            {
+                reasons.Add("an import map would not load under the policy the gateway would send.");
+                reasons.AddRange(maps);
+            }
+
+            throw new RefusedException("Refused: " + string.Join(Environment.NewLine + "  ", reasons));
         }
 
         if (!write)
         {
-            await Out.WriteLineAsync($"Valid: revision {validation.Revision}, {validation.Apps.Length} app(s), every release published.");
+            await Out.WriteLineAsync(
+                $"Valid: revision {validation.Revision}, {validation.Apps.Length} app(s), every release published, " +
+                "every fragment's entry file present and every import map admitted.");
             return 0;
         }
 
         if (!await objects.PutAsync(RegistryKey, new MemoryStream(Utf8.GetBytes(document), writable: false), live.ETag, ct))
         {
             throw new RefusedException(
-                "The live registry changed after spactl read it, so nothing was written. Run the command again " +
+                "The live registry changed after spactl read it, so nothing was written: run the command again " +
                 "to apply against the new live version.");
         }
 
         await Out.WriteLineAsync($"Applied revision {validation.Revision}: {validation.Apps.Length} app(s).");
         return 0;
     }
+
+    /// <summary>
+    /// The import-map check of one shell of the proposed document (the fragments spec, #961, "The
+    /// import map"): its <c>index.html</c>, from the proposed release, is scanned by
+    /// <see cref="ImportMap.Read"/>, and a map it holds must be admitted by a hash source in the
+    /// <c>script-src</c> the gateway would send for the entry, the pure merge of
+    /// <see cref="ContentSecurityPolicy.Merge"/>: the baseline, the shell's <c>csp</c>, then each
+    /// fragment's in registry order. A refusal names the source to add. Two things warn and do not
+    /// refuse: a CSP <c>&lt;meta&gt;</c> in the document, and a hash source the live entry lists that
+    /// the proposed one drops, after which a release whose map it admitted cannot be activated until it
+    /// is added back (re-add with <c>app add</c>, then activate).
+    /// </summary>
+    private void CheckImportMap(AppDefinition shell, string index, PlatformPolicy policy, JsonObject? live, List<string> refusals)
+    {
+        string at = ReleasePrefix(shell.AppId, shell.Release) + "index.html";
+        ImportMap.Scan scan = ImportMap.Read(index);
+        if (scan.CspMeta)
+        {
+            WarnLine(
+                $"{at} carries a Content-Security-Policy <meta>, which a browser enforces beside the gateway's header; " +
+                "this check reads only the header's policy.");
+        }
+
+        ImmutableArray<string> proposed = shell.Csp.TryGetValue("script-src", out ImmutableArray<string> sources) ? sources : [];
+        foreach (string hash in LiveHashSources(live, shell.AppId).Where(hash => !proposed.Contains(hash, StringComparer.Ordinal)))
+        {
+            WarnLine(
+                $"the write removes {hash} from the csp.script-src of {shell.AppId}, which the live registry lists: a release " +
+                "whose import map it admits cannot be activated until app add lists it again.");
+        }
+
+        if (scan.Refusal is { } refusal)
+        {
+            refusals.Add($"{at} (release {shell.Release} of {shell.AppId}) is refused: {refusal}");
+            return;
+        }
+
+        if (scan.Map is not { } map)
+        {
+            return;
+        }
+
+        // form-action is the only directive the issuer's origin reaches; script-src, read here, is
+        // the same whatever it is. The validator has refused an issuer the policy does not configure.
+        string formAction = policy.Issuers[shell.OAuth.Issuer].BrowserOrigin.OriginalString;
+        if (!ImportMap.Admits(map, ContentSecurityPolicy.Merge(shell, formAction).SourcesOf("script-src")))
+        {
+            refusals.Add(
+                $"{at} (release {shell.Release} of {shell.AppId}): no script-src source admits its import map. " +
+                $"Add {ImportMap.Sha256Source(map)} to the entry's csp.script-src with app add, then activate.");
+        }
+    }
+
+    /// <summary>The hash sources the live entry of <paramref name="appId"/> lists in its own <c>csp.script-src</c>.</summary>
+    private static IEnumerable<string> LiveHashSources(JsonObject? live, string appId) =>
+        live?["apps"] is JsonArray apps && Find(apps, appId)?["csp"]?["script-src"] is JsonArray listed
+            ? listed.OfType<JsonValue>()
+                .Select(value => value.TryGetValue(out string? source) ? source : null)
+                .OfType<string>()
+                .Where(ImportMap.IsHashSource)
+            : [];
+
+    /// <summary>
+    /// registry.schema.json#/properties/schemaVersion: "spactl writes 2 on a document's first fragment
+    /// and never lowers it". A document a command builds or restores declares 2 once any entry carries
+    /// fragments, and never less than the live document declared.
+    /// </summary>
+    private static void KeepSchemaVersion(JsonObject document, JsonObject? live)
+    {
+        long version = SchemaVersionOf(document);
+        bool fragments = document["apps"] is JsonArray apps && apps.OfType<JsonObject>().Any(entry => entry["fragments"] is not null);
+        long kept = Math.Max(Math.Max(version, fragments ? 2 : 1), live is null ? 1 : SchemaVersionOf(live));
+        if (kept != version)
+        {
+            document["schemaVersion"] = kept;
+        }
+    }
+
+    private static long SchemaVersionOf(JsonObject document) =>
+        document["schemaVersion"] is { } value && JsonInteger.TryRead(value, out long version) ? version : 1;
 
     private RegistryValidation Validate(string document, PlatformPolicy policy, long? liveRevision)
     {
@@ -514,6 +827,19 @@ internal sealed class Commands(Arguments arguments, SpactlEnvironment environmen
         }
 
         return stored is not null;
+    }
+
+    /// <summary>A key's text, or null when the store confirms it absent. A refused read propagates.</summary>
+    private static async Task<string?> ReadTextAsync(IObjectStore objects, string key, CancellationToken ct)
+    {
+        StoredObject? stored = await objects.GetAsync(key, ifNoneMatch: null, ct);
+        if (stored?.Body is not { } body)
+        {
+            return null;
+        }
+
+        using StreamReader reader = new(body, Utf8);
+        return await reader.ReadToEndAsync(ct);
     }
 
     private static async Task<bool> SameBytesAsync(IObjectStore objects, string key, byte[] bytes, CancellationToken ct)
@@ -586,11 +912,61 @@ internal sealed class Commands(Arguments arguments, SpactlEnvironment environmen
     private static string ReadFile(string path) =>
         File.Exists(path) ? File.ReadAllText(path) : throw new RefusedException($"No file at {path}.");
 
-    /// <summary>contracts/s3-layout.md. Both values are checked against registry.schema.json first.</summary>
-    private static string ReleasePrefix(string appId, string release) => $"apps/{appId}/releases/{release}/";
+    /// <summary>The first segment of a release key that names the immutable, claimed files (contracts/s3-layout.md).</summary>
+    private const string AssetsPrefix = "assets/";
+
+    /// <summary>contracts/s3-layout.md: a shell's namespace. Every value is checked against registry.schema.json first.</summary>
+    private static string AppNamespace(string appId) => $"apps/{appId}/";
+
+    /// <summary>contracts/s3-layout.md: one fragment's namespace, under its shell's.</summary>
+    private static string FragmentNamespace(string appId, string fragmentId) => $"apps/{appId}/fragments/{fragmentId}/";
+
+    private static string ReleasePrefix(string appId, string release) => AppNamespace(appId) + $"releases/{release}/";
+
+    private static string FragmentReleasePrefix(string appId, string fragmentId, string release) =>
+        FragmentNamespace(appId, fragmentId) + $"releases/{release}/";
+
+    /// <summary>Every file under a release directory, relative and with '/' separators, in ordinal order.</summary>
+    private static List<string> ReleaseFiles(string root) =>
+        [.. Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)
+            .Select(file => Path.GetRelativePath(root, file).Replace(Path.DirectorySeparatorChar, '/'))
+            .Order(StringComparer.Ordinal)];
 
     private static string AppId(string value) =>
         ContractDocuments.IsAppId(value) ? value : throw new UsageException($"'{value}' is not an appId (registry.schema.json#/$defs/appId).");
+
+    /// <summary>registry.schema.json#/$defs/fragmentId: the appId rule, so the same check.</summary>
+    private static string FragmentId(string value) =>
+        ContractDocuments.IsAppId(value) ? value : throw new UsageException($"'{value}' is not a fragmentId (registry.schema.json#/$defs/fragmentId).");
+
+    /// <summary>
+    /// <c>--fragment-release id=rel,id=rel</c>: one comma-separated option, not a repeated one, because
+    /// the parser keeps only a repeated option's last value (as <c>wait --instances</c>).
+    /// </summary>
+    private static Dictionary<string, string> FragmentReleases(string listed)
+    {
+        Dictionary<string, string> releases = new(StringComparer.Ordinal);
+        foreach (string item in listed.Split(','))
+        {
+            int equals = item.IndexOf('=', StringComparison.Ordinal);
+            if (equals < 0)
+            {
+                throw new UsageException("--fragment-release must be a comma-separated list of <fragmentId>=<release>.");
+            }
+
+            string fragmentId = FragmentId(item[..equals]);
+            if (!releases.TryAdd(fragmentId, Release(item[(equals + 1)..])))
+            {
+                throw new UsageException($"--fragment-release names '{fragmentId}' twice.");
+            }
+        }
+
+        return releases;
+    }
+
+    private static JsonObject? FindFragment(JsonObject entry, string fragmentId) =>
+        (entry["fragments"] as JsonArray)?.OfType<JsonObject>()
+            .FirstOrDefault(fragment => fragment["fragmentId"] is JsonValue id && id.TryGetValue(out string? value) && value == fragmentId);
 
     private static string Release(string value) =>
         ContractDocuments.IsRelease(value) ? value : throw new UsageException($"'{value}' is not a release name (registry.schema.json#/$defs/release).");
@@ -696,9 +1072,11 @@ internal sealed class Commands(Arguments arguments, SpactlEnvironment environmen
     {
         foreach (RegistryIssue warning in warnings)
         {
-            environment.Error.WriteLine($"warning: {warning}");
+            WarnLine(warning.ToString());
         }
     }
+
+    private void WarnLine(string warning) => environment.Error.WriteLine($"warning: {warning}");
 
     private static RefusedException Refused(string what, ImmutableArray<RegistryIssue> errors) =>
         new($"{what}:{Environment.NewLine}  {string.Join(Environment.NewLine + "  ", errors)}");

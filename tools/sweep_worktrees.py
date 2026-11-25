@@ -6,6 +6,9 @@ Owner: integrator.
                                                  reason and its size, and remove nothing
     tools/sweep_worktrees.py --apply             remove what the listing marks, then git worktree prune
     tools/sweep_worktrees.py --apply --verbose   and list each kept worktree, not only a count
+    tools/sweep_worktrees.py --strip-idle [--idle-hours N] --end-orphans
+                                                 and list what the two rules below would do; with
+                                                 --apply, each flag runs its rule after the removals
 
 Nothing else removes a worktree (#1503). tools/land.sh removes only the detached one a landing ran
 in (#490); tools/prune_branches.py keeps every branch a worktree holds and never removes one; the
@@ -65,6 +68,35 @@ whose directories are gone. It counts what it kept under a short reason each, co
 `prune_branches.py --delete` does (#524), and --verbose lists each kept one. The last line is the
 count removed and the total freed.
 
+Two more rules make room without removing a worktree (#1504), each asked for by its own flag, so
+--apply alone is the removals and nothing else. Without --apply a flag lists its candidates and acts
+on nothing; with it, its rule runs after the removals on a process table read again then, and the
+last line adds the bytes each rule freed. On 2026-11-23 deleting only these caches in two worktrees
+waiting on a review freed 8.9 GB, and ending nine orphaned providers with one worktree freed 5.18 GB.
+
+  --strip-idle   For each linked worktree the sweep keeps, other than the one holding `main`, whose
+                 `.terraform` directories are initialised against the real backends: when nothing
+                 outside its ignored cache directories has changed in --idle-hours (72), and no
+                 process has its working directory inside it, delete each directory
+                 `git status --porcelain --ignored` lists as wholly ignored whose last component is
+                 one of STRIP. The list comes from git, so a tracked directory of one of those names
+                 is never a candidate, and each is listed again just before it goes. The deletion
+                 never follows a symlink: a provider linked into TF_PLUGIN_CACHE_DIR loses its link
+                 and the cache keeps it. Each line gives the directory's size and how long ago its
+                 worktree last changed. An lsof that cannot answer strips nothing.
+  --end-orphans  Send SIGTERM to each process whose executable's name begins `terraform-provider-`,
+                 whose parent is pid 1 and whose working directory, as lsof names it, no longer
+                 exists: Terraform started it in a worktree since removed, and it holds its deleted
+                 binary open where du cannot see it. Each line gives its pid, start time, executable
+                 and the bytes of deleted files it holds open (`lsof +L1`). One whose parent still
+                 runs, or whose working directory exists, is left and not listed. A ps or lsof that
+                 cannot answer ends nothing. The executable is ps's `comm`, which is the whole path
+                 on macOS; a ps that cuts it short, as Linux's cuts it at 15 characters, matches no
+                 provider and so ends nothing.
+
+A rule that cannot judge says so in one line and changes nothing, and the exit status stays the
+removals'.
+
 It exits 0 once every worktree is judged, whatever it kept; 1, removing nothing, when it cannot judge
 (no origin/main, a worktree listing git cannot give), and 1 when `git worktree prune` fails; 2 for an
 unknown argument.
@@ -75,10 +107,13 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import math
 import os
 import pathlib
 import re
 import shlex
+import shutil
+import signal
 import stat
 import subprocess
 import sys
@@ -99,6 +134,13 @@ FILES = frozenset({".terraform.lock.hcl", ".DS_Store"})
 SUFFIXES = (".pyc",)
 # Rule 7's quiet time.
 IDLE_SECONDS = 72 * 60 * 60
+# What --strip-idle deletes from an idle worktree the sweep keeps (#1504): the build output and
+# Terraform's working directory, about 0.5 GB and 4.4 GB of a built worktree, which a build or
+# `terraform init` makes again. Its quiet time is --idle-hours, 72 unless given.
+STRIP = frozenset({".terraform", "bin", "obj"})
+STRIP_IDLE_HOURS = 72.0
+# What --end-orphans ends (#1504): a provider Terraform started, outliving it.
+PROVIDER = "terraform-provider-"
 NIGHT = re.compile(r"^overnight-(\d{4}-\d{2}-\d{2})$")
 # What a part-way operation leaves in a worktree's git directory: https://git-scm.com/docs/git-status.
 IN_PROGRESS = ("rebase-merge", "rebase-apply", "MERGE_HEAD", "BISECT_LOG", "CHERRY_PICK_HEAD",
@@ -255,36 +297,52 @@ def in_progress(path: str) -> str:
 
 
 class Processes:
-    """Every process's working directory, read once, when a worktree first reaches rule 5."""
+    """Every process's working directory, read once, when a worktree first reaches rule 5, or when
+    --strip-idle or --end-orphans first asks."""
 
     def __init__(self):
         self.read = False
-        self.cwds: list[str] = []
+        self.cwds: dict[int, str] = {}
         self.why = ""
+
+    def load(self) -> None:
+        if self.read:
+            return
+        self.read = True
+        try:
+            # -F pn prints each process's id on a line starting `p`, then each open file's name on
+            # a line starting `n`: https://lsof.readthedocs.io. A working directory deleted since
+            # still prints its old path, which is how --end-orphans sees that it is gone.
+            done = subprocess.run(["lsof", "-a", "-d", "cwd", "-F", "pn"], capture_output=True,
+                                  text=True, check=False)
+        except OSError:
+            self.why = "lsof is not on PATH, so nothing says whether a process runs in it"
+            return
+        if done.returncode != 0:
+            self.why = f"lsof exited {done.returncode}, so nothing says whether a process runs in it"
+            return
+        pid = -1
+        for line in done.stdout.splitlines():
+            if line.startswith("p") and line[1:].isdigit():
+                pid = int(line[1:])
+            elif line.startswith("n"):
+                self.cwds[pid] = line[1:]
 
     def inside(self, path: str) -> str | None:
         """Why a process keeps the worktree, or None when none runs in it."""
-        if not self.read:
-            self.read = True
-            try:
-                # -F n prints each open file's name on a line starting `n`: https://lsof.readthedocs.io.
-                done = subprocess.run(["lsof", "-a", "-d", "cwd", "-F", "n"], capture_output=True,
-                                      text=True, check=False)
-            except OSError:
-                self.why = "lsof is not on PATH, so nothing says whether a process runs in it"
-            else:
-                if done.returncode != 0:
-                    self.why = (f"lsof exited {done.returncode}, so nothing says whether a process "
-                                "runs in it")
-                else:
-                    self.cwds = [line[1:] for line in done.stdout.splitlines() if line.startswith("n")]
+        self.load()
         if self.why:
             return self.why
         root = real(path)
-        for cwd in self.cwds:
+        for cwd in self.cwds.values():
             if cwd == root or cwd.startswith(root + "/"):
                 return f"a process has its working directory at {cwd}"
         return None
+
+    def cwd_of(self, pid: int) -> str | None:
+        """The process's working directory as lsof named it, or None when lsof named none."""
+        self.load()
+        return self.cwds.get(pid)
 
 
 class Nights:
@@ -414,6 +472,176 @@ def still_the_same(tree: Tree) -> str | None:
     return None
 
 
+# --- --strip-idle: an idle worktree's caches ---------------------------------------------------
+
+
+class Cache(NamedTuple):
+    tree: Tree
+    path: str
+    size: int
+    hours: int
+
+
+def cache_dirs(path: str) -> list[str] | None:
+    """The directories git lists as ignored in the worktree whose last component is one of STRIP,
+    as absolute paths, or None when git cannot say. Only a wholly ignored directory is listed with
+    the trailing slash (https://git-scm.com/docs/git-status#_porcelain_format_version_1), so a
+    tracked directory of one of those names, and a symlink, which git lists as a file, are never
+    here."""
+    status = status_of(path)
+    if isinstance(status, str):
+        return None
+    return [os.path.normpath(os.path.join(path, entry)) for entry in status[1]
+            if entry.endswith("/") and entry.rstrip("/").rsplit("/", 1)[-1] in STRIP]
+
+
+def newest_outside(path: str, caches: list[str]) -> float:
+    """The newest change time of anything under the worktree, itself included, outside the cache
+    directories, which are not entered and whose own times are not read. Nothing is followed
+    through a link."""
+    skip = set(caches)
+    newest = os.lstat(path).st_mtime
+    for directory, subdirectories, files in os.walk(path, onerror=lambda _error: None):
+        subdirectories[:] = [name for name in subdirectories
+                             if os.path.normpath(os.path.join(directory, name)) not in skip]
+        for name in subdirectories + files:
+            try:
+                newest = max(newest, os.lstat(os.path.join(directory, name)).st_mtime)
+            except OSError:
+                continue
+    return newest
+
+
+def idle_caches(trees: list[Tree], processes: Processes, now: float,
+                idle_seconds: float) -> tuple[list[Cache], str]:
+    """The cache directories --strip-idle deletes from the kept worktrees, and why none was judged
+    when lsof cannot say whether a process runs in them."""
+    found: list[Cache] = []
+    for tree in trees:
+        # The worktree holding main is initialised against the real backends (#1504).
+        if tree.branch == "main" or tree.prunable or not os.path.isdir(tree.path):
+            continue
+        caches = cache_dirs(tree.path)
+        if not caches:
+            continue
+        quiet = now - newest_outside(tree.path, caches)
+        if quiet < idle_seconds:
+            continue
+        if processes.inside(tree.path):
+            if processes.why:
+                return [], processes.why
+            continue
+        for cache in caches:
+            found.append(Cache(tree, cache, measure(cache)[0], max(0, int(quiet // 3600))))
+    return found, ""
+
+
+def strip(cache: Cache) -> tuple[str, int]:
+    """Deletes one cache directory: (why it was left, or "" once deleted; the bytes freed)."""
+    if cache.path not in (cache_dirs(cache.tree.path) or []):
+        return "git no longer lists it as an ignored directory", 0
+    try:
+        if not stat.S_ISDIR(os.lstat(cache.path).st_mode):
+            return "it is no longer a directory", 0
+        # rmtree removes a symlink inside the tree and never follows it, and refuses a path that
+        # is itself a link: https://docs.python.org/3/library/shutil.html#shutil.rmtree. A provider
+        # linked into TF_PLUGIN_CACHE_DIR loses its link and the cache keeps the provider.
+        shutil.rmtree(cache.path)
+    except OSError as error:
+        left = measure(cache.path)[0] if os.path.lexists(cache.path) else 0
+        return f"it could not all be deleted: {error}", max(0, cache.size - left)
+    return "", cache.size
+
+
+# --- --end-orphans: a Terraform provider whose Terraform has gone -----------------------------
+
+
+class Orphan(NamedTuple):
+    pid: int
+    started: str
+    executable: str
+    cwd: str
+
+
+# `ps -o pid=,ppid=,lstart=,comm=`: lstart is five words, `Mon Nov 18 00:02:11 2026`, and comm,
+# last so a space in it is kept, is the executable's path
+# (https://keith.github.io/xcode-man-pages/ps.1.html).
+PS_ROW = re.compile(r"^\s*(\d+)\s+(\d+)\s+(\S+\s+\S+\s+\d+\s+\S+\s+\d+)\s+(.+)$")
+
+
+def orphans(processes: Processes) -> tuple[list[Orphan], str]:
+    """The providers --end-orphans ends, and why none was judged when ps or lsof cannot say."""
+    try:
+        done = subprocess.run(["ps", "-A", "-o", "pid=,ppid=,lstart=,comm="], capture_output=True,
+                              text=True, check=False)
+    except OSError:
+        return [], "ps is not on PATH, so nothing says which providers are orphaned"
+    if done.returncode != 0:
+        return [], f"ps exited {done.returncode}, so nothing says which providers are orphaned"
+    found: list[Orphan] = []
+    for line in done.stdout.splitlines():
+        row = PS_ROW.match(line)
+        # A row that does not read is not judged, so nothing is ended on a guess.
+        if not row or int(row.group(2)) != 1:
+            continue
+        pid, executable = int(row.group(1)), row.group(4).strip()
+        if not os.path.basename(executable).startswith(PROVIDER):
+            continue
+        cwd = processes.cwd_of(pid)
+        if processes.why:
+            return [], processes.why
+        if cwd is None or os.path.exists(cwd):
+            continue
+        found.append(Orphan(pid, " ".join(row.group(3).split()), executable, cwd))
+    return found, ""
+
+
+def held(pids: list[int]) -> dict[int, int] | None:
+    """The bytes of deleted files each process holds open, which du cannot see and which come back
+    once it exits, or None when lsof cannot say. +L1 lists open files with no link left, -F pfis
+    names each process, then each file's descriptor, inode and size: https://lsof.readthedocs.io."""
+    if not pids:
+        return {}
+    try:
+        done = subprocess.run(["lsof", "-a", "+L1", "-p", ",".join(str(pid) for pid in pids),
+                               "-F", "pfis"], capture_output=True, text=True, check=False)
+    except OSError:
+        return None
+    # lsof exits 1 when nothing matches, which here is a process holding no deleted file.
+    if done.returncode != 0 and (done.returncode != 1 or done.stdout.strip()):
+        return None
+    sizes: dict[int, int] = {pid: 0 for pid in pids}
+    seen: set[tuple[int, str]] = set()
+    pid, inode = -1, ""
+    for line in done.stdout.splitlines():
+        field, value = line[:1], line[1:]
+        if field == "p" and value.isdigit():
+            pid = int(value)
+        elif field == "f":
+            inode = ""
+        elif field == "i":
+            inode = value
+        elif field == "s" and value.isdigit() and pid in sizes and (pid, inode) not in seen:
+            seen.add((pid, inode))
+            sizes[pid] += int(value)
+    return sizes
+
+
+def end(orphan: Orphan) -> str:
+    """Sends the provider SIGTERM: why it was left, or "" once sent."""
+    try:
+        os.kill(orphan.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return "it had exited already"
+    except PermissionError:
+        return "this user may not signal it"
+    return ""
+
+
+def many(count: int, one: str, more: str) -> str:
+    return f"{count} {one if count == 1 else more}"
+
+
 def main(argv: list[str]) -> int:
     # No abbreviations: argparse would otherwise read a typo such as --appl as --apply
     # (https://docs.python.org/3/library/argparse.html#allow-abbrev), and that flag removes.
@@ -426,7 +654,20 @@ def main(argv: list[str]) -> int:
                         help="remove what the listing marks; without it nothing is removed")
     parser.add_argument("--verbose", action="store_true",
                         help="with --apply, list each kept worktree rather than a count per reason")
+    parser.add_argument("--strip-idle", action="store_true",
+                        help="list, and with --apply delete, the ignored .terraform, bin and obj "
+                             "directories of each idle worktree it keeps")
+    parser.add_argument("--idle-hours", type=float, default=STRIP_IDLE_HOURS, metavar="N",
+                        help="the hours without a change that make a worktree idle for "
+                             "--strip-idle (default 72)")
+    parser.add_argument("--end-orphans", action="store_true",
+                        help="list, and with --apply send SIGTERM to, each Terraform provider "
+                             "whose parent is pid 1 and whose working directory is gone")
     arguments = parser.parse_args(argv)
+    # float() reads "nan" and "inf" too, and a nan compares false with every quiet time, which
+    # would make each kept worktree idle.
+    if not math.isfinite(arguments.idle_hours) or arguments.idle_hours < 0:
+        parser.error("--idle-hours takes a number of hours, 0 or more")
     counting = arguments.apply and not arguments.verbose
 
     try:
@@ -447,6 +688,7 @@ def main(argv: list[str]) -> int:
 
     removed, freed = 0, 0
     counted: dict[str, int] = {}
+    kept: list[Tree] = []
     for verdict in verdicts:
         tree, reason, word = verdict.tree, verdict.reason, ""
         if not arguments.apply:
@@ -460,9 +702,12 @@ def main(argv: list[str]) -> int:
                 word, reason = "kept", changed or f"git refused to remove it: {last_line(done)}"
         elif counting:
             counted[verdict.group] = counted.get(verdict.group, 0) + 1
+            kept.append(tree)
             continue
         else:
             word = "kept"
+        if word in ("keep", "kept"):
+            kept.append(tree)
         print(f"{word:<8} {human(verdict.size):>9}  {tree.path}  {reason}")
         if word == "removed":
             removed += 1
@@ -480,14 +725,73 @@ def main(argv: list[str]) -> int:
     for group, count in sorted(counted.items(), key=lambda item: -item[1]):
         print(f"sweep_worktrees: kept {count} because {group}; --verbose names each.")
 
+    # The two rules run after the removals, on a process table read again now: what has run since
+    # the verdicts is what decides whether a cache or a provider is still in use.
+    after = Processes()
+    clauses: list[str] = []
+    if arguments.strip_idle:
+        caches, why = idle_caches(kept, after, time.time(), arguments.idle_hours * 3600)
+        if why:
+            print(f"sweep_worktrees: --strip-idle judged no worktree: {why}.")
+        stripped, stripped_bytes = 0, 0
+        for cache in caches:
+            reason = (f"its worktree's newest change outside .terraform, bin and obj was "
+                      f"{cache.hours} hours ago")
+            word, freed_here = "strip", 0
+            if arguments.apply:
+                left, freed_here = strip(cache)
+                word, reason = ("left", left) if left else ("stripped", reason)
+                stripped += 0 if left else 1
+                stripped_bytes += freed_here
+            print(f"{word:<8} {human(freed_here if word == 'left' else cache.size):>9}  "
+                  f"{cache.path}  {reason}")
+        if arguments.apply:
+            clauses.append(f"--strip-idle stripped "
+                           f"{many(stripped, 'cache directory', 'cache directories')}, "
+                           f"freeing {human(stripped_bytes)}.")
+        else:
+            clauses.append(f"--strip-idle would strip "
+                           f"{many(len(caches), 'cache directory', 'cache directories')}, freeing "
+                           f"{human(sum(cache.size for cache in caches))}")
+    if arguments.end_orphans:
+        found, why = orphans(after)
+        if why:
+            print(f"sweep_worktrees: --end-orphans judged no process: {why}.")
+        sizes = held([orphan.pid for orphan in found])
+        ended, ended_bytes = 0, 0
+        for orphan in found:
+            holding = sizes.get(orphan.pid, 0) if sizes is not None else 0
+            reason = f"its parent is pid 1 and its working directory {orphan.cwd} is gone"
+            word = "end"
+            if arguments.apply:
+                left = end(orphan)
+                word, reason = ("left", left) if left else ("ended", reason)
+                if not left:
+                    ended += 1
+                    ended_bytes += holding
+            size = human(holding) if sizes is not None else "unknown"
+            print(f"{word:<8} {size:>9}  pid {orphan.pid} started {orphan.started}  "
+                  f"{orphan.executable}  {reason}")
+        unknown = "" if sizes is not None else ", lsof unable to say how much"
+        if arguments.apply:
+            clauses.append(f"--end-orphans ended "
+                           f"{many(ended, 'orphaned provider', 'orphaned providers')}, releasing "
+                           f"{human(ended_bytes)} of deleted files they held open{unknown}.")
+        else:
+            clauses.append(f"--end-orphans would end "
+                           f"{many(len(found), 'orphaned provider', 'orphaned providers')}, releasing "
+                           f"{human(sum((sizes or {}).values()))} of deleted files they hold "
+                           f"open{unknown}")
+
     if arguments.apply:
-        print(f"sweep_worktrees: removed {removed} and kept {len(verdicts) - removed}; "
-              f"freed {human(freed)}.")
+        print(" ".join([f"sweep_worktrees: removed {removed} and kept {len(verdicts) - removed}; "
+                        f"freed {human(freed)}.", *clauses]))
     else:
         marked = [verdict for verdict in verdicts if verdict.remove]
         print(f"sweep_worktrees: --apply would remove {len(marked)} and keep "
               f"{len(verdicts) - len(marked)}, freeing {human(sum(v.size for v in marked))}; "
-              "nothing was removed.")
+              + "".join(f"{clause}; " for clause in clauses)
+              + ("nothing was changed." if clauses else "nothing was removed."))
     return status
 
 
