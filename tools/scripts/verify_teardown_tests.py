@@ -80,7 +80,7 @@ _, POOL_ARN, POOL = cell.DESTROYED["idp"]
 JUDGE = "tools/scripts/poc/teardown-judge.sh"
 # An ARN of a type verify-teardown.sh has no describe for, and the line it counts the judge's drops on.
 WIDGET_ARN = f"arn:aws:example:{REGION}:{ACCOUNT}:widget/w-0123456789"
-JUDGED_GONE = "the teardown judge says are gone"
+JUDGED_GONE = "ARNs the teardown judge says are gone"
 
 
 def tagged(arn: str, kind: str, value: str = PLATFORM_VALUE, **state) -> dict:
@@ -509,7 +509,7 @@ class ATypeItDoesNotKnowGoesToTheJudge(Verify):
         log = case.dir / "judged.log"
         path = case.dir / "judge"
         path.write_text(f"#!/bin/sh\nprintf '%s|%s\\n' \"$*\" \"$AWS_REGION\" >> '{log}'\n"
-                        f"printf '%s' '{stderr}' >&2\nprintf '%s\\n' '{answer}'\nexit {status}\n")
+                        f"printf '%s' '{stderr}' >&2\nprintf '%b\\n' '{answer}'\nexit {status}\n")
         path.chmod(0o755)
         named = None if judge is None else str(path) if judge == "judge" else judge
         result = case.run(SCRIPT, env=case.env(SPA_TEARDOWN_TAG_WAIT="0", SPA_TEARDOWN_TAG_POLL="0",
@@ -546,7 +546,8 @@ class ATypeItDoesNotKnowGoesToTheJudge(Verify):
                       result.stderr)
 
     def test_a_judge_that_answers_neither_fails_the_verification(self):
-        for answer in ("maybe", "", "Gone", "gonestands"):
+        # A second line is not one answer, whatever the first says.
+        for answer in ("maybe", "", "Gone", "gonestands", "gone\\nstands"):
             with self.subTest(answer=answer):
                 result, _ = self.judged(answer)
                 self.assertEqual(1, result.status, result.output)

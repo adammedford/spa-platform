@@ -304,7 +304,9 @@ ask_judge() {
   AWS_REGION="$REGION" "$TEARDOWN_JUDGE" "$arn" > "$OUT" 2> "$ERR" < /dev/null || status=$?
   [ "$status" -eq 0 ] ||
     fail "the teardown judge ${SPA_TEARDOWN_JUDGE} exited ${status} on $(redact "$arn"): $(redact "$(awk 'NF { line = $0 } END { print line }' "$ERR")")"
-  answer="$(printed)"
+  # One line and nothing after it: a judge that says more than its answer is not giving one.
+  answer=""
+  [ "$(awk 'END { print NR }' "$OUT")" != "1" ] || answer="$(printed)"
   case "$answer" in
     gone | "gone "*) JUDGED=$((JUDGED + 1)) ;;
     stands) stands "${arn} (the teardown judge says it stands)" ;;
@@ -424,7 +426,7 @@ read_tag_index() {
   [ "$UNKNOWN" -eq 0 ] || dropped="${dropped}, ${UNKNOWN} EC2 ids describe does not know"
   [ "$EGRESS" -eq 0 ] || dropped="${dropped}, ${EGRESS} NAT gateways or VPC endpoints EC2 says deleted or does not know"
   [ "$TABLES" -eq 0 ] || dropped="${dropped}, ${TABLES} DynamoDB tables DynamoDB does not know"
-  [ "$JUDGED" -eq 0 ] || dropped="${dropped}, ${JUDGED} the teardown judge says are gone"
+  [ "$JUDGED" -eq 0 ] || dropped="${dropped}, ${JUDGED} ARNs the teardown judge says are gone"
   SUMMARY="${count} listed, none standing${dropped:+:}${dropped#,}"
 }
 

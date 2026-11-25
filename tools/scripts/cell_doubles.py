@@ -85,7 +85,8 @@ def field_map() -> dict:
     """The proof cell's field map, the file its entry file names."""
     return json.loads((ROOT / ENTRY["SPA_FIELD_MAP"]).read_text())
 
-# The entry values each reference script reads, which its companion holds one at a time unset.
+# The proof cell's entry file's values: those a reference script reads, which its companion holds one
+# at a time unset, and SPA_CERT_DOMAIN, which only the proof cell's certs.sh reads (#1351).
 ENTRY_NAMES = ("SPA_CELL", "SPA_CERT_DOMAIN", "SPA_PLATFORM_ROOT", "SPA_ROOTS", "SPA_OUTPUTS_FILE", "SPA_FIELD_MAP",
                "SPA_APP_HOST", "SPA_TEARDOWN_JUDGE")
 assert set(ENTRY) == set(ENTRY_NAMES), f"{CELL_ENV.name} sets {sorted(ENTRY)}"

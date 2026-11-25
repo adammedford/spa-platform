@@ -697,8 +697,8 @@ wait_and_assert() {
 
 # Wait until every running task of $SERVICE in $CLUSTER has answered /readyz at revision $1 or later,
 # read through a tunnel the wait opens itself, at the app host $3, or through the gateway origin $2
-# when the caller names one. Change request P2-5, decision 6 (#309): the load balancer hands each read to the task it
-# picks, so one answer at N says only that one task is at N.
+# when the caller names one. Change request P2-5, decision 6 (#309): the load balancer hands each
+# read to the task it picks, so one answer at N says only that one task is at N.
 #
 # The tasks are the service's RUNNING ones, each named by its task id, the last segment of its ARN
 # and never the ARN, which carries the account id and the Region (P2-5, decision 1). spactl wait
