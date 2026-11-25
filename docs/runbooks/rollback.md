@@ -38,8 +38,10 @@ script looks back twenty revisions.
 It refuses, with exit 1:
 
 - a revision whose gateway is not a build from the cell's gateway repository. The sample image of
-  the first apply answers `/` and not `/readyz`, so going back to it is a platform-root apply with
-  `health_check_path = "/"`, not a rollback;
+  the first apply answers `/` and writes under `/tmp` on start-up. Returning to it requires a
+  platform-root apply with the sample's pinned `gateway_image`, `health_check_path = "/"` and
+  `gateway_writable_root = true`. If `images.auto.tfvars` exists, update those values there
+  before applying: Terraform loads it after `terraform.tfvars`;
 - an image the repository no longer holds, since the task could not pull it;
 - `--to-revision` naming the revision already running, or one ECS no longer describes;
 - without `--to-revision`, when none of the twenty revisions below the running one has another

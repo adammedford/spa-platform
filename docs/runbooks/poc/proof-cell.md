@@ -47,9 +47,12 @@ First deployment):
 3. The identity root: `terraform -chdir=infra/envs/poc/idp apply`.
 4. The apps root: `terraform -chdir=infra/envs/poc/apps apply`. Cognito now has the two clients.
 5. The platform root on the sample image: `terraform -chdir=infra/envs/poc/platform apply`, whose
-   health check is `/` for the sample. Before it, set `bastion = true` and `bastion_image`, the
-   sample image pinned by digest as `gateway_image` is, in that root's `terraform.tfvars`
-   (`terraform.tfvars.example` has both lines): the bastion is the tunnel's hop, and without
+   health check is `/` for the sample. Before it, set `health_check_path = "/"` and
+   `gateway_writable_root = true` in the platform root's `terraform.tfvars`, including when
+   reusing a file created before the writable-root setting was added. The sample writes under
+   `/tmp` during start-up. Set `bastion = true` and pin the sample image by digest in both
+   `gateway_image` and `bastion_image`, using `terraform.tfvars.example` as the reference.
+   The bastion is the tunnel's hop, and without
    it `tunnel.sh` refuses and `deploy.sh` exits 2 unless `--url` names an origin this workstation
    already reaches. The bastion task runs, and is billed, until an apply sets it back to false.
 6. `tools/scripts/poc/seed.sh` publishes the fixture releases and writes the first registry through
