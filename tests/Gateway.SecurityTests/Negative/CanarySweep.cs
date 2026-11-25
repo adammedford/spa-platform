@@ -65,6 +65,7 @@ internal static class CanarySweep
     [
         .. Canaries.All,
         .. watched.SelectMany(harness => harness.Apps.Values.Select(app => app.ClientSecret)),
+        .. watched.SelectMany(harness => harness.Apps.Values.SelectMany(app => app.Fragments.Select(fragment => fragment.ClientSecret))),
         .. watched.SelectMany(harness => harness.Idp.IssuedAccessTokens.Concat(harness.Idp.IssuedRefreshTokens)),
     ];
 

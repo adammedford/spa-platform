@@ -14,6 +14,9 @@ public sealed class HostSessionStore(ISessionStore shared) : ISessionStore
 {
     private int replaces;
 
+    /// <summary>The cell's one store, which every host's view reaches.</summary>
+    public ISessionStore Shared => shared;
+
     /// <summary>
     /// Runs before each of this host's versioned replaces reaches the records, with the replace's number
     /// on this host, from 1. Null runs nothing.
