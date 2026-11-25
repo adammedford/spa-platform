@@ -347,7 +347,7 @@ public sealed class FragmentsObserverTests
 
     // ---- O8, the fallback on one host (F-40) ----
 
-    private static readonly DateTimeOffset SignedIn = new(2026, 11, 10, 3, 0, 0, TimeSpan.Zero);
+    internal static readonly DateTimeOffset SignedIn = new(2026, 11, 10, 3, 0, 0, TimeSpan.Zero);
 
     internal static FallbackRecord GoodFallback() =>
         new(SignedIn, new FallbackHalf(SignedIn.AddMinutes(5), false, false), new FallbackHalf(SignedIn.AddMinutes(62), true, true));

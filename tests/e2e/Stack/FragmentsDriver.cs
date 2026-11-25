@@ -1,3 +1,5 @@
+using Gateway.TestHarness;
+
 namespace Gateway.E2ETests.Stack;
 
 /// <summary>
@@ -106,17 +108,84 @@ public sealed class FragmentsDriver : IAsyncDisposable
         return new Driven<RollingRefusalRecord>(await ContextAsync([], [.. seen.Keys], ct), [], record) { Until = DateTimeOffset.UtcNow };
     }
 
-    /// <summary>O4's size half from the isolated table; the capacity half needs the named workload, which this driver does not run.</summary>
+    /// <summary>
+    /// O4 on the isolated table: the stored item's and the payload's bytes from a scan, then the named
+    /// sign-in workload's capacity sample (<see cref="FragmentsWorkloads.CapacityAsync"/>). The read of the
+    /// lines runs to the quiet minute after the workload, where isolation is judged.
+    /// </summary>
     public async Task<Driven<RecordSize>> RecordSizeAsync(CancellationToken ct)
     {
         string table = environment(TableVariable) is { Length: > 0 } named
             ? named
             : throw new InvalidOperationException($"{TableVariable} names no table: O4 runs on an isolated test cell and table.");
+        (CapacitySample sample, IReadOnlyList<Step> steps, DateTimeOffset until) = await Workloads.CapacityAsync(Readers, table, ct);
         ItemSize size = await Readers.ItemSizeAsync(table, "ticket", ct);
-        return new Driven<RecordSize>(await ContextAsync([], [], ct), [], new RecordSize(size, null))
+        return new Driven<RecordSize>(await ContextAsync([], [], ct), steps, new RecordSize(size, sample)) { Until = until };
+    }
+
+    /// <summary>O2 on the shell's live fragments (<see cref="FragmentsWorkloads.ContentionAsync"/>), the service's task count put back after it.</summary>
+    public async Task<Driven<RefreshContention>> ContentionAsync(CancellationToken ct)
+    {
+        (RefreshContention record, IReadOnlyList<Step> steps) = await Workloads.ContentionAsync(await Readers.LiveFragmentsAsync(Shell, ct), ct);
+        return new Driven<RefreshContention>(await ContextAsync([], [], ct), steps, record);
+    }
+
+    /// <summary>O2's and O4's workloads over the cell's browser and tunnel.</summary>
+    public FragmentsWorkloads Workloads => new(stack.Cell, Readers.Runner, new CellSessions(this));
+
+    /// <summary>The cell's sessions: each sign-in a fresh Chromium profile, closed once its cookies are read.</summary>
+    private sealed class CellSessions(FragmentsDriver driver) : IFragmentsSessions
+    {
+        private HarnessApp App => driver.stack.App(driver.Shell);
+
+        public async Task<(Step Step, SessionCookies? Cookies)> SignInAsync(string name, CancellationToken ct)
         {
-            Missing = "run O4's named session-write workload with its quiet control periods and isolation check, so its capacity sample is unrecorded",
-        };
+            await using Profile profile = await driver.stack.OpenCancellableAsync(ct);
+            DateTimeOffset at = DateTimeOffset.UtcNow;
+            try
+            {
+                Step step = await ContinuityDriver.BrowserStepAsync(profile, App, name, "/bff/login", "bff", 302, () => profile.SignInAsync(App));
+                return (step, await ContinuityDriver.CookiesAsync(profile, App));
+            }
+            catch (Exception failed) when (failed is Microsoft.Playwright.PlaywrightException or TimeoutException)
+            {
+                // Redacted.PlaywrightAsync has already taken every URL's query out of the message; the step keeps its type alone.
+                return (Step.Failed(name, ClientTrace.Fresh(), at, failed), null);
+            }
+        }
+
+        public Task<Step> SendAsync(string name, string path, SessionCookies cookies, CancellationToken ct) =>
+            driver.raw.SendAsync(name, HttpMethod.Get, App.Url(path), cookies, null, ct, "api");
+
+        public async Task<IReadOnlyList<Step>> OverlapAsync(string name, string fallbackFragment, CancellationToken ct)
+        {
+            await using Profile profile = await driver.stack.OpenCancellableAsync(ct);
+            Microsoft.Playwright.IPage second = await profile.Context.NewPageAsync();
+            TaskCompletionSource chained = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            profile.Page.Request += (_, request) =>
+            {
+                if (new Uri(request.Url).AbsolutePath == FragmentsWorkloads.ChainPath)
+                {
+                    chained.TrySetResult();
+                }
+            };
+            Task<Step> signIn = ContinuityDriver.BrowserStepAsync(profile, App, name + "-sign-in", "/bff/login", "bff", 302, () => profile.SignInAsync(App));
+            await chained.Task.WaitAsync(TimeSpan.FromMinutes(2), ct);
+            Step fallback = await PageStepAsync(second, name + "-fallback", $"/bff/login?fragment={fallbackFragment}&returnUrl=%2F");
+            return [await signIn, fallback];
+        }
+
+        /// <summary>A navigation of a second page in the profile, traced as <see cref="ContinuityDriver.BrowserStepAsync"/> traces the first's, ending back on the shell.</summary>
+        private async Task<Step> PageStepAsync(Microsoft.Playwright.IPage page, string name, string pathAndQuery)
+        {
+            ClientTrace trace = ClientTrace.Fresh();
+            DateTimeOffset at = DateTimeOffset.UtcNow;
+            await using OriginHeader header = await OriginHeader.SendAsync(page, App.Origin, ClientTrace.Header, trace.Traceparent);
+            Microsoft.Playwright.IResponse? response = await Redacted.PlaywrightAsync(() => page.GotoAsync(App.Url(pathAndQuery).ToString()));
+            await Redacted.PlaywrightAsync(() => page.WaitForURLAsync(App.Url("/").ToString()));
+            header.ThrowIfFailed();
+            return new Step(name, trace.TraceId, at, response?.Status) { Route = "bff" };
+        }
     }
 
     /// <summary>

@@ -47,9 +47,8 @@ public sealed class FragmentsTests
         await using FragmentsDriver driver = await FragmentsDriver.StartAsync();
         Step control = await driver.ControlAsync(Ct);
         RowResult result = await driver.Run.RowAsync(FragmentsBounds.O2, control,
-            (_, ct) => driver.NotDrivenAsync(new RefreshContention([], null),
-                "read each refresh's latency and each write's attempts and CAS conflicts at 1 + 5 due sets: the gateway's lines carry neither (contracts/telemetry.md)", ct),
-            (driven, _) => FragmentsObserver.Contention(driven.Record),
+            (_, ct) => driver.ContentionAsync(ct),
+            (driven, capture) => FragmentsObserver.Contention(FragmentsWorkloads.WithWrites(driven.Record, driven.Steps, capture)),
             Ct);
         result.Assert();
     }
@@ -74,7 +73,10 @@ public sealed class FragmentsTests
         Step control = await driver.ControlAsync(Ct);
         RowResult result = await driver.Run.RowAsync(FragmentsBounds.O4, control,
             (_, ct) => driver.RecordSizeAsync(ct),
-            (driven, _) => FragmentsObserver.Size(driven.Record),
+            (driven, capture) => FragmentsObserver.Size(driven.Record with
+            {
+                Capacity = driven.Record.Capacity is { } sample ? FragmentsWorkloads.Isolated(sample, driven.Steps, capture) : null,
+            }),
             Ct);
         result.Assert();
     }
