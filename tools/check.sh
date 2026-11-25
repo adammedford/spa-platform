@@ -186,8 +186,117 @@ verdict=""
 # The red test companions so far, comma-separated, of each kind (#1472).
 red_tests=""
 red_workflows=""
+# Whether this run holds the Terraform provider cache's lock, which every way out releases (#1502).
+# The Terraform half below says why the lock exists; these two take and release it.
+cache_lock=""
+cache_lock_held=false
+
+# Takes the lock: a file named pid, in a directory made for it in the cache, that holds the
+# holder's pid. The file is the lock and the directory only its place. Only one run can create the
+# file, because bash creates it under noclobber, `set -C`, which opens it with O_EXCL, so of two
+# runs only one gets it; macOS has no flock. The mkdir alone is not trusted to choose: Ubuntu
+# 26.04's mkdir is uutils' 0.10.0 (coreutils 9.5-1ubuntu2+0.0.0~ubuntu25, the version CI's runner
+# image lists), which answered success to both of two runs racing to make one directory in 260 of
+# 300 tries, where GNU's did in none, and two inits ran at once that way in CI (#1535's review). A
+# directory with no pid file in it is held by no one.
+# A pid file whose pid no longer runs is taken over, and the run says so. A pid file holding a live
+# pid, or not written yet, which is how a holder's lock looks in the instant between its create and
+# its write, is waited on, with a line at once and every 30 seconds after naming the holder. A run
+# killed in that instant, by SIGKILL, which no trap sees, would leave one that names no pid for
+# good, so one that has named none for cache_lock_grace seconds of this run's wait is taken over
+# too, and the run says so; a live holder writes its pid in the same printf that creates the file.
+# Only "No such process" from kill -0 means gone: a pid of another user's answers "Operation not
+# permitted", and that one still runs. A known limit: two runs that find the same dead lock at once
+# can both pass the second read, and the later one's rm can remove the lock the earlier one just
+# took. Closing it takes a second lock around the takeover, which a run killed inside it would
+# leave behind for good; a takeover follows only a killed run, so the window stays. Another known
+# limit: a lock left by a killed run whose pid the system has since given to another live process
+# is waited on with no deadline, since kill -0 cannot tell that process from a holder. The line
+# repeated every 30 seconds names the pid; once `ps -p <pid>` shows it is no check, remove the pid
+# file in the lock directory the line names and the wait ends.
+cache_lock_grace=10
+cache_lock_take() {
+  local holder again said_at gone unnamed_since unwritten
+  said_at=""
+  unnamed_since=""
+  unwritten=0
+  while :; do
+    # A mkdir that failed with no directory there is a cache that cannot hold the lock, not a lock
+    # to wait on: the directory is looked for again after it, since another run may have made it.
+    if [ ! -d "$cache_lock" ] && ! mkdir "$cache_lock" 2> /dev/null && [ ! -d "$cache_lock" ]; then
+      fail "could not make Terraform's provider cache lock $cache_lock."
+    fi
+    if (set -C && printf '%s\n' "$$" > "$cache_lock/pid") 2> /dev/null; then
+      break
+    fi
+    # Not created, and no file there: a holder released it between the two, or the directory is
+    # one this run cannot write in. Tried again at once, a few times, and then the run fails.
+    if [ ! -e "$cache_lock/pid" ]; then
+      unwritten=$((unwritten + 1))
+      [ "$unwritten" -lt 3 ] || fail "could not write this run's pid into $cache_lock."
+      continue
+    fi
+    unwritten=0
+    holder=""
+    { read -r holder < "$cache_lock/pid"; } 2> /dev/null || holder=""
+    case "$holder" in
+      '' | *[!0-9]*)
+        if [ -z "$unnamed_since" ]; then
+          unnamed_since=$SECONDS
+        elif [ $((SECONDS - unnamed_since)) -ge "$cache_lock_grace" ]; then
+          # Read again just before removing it, as below: a lock that names a pid now is live.
+          again=""
+          { read -r again < "$cache_lock/pid"; } 2> /dev/null || again=""
+          if [ "$again" = "$holder" ]; then
+            rm -f "$cache_lock/pid"
+            echo "$me: took over Terraform's provider cache lock $cache_lock, which named no pid for $cache_lock_grace seconds."
+          fi
+          unnamed_since=""
+          continue
+        fi
+        ;;
+      *)
+        unnamed_since=""
+        # In the C locale, so the text matched below is not a translation of it.
+        gone="$(LC_ALL=C kill -0 "$holder" 2>&1)" || true
+        case "$gone" in
+          *"No such process"*)
+            # Read again just before removing it: another run may have taken it over already and
+            # written its own pid, and that lock is live.
+            again=""
+            { read -r again < "$cache_lock/pid"; } 2> /dev/null || again=""
+            if [ "$again" = "$holder" ]; then
+              rm -f "$cache_lock/pid"
+              echo "$me: took over Terraform's provider cache lock $cache_lock from pid $holder, which no longer runs."
+            fi
+            continue
+            ;;
+        esac
+        ;;
+    esac
+    if [ -z "$said_at" ] || [ $((SECONDS - said_at)) -ge 30 ]; then
+      echo "$me: waiting for Terraform's provider cache lock $cache_lock, held by pid ${holder:-not yet written}."
+      said_at=$SECONDS
+    fi
+    sleep 1
+  done
+  cache_lock_held=true
+}
+
+# Releases it: the pid file, then the directory with rm -d, which removes only an empty one and so
+# fails, harmlessly, once another run has created its own pid file in it. Removed in that order,
+# and not with one rm -rf, whose order a run taking the lock at the same moment would depend on.
+cache_lock_release() {
+  if $cache_lock_held; then
+    cache_lock_held=false
+    rm -f "$cache_lock/pid" || true
+    rm -d "$cache_lock" 2> /dev/null || true
+  fi
+}
+
 on_exit() {
   status=$?
+  cache_lock_release
   if $full && [ "$status" -ne 0 ] && [ -z "$verdict" ]; then
     elapsed_total
     echo "check: fail: stopped with status $status.$(after_reds)" >&2
@@ -195,6 +304,16 @@ on_exit() {
   fi
 }
 trap on_exit EXIT
+# A run ended by HUP, INT or TERM goes through on_exit too, so a killed run leaves no lock behind.
+# That rests on measurement, not on bash's manual, which says only that the EXIT trap runs "on exit
+# from the shell": HUP, INT and TERM sent to a bash -c's process group, while it waited on a child
+# and while it ran a builtin loop, each ran its EXIT trap, on 3.2.57 and on 5.3.9 (#1535's review).
+# tools/check_tests.py's signal case proves HUP and TERM on every run. It leaves INT out: a runner
+# started in the background starts this script with SIGINT ignored, which bash cannot undo ("Signals
+# ignored upon entry to the shell cannot be trapped or reset", its manual), and resetting it per
+# case takes a preexec_fn, which is not safe beside the companion's threads. A SIGINT that does
+# reach the run reaches its terraform too, whose failed init ends the run through fail() and
+# on_exit in any case.
 
 # The elapsed lines (#629): after each step it executes, and after each test companion, the check
 # writes `<me>: elapsed: <step>: <N>s` on a line of its own, and `<me>: elapsed: total: <N>s` just
@@ -694,11 +813,39 @@ elif [ -n "$terraform_bin" ]; then
     echo "$me: tools/preflight.sh says how to install the floor." >&2
   fi
 
+  # The provider cache (#1502). Without one, every init downloads its own copy of every provider
+  # into its directory's .terraform/: on 2026-11-23 an infra worktree held six copies of the AWS
+  # provider, 755 MB each, and 89 worktrees left 3.4 GB free of 460 GB, a full disk that fails
+  # every lane at once. With TF_PLUGIN_CACHE_DIR set, init installs a provider into the cache once
+  # and links each directory's copy to it
+  # (https://developer.hashicorp.com/terraform/cli/config/config-file#provider-plugin-cache). A
+  # TF_PLUGIN_CACHE_DIR the caller set is used as it is; otherwise the check exports the default,
+  # one directory for every worktree on the machine. Only the variable is read: a plugin_cache_dir
+  # in the caller's CLI config file is not, and the exported default overrides it, as the page above
+  # says the variable does ("to override an existing cache directory"). tools/preflight.sh names
+  # the same directory, by the same rule.
+  # Terraform does not create the directory, so the check does, before the first init.
+  if [ -n "${TF_PLUGIN_CACHE_DIR:-}" ]; then
+    cache_chosen="the caller's TF_PLUGIN_CACHE_DIR"
+  else
+    TF_PLUGIN_CACHE_DIR="$HOME/.terraform.d/plugin-cache"
+    cache_chosen="the default, since TF_PLUGIN_CACHE_DIR was unset"
+  fi
+  export TF_PLUGIN_CACHE_DIR
+  mkdir -p "$TF_PLUGIN_CACHE_DIR" || fail "could not create Terraform's provider cache $TF_PLUGIN_CACHE_DIR."
+  echo "$me: Terraform's provider cache: $TF_PLUGIN_CACHE_DIR, $cache_chosen."
+  # HashiCorp does not promise the cache is safe under concurrent inits, and the overnight lanes
+  # run this check side by side, so one init at a time writes to it: cache_lock_take, near the top,
+  # says how. The lock is held for init alone, the one command that installs into the cache;
+  # validate and `terraform test` read what init linked and run without it.
+  cache_lock="$TF_PLUGIN_CACHE_DIR/.tools-check-init.lock"
+
   quietly "$terraform_bin" fmt -check -recursive infra || fail "terraform fmt -check -recursive infra failed."
 
   for dir in $(find infra -name '*.tf' -not -path '*/.terraform/*' -exec dirname {} \; | sort -u); do
     # init's progress lines stay hidden in both modes. Its errors go to standard error, which the
     # full check shows and the hook, as it always has, does not.
+    cache_lock_take
     if $full; then
       "$terraform_bin" -chdir="$dir" init -backend=false -input=false > /dev/null \
         || fail "terraform init failed in $dir."
@@ -706,6 +853,7 @@ elif [ -n "$terraform_bin" ]; then
       "$terraform_bin" -chdir="$dir" init -backend=false -input=false > /dev/null 2>&1 \
         || fail "terraform init failed in $dir."
     fi
+    cache_lock_release
     quietly "$terraform_bin" -chdir="$dir" validate || fail "terraform validate failed in $dir."
   done
   elapsed "Terraform"

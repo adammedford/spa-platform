@@ -183,6 +183,36 @@ else
   missing "Terraform >= ${floor:-the floor}" "brew install hashicorp/tap/terraform"
 fi
 
+# Terraform's provider cache, the one directory every tools/check.sh init on this machine installs
+# providers into (#1502): TF_PLUGIN_CACHE_DIR when it is set, and otherwise the default the check
+# sets, typed here as tools/check.sh's Terraform half types it, since that is where the rule lives.
+# Only the variable is read, as the check reads it: a plugin_cache_dir in the CLI config file alone
+# is not the cache the check uses, since the default it exports overrides the file.
+# Its size is what the cache costs the disk, which a full disk shared by every overnight lane made
+# worth a row. An info row: a cache not made yet is no missing dependency, the check makes it.
+tf_cache="${TF_PLUGIN_CACHE_DIR:-${HOME-}/.terraform.d/plugin-cache}"
+if [ -d "$tf_cache" ]; then
+  tf_cache_kb=$(du -sk "$tf_cache" 2>/dev/null | cut -f1)
+  case "$tf_cache_kb" in
+    '' | *[!0-9]*) tf_cache_size="of a size du could not read" ;;
+    *)
+      if [ "$tf_cache_kb" -ge 1048576 ]; then
+        # Tenths of a gigabyte, rounded to the nearest: half a tenth, 524288 KB over ten, is added
+        # before the division, so #1502's 1570304 KB, 1.4976 GB, reads 1.5 GB and not 1.4.
+        tf_cache_tenths=$(((tf_cache_kb * 10 + 524288) / 1048576))
+        tf_cache_size="$((tf_cache_tenths / 10)).$((tf_cache_tenths % 10)) GB"
+      elif [ "$tf_cache_kb" -ge 1024 ]; then
+        tf_cache_size="$((tf_cache_kb / 1024)) MB"
+      else
+        tf_cache_size="${tf_cache_kb} KB"
+      fi
+      ;;
+  esac
+  info "Terraform provider cache" "${tf_cache}, ${tf_cache_size}, which tools/check.sh shares across worktrees"
+else
+  info "Terraform provider cache" "${tf_cache} does not exist yet; tools/check.sh makes it before its first terraform init"
+fi
+
 # AWS CLI and credentials
 aws_ok=0
 if have aws; then
