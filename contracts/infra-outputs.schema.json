@@ -61,7 +61,7 @@
     },
     "clients": {
       "type": "object",
-      "description": "One entry per app that has an OAuth client, keyed by appId, and under it one per fragment of that app, keyed by fragmentId, mirroring the registry's nesting. Read by spactl: app add reads it to complete an app definition and each of its fragments.",
+      "description": "One entry per app that has an OAuth client, keyed by appId, and under it one per fragment of that app, keyed by fragmentId, mirroring the registry's nesting. Whatever registers a client at the identity provider and writes its secret writes its entry here, as whatever applies the cell writes the rest of the document. Read by spactl: app add reads it to complete an app definition and each of its fragments.",
       "propertyNames": { "$ref": "https://spa-platform.internal/contracts/registry.schema.json#/$defs/appId" },
       "additionalProperties": {
         "type": "object",
@@ -90,7 +90,7 @@
                 "clientId": { "$ref": "https://spa-platform.internal/contracts/registry.schema.json#/$defs/clientId" },
                 "secretParameter": {
                   "$ref": "#/$defs/parameterName",
-                  "description": "The Parameter Store name holding the fragment client's secret, /spa-platform/{env}/apps/{appId}/fragments/{fragmentId}/client-secret. Never the value."
+                  "description": "The Parameter Store name holding the fragment client's secret, for example /spa-platform/{cell}/apps/{appId}/fragments/{fragmentId}/client-secret: any name the gateway's task role may read serves. Never the value."
                 },
                 "secretVersion": {
                   "type": "integer",
