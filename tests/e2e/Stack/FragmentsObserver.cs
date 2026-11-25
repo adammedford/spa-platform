@@ -560,7 +560,11 @@ public static partial class FragmentsObserver
         return RowResult.Passed("every entry imported and its chunk resolved under its fragment's assets/", seen);
     }
 
-    /// <summary>F-42 (O13): at N = 2, in every named user agent, the chain completed with N steps, each with its Fetch Metadata recorded.</summary>
+    /// <summary>
+    /// F-42 (O13): at N = 2, in each of <see cref="Engines"/> and every named user agent, the chain completed with
+    /// N steps, each with its Fetch Metadata recorded. An engine that did not launch has no run in the record,
+    /// and the row is not proved naming it, never a pass on the others (#1411's decision of 2026-11-24).
+    /// </summary>
     public static RowResult Chain(ChainRecord record, FragmentsContext context)
     {
         List<string> seen = [];
@@ -572,6 +576,12 @@ public static partial class FragmentsObserver
         if (context.UserAgents.Count == 0)
         {
             return RowResult.NotProved("the run names no user agent", seen);
+        }
+
+        string[] missing = [.. Engines.Where(engine => !record.Runs.Any(run => run.UserAgent.StartsWith(engine + " ", StringComparison.Ordinal)))];
+        if (missing.Length > 0)
+        {
+            return RowResult.NotProved(string.Join("; ", missing.Select(engine => $"{engine} has no run")) + $": O13's chain runs in each of {string.Join(", ", Engines)}", seen);
         }
 
         foreach (string agent in context.UserAgents)

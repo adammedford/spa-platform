@@ -16,6 +16,8 @@
 
   <ItemGroup>
     <ProjectReference Include="../Gateway.TestHarness/Gateway.TestHarness.csproj" />
+    <!-- F-T5 (#1411) runs two spactl fragment publish runs in this process, each held at a barrier before its claim. -->
+    <ProjectReference Include="../../tools/spactl/spactl.csproj" />
   </ItemGroup>
 
   <ItemGroup>

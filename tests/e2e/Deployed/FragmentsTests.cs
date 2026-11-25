@@ -22,7 +22,15 @@ namespace Gateway.E2ETests.Deployed;
 /// N-38 and N-46); the record rows, O1, O2, O4 and O9, have no id and carry their obligation in their name.
 /// A not-proved row is a red test whose message starts <c>not proved:</c>; a broken rule's starts
 /// <c>failed:</c>. A row whose part this driver cannot yet drive reports <c>not proved: the driver cannot yet …</c>
-/// naming the part.</para>
+/// naming the part, so it never passes on a recording nobody made (#1005, decision 2).</para>
+///
+/// <para>The drives pull the cell's levers they need and put them back (#1411's decision of 2026-11-24):
+/// O1 writes the shell's entry at each N with spactl, so <c>Policy:FragmentsPerShell</c> is raised to 6 for its
+/// run (#1011 row 1); O2 scales the gateway service to one task and two; F-T5 activates the winning fragment
+/// release. O1 and F-T5 read <c>SPA_E2E_PLATFORM_CONFIG</c> and the outputs document
+/// <c>SPA_E2E_OUTPUTS</c> names (the repository's when unset); O2 reads neither. The browser rows launch Chromium, Firefox and
+/// WebKit through a loopback proxy to the tunnel; an engine that does not launch is named on standard output
+/// and missing from the record.</para>
 /// </summary>
 public sealed class FragmentsTests
 {
@@ -34,8 +42,7 @@ public sealed class FragmentsTests
         await using FragmentsDriver driver = await FragmentsDriver.StartAsync();
         Step control = await driver.ControlAsync(Ct);
         RowResult result = await driver.Run.RowAsync(FragmentsBounds.O1, control,
-            (_, ct) => driver.NotDrivenAsync(new RedirectRecord([]),
-                "drive Chromium, Firefox and WebKit through Cognito's managed login at N = 0 to 6 and record each redirect: the project installs Chromium alone (docs/dependencies.md)", ct),
+            (_, ct) => driver.RedirectsAsync(ct),
             (driven, _) => FragmentsObserver.Redirects(driven.Record),
             Ct);
         result.Assert();
@@ -47,9 +54,8 @@ public sealed class FragmentsTests
         await using FragmentsDriver driver = await FragmentsDriver.StartAsync();
         Step control = await driver.ControlAsync(Ct);
         RowResult result = await driver.Run.RowAsync(FragmentsBounds.O2, control,
-            (_, ct) => driver.NotDrivenAsync(new RefreshContention([], null),
-                "read each refresh's latency and each write's attempts and CAS conflicts at 1 + 5 due sets: the gateway's lines carry neither (contracts/telemetry.md)", ct),
-            (driven, _) => FragmentsObserver.Contention(driven.Record),
+            (_, ct) => driver.ContentionAsync(ct),
+            (driven, capture) => FragmentsObserver.Contention(FragmentsWorkloads.WithWrites(driven.Record, driven.Steps, capture)),
             Ct);
         result.Assert();
     }
@@ -61,7 +67,7 @@ public sealed class FragmentsTests
         Step control = await driver.ControlAsync(Ct);
         RowResult result = await driver.Run.RowAsync(FragmentsBounds.O3, control,
             (_, ct) => driver.NotDrivenAsync(new SuccessorRecord("", "", null, null),
-                "present the successor a concurrent refresh obtained to the provider after the logout: the gateway keeps every token on the server, so the probe needs a way to it this class does not have", ct),
+                "present the successor a concurrent refresh obtained to the provider after the logout: the token never leaves the gateway task, and the seam that would reach it is #1529", ct),
             (driven, capture) => FragmentsObserver.Successor(driven.Steps, driven.Record, capture),
             Ct);
         result.Assert();
@@ -74,7 +80,10 @@ public sealed class FragmentsTests
         Step control = await driver.ControlAsync(Ct);
         RowResult result = await driver.Run.RowAsync(FragmentsBounds.O4, control,
             (_, ct) => driver.RecordSizeAsync(ct),
-            (driven, _) => FragmentsObserver.Size(driven.Record),
+            (driven, capture) => FragmentsObserver.Size(driven.Record with
+            {
+                Capacity = driven.Record.Capacity is { } sample ? FragmentsWorkloads.Isolated(sample, driven.Steps, capture) : null,
+            }),
             Ct);
         result.Assert();
     }
@@ -86,7 +95,7 @@ public sealed class FragmentsTests
         Step control = await driver.ControlAsync(Ct);
         RowResult result = await driver.Run.RowAsync(FragmentsBounds.O5, control,
             (_, ct) => driver.NotDrivenAsync(new ImportMapRecord([]),
-                "load the four hashed import-map cases in each sitting browser: it needs a shell release carrying them on the cell, and Firefox and WebKit", ct),
+                "publish a shell release carrying the four hashed import-map case pages, write their hashes into the entry's script-src, and load each case in each engine", ct),
             (driven, _) => FragmentsObserver.ImportMap(driven.Record, driven.Context.UserAgents),
             Ct);
         result.Assert();
@@ -98,8 +107,7 @@ public sealed class FragmentsTests
         await using FragmentsDriver driver = await FragmentsDriver.StartAsync();
         Step control = await driver.ControlAsync(Ct);
         RowResult result = await driver.Run.RowAsync(FragmentsBounds.O8, control,
-            (_, ct) => driver.NotDrivenAsync(new FallbackRecord(null, null, null),
-                "open a second client's /bff/login?fragment= on the shell's host inside and after Cognito's managed-login hour", ct),
+            (_, ct) => driver.FallbackAsync(ct),
             (driven, _) => FragmentsObserver.Fallback(driven.Record),
             Ct);
         result.Assert();
@@ -112,7 +120,7 @@ public sealed class FragmentsTests
         Step control = await driver.ControlAsync(Ct);
         RowResult result = await driver.Run.RowAsync(FragmentsBounds.O9, control,
             (_, ct) => driver.NotDrivenAsync(new HeaderLimitRecord(null, null, null, null, []),
-                "probe the largest response header the ALB, Kestrel and each sitting browser accept beside the merged CSP at the cap", ct),
+                "probe the largest response header the ALB, Kestrel and each engine accept: nothing on the cell answers a header of a chosen size, and the fixture that would is #1530", ct),
             (driven, _) => FragmentsObserver.HeaderLimits(driven.Record, driven.Context.UserAgents),
             Ct);
         result.Assert();
@@ -124,8 +132,7 @@ public sealed class FragmentsTests
         await using FragmentsDriver driver = await FragmentsDriver.StartAsync();
         Step control = await driver.ControlAsync(Ct);
         RowResult result = await driver.Run.RowAsync(FragmentsBounds.FT5, control,
-            (_, ct) => driver.NotDrivenAsync(new PublishRaceRecord([]),
-                "hold two spactl fragment publish runs of one key at a barrier before the claim, which this driver does not do", ct),
+            (_, ct) => driver.PublishRaceAsync(ct),
             (driven, _) => FragmentsObserver.PublishRaces(driven.Record),
             Ct);
         result.Assert();
@@ -137,8 +144,7 @@ public sealed class FragmentsTests
         await using FragmentsDriver driver = await FragmentsDriver.StartAsync();
         Step control = await driver.ControlAsync(Ct);
         RowResult result = await driver.Run.RowAsync(FragmentsBounds.O12, control,
-            (_, ct) => driver.NotDrivenAsync(new EntryImportRecord([]),
-                "import a fragment's entry at entry.js and at another name in the browser and record its chunk's resolved path", ct),
+            (_, ct) => driver.EntryImportsAsync(ct),
             (driven, _) => FragmentsObserver.EntryImports(driven.Record),
             Ct);
         result.Assert();
@@ -150,8 +156,7 @@ public sealed class FragmentsTests
         await using FragmentsDriver driver = await FragmentsDriver.StartAsync();
         Step control = await driver.ControlAsync(Ct);
         RowResult result = await driver.Run.RowAsync(FragmentsBounds.O13Chain, control,
-            (_, ct) => driver.NotDrivenAsync(new ChainRecord([]),
-                "sign in at N = 2 in each sitting browser and record each /bff/chain request's Sec-Fetch-Site, -Mode and -Dest", ct),
+            (_, ct) => driver.ChainAsync(ct),
             (driven, _) => FragmentsObserver.Chain(driven.Record, driven.Context),
             Ct);
         result.Assert();
@@ -164,7 +169,7 @@ public sealed class FragmentsTests
         Step control = await driver.ControlAsync(Ct);
         RowResult result = await driver.Run.RowAsync(FragmentsBounds.O13Refusal, control,
             (_, ct) => driver.NotDrivenAsync(new ChainRefusalRecord([]),
-                "replay a /bff/chain step after the chain, with another session's continuation and past ChainLifetime, reading the session record's version before and after each", ct),
+                "read the session record's version before and after a replayed, a foreign and an expired /bff/chain step, each held from a sign-in in each engine", ct),
             (driven, _) => FragmentsObserver.ChainRefusals(driven.Record, driven.Context.UserAgents),
             Ct);
         result.Assert();
