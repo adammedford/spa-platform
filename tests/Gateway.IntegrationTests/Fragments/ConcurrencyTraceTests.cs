@@ -591,7 +591,7 @@ internal sealed class TwoHostShell : IAsyncDisposable
 
     public TestBrowser BrowserOn(GatewayHost host) => ReferenceEquals(host, A) ? OnA : OnB;
 
-    /// <summary>The record's version, or null when there is no record.</summary>
+    /// <summary>The record's version; throws when there is no record (<see cref="RecordAsync"/> reads one that may be gone).</summary>
     public async Task<long> VersionAsync(CancellationToken ct) =>
         (await Harness.SessionStore!.GetAsync(Key, ct) ?? throw new InvalidOperationException("the session record is gone.")).Version;
 

@@ -38,7 +38,7 @@ internal static class Steps
 
     /// <summary>Whether <paramref name="url"/> is the provider's authorization request for <paramref name="clientId"/>.</summary>
     public static bool IsAuthorizeFor(Uri url, string clientId) =>
-        url.AbsolutePath == "/authorize" && url.Query.Contains("client_id=" + Uri.EscapeDataString(clientId) + "&", StringComparison.Ordinal);
+        url.AbsolutePath == "/authorize" && ClientOf(url) == clientId;
 
     /// <summary>The <c>client_id</c> an authorization request names.</summary>
     public static string? ClientOf(Uri authorize) =>

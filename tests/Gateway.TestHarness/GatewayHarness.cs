@@ -971,7 +971,10 @@ public sealed class GatewayHarness : IAsyncDisposable
     /// <summary>The mock API's listeners, by the API names the fixture definitions give them.</summary>
     private static readonly string[] MockApiListeners = ["orders", "reports"];
 
-    /// <summary>The client id the provider issues a fragment: distinct from every shell's and every other fragment's.</summary>
+    /// <summary>
+    /// The client id the provider issues a fragment, <c>client-{appId}-{fragmentId}</c>: distinct from every
+    /// other fragment's and from the shell's of every fixture app, none of whose ids has that form.
+    /// </summary>
     public static string ClientIdFor(string appId, string fragmentId) => "client-" + appId + "-" + fragmentId;
 
     /// <summary>The client id the provider issues an app. Fixed per appId, so the mock API can admit it before it exists.</summary>

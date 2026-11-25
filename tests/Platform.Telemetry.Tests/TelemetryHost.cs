@@ -202,7 +202,7 @@ public sealed class TelemetryHost : IAsyncDisposable
 
             // And, as the real stage pins it, the fragment of a request under /fragments/{fragmentId}/
             // when the entry lists that fragment, and nothing for an id it does not list
-            // (contracts/pipeline.md, stage 4).
+            // (UsePlatformHostResolution, contracts/pipeline.md).
             if (context.Request.Path.StartsWithSegments(PlatformPaths.Fragments, out PathString rest)
                 && rest.Value?.Split('/', StringSplitOptions.RemoveEmptyEntries) is [{ } fragmentId, ..]
                 && entry.Fragments.Any(fragment => string.Equals(fragment.FragmentId, fragmentId, StringComparison.Ordinal)))
