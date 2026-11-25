@@ -21,6 +21,7 @@ public sealed class RegistryPollerTests
 {
     private const string Key = "registry/registry.json";
     private const string App1Ref = "ssm:/spa-platform/poc/apps/app1/client-secret:1";
+    private const string App1ReportsRef = "ssm:/spa-platform/poc/apps/app1/fragments/reports/client-secret:1";
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
@@ -86,7 +87,7 @@ public sealed class RegistryPollerTests
         HostApplicationBuilder builder = Builder(new CapturedLog(), configured: true);
         builder.Services.AddSingleton<TimeProvider>(clock);
         builder.Services.AddSingleton<IObjectStore>(store);
-        builder.Services.AddSingleton<IClientSecretSource>(new FakeClientSecretSource { [App1Ref] = "s3cret" });
+        builder.Services.AddSingleton<IClientSecretSource>(new FakeClientSecretSource { [App1Ref] = "s3cret", [App1ReportsRef] = "s3cret-reports" });
         builder.AddPlatformRegistry();
 
         using IHost host = builder.Build();
@@ -119,7 +120,7 @@ public sealed class RegistryPollerTests
         builder.Services.AddSingleton<TimeProvider>(clock);
         builder.Services.AddSingleton<IObjectStore>(_ =>
             Interlocked.Increment(ref attempts) == 1 ? throw new InvalidOperationException("no region") : store);
-        builder.Services.AddSingleton<IClientSecretSource>(new FakeClientSecretSource { [App1Ref] = "s3cret" });
+        builder.Services.AddSingleton<IClientSecretSource>(new FakeClientSecretSource { [App1Ref] = "s3cret", [App1ReportsRef] = "s3cret-reports" });
         builder.AddPlatformRegistry();
 
         using IHost host = builder.Build();
