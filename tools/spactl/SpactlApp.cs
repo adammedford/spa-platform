@@ -29,8 +29,9 @@ public static class SpactlApp
           spactl wait              --url <gateway origin> --revision <N> [--instances <id,id,...>]
                                    [--timeout <seconds>]
 
-        The bucket and region come from --outputs (default infra/envs/poc/outputs.json), or --bucket
-        [--region] names them. --config is a platform configuration file in the shape of
+        The bucket and Region come from --outputs <outputs.json>, a cell's infrastructure outputs
+        document, or from --bucket and --region; there is no default. app add always needs --outputs,
+        for the app's client. --config is a platform configuration file in the shape of
         contracts/platform-config.schema.json; its Policy and Issuers sections bound the registry.
         """;
 
