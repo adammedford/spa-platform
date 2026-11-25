@@ -1,14 +1,13 @@
 # Operating notes
 
-The seven operations an operator performs on a Phase 1 cell, each as the command sequence the
-scripts in `tools/scripts/` and `spactl` already run (plan row 6.7; roadmap stage S7). Owner:
-workstream 6.
+The seven operations an operator performs on a cell built from the reference module, each as the
+command sequence the scripts in `tools/scripts/` and `spactl` already run. Owner: workstream 6.
 
 These notes are the order and the reasons. Each script's header is its manual, printed by
 `--help`, and `spactl` prints its usage when run with no arguments, so where a note and a header
 disagree the header wins and the note is wrong: fix the note.
 
-| Operation | Note | Lever (`docs/plan/05-infrastructure-and-cost.md`, Deployment and rollback) | Signs users out |
+| Operation | Note | Lever | Signs users out |
 | --- | --- | --- | --- |
 | Deploy the gateway | [deploy.md](deploy.md) | Gateway | Every user of every app |
 | Roll the gateway back | [rollback.md](rollback.md) | Gateway | Every user of every app |
@@ -19,32 +18,33 @@ disagree the header wins and the note is wrong: fix the note.
 | Tear the cell down | [teardown.md](teardown.md) | Infrastructure | Everyone; nothing is left |
 
 A gateway deployment signs everyone out because Phase 1 keeps sessions and data-protection keys in
-the one task's memory (`docs/plan/05-infrastructure-and-cost.md`, Deployment and rollback). Phase 2
-removes that (P2-1, P2-2); until then, prefer a lever that needs no deployment.
-
-**Walked:** task 6.9's gate runs are where deploy and teardown are exercised, and #244 is where the
-other five are walked on the deployed cell and where each walk is recorded, not here. A note that has
-not been walked is the scripts' sequence written down, not a sequence that has been run.
+the one task's memory. Until that changes, prefer a lever that needs no deployment.
 
 ## Before any note: the operator session
 
-Every note starts here, from the repository root, in one shell.
+Every note starts here, from the repository root, in one shell:
 
-```bash
-set -a; . tools/aws-project.env; set +a     # the profile and the Region (tools/aws-project.env)
-tools/preflight.sh                          # the tools, and that the session is the platform account
-```
+- a session with credentials for the account the cell is in, and `AWS_REGION` set to the cell's
+  Region;
+- the cell's entry file sourced, `set -a; . <entry file>; set +a`, which sets the values the
+  scripts take with no default (`tools/scripts/cell-common.sh`'s header names each one);
+- `APP` set to the id of the app the note acts on, and `APP_DEFINITION` to that app's definition
+  file, the document `spactl app add` reads.
 
-The scripts need `terraform init -backend-config=backend.hcl` run once in each of
-`infra/envs/poc/idp`, `infra/envs/poc/apps` and `infra/envs/poc/platform`, and they read the cell's
-names from `infra/envs/poc/outputs.json`, which `seed.sh`, `deploy.sh` and `rollback.sh` write
+The scripts need each root on `$SPA_ROOTS` initialised with its backend, and they read the cell's
+names from the outputs document, `$SPA_OUTPUTS_FILE`, which the scripts write after every apply
 (`contracts/infra-outputs.schema.json`). No script reads Terraform state directly except
 `teardown.sh`; of the notes, only [secret-rotation.md](secret-rotation.md) does, by hand.
 
+The app's origin, which `spactl wait` reads through, is its definition's `host`:
+
+```bash
+ORIGIN="https://$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["host"])' "$APP_DEFINITION")"
+```
+
 Never paste an AWS command's raw output into a ticket or a log: the bucket name, every ARN and every
 repository URI carry the account id, which the scripts redact and a hand-run command does not. Never
-print a client secret, a token, a cookie, an authorization code or a state value (AGENTS.md; test
-N-16).
+print a client secret, a token, a cookie, an authorization code or a state value.
 
 ### `spactl` and its platform configuration
 
@@ -56,16 +56,16 @@ spactl() { dotnet run --project tools/spactl -- "$@"; }
 
 Every `spactl` command that writes the registry takes `--config <platform-config.json>`, whose
 `Policy` and `Issuers` sections bound the document. The bounds must be the gateway's own, or
-`spactl` accepts an entry the gateway then refuses. `seed.sh` builds that file from the running
-gateway's task definition and deletes it on exit (`read_platform_config` in
+`spactl` accepts an entry the gateway then refuses. The scripts build that file from the running
+gateway's task definition and delete it on exit (`read_platform_config` in
 `tools/scripts/cell-common.sh`); by hand it is the same three calls, into a directory only you can
 read:
 
 ```bash
 umask 077
 RUN="$(mktemp -d)"
-CLUSTER="$(python3 -I tools/scripts/cell_documents.py field infra/envs/poc/outputs.json ecsCluster "$AWS_REGION")"
-SERVICE="$(python3 -I tools/scripts/cell_documents.py field infra/envs/poc/outputs.json ecsService "$AWS_REGION")"
+CLUSTER="$(python3 -I tools/scripts/cell_documents.py field "$SPA_OUTPUTS_FILE" ecsCluster "$AWS_REGION")"
+SERVICE="$(python3 -I tools/scripts/cell_documents.py field "$SPA_OUTPUTS_FILE" ecsService "$AWS_REGION")"
 TASK_DEFINITION="$(aws ecs describe-services --region "$AWS_REGION" --cluster "$CLUSTER" --services "$SERVICE" \
   --query 'services[0].taskDefinition' --output text)"
 aws ecs describe-task-definition --region "$AWS_REGION" --task-definition "$TASK_DEFINITION" \
@@ -85,24 +85,24 @@ same, start it again. Remove the directory when the note is done (`rm -rf "$RUN"
 A registry change is live once the gateway's poller has swapped to it. `spactl wait --url <origin>
 --revision <N>` reads `/readyz` until it reports revision N or later (`contracts/pipeline.md`).
 `/readyz` answers on any host, but the load balancer is internal, so the workstation reaches it
-through the tunnel (`docs/plan/05-infrastructure-and-cost.md`, Workstation access). The plan's
-export names the gateway task as the hop; #1168 made it the cell's bastion task instead, a service
-of one task that the platform root declares only with `bastion = true` and `bastion_image` in its
-`terraform.tfvars`, off by default ([deploy.md](deploy.md), first deployment, step 3).
-`tools/scripts/tunnel.sh` forwards through it and never through a gateway task; when the outputs
-document names no bastion it refuses, exit 2, before it asks AWS anything:
+through the tunnel. Its hop is the cell's bastion task, a service of one task that the platform root
+declares only with `bastion = true` and `bastion_image` in its `terraform.tfvars`, off by default;
+the bastion runs, and is billed, until an apply sets it back to false. `tools/scripts/tunnel.sh`
+forwards through it and never through a gateway task; when the outputs document names no bastion it
+refuses, exit 2, before it asks AWS anything:
 
 ```bash
 tools/scripts/tunnel.sh                       # a second terminal; it stays in the foreground
-tools/scripts/verify-tunnel.sh /healthz       # a third, once: TLS validates against the local authority
+tools/scripts/verify-tunnel.sh /healthz       # a third, once: TLS validates against the cell's authority
 ```
 
-With the hosts-file line in place, the origin is `https://app1.spa-poc.test:8443`. Every `spactl`
-write prints `Applied revision N`; that N is the one to wait for:
+The tunnel listens on local port 8443, the port in each app's registry host, so with the app's host
+resolving to this workstation `$ORIGIN` reaches the gateway through it. Every `spactl` write prints
+`Applied revision N`; that N is the one to wait for:
 
 ```bash
-spactl wait --url https://app1.spa-poc.test:8443 --revision N
+spactl wait --url "$ORIGIN" --revision N
 ```
 
-In Phase 1 there is one task, so one `/readyz` that reports N means the whole cell has it. Phase 2
-waits for every task (P2-5).
+In Phase 1 there is one task, so one `/readyz` that reports N means the whole cell has it. A cell of
+more than one task waits for each of them (`spactl wait --instances`).
