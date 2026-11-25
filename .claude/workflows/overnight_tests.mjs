@@ -2006,7 +2006,7 @@ const forkOf = (prompt) => (/Otherwise fork from [^:]+: forkSha = (\S+?)\. Take 
   if (!beforeGreen) fail('#665: no implement started before any gate passed, so the run-base fallback check read nothing')
 }
 
-// 49. A ticket body that names another base does not move the fork (#1386). On 2026-11-18 #1005, #1329 and #1330 each
+// 52. A ticket body that names another base does not move the fork (#1386). On 2026-11-18 #1005, #1329 and #1330 each
 //     re-decided where to fork as a gap decision because their bodies named landing B's branch, and #1002 ended red for
 //     the reason its body expected. STEP 0's line after the fork says the fork at forkSha still wins, the change is
 //     proven on a throwaway tree of that base, and a change red on forkSha by design takes the "Cannot get green" route
