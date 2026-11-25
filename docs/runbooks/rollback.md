@@ -5,7 +5,7 @@ definition. The deployment circuit breaker also rolls back on failed health chec
 
 **It signs out whom a deployment signs out**, since it is one: on one task with sessions in memory,
 every user of every app; on two tasks with the durable session store, no one ([deploy.md](deploy.md)
-states each shape).
+says why).
 
 Start with the operator session in [README.md](README.md).
 

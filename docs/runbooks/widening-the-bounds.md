@@ -33,8 +33,8 @@ note as an app does.
 **A new issuer is checked before it goes in**, against the issuer section of the identity provider
 contract, `contracts/identity-provider-contract.md` → "The issuer": its discovery document, its
 signing keys, its access and ID tokens, its revocation endpoint and how it ends a session under its
-profile. The gateway trusts every issuer in the configuration to sign users in, so an issuer that
-misses a row there is found at the first sign-in, after the deployment, not by this note.
+profile. The gateway trusts every issuer in the configuration to sign users in, and nothing in
+this note checks the issuer for you.
 
 ## A new host suffix is not a widening
 
@@ -47,7 +47,7 @@ itself, not to its platform configuration. This note has no procedure for it.
 
 1. **Apply the changed task definition.** Change the input in the platform root, then deploy as
    [deploy.md](deploy.md) has it, from the commit of the gateway the cell already runs, so that
-   the deployment changes the bounds and nothing else. Its apply writes the new task definition.
+   the deployment carries no change to the gateway's code beside the bounds. Its apply writes the new task definition.
 2. **Wait until every task runs it.** `deploy.sh`'s exit 0 is that wait: the primary deployment
    completed on the applied task definition, and every running task is healthy on it. Until then,
    a task on the old task definition still holds the old bounds. It rejects a registry document

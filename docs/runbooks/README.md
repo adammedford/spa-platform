@@ -9,20 +9,19 @@ disagree the header wins and the note is wrong: fix the note.
 
 | Operation | Note | Lever | Signs users out |
 | --- | --- | --- | --- |
-| Deploy the gateway | [deploy.md](deploy.md) | Gateway | On one task with sessions in memory, every user of every app; on two tasks with durable sessions, no one |
-| Roll the gateway back | [rollback.md](rollback.md) | Gateway | As Deploy: on one task with sessions in memory, every user of every app; on two tasks with durable sessions, no one |
+| Deploy the gateway | [deploy.md](deploy.md) | Gateway | On one task with sessions in memory, every user of every app; on two tasks with the durable session store, no one |
+| Roll the gateway back | [rollback.md](rollback.md) | Gateway | As Deploy: on one task with sessions in memory, every user of every app; on two tasks with the durable session store, no one |
 | Roll a release back | [release-rollback.md](release-rollback.md) | SPA release | No one |
 | Roll the registry back | [registry-rollback.md](registry-rollback.md) | Registry | Only users of an app the rollback removes or moves to another client |
 | Rotate a client secret | [secret-rotation.md](secret-rotation.md) | Registry | No one |
 | End every session for an app | [end-app-sessions.md](end-app-sessions.md) | Registry | Every user of that app, and only that app |
-| Widen or narrow the bounds | [widening-the-bounds.md](widening-the-bounds.md) | Gateway | As Deploy: on one task with sessions in memory, every user of every app; on two tasks with durable sessions, no one |
+| Widen or narrow the bounds | [widening-the-bounds.md](widening-the-bounds.md) | Gateway | As Deploy: on one task with sessions in memory, every user of every app; on two tasks with the durable session store, no one |
 | Tear the cell down | [teardown.md](teardown.md) | Infrastructure | Everyone; nothing is left |
 
 Whom a gateway deployment signs out depends on the cell's shape, which the cell module's
-`multi_task` and `session_store` inputs choose. On one task with sessions in memory, it signs
-everyone out, because sessions and data-protection keys live in the one task's memory. On two tasks
-with the durable session store, a rolling deployment signs no one out, because sessions live in
-DynamoDB under the shared key ring. On the first shape, prefer a lever that needs no deployment.
+`multi_task` and `session_store` inputs choose: everyone on one task with sessions in memory, no one
+on two tasks with the durable session store. [deploy.md](deploy.md) says why. On the first shape,
+prefer a lever that needs no deployment.
 
 ## Before any note: the operator session
 
