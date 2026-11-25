@@ -113,8 +113,9 @@ const TRAILER = 'Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>'
 const SKILLS = (A.skills || SKILLS_DEFAULT).replace(/\/+$/, '')   // no trailing slash, so ${SKILLS}/<name> is one path
 // A workflow agent has no Agent tool (#1475), so a skill whose steps hand work to a background agent or a sub-agent
 // is called with the override that keeps that step in the agent's own session. code-review's override is the review
-// prompt's own, since it says how the two axes stay separate.
-const SKILLS_WITH_AGENTS = new Set(['research', 'grilling'])
+// prompt's own, since it says how the two axes stay separate. tdd is here for the skill it hands on to: when an
+// interface's shape is in question it calls codebase-design, whose design-it-twice step spawns parallel sub-agents.
+const SKILLS_WITH_AGENTS = new Set(['research', 'grilling', 'tdd'])
 const NO_AGENT_TOOL = 'you have no Agent tool, so do yourself, in this session, every step the skill hands to a background agent or a sub-agent'
 const skill = (name) => `call the Skill tool with "${name}" (if the Skill tool is unavailable or refuses, read ${SKILLS}/${name}/SKILL.md and follow it${SKILLS_WITH_AGENTS.has(name) ? `; ${NO_AGENT_TOOL}` : ''})`
 
