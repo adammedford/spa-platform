@@ -186,6 +186,8 @@ fi
 # Terraform's provider cache, the one directory every tools/check.sh init on this machine installs
 # providers into (#1502): TF_PLUGIN_CACHE_DIR when it is set, and otherwise the default the check
 # sets, typed here as tools/check.sh's Terraform half types it, since that is where the rule lives.
+# Only the variable is read, as the check reads it: a plugin_cache_dir in the CLI config file alone
+# is not the cache the check uses, since the default it exports overrides the file.
 # Its size is what the cache costs the disk, which a full disk shared by every overnight lane made
 # worth a row. An info row: a cache not made yet is no missing dependency, the check makes it.
 tf_cache="${TF_PLUGIN_CACHE_DIR:-${HOME-}/.terraform.d/plugin-cache}"

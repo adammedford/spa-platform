@@ -264,8 +264,16 @@ on_exit() {
   fi
 }
 trap on_exit EXIT
-# A run ended by HUP, INT or TERM goes through on_exit too: bash, 3.2 among them, runs the EXIT trap
-# when a fatal signal ends it (measured on 3.2.57, #1502), so a killed run leaves no lock behind.
+# A run ended by HUP, INT or TERM goes through on_exit too, so a killed run leaves no lock behind.
+# That rests on measurement, not on bash's manual, which says only that the EXIT trap runs "on exit
+# from the shell": HUP, INT and TERM sent to a bash -c's process group, while it waited on a child
+# and while it ran a builtin loop, each ran its EXIT trap, on 3.2.57 and on 5.3.9 (#1535's review).
+# tools/check_tests.py's signal case proves HUP and TERM on every run. It leaves INT out: a runner
+# started in the background starts this script with SIGINT ignored, which bash cannot undo ("Signals
+# ignored upon entry to the shell cannot be trapped or reset", its manual), and resetting it per
+# case takes a preexec_fn, which is not safe beside the companion's threads. A SIGINT that does
+# reach the run reaches its terraform too, whose failed init ends the run through fail() and
+# on_exit in any case.
 
 # The elapsed lines (#629): after each step it executes, and after each test companion, the check
 # writes `<me>: elapsed: <step>: <N>s` on a line of its own, and `<me>: elapsed: total: <N>s` just
@@ -771,8 +779,11 @@ elif [ -n "$terraform_bin" ]; then
   # every lane at once. With TF_PLUGIN_CACHE_DIR set, init installs a provider into the cache once
   # and links each directory's copy to it
   # (https://developer.hashicorp.com/terraform/cli/config/config-file#provider-plugin-cache). A
-  # value the caller set is used as it is; otherwise the check sets the default, one directory for
-  # every worktree on the machine. tools/preflight.sh names the same directory, by the same rule.
+  # TF_PLUGIN_CACHE_DIR the caller set is used as it is; otherwise the check exports the default,
+  # one directory for every worktree on the machine. Only the variable is read: a plugin_cache_dir
+  # in the caller's CLI config file is not, and the exported default overrides it, as the page above
+  # says the variable does ("to override an existing cache directory"). tools/preflight.sh names
+  # the same directory, by the same rule.
   # Terraform does not create the directory, so the check does, before the first init.
   if [ -n "${TF_PLUGIN_CACHE_DIR:-}" ]; then
     cache_chosen="the caller's TF_PLUGIN_CACHE_DIR"
