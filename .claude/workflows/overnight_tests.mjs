@@ -1437,7 +1437,7 @@ for (const c of allPrompts.filter((x) => x.label.startsWith('review:'))) {
   const closings = allPrompts.filter((c) => c.label === 'closing')
   if (closings.length !== 1) fail(`#629: the run rendered ${closings.length} closing-check prompts, not 1`)
   const p = (closings[0] || {}).prompt || ''
-  const cmd = (/^ {2}2\. cd (\S+) && \{ nohup bash -c '\{ echo "HEAD=\$\(git -C \S+ rev-parse HEAD\)"; tools\/check\.sh --full --base (\S+) --port (\d+); \} > (\S+) 2>&1' < \/dev\/null > \/dev\/null 2>&1 & echo \$! > \4\.pid; \}$/m.exec(p) || [])
+  const cmd = (/^ {2}2\. cd (\S+) && \{ nohup python3 -I -c "[^"]+" bash -c '\{ echo "HEAD=\$\(git -C \S+ rev-parse HEAD\)"; tools\/check\.sh --full --base (\S+) --port (\d+); \} > (\S+) 2>&1' < \/dev\/null > \/dev\/null 2>&1 & echo \$! > \4\.pid; \}$/m.exec(p) || [])
   if (!cmd.length) fail('#629: the closing-check prompt does not run tools/check.sh --full as the one check command')
   else {
     if (cmd[1] !== INT_WT) fail(`#629: the closing check runs in ${cmd[1]}, not the integration worktree ${INT_WT}`)
@@ -3060,6 +3060,41 @@ const forkOf = (prompt) => (/Otherwise fork from [^:]+: forkSha = (\S+?)\. Take 
       if (JSON.stringify(listed) !== JSON.stringify([...HELD_IDS].sort())) fail(`#1470: the report's held list is ${JSON.stringify(summary.held)}, not ${HELD_IDS.join(', ')}`)
     }
     if (!rp.includes('"held" is true') || !rp.includes('failed (held on #')) fail('#1470: the report prompt does not say how a held lane is listed under its request and in the Tickets table')
+  }
+}
+
+// 53. The detached check starts with SIGINT at its default (#1532). A job a non-interactive bash puts in the
+//     background starts with SIGINT ignored, every child inherits that, and no trap in a non-interactive shell can
+//     undo it; so on 2026-11-24 deploy_tests.py's interrupt test went red (130 != 1) in every lane whose diff earned
+//     it, by the launch and not the change. Every check prompt's start command sets SIGINT to SIG_DFL before
+//     tools/check.sh runs; and the closing prompt's command, run from a non-interactive bash against a fake
+//     tools/check.sh that prints its SIGINT handler, logs default_int_handler, never Handlers.SIG_IGN.
+{
+  const starts = allPrompts.filter((c) => c.prompt.includes('THE CHECK (')).map((c) => [c.label, (/^ {2}2\. (.*nohup.*)$/m.exec(c.prompt) || [])[1] || ''])
+  if (!starts.length) fail('#1532: no rendered prompt carries the check\'s start command')
+  for (const [label, s] of starts) {
+    const reset = s.indexOf('signal.signal(signal.SIGINT, signal.SIG_DFL)'), check = s.indexOf('tools/check.sh')
+    if (reset < 0 || check < 0 || reset > check) fail(`#1532: the ${label} prompt's start command does not set SIGINT to its default before tools/check.sh: ${s}`)
+  }
+  const closing = (allPrompts.find((c) => c.label === 'closing') || {}).prompt || ''
+  const start = (/^ {2}2\. (.*nohup.*)$/m.exec(closing) || [])[1]
+  if (!start) fail('#1532: the closing-check prompt gives no start command')
+  else {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'overnight-sigint-'))
+    const log = path.join(dir, 'check.txt')
+    fs.mkdirSync(path.join(dir, 'tools'))
+    fs.writeFileSync(path.join(dir, 'tools', 'check.sh'), '#!/bin/bash\npython3 -I -c \'import signal; print("SIGINT:", signal.getsignal(signal.SIGINT))\'\n', { mode: 0o755 })
+    spawnSync('git', ['init', '-q', dir])
+    const cmd = start.split(`${fixture.args.wt}/overnight`).join(dir).split(`${LOG}/closing-check.txt`).join(log)
+    const r = spawnSync('bash', ['-c', cmd], { encoding: 'utf8' })
+    if (r.status !== 0) fail(`#1532: the closing prompt's start command exited ${r.status}: ${r.stderr}`)
+    let line = ''
+    for (let i = 0; i < 100 && !line; i++) {
+      await sleep(100)
+      line = (fs.existsSync(log) ? fs.readFileSync(log, 'utf8') : '').split('\n').find((l) => l.startsWith('SIGINT:')) || ''
+    }
+    if (!line.includes('default_int_handler')) fail(`#1532: the check started by the closing prompt's command logs ${JSON.stringify(line || 'nothing')}, not SIGINT at default_int_handler`)
+    fs.rmSync(dir, { recursive: true, force: true })
   }
 }
 
