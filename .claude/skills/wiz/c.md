@@ -262,7 +262,8 @@ key, a cookie or a secret:
 - secret rotation: a session signed in before step 1 still calling app 1's API after the old secret
   is deleted; a fresh login succeeding once the entry points at the new version and again after the
   deletion; the parameter's version moved; and the apps root's `plan -detailed-exitcode` exiting 0
-  at the end, with the file's "Checks for the first walk (#244)" settled (#244 names these steps by
+  at the end, with `docs/runbooks/poc/proof-cell.md`'s "Checks for the first walk (#244)" settled
+  (#244 names these steps by
   the plan's four-step count of `docs/plan/05-infrastructure-and-cost.md` → Rotating a client
   secret, where step 3 points the entry and step 4 deletes the old secret, not by the runbook's
   seven headings; the post cites the file's section headings as they read at the commit walked);
@@ -284,8 +285,8 @@ box ticks are Adam's, under rule 5.
 
 **The stop rule (Q87, Q98).** The first step that does not work unedited ends the walk: an exit the
 runbook does not expect, an output other than the one it says the step prints, a line that had to
-change to run (a path, a flag, a name), or one of the file's "Checks for the first walk (#244)" that
-does not hold. Post the walk as not passed at that step, with the command, its exit and its lines,
+change to run (a path, a flag, a name), or, in secret rotation, one of
+`docs/runbooks/poc/proof-cell.md`'s "Checks for the first walk (#244)" that does not hold. Post the walk as not passed at that step, with the command, its exit and its lines,
 and print under "Held" the ws6 follow-up the human files (`**Raised by:** #244`) that fixes the
 runbook; that runbook is walked again in a later sitting once the fix is on `main`. Secret rotation
 stops the same way when the CLI or the SCP refuses Cognito's second-secret call (an `AccessDenied`
