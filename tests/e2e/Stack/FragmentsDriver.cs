@@ -3,11 +3,13 @@ using Gateway.TestHarness;
 namespace Gateway.E2ETests.Stack;
 
 /// <summary>
-/// The driver of the deployed fragments rows (#1005, T14 of #961): it sends the requests, reads the AWS
-/// CLI and records, on the deployed cell and nowhere else. Each row's drive returns a
-/// <see cref="Driven{T}"/>; a part of a row this driver cannot yet drive is returned as
-/// <see cref="Driven{T}.Missing"/>, so the row reports <c>not proved:</c> naming it and never passes on a
-/// recording nobody made. The observer (<see cref="FragmentsObserver"/>) judges what it records.
+/// The driver of the deployed fragments rows (#1005, T14 of #961; the drives #1411): it sends the requests,
+/// drives the engines, reads the AWS CLI, runs spactl and records, on the deployed cell and nowhere else.
+/// Each row's drive returns a <see cref="Driven{T}"/>; a part of a row this driver cannot yet drive is
+/// returned as <see cref="Driven{T}.Missing"/>, so the row reports <c>not proved:</c> naming it and never
+/// passes on a recording nobody made. Each drive is a class with its own seams, proved without AWS:
+/// <see cref="PublishRaceDrive"/>, <see cref="FragmentsWorkloads"/> and <see cref="FragmentsBrowserRows"/>.
+/// The observer (<see cref="FragmentsObserver"/>) judges what it records.
 /// </summary>
 public sealed class FragmentsDriver : IAsyncDisposable
 {

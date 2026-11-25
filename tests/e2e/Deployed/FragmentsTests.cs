@@ -21,8 +21,16 @@ namespace Gateway.E2ETests.Deployed;
 /// <para>The id-bearing methods carry the names contracts/test-ids.md gives them (F-31, F-37, F-39 to F-42,
 /// N-38 and N-46); the record rows, O1, O2, O4 and O9, have no id and carry their obligation in their name.
 /// A not-proved row is a red test whose message starts <c>not proved:</c>; a broken rule's starts
-/// <c>failed:</c>. A row whose part this driver cannot yet drive reports <c>not proved: the driver cannot yet …</c>
-/// naming the part.</para>
+/// <c>failed:</c>. O3, O5, O9 and O13's refusals still report <c>not proved: the driver cannot yet …</c>,
+/// naming the part (#1411): O3 waits on #1529's seam and O9 on #1530's fixture.</para>
+///
+/// <para>The drives pull the cell's levers they need and put them back (#1411's decision of 2026-11-24):
+/// O1 writes the shell's entry at each N with spactl, so <c>Policy:FragmentsPerShell</c> is raised to 6 for its
+/// run (#1011 row 1); O2 scales the gateway service to one task and two; F-T5 activates the winning fragment
+/// release. O1, O2 and F-T5 read <c>SPA_E2E_PLATFORM_CONFIG</c> and the outputs document
+/// <c>SPA_E2E_OUTPUTS</c> names (the repository's when unset). The browser rows launch Chromium, Firefox and
+/// WebKit through a loopback proxy to the tunnel; an engine that does not launch is named on standard output
+/// and missing from the record.</para>
 /// </summary>
 public sealed class FragmentsTests
 {
@@ -59,7 +67,7 @@ public sealed class FragmentsTests
         Step control = await driver.ControlAsync(Ct);
         RowResult result = await driver.Run.RowAsync(FragmentsBounds.O3, control,
             (_, ct) => driver.NotDrivenAsync(new SuccessorRecord("", "", null, null),
-                "present the successor a concurrent refresh obtained to the provider after the logout: the gateway keeps every token on the server, so the probe needs a way to it this class does not have", ct),
+                "present the successor a concurrent refresh obtained to the provider after the logout: the token never leaves the gateway task, and the seam that would reach it is #1529", ct),
             (driven, capture) => FragmentsObserver.Successor(driven.Steps, driven.Record, capture),
             Ct);
         result.Assert();
@@ -87,7 +95,7 @@ public sealed class FragmentsTests
         Step control = await driver.ControlAsync(Ct);
         RowResult result = await driver.Run.RowAsync(FragmentsBounds.O5, control,
             (_, ct) => driver.NotDrivenAsync(new ImportMapRecord([]),
-                "load the four hashed import-map cases in each sitting browser: it needs a shell release carrying them on the cell, and Firefox and WebKit", ct),
+                "publish a shell release carrying the four hashed import-map case pages, write their hashes into the entry's script-src, and load each case in each engine", ct),
             (driven, _) => FragmentsObserver.ImportMap(driven.Record, driven.Context.UserAgents),
             Ct);
         result.Assert();
@@ -112,7 +120,7 @@ public sealed class FragmentsTests
         Step control = await driver.ControlAsync(Ct);
         RowResult result = await driver.Run.RowAsync(FragmentsBounds.O9, control,
             (_, ct) => driver.NotDrivenAsync(new HeaderLimitRecord(null, null, null, null, []),
-                "probe the largest response header the ALB, Kestrel and each sitting browser accept beside the merged CSP at the cap", ct),
+                "probe the largest response header the ALB, Kestrel and each engine accept: nothing on the cell answers a header of a chosen size, and the fixture that would is #1530", ct),
             (driven, _) => FragmentsObserver.HeaderLimits(driven.Record, driven.Context.UserAgents),
             Ct);
         result.Assert();
@@ -161,7 +169,7 @@ public sealed class FragmentsTests
         Step control = await driver.ControlAsync(Ct);
         RowResult result = await driver.Run.RowAsync(FragmentsBounds.O13Refusal, control,
             (_, ct) => driver.NotDrivenAsync(new ChainRefusalRecord([]),
-                "replay a /bff/chain step after the chain, with another session's continuation and past ChainLifetime, reading the session record's version before and after each", ct),
+                "read the session record's version before and after a replayed, a foreign and an expired /bff/chain step, each held from a sign-in in each engine", ct),
             (driven, _) => FragmentsObserver.ChainRefusals(driven.Record, driven.Context.UserAgents),
             Ct);
         result.Assert();
