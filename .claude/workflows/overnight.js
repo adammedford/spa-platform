@@ -142,9 +142,15 @@ const HOUSE = `House rules (unattended; nobody will answer questions tonight):
 // a verdict or the check's process is gone. The rm runs on its own, before the start: chained with && it would go to the
 // background with the check and could delete the pid file the start has just written. The braces background the nohup
 // alone: `cd && nohup ... &` backgrounds the whole list, whose subshell holds the call's output open until the check ends.
+// A job a non-interactive bash backgrounds starts with SIGINT ignored, every child inherits that, and no trap in such a
+// shell can undo it, so a companion that interrupts its own child goes red under the launch (#1532: deploy_tests.py's
+// interrupt test, 130 != 1). So python3 sets SIGINT to its default and execs the check's bash, which keeps the pid
+// that $! names. Bash's manual, Signals (https://www.gnu.org/software/bash/manual/html_node/Signals.html): with job
+// control off, asynchronous commands ignore SIGINT; and the trap builtin: signals ignored upon entry to a
+// non-interactive shell cannot be trapped or reset.
 const GATE = ({ dir, log, kind, fork, port, skipTests }) => `THE CHECK (${kind}). It runs longer than one Bash call may (600 s), so start it detached and wait for its verdict, output to ${log}. Three Bash calls, each exactly as written:
   1. rm -f ${log} ${log}.pid
-  2. cd ${dir} && { nohup bash -c '{ echo "HEAD=$(git -C ${dir} rev-parse HEAD)"; tools/check.sh --full --base ${fork} --port ${port}${skipTests ? ' --skip-tests' : ''}; } > ${log} 2>&1' < /dev/null > /dev/null 2>&1 & echo $! > ${log}.pid; }
+  2. cd ${dir} && { nohup python3 -I -c "import os, signal, sys; signal.signal(signal.SIGINT, signal.SIG_DFL); os.execvp(sys.argv[1], sys.argv[1:])" bash -c '{ echo "HEAD=$(git -C ${dir} rev-parse HEAD)"; tools/check.sh --full --base ${fork} --port ${port}${skipTests ? ' --skip-tests' : ''}; } > ${log} 2>&1' < /dev/null > /dev/null 2>&1 & echo $! > ${log}.pid; }
   3. The wait, with a 600000 ms timeout; it returns within 560 s:
   P=$(cat ${log}.pid); for i in $(seq 54); do case "$(tail -n 1 ${log} 2>/dev/null)" in "check: pass:"*|"check: fail:"*) break;; esac; kill -0 $P 2>/dev/null || break; sleep 10; done; tail -25 ${log}
 Repeat call 3 until the last line of ${log} starts "check: pass:" or "check: fail:", however many times that takes: a full check runs twenty minutes and more. Never return while the check is running and its log has no verdict line: an answer given before the verdict is no gate, and where the script judges a gate from its last line (integrate, the re-run, the gate alone and the closing check) it keeps nothing on one with no verdict (#1469). When call 3 returns, the last line is no verdict, and \`kill -0 $(cat ${log}.pid)\` fails, the check stopped without one: the check failed to run. Green means the last line of ${log} starts "check: pass:", and only that line judges it. Run the commands exactly as written; if the check itself fails to run, report that, do not repair it. This is the only full build-and-suite run: do not run \`dotnet build\` or the full suite any other way. Per-project runs (\`dotnet test --project tests/<X>.Tests\`) are fine while working. To learn what the check does, read its header only, \`sed -n 1,60p tools/check.sh\`, not the whole file.`
