@@ -569,7 +569,11 @@ public sealed class GatewayHarness : IAsyncDisposable
             {
                 bool last = i == path.Length - 1;
                 bool nextIsIndex = !last && int.TryParse(path[i + 1], NumberStyles.None, CultureInfo.InvariantCulture, out _);
-                JsonNode? child = last ? JsonValue.Create(value) : nextIsIndex ? new JsonArray() : new JsonObject();
+                // Configuration holds every value as text; the schema types its counts (PollSeconds,
+                // MaxSessions) as integers, so a value that reads as one is written as one.
+                JsonNode? child = !last ? (nextIsIndex ? new JsonArray() : new JsonObject())
+                    : long.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out long number) ? JsonValue.Create(number)
+                    : JsonValue.Create(value);
                 if (parent is JsonArray array)
                 {
                     int at = int.Parse(path[i], CultureInfo.InvariantCulture);
