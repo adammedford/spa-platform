@@ -25,32 +25,33 @@
    Fix: these readers take only repository accounts' text (`author_association` `OWNER`, `MEMBER` or `COLLABORATOR`). The pins sweep adopts only issues `@adammedford` opened.
 4. **The overnight workflow's resume markers accept a comment by any account.**
    - A comment headed `## Review` makes the reviewer stage return as already done, taking that comment's findings.
-   - A `## Questions for Adam` comment is carried into the Overnight issue's questions.
+   - A `## Questions for Adam` comment makes the grill treat the ticket as grilled on an earlier night. It writes nothing, and the report lists the ticket under `## Carried, already answered` (814).
    - A `## Draft decision` comment counts as a change request's draft.
 
    The Route, grill, implement-resume and report agents read every comment into their prompts. Fix: each marker matches only the account's comment, and the prompts get only repository accounts' comments.
-5. **`review-queue.js` filters review records by `author_association` but nothing else about an outside pull request.** No step reads the pull request's author or `isCrossRepository`, and nothing treats an outside pull request differently:
+5. **`review-queue.js` filters review records by `author_association` but nothing else about an outside pull request.** The inventory returns the pull request's `author`, but nothing gates on it, nothing reads `isCrossRepository`, and nothing treats an outside pull request differently:
    - A fork's head is not fetched, because origin's refspec is `refs/heads/*`. The inventory fails today by accident, not by a check.
    - Once the head is fetched, the mutation agents check it out and run its test project, the contributor's code, on the maintainer's machine.
    - A stated mutation and its container image go from the pull request body into the agent's instructions verbatim.
    - The Spec axis judges the diff against whichever issue the body cites.
 
    Fix: identify an outside pull request in the script. Run its code only in a container without credentials. Pass body fields as quoted data, not instructions. Require that the cited ticket was opened or labelled by the account.
-6. **`Authority: #<n>` accepts any issue of the repository, whoever opened it** (`.github/steering.py` 1188 to 1209; the docstring at 1182 to 1187 leaves this to the reviewer on purpose). Also, CI on a fork pull request runs the pull request's own copy of `steering.py` and `path-ownership.py`, and an outsider never runs the pre-push hook.
+6. **`Authority: #<n>` accepts any issue of the repository, whoever opened it** (`.github/steering.py` 1188 to 1209; the docstring at 1182 to 1187 leaves this to the reviewer on purpose). Also, CI on a fork pull request runs the pull request's own copy of `steering.py`. Check A-05 (`path-ownership.py`) is not in CI at all (`ci.yml` 35); it runs in `tools/check.sh`, and an outsider never runs the pre-push hook. review-queue's inventory runs the main checkout's copy (697), so an outside pull request's ownership is checked there.
 
-   Fix: `#<n>` requires an issue the account opened or labelled. CI runs the checkers from the base commit's copy, and the reviewer and `tools/land.sh` do not take CI's green on an outside pull request as the steering verdict.
+   Fix: `#<n>` requires an issue the account opened or labelled. CI runs the steering checker from the base commit's copy, and the reviewer and `tools/land.sh` do not take CI's green on an outside pull request as the steering verdict.
 7. **`ticket-shape.yml` and `issue-labels.yml` act on outside issues with no author check, and that is safe as written.**
    - Neither interpolates text from the event: the number goes through `env`.
    - Both check out the default branch and hold `issues: write`, `pull-requests: read` and `contents: read`.
    - `ticket-shape.yml` judges only issues that already carry `ready-for-agent`, which an outsider cannot apply.
 
    What an outsider can do: pick their own issue's `kind:`, `area:` and `vendor:` labels through its Touches and Vendor lines, and make the daily `issue-labels` run fail on a line the table does not cover. Fix: none beyond #1547, though the daily run could skip outside issues rather than fail on them.
-8. **Many listings find issues by title or marker line, and none checks who opened the issue.** These are `Overnight <date>`, `Retro <date>`, the pins report title, a follow-up's `Raised by:` line, truth-audit's `**Noun:**` and `**Rule:**` lines, and gate-evidence's open issues that name a row. An outsider's issue there halts a run or suppresses a filing; it does not start one. The morning stops on two issues with the night's title, which is the fail-closed outcome. Fix: filter each listing to repository accounts before matching.
-9. **Some author checks are prompt-only, or run on a field an agent copied.**
+8. **Many listings find issues by title or marker line, and none checks who opened the issue.** These are `Overnight <date>`, `Retro <date>`, the pins report title, a follow-up's `Raised by:` line, the morning apply's "an issue whose body cites them", the overnight lanes' duplicate search before a change request, truth-audit's `**Noun:**` and `**Rule:**` lines, and gate-evidence's open issues that name a row. An outsider's issue there halts a run or suppresses a filing; it does not start one. The morning stops on two issues with the night's title, which is the fail-closed outcome. Fix: filter each listing to repository accounts before matching.
+9. **Commit subjects in an outside pull request are read as landings once merged.** `tools/roadmap.py` takes a `Merge task <id>:` subject anywhere in the history as that row landed, whatever the commit's parents, and never takes it back (`subjects()` at 283-292). `tools/landing_subjects.py` does not judge a subject with no `Ticket:` line, and it runs in `tools/check.sh`, not in CI. Fix: the roadmap reads landing subjects only from first-parent merges on main, or the review refuses a landing-shaped subject on a contributor's commit.
+10. **Some author checks are prompt-only, or run on a field an agent copied.**
    - Prompt-only: the overnight integrator lane's `Decision:` filter, review-queue's change-request decision, and the wiz skill's rule 5 and H1.
    - Copied by an agent: the morning's `Confirm` check and review-queue's record check run in script on an author field an agent transcribed from `gh`. Neither script makes the call itself.
    - Two mismatches with the docs: "the account" (a login) and "a repository account" (`author_association`) are two different tests, and `morning.js` hardcodes `adammedford` where the other readers parse the account line in `tracker-policy.md`.
-10. **No outside account has opened an issue or a pull request yet.** A REST count over every issue and pull request found zero with an `author_association` outside `OWNER`, `MEMBER` and `COLLABORATOR`, and zero cross-repository pull requests. Every gap above is latent.
+11. **No outside account has opened an issue or a pull request yet.** A REST count over every issue and pull request found zero with an `author_association` outside `OWNER`, `MEMBER` and `COLLABORATOR`, and zero cross-repository pull requests. Every gap above is latent.
 
 ## Detail: each reader, its author check, and what outside text could cause
 
@@ -86,7 +87,8 @@ The check column takes one of four values:
 | Reviewer, resume marker | 531 | comments headed `## Review` | **none** | An outside comment with that heading makes the review stage return as done, taking that comment's findings. The landing pull request still needs a review-queue record (ADR-0022) | the prompt read |
 | Change request, decision | 462-470 | comments with `login` | prompt only (`DECISION_COMMENT`, 464) | If the agent misapplies it, an outside `Decision:` comment authorises an integrator build | the prompt read; no script check follows |
 | Change request, draft | 746 | comments starting `## Draft decision` | none | An outside draft counts as "a draft already exists", and nothing new is drafted | the prompt read |
-| Grill, resume marker | 763 | comments headed `## Questions for Adam` | **none** | Outside questions and recommendations are carried into the Overnight issue. Under a standing answer they are pre-accepted, and a one-word `Confirm` confirms every pre-accepted answer | the prompt read; `landing-work.md` 446-450 on the bare `Confirm` |
+| Grill, resume marker | 763, 814 | comments headed `## Questions for Adam` | **none** | An outside comment with that heading makes the grill skip the ticket as already grilled, and the report lists it as "carried, already answered" | the prompts read |
+| Change request, duplicate search | 180, 190 | open `change-request` issues, then `ticket_shape.py --since` matches | label for the first; **none** for the second, which matches any issue created since the search on its title | An outside issue with a near title is read as "the request, filed since your search", and the lane files none and adds a blocked-by edge to it | the prompt read; `ticket_shape.py` 571-576 matches on shared title words alone |
 | Report | 790-814 | each lane ticket's comments | none | Outside comments go into the report agent's prompt | the prompt read |
 | Change-request search | 180 | `change-request` issues | label only (an outsider cannot apply labels) | Nothing directly | GitHub's roles table: applying labels needs Triage, which Read lacks |
 
@@ -115,7 +117,9 @@ The check column takes one of four values:
 
 | Reader | File:line | Text read | Author check | What an outsider's text could cause | Evidence |
 | --- | --- | --- | --- | --- | --- |
-| Pins sweep, adoption | `.claude/workflows/pins-sweep.js` 255, 553-567, 504 | any open issue with a `**Pins family:**` marker | **none** | An outside issue with a matching marker is rewritten and relabelled by the account, `ready-for-agent` when the trial is green. A later edit by its author then reaches a lane as in row 2. A matching move instead makes the sweep only comment | the code read |
+| Pins sweep, adoption | `.claude/workflows/pins-sweep.js` 255, 553-567, 504 | any open issue with a `**Pins family:**` marker | **none**: `mine()` matches the marker, not the issue's author | The sweep treats an outside issue as its own. It rewrites that issue's body and sets its label through the account, so the issue then carries an authorised label on an issue whose author is an outsider. Fix: `mine()` admits only issues the account opened | the code read |
+| Morning, apply skip | `morning.js` 1640-1642 | commits, issues whose body cites `#<issue> Q<n>`, `## Body rewritten` comments | none | An outside issue or comment in that shape makes the applier list a confirmed answer as already done | the prompt read |
+| Roadmap, landing subjects | `tools/roadmap.py` 283-292, 408; `tools/landing_subjects.py` docstring 9-27 | every commit subject in `HEAD` and origin/main | none: any commit, not first-parent merges only | Once merged, a contributor commit with a landing-shaped subject marks a plan row landed, for good | the code read |
 | Pins sweep, the report issue | 256 | the issue titled `Pins sweep: the state of every pin` | none | Its status table is read from whichever issue holds that title | the prompt read |
 | Truth audit | `.claude/workflows/truth-audit.js` 330-331, 559-566 | `**Noun:**` lines on open issues and `**Rule:**` lines on the rule issue's comments | none | Suppresses a finding or a candidate rule | the code read |
 | Gate evidence | `.claude/workflows/gate-evidence.js` 672, 1015-1016 | open issues naming a row | none (change requests: by label) | An outside issue is named as one "carrying" a row that is not done, in the evidence report | the code read |
@@ -124,7 +128,7 @@ The check column takes one of four values:
 | `tools/land.sh` | 304 | the pull request description's closing references | none, mechanical | On merge, an outside pull request closes the issues it names, as long as its own commits name them too | the docstring at 52-60 |
 | `ticket-shape.yml` and `tools/ticket_shape.py` | the workflow at 41-77; the script at 521-532 | the body of an issue labelled `ready-for-agent` | none, and none needed (it runs only after an authorised label) | The bot comment quotes up to 160 characters of a failing box. It cannot add `ready-for-agent`, only remove it | the workflow read; `NUMBER` goes through `env`, so no expression injection |
 | `issue-labels.yml` and `tools/issue_labels.py` | the whole workflow | title, sub-issues, Touches and Vendor lines | none | The author picks their own issue's `kind:`, `area:` and `vendor:` labels, and an uncovered path fails the daily run | the workflow header |
-| `ci.yml` on a fork pull request | 59-64, 236-243 | the pull request's tree, including `.github/steering.py` | n/a; `pull_request`, `contents: read`, no secrets | The pull request's own copy of the steering and ownership checkers judges it | the workflow read; nothing uses `pull_request_target` |
+| `ci.yml` on a fork pull request | 35, 59-64, 236-243 | the pull request's tree, including `.github/steering.py` | n/a; `pull_request`, `contents: read`, no secrets | The pull request's own copy of the steering checker judges it. A-05 is not in CI | the workflow read; nothing uses `pull_request_target` |
 | `codeql-weekly.yml` and `startup-bench.yml` | their triggers | none | n/a: schedule and dispatch only | Nothing | the workflows read |
 | The wiz skill | `.claude/skills/wiz/SKILL.md` 44-46, 209, 292-295 | fixed issues' bodies; Overnight comments for H1 | prompt only; rule 5 does not say a `Confirm` must be Adam's | A session reading H1's digest or rule 5 could count an outside `Confirm` | the skill read; the fixed issues at 209 are the account's own |
 | Project skills | `.claude/skills/` | none other: wiz is the only project skill | n/a | n/a | `ls .claude/skills` |
@@ -133,7 +137,7 @@ The check column takes one of four values:
 
 - `tracker-policy.md` lines 75-84 say a `Confirm` and `ready-for-agent` count only from `@adammedford`, and that the collect step and steering read the account from that line. The code agrees. `morning.js` 217 instead hardcodes the login, so a change to the guide's line would not reach it.
 - `review.md` lines 145-147 read records only from `OWNER`, `MEMBER` and `COLLABORATOR`. The code agrees, in `review_record.py`, `review-queue.js` and `morning.js`. These are two different tests: the record test admits any collaborator the repository invites, and the `Confirm` test admits only the one login.
-- `CODING_STANDARDS.md` → "An authorisation is read from its author" asks whether the code checks the writer "everywhere the writing is used, in what it confirms, what it overrides and what it switches on". The resume markers (row 4 of the answer), the retro's and pins sweep's labelling (row 3) and the label-versus-body gap (row 2) are the places it does not.
+- `CODING_STANDARDS.md` → "An authorisation is read from its author" asks whether the code checks the writer "everywhere the writing is used, in what it confirms, what it overrides and what it switches on". The resume markers (item 4 of the answer), the retro's and pins sweep's labelling (item 3), the label-versus-body gap (item 2) and the roadmap's landing subjects (item 9) are the places it does not.
 - `tracker-policy.md` 80-84 already says that the shared account "cannot tell a session from the human". Row 3 is the same limit seen from the other side: a session's write carries the account's authority whatever text it copied.
 
 ## What was executed and what was only read
@@ -147,9 +151,9 @@ Executed on 2026-11-25, in the worktree at `feafd88c`:
 - REST counts over `issues?state=all` and `pulls?state=all`: zero items from outside `OWNER`, `MEMBER` and `COLLABORATOR`, and zero cross-repository pull requests.
 
 Read only, on 2026-11-25:
-- The code at `feafd88c`: `tools/overnight_collect.py`, `tools/overnight_answers.py`, `tools/decision_citation.py`, `tools/review_record.py`, `tools/ticket_shape.py`, `tools/land.sh`, `.github/steering.py`, `.github/workflows/{ci,ticket-shape,issue-labels,codeql-weekly,startup-bench}.yml`, `.claude/workflows/{overnight,morning,review-queue,retro,pins-sweep,truth-audit,gate-evidence}.js` and `.claude/skills/wiz/SKILL.md`.
+- The code at `feafd88c`: `tools/roadmap.py` (`subjects()`), the `tools/landing_subjects.py` docstring, the `--since` part of `tools/ticket_shape.py`, `tools/overnight_collect.py`, `tools/overnight_answers.py`, `tools/decision_citation.py`, `tools/review_record.py`, `tools/ticket_shape.py`, `tools/land.sh`, `.github/steering.py`, `.github/workflows/{ci,ticket-shape,issue-labels,codeql-weekly,startup-bench}.yml`, `.claude/workflows/{overnight,morning,review-queue,retro,pins-sweep,truth-audit,gate-evidence}.js` and `.claude/skills/wiz/SKILL.md`.
 - The rules: `docs/agents/review.md`, `docs/agents/tracker-policy.md`, `docs/agents/landing-work.md` and `CODING_STANDARDS.md`.
 - The tracker: #1547, #1548 and #1551.
 - GitHub's roles table, https://docs.github.com/en/organizations/managing-user-access-to-your-organizations-repositories/managing-repository-roles/repository-roles-for-an-organization. "Apply/dismiss labels" needs Triage, which Read lacks. "Edit and delete their own comments" is open to every role.
 
-Not verified: that an issue's author who is not a collaborator can edit that issue's body. GitHub's interface allows it, but the pages read do not say so for issue bodies, only for comments. Row 2 of the answer rests on it. It was not tested live, since that would mean writing to the tracker from an outside account.
+Not verified: that an issue's author who is not a collaborator can edit that issue's body. GitHub's interface allows it, but the pages read do not say so for issue bodies, only for comments. Item 2 of the answer rests on it. `tools/issue_labels.py` was searched, not read: item 7 cites the workflow's header for what it does. It was not tested live, since that would mean writing to the tracker from an outside account.
