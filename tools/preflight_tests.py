@@ -509,6 +509,19 @@ class ProviderCacheRowTests(PreflightTestCase):
         self.assertIn(row("info", CACHE_LABEL, f"{self.default(case)}, {kilobytes} KB, which tools/check.sh "
                           "shares across worktrees"), result.lines)
 
+    def test_a_cache_of_a_gigabyte_or_more_is_counted_in_tenths_of_a_gigabyte(self):
+        # A real cache is 1.5 GB (#1502), too much to write for a case, and du does not count a
+        # sparse file's holes, so du is a double here that answers for the cache with a given figure.
+        for kilobytes, size in ((1048576, "1.0 GB"), (1570304, "1.4 GB")):
+            with self.subTest(kilobytes=kilobytes):
+                case = Case(self)
+                self.default(case).mkdir(parents=True)
+                write_executable(case.bin / "du", f'#!/bin/sh\nprintf "%s\\t%s\\n" {kilobytes} "$2"\n')
+                result = self.preflight(case, env=INTENDED)
+                self.assertReady(result)
+                self.assertIn(row("info", CACHE_LABEL, f"{self.default(case)}, {size}, which tools/check.sh "
+                                  "shares across worktrees"), result.lines)
+
     def test_the_callers_cache_is_the_one_named(self):
         case = Case(self)
         mine = case.dir / "the-callers-cache"

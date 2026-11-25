@@ -201,6 +201,10 @@ cache_lock_held=false
 # dead lock at once can both pass the second read, and the later one's rm can remove the lock the
 # earlier one just made. Closing it takes a second lock around the takeover, which a run killed
 # inside it would leave behind for good; a takeover follows only a killed run, so the window stays.
+# Another known limit: a lock left by a killed run whose pid the system has since given to another
+# live process is waited on with no deadline, since kill -0 cannot tell that process from a holder.
+# The line repeated every 30 seconds names the pid; once `ps -p <pid>` shows it is no check, remove
+# the lock directory the line names and the wait ends.
 cache_lock_take() {
   local holder again said_at gone
   said_at=""

@@ -1400,6 +1400,42 @@ class ProviderCacheTests(CheckTestCase):
         self.assertNotIn("waiting for", result.stdout)
         self.assertFalse(lock.exists())
 
+    def test_a_dead_pid_is_recognised_under_a_locale_that_translates_kill(self):
+        # glibc translates strerror, and so kill's "No such process", under a locale whose messages
+        # are installed; macOS's libc translates nothing, and no runner can be relied on to have a
+        # translated locale installed. So the case stands one in: BASH_ENV, which a non-interactive
+        # bash reads before its script, defines a kill that answers as glibc's German does unless
+        # LC_ALL is C where it is called, and the run's own locale is not C. A takeover then proves
+        # that the check reads kill's answer in the C locale, whatever the caller's.
+        case = Case(self, change="infra/roots/a/main.tf")
+        record = case.dir / "record"
+        self.cached(case, record)
+        translated = case.dir / "translated-kill.sh"
+        translated.write_text(textwrap.dedent("""\
+            kill() {
+              if [ "${LC_ALL-}" = C ]; then builtin kill "$@"; return; fi
+              builtin kill "$@" 2> /dev/null && return 0
+              echo "bash: kill: (${2-}) - Kein passender Prozess gefunden" >&2
+              return 1
+            }
+            """))
+        gone = subprocess.Popen(["/bin/sh", "-c", ":"])
+        gone.wait()
+        lock = case.home / ".terraform.d" / "plugin-cache" / CACHE_LOCK
+        lock.mkdir(parents=True)
+        (lock / "pid").write_text(f"{gone.pid}\n")
+        # A check that reads the translation waits on the lock instead; this ends that wait, so the
+        # case fails on its assertions rather than on the run's timeout.
+        timer = threading.Timer(5, lambda: shutil.rmtree(lock, ignore_errors=True))
+        timer.start()
+        self.addCleanup(timer.cancel)
+        result = case.run("--full", "--port", PORT,
+                          env={"BASH_ENV": str(translated), "LC_ALL": "", "LANG": "de_DE.UTF-8"})
+        self.assertEqual(0, result.status, result.stdout + result.stderr)
+        self.assertIn(f"check: took over Terraform's provider cache lock {lock} from pid {gone.pid}, "
+                      "which no longer runs.", result.stdout.splitlines())
+        self.assertNotIn("waiting for", result.stdout)
+
     def test_a_lock_held_by_a_live_pid_is_waited_on_and_names_its_holder(self):
         case = Case(self, change="infra/roots/a/main.tf")
         record = case.dir / "record"
