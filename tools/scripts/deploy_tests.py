@@ -47,7 +47,8 @@ def seeded_world(bastion: bool = True) -> dict:
     which the readiness wait's own tunnel goes through unless --url names an origin."""
     world = cell.with_bastion(cell.default_world()) if bastion else cell.default_world()
     world["registry"] = {"schemaVersion": 1, "revision": 2,
-                         "apps": [{"appId": "app1", "release": "r1"}, {"appId": "app2", "release": "r1"}]}
+                         "apps": [{"appId": "app1", "host": "app1.spa-poc.test:8443", "release": "r1"},
+                                  {"appId": "app2", "host": "app2.spa-poc.test:8443", "release": "r1"}]}
     world["objects"] = [{"Key": "registry/registry.json", "VersionId": "r2"}]
     return world
 
@@ -950,11 +951,11 @@ class TheDoublesWorldIsReplacedWholeByRename(unittest.TestCase):
 
 
 class DeployTakesTheCellFromTheEntryValues(cell.CompanionTestCase):
-    """#1348: the platform root, the roots, the field map, the outputs document and, without --url,
-    the certificate's domain are entry values with no default, each refused by name before anything
-    is built."""
+    """#1348: the platform root, the roots, the field map and the outputs document are entry values
+    with no default, each refused by name before anything is built. #1351: the wait's host is the
+    live registry's, so the certificate's domain is not one deploy.sh reads."""
 
-    READS = ("SPA_PLATFORM_ROOT", "SPA_ROOTS", "SPA_FIELD_MAP", "SPA_OUTPUTS_FILE", "SPA_CERT_DOMAIN")
+    READS = ("SPA_PLATFORM_ROOT", "SPA_ROOTS", "SPA_FIELD_MAP", "SPA_OUTPUTS_FILE")
 
     def test_each_entry_value_it_reads_unset_exits_2_naming_it_before_any_call(self):
         for name in self.READS:
@@ -966,18 +967,10 @@ class DeployTakesTheCellFromTheEntryValues(cell.CompanionTestCase):
                     self.assertIn(f"{name} is not set", result.stderr)
                     self.assertEqual([], case.calls())
 
-    def test_with_url_the_domain_is_not_read(self):
-        with listening() as port:
-            case = cell.Case(self, outputs=True, world=seeded_world())
-            result = case.run(SCRIPT, "--url", f"https://app2.spa-poc.test:{port}", env=case.env(SPA_CERT_DOMAIN=None))
-        self.assertEqual(0, result.status, result.output)
-
-    def test_the_wait_reads_through_the_domain_the_entry_value_names(self):
+    def test_neither_the_domain_nor_the_app_host_is_read(self):
         case = cell.Case(self, outputs=True, world=seeded_world())
-        result = case.run(SCRIPT, env=case.env(SPA_CERT_DOMAIN="cells.example.test"))
+        result = case.run(SCRIPT, env=case.env(SPA_CERT_DOMAIN=None, SPA_APP_HOST=None))
         self.assertEqual(0, result.status, result.output)
-        wait = next(c["spactl"] for c in case.calls("dotnet") if c["spactl"][:1] == ["wait"])
-        self.assertTrue(wait[wait.index("--url") + 1].startswith("https://app1.cells.example.test:"), wait)
 
     def test_help_reads_no_entry_value_and_names_no_profile(self):
         case = cell.Case(self)
@@ -988,6 +981,51 @@ class DeployTakesTheCellFromTheEntryValues(cell.CompanionTestCase):
         self.assertNotIn("infra/envs/", result.stdout)
         for name in self.READS:
             self.assertIn(name, result.stdout)
+
+
+class DeployWaitsThroughTheLiveRegistrysHost(cell.CompanionTestCase):
+    """#1351: with no --url, the wait reads through an app's host from the live registry step 1
+    read, without the port the registry carries, on the wait tunnel's own port. No app of the
+    fixtures' is a default, so a registry whose apps are another cell's is read through its own."""
+
+    def wait_url(self, apps: list[dict]):
+        world = seeded_world()
+        world["registry"]["apps"] = apps
+        case = cell.Case(self, outputs=True, world=world)
+        result = case.run(SCRIPT)
+        self.assertNoUnexpectedCall(case)
+        waits = [c["spactl"] for c in case.calls("dotnet") if c["spactl"][:1] == ["wait"]]
+        return case, result, [wait[wait.index("--url") + 1] for wait in waits]
+
+    def test_the_first_app_s_host_without_its_port_on_the_tunnel_s_port(self):
+        for host in ("shell.cells.example.test:8443", "shell.cells.example.test"):
+            with self.subTest(host=host):
+                case, result, urls = self.wait_url([
+                    {"appId": "shell", "host": host, "release": "r1"},
+                    {"appId": "orders", "host": "orders.cells.example.test:8443", "release": "r1"}])
+                self.assertEqual(0, result.status, result.output)
+                port = case.aws("ssm start-session")[0]["port"]
+                self.assertEqual([f"https://shell.cells.example.test:{port}"], urls)
+                self.assertNotIn("app1", result.stdout)
+
+    def test_a_registry_whose_first_app_names_no_host_fails_before_anything_is_built(self):
+        for app in ({"appId": "shell", "release": "r1"}, {"appId": "shell", "host": "", "release": "r1"},
+                    {"appId": "shell", "host": "https://shell.cells.example.test", "release": "r1"}):
+            with self.subTest(app=app):
+                case, result, urls = self.wait_url([app])
+                self.assertEqual(1, result.status, result.output)
+                self.assertIn("names no host", result.stderr)
+                self.assertEqual([], urls)
+                # Only the preflight's `docker buildx version`: no build and no login.
+                self.assertEqual([["buildx", "version"]], [c["argv"] for c in case.calls("docker")])
+
+    def test_with_url_the_registry_s_host_is_not_read(self):
+        world = seeded_world()
+        world["registry"]["apps"] = [{"appId": "shell", "release": "r1"}]
+        with listening() as port:
+            case = cell.Case(self, outputs=True, world=world)
+            result = case.run(SCRIPT, "--url", f"https://gateway.cells.example.test:{port}")
+        self.assertEqual(0, result.status, result.output)
 
 
 if __name__ == "__main__":

@@ -19,6 +19,11 @@ request record, drops the health checks, and still passes every line through the
 record's category and the health route are read from the gateway's source and the telemetry
 contract, so a change to either runs these cases.
 
+#1351: --container takes any container the service's task definition holds, and refuses a name it
+does not hold, naming those it does; --requests takes the gateway's alone. The cases' task definition
+holds the mock API and a log router beside the gateway, so no container but the gateway is one
+logs.sh knows by name.
+
 Run: python3 -I tools/scripts/logs_tests.py
 Checkout inputs: src/Platform.Telemetry/RequestTelemetry.cs contracts/telemetry.md infra/envs/poc/cell.env infra/envs/poc/outputs-fields.json
 """
@@ -62,6 +67,11 @@ def client_ids(world: dict) -> dict[str, str]:
     return {app: entry["clientId"] for app, entry in world["roots"]["apps"]["clients"].items()}
 
 
+# A container of the task that is neither the gateway nor a fixture's: logs.sh knows no name but the
+# gateway's.
+ROUTER = "log-router"
+
+
 def logged_world() -> dict:
     """The cell with one gateway task and one mock API task logging. The mock API's start line names
     both apps' clients, as fixtures/MockApi/Program.cs's configuration does (MockApi__App1Client and
@@ -70,6 +80,9 @@ def logged_world() -> dict:
     world = cell.default_world()
     ids = client_ids(world)
     task = world["tasks"][0]["id"]
+    containers = world["task_definitions"][world["service"]["taskDefinition"]]["containers"]
+    for name in (cell.MOCK_API, ROUTER):
+        containers[name] = {"image": cell.SAMPLE_IMAGE, "environment": []}
     world["log_events"] = [
         [f"{cell.MOCK_API}/{cell.MOCK_API}/{task}",
          f"mock api listening; app1 client {ids['app1']}, app2 client {ids['app2']}"],
@@ -78,6 +91,7 @@ def logged_world() -> dict:
                      "resource": f"arn:aws:s3:::spa-platform-poc-{cell.ACCOUNT}-{cell.REGION}-an/registry/registry.json",
                      "clientId": ids["app1"]})],
         [f"{cell.GATEWAY}/{cell.GATEWAY}/{task}", "GET /readyz 200"],
+        [f"{ROUTER}/{ROUTER}/{task}", "router flushed 12 records"],
     ]
     return world
 
@@ -134,6 +148,19 @@ class LogsReadsTheGroupThroughTheRedaction(cell.CompanionTestCase):
         self.assertEqual(f"{cell.GATEWAY}/", call["options"]["log-stream-name-prefix"])
         self.assertNotIn("mock api listening", result.stdout)
         self.assertIn("GET /readyz 200", result.stdout)
+
+    def test_a_container_named_by_the_task_definition_and_by_no_script_is_read(self):
+        case = cell.Case(self, outputs=True, world=logged_world())
+        result = case.run(SCRIPT, "--container", ROUTER)
+        self.assertEqual(0, result.status, result.output)
+        self.assertNoUnexpectedCall(case)
+        [call] = case.aws("logs tail")
+        self.assertEqual(f"{ROUTER}/", call["options"]["log-stream-name-prefix"])
+        self.assertIn("router flushed 12 records", result.stdout)
+        self.assertNotIn("GET /readyz 200", result.stdout)
+        # The service's own task definition is the one asked.
+        [read] = case.aws("ecs describe-task-definition")
+        self.assertEqual(cell.td_arn(f"{cell.FAMILY}:1"), read["options"]["task-definition"])
 
     def test_follow_is_passed_on(self):
         _, call = self.read(logged_world(), "--follow")
@@ -269,13 +296,18 @@ class LogsRefuses(cell.CompanionTestCase):
         self.assertNoUnexpectedCall(case)
         return case, result
 
-    def test_a_container_the_task_does_not_run(self):
-        case, _ = self.refused("--container must be", "--container", "sidecar")
-        self.assertEqual([], case.calls("aws"))
+    def test_a_container_the_task_does_not_run_is_refused_naming_those_it_does(self):
+        case, result = self.refused("--container must be", "--container", "sidecar")
+        self.assertIn(f"one of the containers the task definition holds: {cell.GATEWAY}, {cell.MOCK_API}, {ROUTER}",
+                      result.stderr)
+        self.assertEqual([], case.aws("logs tail"))
 
-    def test_requests_from_the_mock_api(self):
-        case, _ = self.refused("--requests reads the", "--requests", "--container", cell.MOCK_API)
-        self.assertEqual([], case.calls("aws"))
+    def test_requests_from_any_container_but_the_gateway(self):
+        for container in (cell.MOCK_API, ROUTER, "sidecar"):
+            with self.subTest(container=container):
+                case, _ = self.refused(f"--requests reads the {cell.GATEWAY} container's requests",
+                                       "--requests", "--container", container)
+                self.assertEqual([], case.calls("aws"))
 
     def test_a_window_the_cli_does_not_take(self):
         for since in ("5h30m", "ten", "10", "-5m", "0m"):

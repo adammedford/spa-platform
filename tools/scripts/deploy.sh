@@ -8,14 +8,16 @@
 # digest and checks that the running task has it".
 #
 #   tools/scripts/deploy.sh
-#   tools/scripts/deploy.sh --url https://app1.$SPA_CERT_DOMAIN:9443    # wait through this origin instead
+#   tools/scripts/deploy.sh --url https://<app host>:9443    # wait through this origin instead
 #
 # In order, and it stops at the first that fails:
 #   1. It reads the live registry from the bucket the gateway reads, and refuses when there is none
 #      or it holds no app: a gateway started against an empty registry never becomes ready, so the
 #      deployment would fail its health checks and roll back (contracts/README.md). Publish an app
 #      with spactl first: spactl release publish, then spactl app add. Nothing is built before this.
-#      It keeps the registry's revision for step 5.
+#      It keeps the registry's revision for step 5 and, without --url, its first app's host without
+#      the port the registry carries, which step 5's wait reads through; a first app that names no
+#      host fails here (#1351).
 #   2. It builds the gateway's image for ARM64 and pushes it under a tag of this run's own, since the
 #      repositories' tags are immutable, then takes its digest from ECR. It builds nothing else: an
 #      image a cell runs beside the gateway is that cell's to build, and this apply leaves it at what
@@ -62,7 +64,7 @@
 #      the load balancer never picks fails the wait. The load balancer is internal, so the wait opens a
 #      tunnel of its own, tools/scripts/tunnel.sh through the cell's bastion task (#1167), on a free
 #      ephemeral port the system picks (8443 lies below that range), and reads through
-#      https://app1.$SPA_CERT_DOMAIN:<that port>; it closes it when the wait ends, pass, fail or
+#      https://<that app host>:<that port>; it closes it when the wait ends, pass, fail or
 #      Ctrl-C (#1008). An operator's tunnel on 8443 is left alone, and none need be running. --url
 #      names an origin to wait through instead, and then no tunnel is opened.
 #
@@ -79,9 +81,9 @@
 #
 # Run it as the operator's own session, with credentials for the account the cell is in and
 # AWS_REGION set to the cell's Region, after `terraform init -backend-config=backend.hcl` in each
-# root. It reads the entry values SPA_PLATFORM_ROOT, SPA_ROOTS, SPA_FIELD_MAP, SPA_OUTPUTS_FILE and,
-# without --url, SPA_CERT_DOMAIN, which have no default (cell-common.sh's header), and refuses, exit
-# 2, when one is unset, before anything is built. It needs the AWS CLI,
+# root. It reads the entry values SPA_PLATFORM_ROOT, SPA_ROOTS, SPA_FIELD_MAP and SPA_OUTPUTS_FILE,
+# which have no default (cell-common.sh's header), and refuses, exit 2, when one is unset, before
+# anything is built. It needs the AWS CLI,
 # Terraform, python3, Docker with buildx (decision D-2 in docs/dependencies.md), the .NET SDK for
 # spactl, or SPACTL naming a spactl to run instead (cell-common.sh), and the Session Manager plugin
 # for the wait's tunnel unless --url is given. Docker's own builder, the docker driver, builds the
@@ -92,8 +94,7 @@
 # does it (cell-common.sh's redact_stream):
 #   - the account id, which the repositories, the bucket and every ARN carry, becomes <account>;
 #   - each app's client id that the outputs document lists becomes <client-id:appId>. A plan shows
-#     every container's environment, and a container beside the gateway can carry the clients', as
-#     the proof cell's mock API does with MockApi__App1Client and MockApi__App2Client (#251). The
+#     every container's environment, and a container's environment can carry a client id (#251). The
 #     list is the outputs document's as this run starts: a client id an apply changed after that
 #     document was last written is not on it. Rewrite it after any apply of the root that holds the
 #     clients.
@@ -120,7 +121,8 @@ usage() {
 Options
   --url ORIGIN   A gateway origin this workstation already reaches, for step 5's wait to read
                  /readyz through; the wait then opens no tunnel. Default: a tunnel of the wait's
-                 own, on a free local port, at https://app1.\$SPA_CERT_DOMAIN:<that port>.
+                 own, on a free local port, at https://<the live registry's first app's
+                 host>:<that port>.
   -h, --help     This text.
 EOF
 }
@@ -158,11 +160,6 @@ case "$ORIGIN" in
   *) refuse "--url must be an http or https origin: got '${ORIGIN}'" ;;
 esac
 need_entry SPA_PLATFORM_ROOT SPA_ROOTS SPA_FIELD_MAP SPA_OUTPUTS_FILE
-# The wait's own tunnel reads through an app's host under the certificate's domain; --url names the
-# origin instead.
-if [ -z "$ORIGIN" ]; then
-  need_entry SPA_CERT_DOMAIN
-fi
 
 need_terraform
 need_spactl
@@ -212,6 +209,12 @@ APPS="$(documents apps "${WORK}/registry.json")" || fail "the live registry at $
 note "the live registry holds ${APPS} apps"
 REVISION="$(documents revision "${WORK}/registry.json")" || fail "the live registry at ${REGISTRY_KEY} has no revision."
 note "the live registry is at revision ${REVISION}"
+# The host the wait's own tunnel reads through: the registry's, never one of a cell's own (#1351).
+WAIT_HOST=""
+if [ -z "$ORIGIN" ]; then
+  WAIT_HOST="$(documents host "${WORK}/registry.json")" ||
+    fail "the live registry at ${REGISTRY_KEY}: its first app names no host for the wait to read through. Pass --url with an origin this workstation already reaches."
+fi
 
 # --- 2. build and push -----------------------------------------------------------------------------
 #
@@ -227,5 +230,5 @@ note "pushed the gateway as ${GATEWAY_IMAGE##*@}"
 
 apply_images "$GATEWAY_IMAGE"
 wait_and_assert "$GATEWAY_IMAGE"
-wait_for_revision "$REVISION" "$ORIGIN"
+wait_for_revision "$REVISION" "$ORIGIN" "$WAIT_HOST"
 note "pass: the gateway ${GATEWAY_IMAGE##*@} runs steady in ${CLUSTER}, and every running task reports revision ${REVISION} or later on ${READY_PATH}"

@@ -9,23 +9,24 @@
 #   tools/scripts/verify-tunnel.sh /           # the sample image, which answers / only
 #   tools/scripts/verify-tunnel.sh /healthz    # the gateway (contracts/pipeline.md, Health endpoints)
 #
-# It requests https://app1.$SPA_CERT_DOMAIN:8443<path> and passes only when all of these hold:
+# It requests https://<host>:8443<path>, where the host is --host, else the entry value
+# SPA_APP_HOST, an app's host name with no port, and passes only when all of these hold:
 #   - the name resolved to the loopback address, so the request went into the tunnel and not
-#     somewhere else (the hosts-file line certs.sh names);
+#     somewhere else (a hosts-file line, which a failure names);
 #   - TLS validated against this workstation's own trust store: no -k, no CA file of its own, no
 #     curlrc (-q) and no CA bundle from the environment, so a pass means what the ALB presented
 #     chains to an authority this workstation trusts. For a name under .test, which RFC 6761
-#     reserves, that is the local authority certs.sh trusts; the check does not pin it;
+#     reserves, that is a local authority the operator trusts; the check does not pin it;
 #   - the answer was 200, with no redirect followed and no proxy in the way.
 # A failure says which of those broke, and a connection the tunnel accepted but nothing answered
 # reads as a dead session (risk 15 in docs/plan/06-phase-2-and-risks.md).
 #
-# It needs no AWS credentials: it reads nothing but the one request. It reads the entry value
-# SPA_CERT_DOMAIN, the certificate's domain, which has no default (tools/scripts/cell-common.sh's
-# header): the default host is under it, and so is the hosts-file line a failure names.
+# It needs no AWS credentials: it reads nothing but the one request. Without --host it reads the
+# entry value SPA_APP_HOST, which has no default (tools/scripts/cell-common.sh's header), and with
+# neither it refuses: no app's host is a default (#1351).
 #
 # Exit status: 0 when the path answered 200 over trusted TLS through the tunnel, 1 when it did not,
-# 2 when it did not start (a usage error, SPA_CERT_DOMAIN unset, or no curl).
+# 2 when it did not start (a usage error, no --host and SPA_APP_HOST unset, or no curl).
 #
 # Written for the bash 3.2 that ships with macOS.
 # Owner: workstream 1, AWS and IaC.
@@ -34,7 +35,6 @@ set -euo pipefail
 umask 077
 
 PROGRAM="verify-tunnel"
-DOMAIN="${SPA_CERT_DOMAIN:-}"
 HOST=""
 PORT="${SPA_TUNNEL_PORT:-8443}"
 REQUEST_PATH=""
@@ -56,7 +56,8 @@ usage() {
 
 Usage: verify-tunnel.sh <path> [--host NAME] [--port N]
   <path>        The health path, absolute: / on the sample image, /healthz on the gateway.
-  --host NAME   The app host to ask. Default: app1.\$SPA_CERT_DOMAIN.
+  --host NAME   The app host to ask, a host name with no port. Default: \$SPA_APP_HOST;
+                with neither, it refuses.
   --port N      The tunnel's local port. Default: \$SPA_TUNNEL_PORT, else 8443.
   -h, --help    This text.
 EOF
@@ -83,8 +84,9 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 
-[ -n "$DOMAIN" ] ||
-  refuse "SPA_CERT_DOMAIN is not set. It is one of the cell's entry values, which have no default: set it for the cell, as the proof cell's entry file cell.env does, and export it (set -a; . <entry file>; set +a)."
+[ -n "$HOST" ] || HOST="${SPA_APP_HOST:-}"
+[ -n "$HOST" ] ||
+  refuse "no host: --host was not given and SPA_APP_HOST is not set. Pass --host, or set the entry value SPA_APP_HOST for the cell, as the proof cell's entry file cell.env does, and export it (set -a; . <entry file>; set +a)."
 [ -n "$REQUEST_PATH" ] || refuse "give the health path: / on the sample image, /healthz on the gateway. Try --help."
 # The form modules/cell's health_check_path takes (variables.tf): absolute, no query string, and
 # nothing a URL would need escaped.
@@ -99,15 +101,15 @@ case "$PORT" in
   '' | *[!0-9]* | 0*) refuse "--port must be a port number: got '${PORT}'" ;;
 esac
 [ "$PORT" -le 65535 ] || refuse "--port must be a port number: got '${PORT}'"
-[ -n "$HOST" ] || HOST="app1.${DOMAIN}"
 case "$HOST" in
-  *[!A-Za-z0-9.-]* | "") refuse "--host must be a host name: got '${HOST}'" ;;
+  *[!A-Za-z0-9.-]* | "" | .* | *.) refuse "--host and SPA_APP_HOST must be a host name, with no scheme or port: got '${HOST}'" ;;
 esac
 
 command -v curl > /dev/null 2>&1 || refuse "curl is not on PATH, so the tunnel cannot be checked"
 
 URL="https://${HOST}:${PORT}${REQUEST_PATH}"
-HOSTS_LINE="127.0.0.1 app1.${DOMAIN} app2.${DOMAIN} app3.${DOMAIN}"
+# The host asked, on the loopback, where tunnel.sh's port is.
+HOSTS_LINE="127.0.0.1 ${HOST}"
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/${PROGRAM}.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
@@ -133,7 +135,7 @@ case "$status" in
   0) ;;
   6) fail "${HOST} does not resolve (${detail}). Add this line to /etc/hosts: ${HOSTS_LINE}" ;;
   7) fail "nothing answers on ${HOST}:${PORT} (${detail}). start tools/scripts/tunnel.sh in another terminal, then run this again." ;;
-  60) fail "this workstation does not trust the certificate ${HOST}:${PORT} presented (${detail}). Run 'tools/scripts/poc/certs.sh trust', or 'certs.sh fetch-ca' on a second workstation, then 'certs.sh status'." ;;
+  60) fail "this workstation does not trust the certificate ${HOST}:${PORT} presented (${detail}). Have it trust the authority that issued the certificate the listener presents, then run this again." ;;
   28 | 35 | 52 | 56) fail "the tunnel took the connection but nothing answered through it (${detail}): the session has ended or the task is gone. Restart tools/scripts/tunnel.sh." ;;
   *) fail "curl exited ${status} asking ${URL} (${detail})" ;;
 esac

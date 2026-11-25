@@ -679,10 +679,10 @@ def driven(test, world: dict | None = None, **env: str | None):
 
 
 class TheProofCellsEntryFile(cell.CompanionTestCase):
-    """infra/envs/poc/cell.env sets the five entry values to the proof cell's own and names the
+    """infra/envs/poc/cell.env sets the entry values to the proof cell's own and names the
     field map; sourced, it makes write_outputs write what it wrote at c3fa0e0."""
 
-    def test_it_sets_the_five_values_and_names_the_field_map(self):
+    def test_it_sets_the_entry_values_and_names_the_field_map(self):
         values = cell.entry_values()
         self.assertEqual(sorted(cell.ENTRY_NAMES), sorted(values))
         self.assertEqual(cell.CELL, values["SPA_CELL"])

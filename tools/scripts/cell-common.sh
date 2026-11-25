@@ -1,5 +1,5 @@
 # cell-common.sh -- what deploy.sh, rollback.sh, teardown.sh, logs.sh and tunnel.sh share, and the
-# proof cell's scripts under poc/ with them. Sourced, never run.
+# proof cell's own scripts with them. Sourced, never run.
 #
 # Task 1.7 (#58). The plumbing is tunnel.sh's and verify-release-immutability.sh's: every AWS call
 # names the Region and --output text, a failure is reported by its error code and never by its
@@ -23,13 +23,19 @@
 # file, cell.env, sourced beside the operator's session.
 #   SPA_CELL           the cell's name: its teardown role, task definition families, key ring prefix
 #                      and Cell tag. --cell, where a script takes it, defaults to this.
-#   SPA_CERT_DOMAIN    the certificate's domain: an app's host is <app>.<domain>.
 #   SPA_PLATFORM_ROOT  the platform root's directory, which applies the images and holds the bucket.
 #   SPA_ROOTS          every root's directory, colon-separated, in the order they are applied:
 #                      write_outputs reads them in this order and teardown.sh destroys them in the
 #                      reverse. A root is named by its directory's last segment.
 #   SPA_OUTPUTS_FILE   the outputs document's path (contracts/infra-outputs.schema.json).
 #   SPA_FIELD_MAP      the field map: which root's output answers each field of that document.
+#   SPA_APP_HOST       an app's host name, with no port: the one tunnel.sh's --keepalive and
+#                      verify-tunnel.sh ask when no --host is given (#1351).
+#   SPA_TEARDOWN_JUDGE the cell's teardown judge, which verify-teardown.sh asks about an ARN of a
+#                      type it does not know; unset or empty, there is none (#1351).
+# Neither of the last two is read through need_entry: each script that reads one says what it does
+# when it is unset. The proof cell's entry file sets one more, SPA_CERT_DOMAIN, for its own
+# certificate script; no script here reads it (#1351).
 #
 # Written for the bash 3.2 that ships with macOS.
 # Owner: workstream 1, AWS and IaC.
@@ -47,7 +53,6 @@ DOCUMENTS="${SCRIPTS_DIR}/cell_documents.py"
 PLATFORM_ROOT=""
 OUTPUTS_FILE=""
 FIELD_MAP=""
-CERT_DOMAIN=""
 # The roots' directories, in SPA_ROOTS's order, and their names, one a line in the same order.
 ROOT_DIRS=()
 ROOT_NAMES=""
@@ -120,7 +125,6 @@ need_entry() {
         ;;
       SPA_OUTPUTS_FILE) OUTPUTS_FILE="$(entry_path "$value")" ;;
       SPA_FIELD_MAP) FIELD_MAP="$(entry_path "$value")" ;;
-      SPA_CERT_DOMAIN) CERT_DOMAIN="$value" ;;
       SPA_ROOTS)
         ROOT_DIRS=()
         ROOT_NAMES=""
@@ -186,8 +190,9 @@ cell_start() {
 # tracked tree, and this output is pasted into tickets in a public repository (#122's rule).
 #
 # Nor does a client id, once a script has called redact_clients: each app's client id in the outputs
-# document becomes <client-id:appId>. The mock API's start line names both apps' clients, and the
-# sitting of #58 put them on the terminal and into its log by tailing the log group directly (#208).
+# document becomes <client-id:appId>. A container's environment, or its log line, can carry a client
+# id, and the sitting of #58 put them on the terminal and into its log by tailing the log group
+# directly (#208).
 # A clientId may be any printable ASCII (contracts/registry.schema.json), so each value is replaced
 # as text, never made into a pattern. Each line is flushed as it is written, so a followed log
 # reaches a terminal or a tee as it arrives.
@@ -691,8 +696,8 @@ wait_and_assert() {
 # --- convergence -----------------------------------------------------------------------------------
 
 # Wait until every running task of $SERVICE in $CLUSTER has answered /readyz at revision $1 or later,
-# read through a tunnel the wait opens itself, or through the gateway origin $2 when the caller names
-# one. Change request P2-5, decision 6 (#309): the load balancer hands each read to the task it
+# read through a tunnel the wait opens itself, at the app host $3, or through the gateway origin $2
+# when the caller names one. Change request P2-5, decision 6 (#309): the load balancer hands each read to the task it
 # picks, so one answer at N says only that one task is at N.
 #
 # The tasks are the service's RUNNING ones, each named by its task id, the last segment of its ARN
@@ -715,14 +720,16 @@ wait_and_assert() {
 # the cell's bastion task (#1167), never a task of the deployment it waits on. The wait runs after
 # the apply, whose outputs apply_images wrote to the document, so a document that then names no
 # bastion fails the wait before any tunnel opens, naming bastion = true and --url. The origin is
-# https://app1.$SPA_CERT_DOMAIN:<that port>, the first app's host on the loopback address by the hosts-file line certs.sh names, and the gateway answers /readyz on any host
-# (contracts/pipeline.md, UsePlatformHealth). The wait closes it when the wait ends, pass or fail,
+# https://$3:<that port>, where $3 is a host name the caller took from the live registry (deploy.sh
+# takes its first app's, without the port the registry carries, #1351), on the loopback address by
+# the operator's hosts-file line, and the gateway answers /readyz on any host (contracts/pipeline.md,
+# UsePlatformHealth). The wait closes it when the wait ends, pass or fail,
 # and cell_cleanup closes it on an exit or an interrupt before then. Until #1008 the wait read through
 # an operator's tunnel, which had to be started by hand, through a task of the new deployment,
 # between the steady line and the end of the wait; sitting D missed that window, and deploy.sh exited
 # 1 after a healthy, steady deployment (#242).
 wait_for_revision() {
-  local revision="$1" origin="${2:-}" arn ids="" status=0
+  local revision="$1" origin="${2:-}" host="${3:-}" arn ids="" status=0
   aws_read "the running tasks of ${SERVICE}" ecs list-tasks --cluster "$CLUSTER" --service-name "$SERVICE" \
     --desired-status RUNNING --query taskArns
   # Word splitting on purpose: --output text prints a list's strings tab-separated, a line for each
@@ -734,8 +741,9 @@ wait_for_revision() {
   [ -n "$ids" ] || fail "${SERVICE} has no running task to wait for."
   if [ -z "$origin" ]; then
     [ -n "$(outputs_bastion)" ] || fail "$(no_bastion) Or pass --url with an origin this workstation already reaches, and the wait opens no tunnel."
+    [ -n "$host" ] || fail "wait_for_revision: no host to read through."
     open_wait_tunnel
-    origin="https://app1.${CERT_DOMAIN}:${WAIT_TUNNEL_PORT}"
+    origin="https://${host}:${WAIT_TUNNEL_PORT}"
   fi
   note "waiting through ${origin} until each running task reports revision ${revision} or later: ${ids}"
   spactl wait --url "$origin" --revision "$revision" --instances "$ids" > "$OUT" 2> "$ERR" || status=$?

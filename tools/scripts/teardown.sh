@@ -127,7 +127,7 @@ for dir in "${ROOT_DIRS[@]}"; do
 done
 [ "$PLATFORM_LISTED" -eq 1 ] ||
   refuse "SPA_PLATFORM_ROOT, $(root_name "$PLATFORM_ROOT"), is not one of SPA_ROOTS's roots. Nothing was deleted."
-# The cell's lexical form, as tools/scripts/poc/certs.sh checks it.
+# The cell's lexical form: lowercase letters, digits and inner hyphens, as a cell name is.
 case "$CELL" in
   *[!a-z0-9-]* | "" | -* | *-) refuse "--cell must be lowercase letters, digits and inner hyphens: got '${CELL}'" ;;
 esac
@@ -308,7 +308,7 @@ for arn in $(tr '\t' ' ' < "$OUT"); do
 done
 
 # A replaced or destroyed revision is deregistered, INACTIVE, and keeps its tags until it is deleted.
-# Exact family: the prefix spa-platform-poc would also match spa-platform-poc2's. Ten per call, the
+# Exact family: the prefix spa-platform-<cell> would also match spa-platform-<cell>2's. Ten per call, the
 # API's limit. https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_DeleteTaskDefinitions.html
 #
 # Two families, each by its exact name: the gateway's, spa-platform-<cell>, and the bastion's (#1167,

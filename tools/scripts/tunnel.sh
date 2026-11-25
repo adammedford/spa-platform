@@ -14,6 +14,7 @@
 #   tools/scripts/tunnel.sh --local-port 9443    # another local port
 #   tools/scripts/tunnel.sh --task <task id>     # through that task, not the first one reachable
 #   tools/scripts/tunnel.sh --keepalive 300      # and hold the session open while it is idle
+#   tools/scripts/tunnel.sh --keepalive 300 --host <app host>   # asking that app's host
 #
 # It stays in the foreground until the session ends; Ctrl-C ends it. In a second terminal,
 # tools/scripts/verify-tunnel.sh <path> checks it: / on the sample image, /healthz on the gateway.
@@ -27,7 +28,9 @@
 # next request through the port finds nothing. --keepalive <seconds> holds one open: while the
 # session lasts it requests /healthz through the forwarded port every <seconds>, which is traffic
 # whether or not the request succeeds, and it stops when the session ends. Give it an interval
-# shorter than the idle timeout.
+# shorter than the idle timeout. It asks the app host --host names, else the entry value
+# SPA_APP_HOST, a host name with no port, and with neither it refuses: no app's host is a default
+# (#1351).
 #
 # Without --task it forwards through the first running task of the bastion service that a session
 # can reach. The service runs one, but a roll of it can run two for a while, and either reaches the
@@ -49,7 +52,7 @@
 #
 # Run it as the operator's own session, with credentials for the account the cell is in and
 # AWS_REGION set to the cell's Region, once the outputs document is written. It reads the entry
-# value SPA_OUTPUTS_FILE and, with --keepalive, SPA_CERT_DOMAIN, which have no default
+# value SPA_OUTPUTS_FILE and, with --keepalive and no --host, SPA_APP_HOST, which have no default
 # (cell-common.sh's header), and refuses, exit 2, when one it needs is unset. It needs the AWS CLI
 # v2, the Session Manager plugin and python3, and curl with --keepalive.
 #
@@ -82,10 +85,10 @@ TASK=""
 TASK_GIVEN=0
 KEEPALIVE=""
 KEEPALIVE_GIVEN=0
-# The host --keepalive asks, as verify-tunnel.sh names it, under the certificate's domain once
-# need_entry has read it. Its name is pinned to the loopback for the request, so it needs no
-# hosts-file line.
+# The host --keepalive asks: --host, else SPA_APP_HOST, as verify-tunnel.sh takes it. Its name is
+# pinned to the loopback for the request, so it needs no hosts-file line.
 KEEPALIVE_HOST=""
+HOST_GIVEN=0
 
 # The hop: the bastion task's one container (#1167).
 CONTAINER="$BASTION_CONTAINER"
@@ -104,6 +107,8 @@ Options
                    Default: the first running task a session can reach.
   --keepalive S    While the session lasts, request /healthz through the forwarded port every
                    S seconds, so the idle timeout does not end it. Default: none.
+  --host NAME      The app host --keepalive asks, a host name with no port. Default:
+                   \$SPA_APP_HOST; with neither, --keepalive refuses.
   -h, --help       This text.
 EOF
 }
@@ -120,6 +125,7 @@ while [ "$#" -gt 0 ]; do
     --local-port) value_of "$1" "$#"; LOCAL_PORT="$2"; shift ;;
     --task) value_of "$1" "$#"; TASK="$2"; TASK_GIVEN=1; shift ;;
     --keepalive) value_of "$1" "$#"; KEEPALIVE="$2"; KEEPALIVE_GIVEN=1; shift ;;
+    --host) value_of "$1" "$#"; KEEPALIVE_HOST="$2"; HOST_GIVEN=1; shift ;;
     -h | --help)
       usage
       exit 0
@@ -147,8 +153,16 @@ if [ "$KEEPALIVE_GIVEN" = "1" ]; then
     '' | *[!0-9]* | 0*) refuse "--keepalive must be a whole number of seconds above 0: got '${KEEPALIVE}'" ;;
   esac
   need_tool curl "It makes --keepalive's requests. brew install curl"
-  need_entry SPA_CERT_DOMAIN
-  KEEPALIVE_HOST="app1.${CERT_DOMAIN}"
+  if [ "$HOST_GIVEN" = "0" ]; then
+    KEEPALIVE_HOST="${SPA_APP_HOST:-}"
+    [ -n "$KEEPALIVE_HOST" ] ||
+      refuse "no host: --host was not given and SPA_APP_HOST is not set. --keepalive asks an app's host: pass --host, or set the entry value SPA_APP_HOST for the cell, as the proof cell's entry file cell.env does."
+  fi
+  case "$KEEPALIVE_HOST" in
+    *[!A-Za-z0-9.-]* | "" | .* | *.) refuse "--host and SPA_APP_HOST must be a host name, with no scheme or port: got '${KEEPALIVE_HOST}'" ;;
+  esac
+elif [ "$HOST_GIVEN" = "1" ]; then
+  refuse "--host names the host --keepalive asks: give --keepalive too, or drop --host."
 fi
 need_entry SPA_OUTPUTS_FILE
 

@@ -33,6 +33,9 @@ one file back.
         contracts/platform-config.schema.json, from its task definition's environment.
     cell_documents.py apps <registry.json>
         The number of apps in a registry document.
+    cell_documents.py host <registry.json>
+        The first app's host in a registry document, without its port: deploy.sh's wait reads
+        through it (#1351). Refused when that app names no host the schema admits.
     cell_documents.py revision <registry.json>
         A registry document's revision, the number /readyz reports once it is live.
     cell_documents.py digests <manifest> <digest> <os/architecture>
@@ -338,6 +341,28 @@ def apps(path: str) -> int:
     return 0
 
 
+# contracts/registry.schema.json's host, a lowercase authority with an optional port, read as a
+# name and the port after it.
+HOST = re.compile(r"([a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*)(:[1-9][0-9]{0,4})?")
+
+
+def host(path: str) -> int:
+    """The first app's host in the live registry, without the port the registry carries: the name
+    deploy.sh's readiness wait reads through, on its tunnel's own port (#1351)."""
+    try:
+        document = json.loads(pathlib.Path(path).read_text())
+    except (OSError, ValueError):
+        raise Refused("the live registry is not JSON")
+    entries = document.get("apps") if isinstance(document, dict) else None
+    first = entries[0] if isinstance(entries, list) and entries and isinstance(entries[0], dict) else {}
+    value = first.get("host")
+    match = HOST.fullmatch(value) if isinstance(value, str) else None
+    if match is None:
+        raise Refused("the live registry's first app names no host")
+    print(match[1])
+    return 0
+
+
 def revision(path: str) -> int:
     """contracts/registry.schema.json's revision: an integer of at least 1. A boolean is not one,
     though Python counts it as an int."""
@@ -501,7 +526,7 @@ def requests() -> int:
     return 0
 
 
-COMMANDS = {"outputs": (outputs, -3), "repositories": (repositories, 3), "field": (field, 3), "clients": (clients, 2), "config": (config, 2), "apps": (apps, 1), "revision": (revision, 1), "digests": (digests, 3), "release": (release, 1), "requests": (requests, 0),
+COMMANDS = {"outputs": (outputs, -3), "repositories": (repositories, 3), "field": (field, 3), "clients": (clients, 2), "config": (config, 2), "apps": (apps, 1), "host": (host, 1), "revision": (revision, 1), "digests": (digests, 3), "release": (release, 1), "requests": (requests, 0),
             "fragments": (fragments, 1), "fragment-release": (fragment_release, 2)}
 
 
