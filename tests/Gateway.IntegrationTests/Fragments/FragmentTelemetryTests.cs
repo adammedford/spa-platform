@@ -131,7 +131,11 @@ public sealed class FragmentTelemetryTests
         Assert.Empty(Leaks(lines, values));
 
         // The search can fail: a line made to hold any one of the values, inside other text, is a leak.
-        Assert.All(values, value => Assert.NotEmpty(Leaks(["request " + value + " seen"], values)));
+        // A miss is named by position only, as the leaks are.
+        string[] missed = [.. values.Select((value, index) => (value, index))
+            .Where(pair => Leaks(["request " + pair.value + " seen"], values).Count == 0)
+            .Select(pair => $"value #{pair.index}")];
+        Assert.Empty(missed);
     }
 
     /// <summary>
