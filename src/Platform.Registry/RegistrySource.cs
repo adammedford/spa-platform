@@ -16,10 +16,11 @@ namespace Platform.Registry;
 /// document is accepted or rejected whole (ADR-0002), and so is a snapshot whose secrets cannot all be
 /// read (contracts/README.md, <c>clientSecretRef</c>; decision D3).
 ///
-/// <b>At a cold start</b> there is nothing to keep, so an app whose secret cannot be read is left out
-/// and reported, and the rest go live (docs/plan/02-contracts.md, Registry document). The source keeps
-/// the document it came from and reads the left-out secrets again on each poll while the object is
-/// unchanged; an app joins the live snapshot, under the same revision, once its secret reads.
+/// <b>At a cold start</b> there is nothing to keep, so an app with a secret that cannot be read, its
+/// shell's or a fragment's, is left out and reported, and the rest go live (docs/plan/02-contracts.md,
+/// Registry document). The source keeps the document it came from and reads the left-out secrets
+/// again on each poll while the object is unchanged; an app joins the live snapshot, under the same
+/// revision, once its secrets read.
 ///
 /// <b>Nothing is ready until the first valid snapshot</b>: until then <see cref="IRegistry.Current"/>
 /// is <see cref="LiveRegistry.NoSnapshot"/>, revision 0.
@@ -171,7 +172,7 @@ public sealed class RegistrySource
             // serving, and staying not ready keeps the load balancer on the tasks that still work
             // (decided by implementer). Not settled either way, so the next poll reads it again.
             logger.LogError(
-                "Registry revision {Candidate} is not applied: {Count} client secret(s) could not be read. Revision {Revision} stays live.",
+                "Registry revision {Candidate} is not applied: {Count} app(s) have a client secret that could not be read. Revision {Revision} stays live.",
                 validation.Revision, leftOut.Length, live.Revision);
             return RefreshOutcome.SecretsUnreadable;
         }
@@ -231,8 +232,10 @@ public sealed class RegistrySource
     {
         try
         {
-            // IClientSecretSource: every reference before the swap, because Get never does I/O.
-            await secrets.PreloadAsync(apps.Select(app => app.OAuth.ClientSecretRef).Distinct(StringComparer.Ordinal), ct);
+            // IClientSecretSource: every reference before the swap, because Get never does I/O. A
+            // fragment's code exchange reads its own client's secret, so its reference is preloaded
+            // beside its shell's (#1538).
+            await secrets.PreloadAsync(apps.SelectMany(SecretRefs).Distinct(StringComparer.Ordinal), ct);
             return true;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -251,9 +254,10 @@ public sealed class RegistrySource
     }
 
     /// <summary>
-    /// Splits apps into those whose secret reads and those whose secret does not, and reports each of
-    /// the second by appId and reference. The value read is discarded here: options setup reads it again
-    /// from memory (task 3.2).
+    /// Splits apps into those whose every secret reads, its shell's and each fragment's, and those with
+    /// one that does not, and reports each unreadable reference by appId, fragmentId and reference
+    /// (#1538: a fragment's secret is held to the shell's rule). The value read is discarded here:
+    /// options setup reads it again from memory (task 3.2).
     /// </summary>
     private (ImmutableArray<AppDefinition> Readable, ImmutableArray<AppDefinition> Unreadable) Partition(
         IEnumerable<AppDefinition> apps, long revision)
@@ -262,19 +266,34 @@ public sealed class RegistrySource
         ImmutableArray<AppDefinition>.Builder unreadable = ImmutableArray.CreateBuilder<AppDefinition>();
         foreach (AppDefinition app in apps)
         {
-            try
+            // Every reference is tried, so each unreadable one is reported, not only the first.
+            bool reads = true;
+            foreach ((string? fragmentId, string secretRef) in SecretsOf(app))
             {
-                _ = secrets.Get(app.OAuth.ClientSecretRef);
-                readable.Add(app);
+                try
+                {
+                    _ = secrets.Get(secretRef);
+                }
+                catch (Exception ex)
+                {
+                    // IClientSecretSource.Get: the message never carries a value (task 2.5, N-16).
+                    reads = false;
+                    if (fragmentId is null)
+                    {
+                        logger.LogWarning(
+                            "App {AppId} in registry revision {Revision}: client secret {SecretRef} could not be read. {Reason}",
+                            app.AppId, revision, secretRef, ex.Message);
+                    }
+                    else
+                    {
+                        logger.LogWarning(
+                            "App {AppId} in registry revision {Revision}: fragment {FragmentId}'s client secret {SecretRef} could not be read. {Reason}",
+                            app.AppId, revision, fragmentId, secretRef, ex.Message);
+                    }
+                }
             }
-            catch (Exception ex)
-            {
-                // IClientSecretSource.Get: the message never carries a value (task 2.5, N-16).
-                logger.LogWarning(
-                    "App {AppId} in registry revision {Revision}: client secret {SecretRef} could not be read. {Reason}",
-                    app.AppId, revision, app.OAuth.ClientSecretRef, ex.Message);
-                unreadable.Add(app);
-            }
+
+            (reads ? readable : unreadable).Add(app);
         }
 
         return (readable.ToImmutable(), unreadable.ToImmutable());
@@ -287,6 +306,13 @@ public sealed class RegistrySource
         logger.LogInformation(
             "Registry revision {Revision} ({ETag}) is live with {Count} app(s).", next.Revision, etag, next.ByAppId.Count);
     }
+
+    /// <summary>Every client secret an entry needs: its shell's, then each fragment's in document order.</summary>
+    private static IEnumerable<(string? FragmentId, string SecretRef)> SecretsOf(AppDefinition app) =>
+        app.Fragments.Select(fragment => ((string?)fragment.FragmentId, fragment.OAuth.ClientSecretRef))
+            .Prepend((null, app.OAuth.ClientSecretRef));
+
+    private static IEnumerable<string> SecretRefs(AppDefinition app) => SecretsOf(app).Select(secret => secret.SecretRef);
 
     private sealed record Partial(RegistryValidation Validation, string ETag, ImmutableArray<AppDefinition> LeftOut);
 }

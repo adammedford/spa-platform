@@ -18,13 +18,17 @@ public sealed class RegistrySourceTests
     private const string Key = "registry/registry.json";
     private const string App1Ref = "ssm:/spa-platform/poc/apps/app1/client-secret:1";
     private const string App2Ref = "ssm:/spa-platform/poc/apps/app2/client-secret:1";
+    private const string App1ReportsRef = "ssm:/spa-platform/poc/apps/app1/fragments/reports/client-secret:1";
+    private const string App2ReportsRef = "ssm:/spa-platform/poc/apps/app2/fragments/reports/client-secret:1";
 
     // Canaries: a secret value must never reach a log line (N-16).
     private const string App1Secret = "canary-app1-secret-value";
     private const string App2Secret = "canary-app2-secret-value";
+    private const string App1ReportsSecret = "canary-app1-reports-secret-value";
+    private const string App2ReportsSecret = "canary-app2-reports-secret-value";
 
     private readonly RecordingObjectStore store = new(new InMemoryObjectStore());
-    private readonly FakeClientSecretSource secrets = new() { [App1Ref] = App1Secret };
+    private readonly FakeClientSecretSource secrets = new() { [App1Ref] = App1Secret, [App1ReportsRef] = App1ReportsSecret };
     private readonly CapturedLog logs = new();
     private readonly LiveRegistry registry;
     private readonly RegistrySource source;
@@ -68,15 +72,23 @@ public sealed class RegistrySourceTests
     }
 
     [Fact]
-    public async Task Secrets_are_preloaded_before_the_swap()
+    public async Task Secrets_are_preloaded_before_the_swap_with_each_fragment_beside_its_shell()
     {
+        // A fragment's code exchange on /signin-oidc/{fragmentId} reads its secret with Get, which does
+        // no I/O (#1538). Mutation: preload only app.OAuth.ClientSecretRef in TryPreloadAsync, as before
+        // #1538, and no fragment's reference is preloaded, so both entries are left out and the poll
+        // is not a swap.
         await Publish(Examples.RegistryWithSecondEntry());
         secrets[App2Ref] = App2Secret;
+        secrets[App2ReportsRef] = App2ReportsSecret;
 
-        await source.RefreshAsync(Ct);
+        Assert.Equal(RefreshOutcome.Swapped, await source.RefreshAsync(Ct));
 
-        Assert.Equal([App1Ref, App2Ref], secrets.Preloaded.Order(StringComparer.Ordinal));
-        Assert.Equal(App2Secret, secrets.Get(registry.Current.ByAppId["app2"].OAuth.ClientSecretRef));
+        Assert.Equal([App1Ref, App1ReportsRef, App2Ref, App2ReportsRef], secrets.Preloaded.Order(StringComparer.Ordinal));
+        Assert.Equal(App1ReportsSecret, secrets.Get(Assert.Single(registry.Current.ByAppId["app1"].Fragments).OAuth.ClientSecretRef));
+        Assert.Equal(App2ReportsSecret, secrets.Get(Assert.Single(registry.Current.ByAppId["app2"].Fragments).OAuth.ClientSecretRef));
+        Assert.DoesNotContain(logs.Lines, line =>
+            line.Text.Contains(App1ReportsSecret, StringComparison.Ordinal) || line.Text.Contains(App2ReportsSecret, StringComparison.Ordinal));
     }
 
     [Fact]
@@ -145,6 +157,7 @@ public sealed class RegistrySourceTests
     {
         RegistrySnapshot live = await GoLive(Examples.Registry());
         secrets[App2Ref] = App2Secret;
+        secrets[App2ReportsRef] = App2ReportsSecret;
         await Replace(Examples.RegistryWithSecondEntry().WithRevision(43));
         List<(long Old, long New)> seen = [];
         using IDisposable _ = registry.OnSwapped((old, next) => seen.Add((old.Revision, next.Revision)));
@@ -261,6 +274,7 @@ public sealed class RegistrySourceTests
         await source.RefreshAsync(Ct);
         RegistrySnapshot partial = registry.Current;
         secrets[App2Ref] = App2Secret;
+        secrets[App2ReportsRef] = App2ReportsSecret;
         List<(RegistrySnapshot Old, RegistrySnapshot New)> seen = [];
         using IDisposable _ = registry.OnSwapped((old, next) => seen.Add((old, next)));
 
@@ -277,6 +291,61 @@ public sealed class RegistrySourceTests
 
         // Complete now, so the next unchanged poll is a plain 304 again.
         Assert.Equal(RefreshOutcome.NotModified, await source.RefreshAsync(Ct));
+    }
+
+    [Fact]
+    public async Task An_unreadable_fragment_secret_at_cold_start_leaves_its_entry_out_until_it_reads()
+    {
+        // #961's Composition names no rule for a fragment's secret, so the shell's holds (#1538): an
+        // entry that cannot read a secret it needs is left out and reported by reference, and joins
+        // on a retry once it reads. Mutation: in Partition, read only app.OAuth.ClientSecretRef, and
+        // app2 goes live at the first poll with a fragment that cannot sign in. Mutation: preload
+        // only the shells' references on the retry (RetryLeftOutAsync), and the retry's preload
+        // assertion fails (the swap and the retry share TryPreloadAsync, so make it at the retry's
+        // call: pass cold.LeftOut.Select(app => app with { Fragments = [] })).
+        await Publish(Examples.RegistryWithSecondEntry());
+        secrets[App2Ref] = App2Secret;
+
+        Assert.Equal(RefreshOutcome.Swapped, await source.RefreshAsync(Ct));
+
+        Assert.Equal(["app1"], registry.Current.ByAppId.Keys);
+        Assert.Equal(["app2"], source.LeftOut);
+        // On the line's state, not its text: the reference already spells "app2" and "reports", so
+        // only the structured FragmentId can fail when the template drops the fragment's id.
+        Assert.Contains(logs.Lines, line =>
+            line.State.Contains(new KeyValuePair<string, object?>("AppId", "app2"))
+            && line.State.Contains(new KeyValuePair<string, object?>("FragmentId", "reports"))
+            && line.State.Contains(new KeyValuePair<string, object?>("SecretRef", App2ReportsRef)));
+
+        int before = secrets.Preloaded.Count;
+        secrets[App2ReportsRef] = App2ReportsSecret;
+
+        Assert.Equal(RefreshOutcome.Swapped, await source.RefreshAsync(Ct));
+
+        Assert.True(store.Reads[^1].NotModified);
+        Assert.Equal([App2Ref, App2ReportsRef], secrets.Preloaded.Skip(before).Order(StringComparer.Ordinal));
+        Assert.Equal(["app1", "app2"], registry.Current.ByAppId.Keys.Order(StringComparer.Ordinal));
+        Assert.Equal(App2ReportsSecret, secrets.Get(Assert.Single(registry.Current.ByAppId["app2"].Fragments).OAuth.ClientSecretRef));
+        Assert.Empty(source.LeftOut);
+        Assert.DoesNotContain(logs.Lines, line =>
+            line.Text.Contains(App2Secret, StringComparison.Ordinal) || line.Text.Contains(App2ReportsSecret, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task An_unreadable_fragment_secret_in_a_new_document_keeps_the_live_snapshot_whole()
+    {
+        // D3, for a fragment's secret as for a shell's (#1538). Mutation: in Partition, read only
+        // app.OAuth.ClientSecretRef, and revision 43 replaces the live snapshot.
+        RegistrySnapshot live = await GoLive(Examples.Registry());
+        CountSwaps();
+        secrets[App2Ref] = App2Secret;
+        await Replace(Examples.RegistryWithSecondEntry().WithRevision(43));
+
+        Assert.Equal(RefreshOutcome.SecretsUnreadable, await source.RefreshAsync(Ct));
+
+        Assert.Same(live, registry.Current);
+        Assert.Equal(0, swaps);
+        Assert.Contains(logs.Lines, line => line.Text.Contains(App2ReportsRef, StringComparison.Ordinal));
     }
 
     [Fact]
@@ -344,6 +413,7 @@ public sealed class RegistrySourceTests
         await Replace(Examples.RegistryWithSecondEntry().WithRevision(43));
         await source.RefreshAsync(Ct);
         secrets[App2Ref] = App2Secret;
+        secrets[App2ReportsRef] = App2ReportsSecret;
 
         Assert.Equal(RefreshOutcome.Swapped, await source.RefreshAsync(Ct));
 
