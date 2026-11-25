@@ -191,35 +191,72 @@ red_workflows=""
 cache_lock=""
 cache_lock_held=false
 
-# Takes the lock: a directory made with mkdir, which either creates it or fails, atomically, so of
-# two runs only one gets it; macOS has no flock. The holder's pid goes in it, in a file named pid.
-# A lock whose pid no longer runs is taken over, and the run says so. A lock held by a live pid, or
-# one whose pid file is not written yet, which is how a holder's lock looks in the instant between
-# its mkdir and its write, is waited on, with a line at once and every 30 seconds after naming the
-# holder. Only "No such process" from kill -0 means gone: a pid of another user's answers
-# "Operation not permitted", and that one still runs. A known limit: two runs that find the same
-# dead lock at once can both pass the second read, and the later one's rm can remove the lock the
-# earlier one just made. Closing it takes a second lock around the takeover, which a run killed
-# inside it would leave behind for good; a takeover follows only a killed run, so the window stays.
-# Another known limit: a lock left by a killed run whose pid the system has since given to another
-# live process is waited on with no deadline, since kill -0 cannot tell that process from a holder.
-# The line repeated every 30 seconds names the pid; once `ps -p <pid>` shows it is no check, remove
-# the lock directory the line names and the wait ends.
+# Takes the lock: a file named pid, in a directory made for it in the cache, that holds the
+# holder's pid. The file is the lock and the directory only its place. Only one run can create the
+# file, because bash creates it under noclobber, `set -C`, which opens it with O_EXCL, so of two
+# runs only one gets it; macOS has no flock. The mkdir alone is not trusted to choose: Ubuntu
+# 26.04's mkdir is uutils' 0.10.0 (coreutils 9.5-1ubuntu2+0.0.0~ubuntu25, the version CI's runner
+# image lists), which answered success to both of two runs racing to make one directory in 260 of
+# 300 tries, where GNU's did in none, and two inits ran at once that way in CI (#1535's review). A
+# directory with no pid file in it is held by no one.
+# A pid file whose pid no longer runs is taken over, and the run says so. A pid file holding a live
+# pid, or not written yet, which is how a holder's lock looks in the instant between its create and
+# its write, is waited on, with a line at once and every 30 seconds after naming the holder. A run
+# killed in that instant, by SIGKILL, which no trap sees, would leave one that names no pid for
+# good, so one that has named none for cache_lock_grace seconds of this run's wait is taken over
+# too, and the run says so; a live holder writes its pid in the same printf that creates the file.
+# Only "No such process" from kill -0 means gone: a pid of another user's answers "Operation not
+# permitted", and that one still runs. A known limit: two runs that find the same dead lock at once
+# can both pass the second read, and the later one's rm can remove the lock the earlier one just
+# took. Closing it takes a second lock around the takeover, which a run killed inside it would
+# leave behind for good; a takeover follows only a killed run, so the window stays. Another known
+# limit: a lock left by a killed run whose pid the system has since given to another live process
+# is waited on with no deadline, since kill -0 cannot tell that process from a holder. The line
+# repeated every 30 seconds names the pid; once `ps -p <pid>` shows it is no check, remove the pid
+# file in the lock directory the line names and the wait ends.
+cache_lock_grace=10
 cache_lock_take() {
-  local holder again said_at gone
+  local holder again said_at gone unnamed_since unwritten
   said_at=""
-  while ! mkdir "$cache_lock" 2> /dev/null; do
-    # A mkdir that failed with no lock there is a cache that cannot hold one, not a lock to wait
-    # on; asked twice, since a holder may have released it between the two looks.
-    if [ ! -d "$cache_lock" ]; then
-      mkdir "$cache_lock" 2> /dev/null && break
-      [ -d "$cache_lock" ] || fail "could not make Terraform's provider cache lock $cache_lock."
+  unnamed_since=""
+  unwritten=0
+  while :; do
+    # A mkdir that failed with no directory there is a cache that cannot hold the lock, not a lock
+    # to wait on: the directory is looked for again after it, since another run may have made it.
+    if [ ! -d "$cache_lock" ] && ! mkdir "$cache_lock" 2> /dev/null && [ ! -d "$cache_lock" ]; then
+      fail "could not make Terraform's provider cache lock $cache_lock."
     fi
+    if (set -C && printf '%s\n' "$$" > "$cache_lock/pid") 2> /dev/null; then
+      break
+    fi
+    # Not created, and no file there: a holder released it between the two, or the directory is
+    # one this run cannot write in. Tried again at once, a few times, and then the run fails.
+    if [ ! -e "$cache_lock/pid" ]; then
+      unwritten=$((unwritten + 1))
+      [ "$unwritten" -lt 3 ] || fail "could not write this run's pid into $cache_lock."
+      continue
+    fi
+    unwritten=0
     holder=""
     { read -r holder < "$cache_lock/pid"; } 2> /dev/null || holder=""
     case "$holder" in
-      '' | *[!0-9]*) ;;
+      '' | *[!0-9]*)
+        if [ -z "$unnamed_since" ]; then
+          unnamed_since=$SECONDS
+        elif [ $((SECONDS - unnamed_since)) -ge "$cache_lock_grace" ]; then
+          # Read again just before removing it, as below: a lock that names a pid now is live.
+          again=""
+          { read -r again < "$cache_lock/pid"; } 2> /dev/null || again=""
+          if [ "$again" = "$holder" ]; then
+            rm -f "$cache_lock/pid"
+            echo "$me: took over Terraform's provider cache lock $cache_lock, which named no pid for $cache_lock_grace seconds."
+          fi
+          unnamed_since=""
+          continue
+        fi
+        ;;
       *)
+        unnamed_since=""
         # In the C locale, so the text matched below is not a translation of it.
         gone="$(LC_ALL=C kill -0 "$holder" 2>&1)" || true
         case "$gone" in
@@ -229,7 +266,7 @@ cache_lock_take() {
             again=""
             { read -r again < "$cache_lock/pid"; } 2> /dev/null || again=""
             if [ "$again" = "$holder" ]; then
-              rm -rf "$cache_lock"
+              rm -f "$cache_lock/pid"
               echo "$me: took over Terraform's provider cache lock $cache_lock from pid $holder, which no longer runs."
             fi
             continue
@@ -244,13 +281,16 @@ cache_lock_take() {
     sleep 1
   done
   cache_lock_held=true
-  printf '%s\n' "$$" > "$cache_lock/pid" || fail "could not write this run's pid into $cache_lock."
 }
 
+# Releases it: the pid file, then the directory with rm -d, which removes only an empty one and so
+# fails, harmlessly, once another run has created its own pid file in it. Removed in that order,
+# and not with one rm -rf, whose order a run taking the lock at the same moment would depend on.
 cache_lock_release() {
   if $cache_lock_held; then
     cache_lock_held=false
-    rm -rf "$cache_lock" || true
+    rm -f "$cache_lock/pid" || true
+    rm -d "$cache_lock" 2> /dev/null || true
   fi
 }
 

@@ -1254,13 +1254,29 @@ class FloorTests(CheckTestCase):
 # The lock tools/check.sh holds in the provider cache around each init, typed from #1502's design
 # rather than read from the script.
 CACHE_LOCK = ".tools-check-init.lock"
+# How long a pid file that names no pid is waited on before it is taken over, typed from check.sh's
+# cache_lock_grace.
+CACHE_GRACE = 10
+
+# A mkdir that answers as uutils' mkdir 0.10.0, Ubuntu 26.04's, did under a race (#1535's review):
+# it looks for the directory, fails if it is there, and otherwise makes it as `mkdir -p` would, so
+# two runs that both looked before either made it are both told they made it. The pause holds the
+# window open; a call with an option, `mkdir -p` among them, goes to the real mkdir.
+RACING_MKDIR = """#!/bin/sh
+case "$1" in -*) exec {real} "$@" ;; esac
+if [ -e "$1" ]; then echo "mkdir: $1: File exists" >&2; exit 1; fi
+sleep 0.5
+exec {real} -p "$1"
+"""
 
 # A terraform for the provider cache's cases (#1502). It answers `version` with the floor, and
 # appends one line a call to the file it is given, shared by every run that is handed the same file:
-# `<event> <run's pid> <-chdir=dir> cache=<TF_PLUGIN_CACHE_DIR, or unset> made=<yes|no> lock=<yes|no>`,
-# where made says whether the cache directory existed and lock whether the check's lock directory
-# was in it. An init writes `start` before a pause and `end` after it, so overlapping inits show as
-# two starts in a row; an init fails, after its start, while the file `<record>.fail` exists.
+# `<event> <run's pid> <-chdir=dir> cache=<TF_PLUGIN_CACHE_DIR, or unset> made=<yes|no> lock=<yes|no>
+# holder=<the lock's pid file, or nothing>`, where made says whether the cache directory existed,
+# lock whether the check's lock directory was in it and holder what the lock's pid file held, the
+# last two as the line is written, so a record shows whose lock each init started and ended under.
+# An init writes `start` before a pause and `end` after it, so overlapping inits show as two starts
+# in a row; an init fails, after its start, while the file `<record>.fail` exists.
 CACHE_DOUBLE = """#!/bin/bash
 record={record}
 case "$*" in
@@ -1268,9 +1284,12 @@ case "$*" in
 esac
 cache="${{TF_PLUGIN_CACHE_DIR-unset}}"
 made=no; [ -d "$cache" ] && made=yes
-lock=no; [ -d "$cache/{lock}" ] && lock=yes
 event="$2"
-line() {{ printf '%s %s %s cache=%s made=%s lock=%s\\n' "$1" "$PPID" "${{2:-}}" "$cache" "$made" "$lock" >> "$record"; }}
+line() {{
+  lock=no; [ -d "$cache/{lock}" ] && lock=yes
+  holder=""; {{ read -r holder < "$cache/{lock}/pid"; }} 2> /dev/null
+  printf '%s %s %s cache=%s made=%s lock=%s holder=%s\\n' "$1" "$PPID" "${{2:-}}" "$cache" "$made" "$lock" "$holder" >> "$record"
+}}
 if [ "$event" = init ]; then
   line start "$1"
   [ -e "$record.fail" ] && exit 1
@@ -1359,12 +1378,18 @@ class ProviderCacheTests(CheckTestCase):
                                  [[event[0], event[2]] for event in self.events(record) if event[0] != "-check"])
                 self.assertFalse((case.home / ".terraform.d" / "plugin-cache" / CACHE_LOCK).exists())
 
-    def test_two_concurrent_runs_never_init_at_once(self):
+    def concurrent(self, racing_mkdir: bool):
+        """Two full runs at once, sharing one cache and one record; returns nothing, asserts all."""
         shared = tempfile.TemporaryDirectory()
         self.addCleanup(shared.cleanup)
         cache = pathlib.Path(shared.name).resolve() / "cache"
         record = pathlib.Path(shared.name).resolve() / "record"
         cases = [self.cached(Case(self, change="infra/roots/a/main.tf"), record, pause="0.5") for _ in range(2)]
+        if racing_mkdir:
+            for case in cases:
+                real = os.readlink(case.bin / "mkdir")
+                (case.bin / "mkdir").unlink()
+                case.write_executable(case.bin / "mkdir", RACING_MKDIR.format(real=shlex.quote(real)))
         results: list[Result | None] = [None, None]
 
         def run(index: int):
@@ -1375,14 +1400,84 @@ class ProviderCacheTests(CheckTestCase):
             thread.start()
         for thread in threads:
             thread.join()
+        # A red names the whole record, each line with its run's pid, the lock's state and the pid
+        # the lock named, and both runs' output, which holds their waiting and took-over lines.
+        told = "\n".join(["the record:", *(record.read_text().splitlines() if record.exists() else []),
+                          *(f"run {index}, status {result.status}:\n{result.stdout}{result.stderr}"
+                            for index, result in enumerate(results))])
         for result in results:
-            self.assertEqual(0, result.status, result.stdout + result.stderr)
-        inits = [event[0] for event in self.events(record) if event[0] in ("start", "end")]
-        self.assertEqual(len(ROOTS) * 2 * 2, len(inits), inits)
+            self.assertEqual(0, result.status, told)
+        events = [event for event in self.events(record) if event[0] in ("start", "end")]
+        self.assertEqual(len(ROOTS) * 2 * 2, len(events), told)
         # Each start is followed by its own end before the next start: never two inits at once.
-        self.assertEqual(["start", "end"] * len(ROOTS) * 2, inits)
-        runs = {event[1] for event in self.events(record) if event[0] == "start"}
-        self.assertEqual(2, len(runs), "both runs reached their inits")
+        self.assertEqual(["start", "end"] * len(ROOTS) * 2, [event[0] for event in events], told)
+        # And each init ran under its own run's lock, named by its pid from start to end.
+        for event in events:
+            self.assertEqual(["lock=yes", f"holder={event[1]}"], event[5:7], told)
+        runs = {event[1] for event in events if event[0] == "start"}
+        self.assertEqual(2, len(runs), told)
+
+    def test_two_concurrent_runs_never_init_at_once(self):
+        self.concurrent(racing_mkdir=False)
+
+    def test_two_concurrent_runs_never_init_at_once_when_mkdir_answers_both(self):
+        # CI's Ubuntu 26.04 ran two inits at once on #1535's head: its mkdir, uutils', told two
+        # runs racing to make the lock's directory that each had made it. The double does the same.
+        self.concurrent(racing_mkdir=True)
+
+    def test_a_lock_directory_with_no_pid_file_is_taken_at_once(self):
+        case = Case(self, change="infra/roots/a/main.tf")
+        record = case.dir / "record"
+        self.cached(case, record)
+        (case.home / ".terraform.d" / "plugin-cache" / CACHE_LOCK).mkdir(parents=True)
+        result = case.run("--full", "--port", PORT)
+        self.assertEqual(0, result.status, result.stdout + result.stderr)
+        self.assertNotIn("waiting for", result.stdout)
+        self.assertNotIn("took over", result.stdout)
+        self.assertEqual(len(ROOTS), len([event for event in self.events(record) if event[0] == "start"]))
+
+    def test_a_pid_file_that_names_no_pid_past_the_grace_is_taken_over(self):
+        # What a run SIGKILLed between creating the pid file and writing it would leave, for good.
+        for text in ("", "not a pid\n"):
+            with self.subTest(text=text):
+                case = Case(self, change="infra/roots/a/main.tf")
+                record = case.dir / "record"
+                self.cached(case, record)
+                lock = case.home / ".terraform.d" / "plugin-cache" / CACHE_LOCK
+                lock.mkdir(parents=True)
+                (lock / "pid").write_text(text)
+                result = case.run("--full", "--port", PORT)
+                self.assertEqual(0, result.status, result.stdout + result.stderr)
+                lines = result.stdout.splitlines()
+                holder = "not yet written" if text == "" else "not a pid"
+                self.assertIn(f"check: waiting for Terraform's provider cache lock {lock}, held by pid {holder}.",
+                              lines)
+                self.assertIn(f"check: took over Terraform's provider cache lock {lock}, which named no pid "
+                              f"for {CACHE_GRACE} seconds.", lines)
+                self.assertEqual(len(ROOTS), len([event for event in self.events(record) if event[0] == "start"]))
+
+    def test_a_holder_that_writes_its_pid_within_the_grace_is_not_taken_over(self):
+        case = Case(self, change="infra/roots/a/main.tf")
+        record = case.dir / "record"
+        self.cached(case, record)
+        lock = case.home / ".terraform.d" / "plugin-cache" / CACHE_LOCK
+        lock.mkdir(parents=True)
+        (lock / "pid").write_text("")
+        # This process writes its pid 3 seconds in and holds the lock past the grace, then empties the
+        # file, as the next holder's would look in the instant before its write, and releases it 2
+        # seconds later: a wait counts the grace afresh each time the file stops naming a pid.
+        timers = [threading.Timer(3, lambda: (lock / "pid").write_text(f"{os.getpid()}\n")),
+                  threading.Timer(CACHE_GRACE + 3, lambda: (lock / "pid").write_text("")),
+                  threading.Timer(CACHE_GRACE + 5, lambda: shutil.rmtree(lock))]
+        for timer in timers:
+            timer.start()
+            self.addCleanup(timer.cancel)
+        result = case.run("--full", "--port", PORT)
+        self.assertEqual(0, result.status, result.stdout + result.stderr)
+        self.assertIn(f"check: waiting for Terraform's provider cache lock {lock}, held by pid not yet written.",
+                      result.stdout.splitlines())
+        self.assertNotIn("took over", result.stdout)
+        self.assertEqual(len(ROOTS), len([event for event in self.events(record) if event[0] == "start"]))
 
     def test_a_lock_naming_a_pid_that_no_longer_runs_is_taken_over(self):
         case = Case(self, change="infra/roots/a/main.tf")
@@ -1468,6 +1563,19 @@ class ProviderCacheTests(CheckTestCase):
         self.assertEqual(1, result.status, result.stdout + result.stderr)
         self.assertEqual(f"check: fail: could not make Terraform's provider cache lock {cache / CACHE_LOCK}.",
                          result.last_line(result.stderr))
+        self.assertEqual([], [event for event in self.events(record) if event[0] == "start"])
+
+    def test_a_lock_directory_the_run_cannot_write_in_fails_rather_than_waits(self):
+        case = Case(self, change="infra/roots/a/main.tf")
+        record = case.dir / "record"
+        self.cached(case, record)
+        lock = case.home / ".terraform.d" / "plugin-cache" / CACHE_LOCK
+        lock.mkdir(parents=True)
+        lock.chmod(0o500)
+        self.addCleanup(lock.chmod, 0o700)
+        result = case.run("--full", "--port", PORT)
+        self.assertEqual(1, result.status, result.stdout + result.stderr)
+        self.assertEqual(f"check: fail: could not write this run's pid into {lock}.", result.last_line(result.stderr))
         self.assertEqual([], [event for event in self.events(record) if event[0] == "start"])
 
     def test_a_run_ended_by_a_signal_during_init_releases_the_lock(self):
