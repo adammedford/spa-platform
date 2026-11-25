@@ -119,6 +119,46 @@ public sealed class FragmentsDriver : IAsyncDisposable
         };
     }
 
+    /// <summary>
+    /// F-T5's drive (<see cref="PublishRaceDrive"/>) on the shell's first live fragment: spactl in this
+    /// process, over the cell's bucket through an S3 client whose statuses it reads, and the winner's URL
+    /// through the tunnel.
+    /// </summary>
+    public async Task<Driven<PublishRaceRecord>> PublishRaceAsync(CancellationToken ct)
+    {
+        IReadOnlyList<LiveFragment> fragments = await Readers.LiveFragmentsAsync(Shell, ct);
+        LiveFragment fragment = fragments.Count > 0
+            ? fragments[0]
+            : throw new InvalidOperationException($"F-T5 races one fragment's assets/ key, and {Shell}'s live entry names no fragment.");
+        S3Statuses statuses = new();
+        (SpactlRun spactl, Platform.Abstractions.IObjectStore store) = PublishRaceSetup.Live(stack.Cell, statuses);
+        PublishRaceSetup setup = new(spactl, store, statuses, new HarnessAppUrl(stack.App(Shell).Origin), ReadAsync,
+            OutputsPath, PlatformConfig("F-T5 activates the winning release with spactl fragment activate"), stack.RegistryPropagation);
+        PublishRaceRecord record = await new PublishRaceDrive(setup).RunAsync(Shell, fragment, Stamp(), ct);
+        return new Driven<PublishRaceRecord>(await ContextAsync([], [], ct), [], record);
+    }
+
+    /// <summary>A name no earlier attempt used: the UTC second, as spactl's release names allow.</summary>
+    public static string Stamp() => DateTimeOffset.UtcNow.ToString("yyyyMMddHHmmss", System.Globalization.CultureInfo.InvariantCulture);
+
+    /// <summary>The outputs document spactl reads the bucket from, as <see cref="DeployedStack"/> finds it.</summary>
+    private string OutputsPath => environment(DeployedStack.OutputsVariable) is { Length: > 0 } named
+        ? named
+        : Path.Combine(Gateway.TestHarness.FixtureFiles.RepositoryRoot, "infra", "envs", "poc", "outputs.json");
+
+    private string PlatformConfig(string why) => environment(DeployedStack.PlatformConfigVariable) is { Length: > 0 } named
+        ? named
+        : throw new InvalidOperationException($"{why}, which needs {DeployedStack.PlatformConfigVariable}: the platform configuration the gateway runs with.");
+
+    /// <summary>One GET through the tunnel with a fresh <c>traceparent</c>, answering its status and body: an asset, which no gate asks fetch metadata of.</summary>
+    private async Task<(int Status, byte[] Body)> ReadAsync(Uri url, CancellationToken ct)
+    {
+        using HttpRequestMessage request = new(HttpMethod.Get, url);
+        request.Headers.TryAddWithoutValidation(ClientTrace.Header, ClientTrace.Fresh().Traceparent);
+        using HttpResponseMessage response = await stack.SendRawCancellableAsync(request, ct);
+        return ((int)response.StatusCode, await response.Content.ReadAsByteArrayAsync(ct));
+    }
+
     public ValueTask DisposeAsync() => stack.DisposeAsync();
 }
 

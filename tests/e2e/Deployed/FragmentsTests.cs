@@ -124,8 +124,7 @@ public sealed class FragmentsTests
         await using FragmentsDriver driver = await FragmentsDriver.StartAsync();
         Step control = await driver.ControlAsync(Ct);
         RowResult result = await driver.Run.RowAsync(FragmentsBounds.FT5, control,
-            (_, ct) => driver.NotDrivenAsync(new PublishRaceRecord([]),
-                "hold two spactl fragment publish runs of one key at a barrier before the claim, which this driver does not do", ct),
+            (_, ct) => driver.PublishRaceAsync(ct),
             (driven, _) => FragmentsObserver.PublishRaces(driven.Record),
             Ct);
         result.Assert();

@@ -21,15 +21,31 @@ public sealed class FragmentsReaders(Cell cell, ICommandRunner runner)
     /// <c>fragments</c> array's length, 0 when the entry has none (#961: a document without fragments
     /// keeps its meaning). An app the registry does not hold is refused, never read as 0.
     /// </summary>
-    public async Task<int> FragmentsOfAsync(string appId, CancellationToken ct)
+    public async Task<int> FragmentsOfAsync(string appId, CancellationToken ct) =>
+        (await EntryAsync(appId, ct))["fragments"] is JsonArray fragments ? fragments.Count : 0;
+
+    /// <summary>
+    /// The shell's live registry entry, as the bucket's registry object holds it: no secret is in it, only
+    /// a <c>clientSecretRef</c> naming one. An app the registry does not hold is refused.
+    /// </summary>
+    public async Task<JsonObject> EntryAsync(string appId, CancellationToken ct)
     {
         // https://docs.aws.amazon.com/cli/latest/reference/s3/cp.html: "-" streams the object to stdout.
         string text = await runner.RunAsync("aws", ["s3", "cp", $"s3://{cell.Bucket}/{CellAws.RegistryKey}", "-", "--region", cell.Region], ct);
-        JsonNode? entry = (JsonNode.Parse(text)?["apps"] as JsonArray)?.FirstOrDefault(each => each?["appId"]?.GetValue<string>() == appId);
-        return entry is null
-            ? throw new InvalidOperationException($"the live registry has no entry for {appId}, so N cannot be read.")
-            : (entry["fragments"] as JsonArray)?.Count ?? 0;
+        return (JsonNode.Parse(text)?["apps"] as JsonArray)?.FirstOrDefault(each => each?["appId"]?.GetValue<string>() == appId) as JsonObject
+            ?? throw new InvalidOperationException($"the live registry has no entry for {appId}, so N cannot be read.");
     }
+
+    /// <summary>The live entry's fragments in their order: each one's id, live release, entry file and API names.</summary>
+    public async Task<IReadOnlyList<LiveFragment>> LiveFragmentsAsync(string appId, CancellationToken ct) =>
+        LiveFragmentsOf(await EntryAsync(appId, ct));
+
+    public static IReadOnlyList<LiveFragment> LiveFragmentsOf(JsonObject entry) =>
+        [.. ((entry["fragments"] as JsonArray) ?? []).OfType<JsonObject>().Select(fragment => new LiveFragment(
+            fragment["fragmentId"]!.GetValue<string>(),
+            fragment["release"]!.GetValue<string>(),
+            fragment["entry"]?.GetValue<string>() ?? Platform.Abstractions.PlatformPaths.DefaultEntry,
+            [.. ((fragment["apis"] as JsonArray) ?? []).OfType<JsonObject>().Select(api => api["name"]!.GetValue<string>())]))];
 
     /// <summary>
     /// O4's sizes from one <c>aws dynamodb scan</c> of the isolated table: the largest item that holds
@@ -115,3 +131,6 @@ public sealed class FragmentsReaders(Cell cell, ICommandRunner runner)
     public async Task<IReadOnlyList<TaskImage>> TaskImagesAsync(CancellationToken ct) =>
         [.. (await new ContinuityEcs(cell, runner).ListedAsync(ct)).Select(task => new TaskImage(task.Id, task.Digest))];
 }
+
+/// <summary>One fragment of a live entry: its id, the release the registry gives it, its entry file and its APIs' names.</summary>
+public sealed record LiveFragment(string FragmentId, string Release, string Entry, IReadOnlyList<string> Apis);
