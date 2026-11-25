@@ -12,8 +12,9 @@ Sittings A and B are done; they, and the H items that no longer fire, are in `a-
 this file, for a cell that needs the read pass again.
 
 Read first: `docs/agents/aws-rules.md` (one Region, managed IAM, the spend limit, help level HIGH:
-explain each step before running it), `tools/aws-project.env` and the proof cell's entry file
-`infra/envs/poc/cell.env`, `GLOSSARY.md` → *Sitting*, *Unattended run*, *Read-back*, *Sample image*,
+explain each step before running it), `tools/aws-project.env`, the proof cell's entry file
+`infra/envs/poc/cell.env`, and `docs/runbooks/poc/proof-cell.md` → "Session setup", which sources
+both (#1357), `GLOSSARY.md` → *Sitting*, *Unattended run*, *Read-back*, *Sample image*,
 *Platform project*, and the tickets this sitting serves: #242 (the four scripts), #63 (the deployed
 gate rows), #236 (seed with the profile alone), #244 (the runbook walks, their observables and their
 end state), and for D #348 (the G6 run, its rows and their questions) and #358 (the deployed
