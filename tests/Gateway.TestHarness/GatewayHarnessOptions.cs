@@ -13,6 +13,33 @@ public sealed record GatewayHarnessOptions
     /// </summary>
     public IReadOnlyList<string> Apps { get; init; } = ["app1", "app2"];
 
+    /// <summary>
+    /// The fragments each app of <see cref="Apps"/> carries in the first registry revision, by appId, as
+    /// fragment ids of its definition (<c>fixtures/fragments/{appId}.json</c>), in the order the entry
+    /// lists them. An app not named here carries none, whatever its definition lists. Each fragment gets
+    /// its own client at the test provider, its callback <c>/signin-oidc/{fragmentId}</c> and its own
+    /// secret, and its release under <c>apps/{appId}/fragments/{fragmentId}/releases/</c> (#1007, part
+    /// of #961). The default is none, so every suite before fragments sees the cell it had.
+    /// </summary>
+    public IReadOnlyDictionary<string, IReadOnlyList<string>> Fragments { get; init; } =
+        new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
+
+    /// <summary>
+    /// A cell with one shell, <c>shell</c>, carrying the first <paramref name="count"/> fragments its
+    /// fixture definition lists. At most five: the policy's cap per shell (<c>PlatformPolicy.FragmentsPerShell</c>).
+    /// </summary>
+    public static GatewayHarnessOptions Shell(int count) => new()
+    {
+        Apps = ["shell"],
+        Fragments = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal)
+        {
+            ["shell"] = [.. ShellFragmentIds.Take(count)],
+        },
+    };
+
+    /// <summary>The fragment ids of <c>fixtures/fragments/shell.json</c>, in its order.</summary>
+    public static IReadOnlyList<string> ShellFragmentIds { get; } = ["orders", "reports", "order-history", "report-archive", "alerts", "profile"];
+
     /// <summary>The release every app is published under.</summary>
     public string Release { get; init; } = "2026-10-10.1";
 
