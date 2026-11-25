@@ -200,17 +200,17 @@ line of it:
   The session setup's `cell.env` line is the prelude's, and its
   `terraform init -backend-config=backend.hcl` of a poc root runs as `shown guarded_init <root>`,
   the prelude's function, which checks the cached backend against `backend.hcl` first (N's step 2).
-  A value rule 3 keeps off the terminal (`BUCKET`, which carries the account id; `CLIENT_ID`, `PARAMETER`,
-  `POOL_ID`; a secret's id) is never typed from the record: the call that uses it runs the runbook's
-  own read of it again, and where no read gives it again (`OLD_SECRET_ID`, once the second secret
-  exists) the call that read it writes it to a file under `"$RUN"` and the later call reads it back
-  from there. A read whose value a later step needs runs as `X=$(captured <the runbook's command>)`,
-  every other simple command as `shown <the runbook's command>`. `shown` and `captured` wrap one
-  simple command: a runbook line that is a pipeline or writes to a file runs bare, as written, with
-  its command echoed into `"$R"` and its printed output appended by `tee -a "$R"`, because wrapping
-  its first command would send that command's output to the terminal and the record, which for
-  secret rotation's `openssl` line is the secret itself and for its `printf | wc -w` line a secret's
-  id.
+  A value rule 3 keeps off the terminal (`BUCKET`, which carries the account id; `CLIENT_ID`,
+  `PARAMETER`, `POOL_ID`; a secret's id) is never typed from the record: the call that uses it runs
+  the runbook's own read of it again, and where no read gives it again (`OLD_SECRET_ID`, once the
+  second secret exists) the call that read it writes it to a file under `"$RUN"` and the later call
+  reads it back from there. A read whose value a later step needs runs as `X=$(captured <the
+  runbook's command>)`, every other simple command as `shown <the runbook's command>`. `shown` and
+  `captured` wrap one simple command: a runbook line that is a pipeline or writes to a file runs
+  bare, as written, with its command echoed into `"$R"` and its printed output appended by `tee -a
+  "$R"`, because wrapping its first command would send that command's output to the terminal and the
+  record, which for secret rotation's `openssl` line is the secret itself and for its `printf | wc
+  -w` line a secret's id.
 - **`RUN` and `CONFIG`.** The notes' `$RUN` is a private directory of rule 6's kind: `RUN=$(mktemp
   -d)` under `umask 077`, printed once, set by hand in each later call and removed with `rm -rf
   "$RUN"` at the walk's end; secret rotation keeps the new secret there between its steps 2 and 3.
@@ -285,7 +285,7 @@ key, a cookie or a secret:
 
 **The post**, one comment per walk on #244 through the post mode, headed by the walk's name as
 #244's boxes read it (`## Release rollback`, `## Registry rollback`, `## Secret rotation`, `##
-Ending an app's sessions`, `## Gateway rollback`; Q88), save walk 3's: it goes on #1359 under `##
+Ending an app's sessions`, `## Gateway rollback`; Q88), except walk 3's: it goes on #1359 under `##
 Secret rotation`, which carries the walk across both notes, while #244's "Secret rotation walked"
 box stays ticked on its walk at `71d8602` (#1357). Each post carries, per rule 4 and Q87: the
 runbook file, for walk 3 both files, and the `main` commit followed; each command, its exit code and
@@ -303,15 +303,15 @@ exit and its lines, and print under "Held" the ws6 follow-up the human files (`*
 that fixes the runbook, for walk 3 the note whose step it was; that runbook is walked again in a
 later sitting once the fix is on `main`. Secret rotation stops the same way when the CLI or the SCP
 refuses Cognito's second-secret call (an `AccessDenied` adding the second secret, or deleting the
-old one: the proof-cell note's "The reference step 2" and "The reference step 7") or the apps root's
-plan is not empty after the deletion, and the follow-up named is ws1's (Q98). That refusal is the
-walk's stop, not rule 7's: it is the first such call, not one that worked before, so the sitting
-goes on to the next walk. Its post names the step and says the provider refused the call; the
-refusing line stays in the record and never enters the draft, since the post mode exits 3 on that
-word and posts nothing. Before the next walk, put back what the stopped walk's finished steps
-changed, on approval and with the runbook's own means where it offers one (release rollback's
-roll-forward line, a second registry rollback, the re-add that ends an app's sessions, its step 4);
-where it offers none, record what now differs, so that R's end-state line is true.
+old one: the reference step 2 and step 7 blocks of the proof-cell note's "Rotation's Cognito calls")
+or the apps root's plan is not empty after the deletion, and the follow-up named is ws1's (Q98).
+That refusal is the walk's stop, not rule 7's: it is the first such call, not one that worked
+before, so the sitting goes on to the next walk. Its post names the step and says the provider
+refused the call; the refusing line stays in the record and never enters the draft, since the post
+mode exits 3 on that word and posts nothing. Before the next walk, put back what the stopped walk's
+finished steps changed, on approval and with the runbook's own means where it offers one (release
+rollback's roll-forward line, a second registry rollback, the re-add that ends an app's sessions,
+its step 4); where it offers none, record what now differs, so that R's end-state line is true.
 
 W ends after walk 4's post. R follows, and the end state Q99 names goes in its post; when R
 neither runs nor posts, because #244's box already ticks on #242's run and #242 needs no rollback,
