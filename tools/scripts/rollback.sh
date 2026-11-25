@@ -51,8 +51,7 @@
 # (cell-common.sh's redact_stream):
 #   - the account id, which the repositories, the bucket and every ARN carry, becomes <account>;
 #   - each app's client id that the outputs document lists becomes <client-id:appId>. A plan shows
-#     every container's environment, and a container beside the gateway can carry the clients', as
-#     the proof cell's mock API does with MockApi__App1Client and MockApi__App2Client (#251). The
+#     every container's environment, and a container's environment can carry a client id (#251). The
 #     list is the outputs document's as this run starts: a client id an apply changed after that
 #     document was last written is not on it. Rewrite it after any apply of the root that holds the
 #     clients.

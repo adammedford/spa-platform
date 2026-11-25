@@ -33,6 +33,9 @@ one file back.
         contracts/platform-config.schema.json, from its task definition's environment.
     cell_documents.py apps <registry.json>
         The number of apps in a registry document.
+    cell_documents.py host <registry.json>
+        The first app's host in a registry document, without its port: deploy.sh's wait reads
+        through it (#1351). Refused when that app names no host the schema admits.
     cell_documents.py revision <registry.json>
         A registry document's revision, the number /readyz reports once it is live.
     cell_documents.py digests <manifest> <digest> <os/architecture>
@@ -338,6 +341,31 @@ def apps(path: str) -> int:
     return 0
 
 
+# The registry contract, beside this script in the tree, for the host, id and entry rules and the
+# entry's default: read, never copied, so a changed rule there is the rule here.
+REGISTRY_SCHEMA = pathlib.Path(__file__).resolve().parent.parent.parent / "contracts" / "registry.schema.json"
+
+
+def host(path: str) -> int:
+    """The first app's host in the live registry, without the port the registry carries: the name
+    deploy.sh's readiness wait reads through, on its tunnel's own port (#1351). The host is held to
+    contracts/registry.schema.json's host rule, read from REGISTRY_SCHEMA, its pattern and its
+    lengths; that rule's one colon is the port's."""
+    try:
+        document = json.loads(pathlib.Path(path).read_text())
+    except (OSError, ValueError):
+        raise Refused("the live registry is not JSON")
+    entries = document.get("apps") if isinstance(document, dict) else None
+    first = entries[0] if isinstance(entries, list) and entries and isinstance(entries[0], dict) else {}
+    value = first.get("host")
+    rule = json.loads(REGISTRY_SCHEMA.read_text())["$defs"]["host"]
+    if (not isinstance(value, str) or not re.fullmatch(rule["pattern"], value)
+            or not rule.get("minLength", 0) <= len(value) <= rule.get("maxLength", len(value))):
+        raise Refused("the live registry's first app names no host")
+    print(value.partition(":")[0])
+    return 0
+
+
 def revision(path: str) -> int:
     """contracts/registry.schema.json's revision: an integer of at least 1. A boolean is not one,
     though Python counts it as an int."""
@@ -419,9 +447,6 @@ def fragment_release(directory: str, entry: str) -> int:
 
 # --- fragments -------------------------------------------------------------------------------------
 
-# The registry contract, beside this script in the tree, for the id and entry rules and the entry's
-# default: read, never copied, so a changed rule there is the rule here.
-REGISTRY_SCHEMA = pathlib.Path(__file__).resolve().parent.parent.parent / "contracts" / "registry.schema.json"
 
 
 def fragments(path: str) -> int:
@@ -501,7 +526,7 @@ def requests() -> int:
     return 0
 
 
-COMMANDS = {"outputs": (outputs, -3), "repositories": (repositories, 3), "field": (field, 3), "clients": (clients, 2), "config": (config, 2), "apps": (apps, 1), "revision": (revision, 1), "digests": (digests, 3), "release": (release, 1), "requests": (requests, 0),
+COMMANDS = {"outputs": (outputs, -3), "repositories": (repositories, 3), "field": (field, 3), "clients": (clients, 2), "config": (config, 2), "apps": (apps, 1), "host": (host, 1), "revision": (revision, 1), "digests": (digests, 3), "release": (release, 1), "requests": (requests, 0),
             "fragments": (fragments, 1), "fragment-release": (fragment_release, 2)}
 
 

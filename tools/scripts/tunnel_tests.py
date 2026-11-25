@@ -845,13 +845,30 @@ class TunnelKeepsAnIdleSessionOpen(CompanionTestCase):
         self.assertLessEqual(len(calls), 4, "more requests than the interval allows")
         for call in calls:
             argv = call["argv"]
-            self.assertEqual(f"https://app1.spa-poc.test:{port}/healthz", argv[-1])
+            # The entry file's host, SPA_APP_HOST (#1351).
+            self.assertEqual(f"https://{ENTRY['SPA_APP_HOST']}:{port}/healthz", argv[-1])
             # Through the forwarded port and nowhere else: the name is pinned to the loopback and no
             # proxy from the environment carries it away.
-            self.assertEqual(f"app1.spa-poc.test:{port}:127.0.0.1", argv[argv.index("--resolve") + 1])
+            self.assertEqual(f"{ENTRY['SPA_APP_HOST']}:{port}:127.0.0.1", argv[argv.index("--resolve") + 1])
             self.assertEqual("*", argv[argv.index("--noproxy") + 1])
             for flag in ("-k", "--insecure"):
                 self.assertNotIn(flag, argv)
+
+    def test_the_host_is_the_one_host_names_else_the_entry_value(self):
+        # #1351: no app's name of the proof cell's is a default; --host wins over SPA_APP_HOST.
+        for args, env, expected in ((("--host", "shell.cells.example.test"), {}, "shell.cells.example.test"),
+                                    ((), {"SPA_APP_HOST": "orders.cells.example.test"}, "orders.cells.example.test"),
+                                    (("--host", "shell.cells.example.test"), {"SPA_APP_HOST": None}, "shell.cells.example.test")):
+            with self.subTest(args=args, env=env):
+                case = self.lasting_case(1.6)
+                port = free_port()
+                result = case.run(TUNNEL, "--local-port", str(port), "--keepalive", "1", *args, env=case.env(**env))
+                self.assertEqual(0, result.status, result.output)
+                calls = case.curl_calls()
+                self.assertGreaterEqual(len(calls), 1, result.output)
+                argv = calls[0]["argv"]
+                self.assertEqual(f"https://{expected}:{port}/healthz", argv[-1])
+                self.assertEqual(f"{expected}:{port}:127.0.0.1", argv[argv.index("--resolve") + 1])
 
     def test_a_longer_interval_makes_fewer_requests(self):
         case = self.lasting_case(3.6)
@@ -1117,14 +1134,13 @@ class TunnelRefusesBeforeASession(CompanionTestCase):
 
 # --- verify-tunnel.sh ------------------------------------------------------------------------------
 
-# The certificate's domain, as the entry file every case's environment carries names it.
-DOMAIN = ENTRY["SPA_CERT_DOMAIN"]
-HOST = f"app1.{DOMAIN}"
+# The app host, as the entry file every case's environment carries names it (#1351).
+HOST = ENTRY["SPA_APP_HOST"]
 
 
 class VerifyTunnelChecksTheHealthPathOverTrustedTls(CompanionTestCase):
     """docs/plan/05-infrastructure-and-cost.md, Workstation access, step 4: verify-tunnel.sh requests
-    the health path, https://app1.spa-poc.test:8443/healthz once the gateway runs, and fails unless
+    the health path, https://<host>:8443/healthz once the gateway runs, and fails unless
     TLS validates against the local authority. The path is a parameter: / on the sample image."""
 
     def curl_argv(self, case: Case) -> list[str]:
@@ -1147,9 +1163,9 @@ class VerifyTunnelChecksTheHealthPathOverTrustedTls(CompanionTestCase):
 
     def test_host_and_port_can_be_given(self):
         case = Case(self)
-        result = case.run(VERIFY, "/healthz", "--host", f"app2.{DOMAIN}", "--port", "9443")
+        result = case.run(VERIFY, "/healthz", "--host", "orders.cells.example.test", "--port", "9443")
         self.assertEqual(0, result.status, result.output)
-        self.assertEqual(f"https://app2.{DOMAIN}:9443/healthz", self.curl_argv(case)[-1])
+        self.assertEqual("https://orders.cells.example.test:9443/healthz", self.curl_argv(case)[-1])
 
     def test_trust_is_the_workstation_s_and_nothing_steps_round_it(self):
         """No -k, no CA file of its own, no curlrc and no CA bundle from the environment: the
@@ -1207,7 +1223,10 @@ class VerifyTunnelFailsAndSaysWhy(CompanionTestCase):
         self.failed({"status": 7}, "start tools/scripts/tunnel.sh")
 
     def test_an_untrusted_certificate(self):
-        self.failed({"status": 60}, "does not trust")
+        # Trust the authority that issued the listener's certificate, whichever script made it.
+        result = self.failed({"status": 60}, "does not trust")
+        self.assertIn("trust the authority that issued the certificate the listener presents", result.stderr)
+        self.assertNotIn("certs.sh", result.stderr)
 
     def test_a_dead_session(self):
         for status in (35, 52, 56, 28):
@@ -1215,7 +1234,10 @@ class VerifyTunnelFailsAndSaysWhy(CompanionTestCase):
                 self.failed({"status": status}, "the session has ended or the task is gone")
 
     def test_an_unresolved_host(self):
-        self.failed({"status": 6}, f"127.0.0.1 app1.{DOMAIN} app2.{DOMAIN} app3.{DOMAIN}")
+        # The hosts-file line names the host asked, and no other.
+        result = self.failed({"status": 6}, f"Add this line to /etc/hosts: 127.0.0.1 {HOST}\n")
+        result = self.failed({"status": 6}, "Add this line to /etc/hosts: 127.0.0.1 orders.cells.example.test\n",
+                             "/healthz", "--host", "orders.cells.example.test")
 
     def test_a_status_other_than_200(self):
         self.failed({"status": 0, "http_code": 404, "remote_ip": "127.0.0.1", "ssl_verify_result": 0},
@@ -1336,8 +1358,9 @@ def main() -> int:
 
 
 class TheTunnelScriptsTakeTheCellFromTheEntryValues(unittest.TestCase):
-    """#1348: tunnel.sh reads SPA_OUTPUTS_FILE, and SPA_CERT_DOMAIN with --keepalive; verify-tunnel.sh
-    reads SPA_CERT_DOMAIN. None has a default, and each is refused by name before any call."""
+    """#1348: tunnel.sh reads SPA_OUTPUTS_FILE. #1351: the host tunnel.sh's --keepalive and
+    verify-tunnel.sh ask is --host, else SPA_APP_HOST, and with neither each exits 2 naming both. None
+    has a default, and each is refused by name before any call; neither reads SPA_CERT_DOMAIN."""
 
     def test_tunnel_with_no_outputs_document_variable_exits_2_naming_it_before_any_call(self):
         for value in (None, ""):
@@ -1348,13 +1371,26 @@ class TheTunnelScriptsTakeTheCellFromTheEntryValues(unittest.TestCase):
                 self.assertIn("SPA_OUTPUTS_FILE is not set", result.stderr)
                 self.assertEqual([], case.aws_calls())
 
-    def test_tunnel_with_keepalive_and_no_domain_exits_2_naming_it_before_any_call(self):
-        case = Case(self)
-        result = case.run(TUNNEL, "--local-port", str(free_port()), "--keepalive", "1",
-                          env=case.env(SPA_CERT_DOMAIN=None))
-        self.assertEqual(2, result.status, result.output)
-        self.assertIn("SPA_CERT_DOMAIN is not set", result.stderr)
-        self.assertEqual([], case.aws_calls())
+    def test_tunnel_with_keepalive_and_no_host_exits_2_naming_both_before_any_call(self):
+        for value in (None, ""):
+            with self.subTest(value=value):
+                case = Case(self)
+                result = case.run(TUNNEL, "--local-port", str(free_port()), "--keepalive", "1",
+                                  env=case.env(SPA_APP_HOST=value))
+                self.assertEqual(2, result.status, result.output)
+                self.assertIn("no host: --host was not given and SPA_APP_HOST is not set", result.stderr)
+                self.assertEqual([], case.aws_calls())
+
+    def test_a_host_with_a_port_or_a_scheme_is_refused(self):
+        for script, args in ((TUNNEL, ("--local-port", str(free_port()), "--keepalive", "1")), (VERIFY, ("/healthz",))):
+            for host in (f"{HOST}:8443", f"https://{HOST}"):
+                with self.subTest(script=script.name, host=host):
+                    case = Case(self)
+                    result = case.run(script, *args, env=case.env(SPA_APP_HOST=host))
+                    self.assertEqual(2, result.status, result.output)
+                    self.assertIn("must be a host name", result.stderr)
+                    self.assertEqual([], case.aws_calls())
+                    self.assertEqual([], case.curl_calls())
 
     def test_tunnel_without_keepalive_reads_no_domain(self):
         case = Case(self)
@@ -1362,20 +1398,31 @@ class TheTunnelScriptsTakeTheCellFromTheEntryValues(unittest.TestCase):
         result = case.run(TUNNEL, "--local-port", str(free_port()), env=case.env(**others))
         self.assertEqual(0, result.status, result.output)
 
-    def test_verify_tunnel_with_no_domain_exits_2_naming_it_before_any_request(self):
+    def test_the_proof_cells_entry_file_names_its_first_app_s_host(self):
+        # The first of fixtures/apps/*.json by name, its registry host without the port.
+        first = sorted((ROOT / "fixtures" / "apps").glob("*.json"))[0]
+        host = json.loads(first.read_text())["host"].split(":")[0]
+        self.assertEqual(host, ENTRY["SPA_APP_HOST"])
+
+    def test_verify_tunnel_with_no_host_exits_2_naming_both_before_any_request(self):
         for value in (None, ""):
             with self.subTest(value=value):
                 case = Case(self)
-                result = case.run(VERIFY, "/healthz", env=case.env(SPA_CERT_DOMAIN=value))
+                result = case.run(VERIFY, "/healthz", env=case.env(SPA_APP_HOST=value))
                 self.assertEqual(2, result.status, result.output)
-                self.assertIn("SPA_CERT_DOMAIN is not set", result.stderr)
+                self.assertIn("no host: --host was not given and SPA_APP_HOST is not set", result.stderr)
                 self.assertEqual([], case.curl_calls())
 
-    def test_verify_tunnel_asks_the_host_under_the_domain_the_entry_value_names(self):
+    def test_verify_tunnel_asks_the_host_the_entry_value_names_and_host_wins_over_it(self):
         case = Case(self)
-        result = case.run(VERIFY, "/healthz", env=case.env(SPA_CERT_DOMAIN="cells.example.test"))
+        result = case.run(VERIFY, "/healthz", env=case.env(SPA_APP_HOST="shell.cells.example.test", SPA_CERT_DOMAIN=None))
         self.assertEqual(0, result.status, result.output)
-        self.assertEqual("https://app1.cells.example.test:8443/healthz", case.curl_calls()[0]["argv"][-1])
+        self.assertEqual("https://shell.cells.example.test:8443/healthz", case.curl_calls()[0]["argv"][-1])
+        case = Case(self)
+        result = case.run(VERIFY, "/healthz", "--host", "orders.cells.example.test",
+                          env=case.env(SPA_APP_HOST=None, SPA_CERT_DOMAIN=None))
+        self.assertEqual(0, result.status, result.output)
+        self.assertEqual("https://orders.cells.example.test:8443/healthz", case.curl_calls()[0]["argv"][-1])
 
     def test_neither_help_names_the_proof_cells_domain_or_the_profile(self):
         for script in (TUNNEL, VERIFY):
@@ -1383,7 +1430,8 @@ class TheTunnelScriptsTakeTheCellFromTheEntryValues(unittest.TestCase):
                 case = Case(self)
                 result = case.run(script, "--help", env=case.env(**{name: None for name in ENTRY}))
                 self.assertEqual(0, result.status, result.output)
-                self.assertNotIn(DOMAIN, result.stdout)
+                self.assertNotIn(ENTRY["SPA_CERT_DOMAIN"], result.stdout)
+                self.assertNotIn("app1", result.stdout)
                 self.assertNotIn("the spa-platform profile", result.stdout)
                 self.assertNotIn("tools/aws-project.env", result.stdout)
 

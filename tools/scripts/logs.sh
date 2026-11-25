@@ -2,15 +2,15 @@
 #
 # logs.sh -- read the cell's gateway log group, every line through the redaction.
 #
-# This is the way a sitting reads the log. Never `aws logs tail` by hand: the mock API's start line
-# names both apps' client ids, and an ARN in a gateway line names the account, and the sitting of
-# #58 put both on the terminal and into its log that way (#208). Here every line passes through the
+# This is the way a sitting reads the log. Never `aws logs tail` by hand: a container's log line can
+# carry an app's client id, and an ARN in a gateway line names the account, and the sitting of #58
+# put both on the terminal and into its log that way (#208). Here every line passes through the
 # redaction the cell scripts share (cell-common.sh), which elides the account id and each client id
 # in the outputs document.
 #
-#   tools/scripts/logs.sh                          # the last ten minutes, both containers
+#   tools/scripts/logs.sh                          # the last ten minutes, every container
 #   tools/scripts/logs.sh --since 2h               # the last two hours
-#   tools/scripts/logs.sh --container mock-api     # one container's streams
+#   tools/scripts/logs.sh --container gateway      # one container's streams
 #   tools/scripts/logs.sh --since 5m --follow      # and keep reading until Control-C
 #   tools/scripts/logs.sh --requests --since 1h    # one line per gateway request
 #
@@ -24,9 +24,11 @@
 # The group is the logGroup of the outputs document, $SPA_OUTPUTS_FILE (an entry value with no
 # default: cell-common.sh's header), written from the cell's roots' outputs after every apply,
 # deploy.sh's and rollback.sh's among them (contracts/infra-outputs.schema.json), and never
-# Terraform state. One group holds both containers' streams, each named
+# Terraform state. One group holds the streams of every container of the task, each named
 # <container>/<container>/<task id> (infra/modules/cell/ecs.tf), so --container reads the streams
-# with that prefix.
+# with that prefix. It takes any container the service's task definition holds: a name other than the
+# gateway's is checked against the definition, read from ECS by the service the outputs document
+# names, and one it does not hold is refused, naming those it does (#1351).
 #
 # Run it as the operator's own session, with credentials for the account the cell is in and
 # AWS_REGION set to the cell's Region. It needs the AWS CLI and python3. It never prints the account
@@ -46,11 +48,6 @@ PROGRAM="logs"
 # shellcheck source=tools/scripts/cell-common.sh
 . "$(dirname -- "$0")/cell-common.sh"
 
-# The mock API's container in the proof cell's task (the proof cell's platform root). Its own copy
-# until --container takes any container in the task (#1335): cell-common.sh names no container but
-# the gateway and the bastion.
-MOCK_API_CONTAINER="mock-api"
-
 # The CLI's own default window: "By default, logs will be displayed starting from ten minutes in the
 # past." https://awscli.amazonaws.com/v2/documentation/api/latest/reference/logs/tail.html
 SINCE="10m"
@@ -66,7 +63,8 @@ usage() {
 Options
   --since WHEN        From when: a number and one unit of s, m, h, d or w (5m, 2h), or an ISO 8601
                       timestamp (2026-10-21T02:00:00Z). The default is ${SINCE}.
-  --container NAME    Only ${GATEWAY_CONTAINER} or only ${MOCK_API_CONTAINER}. The default is both.
+  --container NAME    Only this container of the task, ${GATEWAY_CONTAINER} or any other its task
+                      definition holds. The default is every container.
   --follow            Keep reading new lines until Control-C.
   --requests          One line per gateway request, health checks left out.
   -h, --help          This text.
@@ -105,16 +103,17 @@ if ! [[ "$SINCE" =~ $since_relative ]] && ! [[ "$SINCE" =~ $since_timestamp ]]; 
   refuse "--since must be a number and one unit of s, m, h, d or w, or an ISO 8601 timestamp: got '${SINCE}'"
 fi
 
-STREAM_PREFIX=""
+# A container's name as ECS takes one: letters, digits, hyphens and underscores.
+# https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_ContainerDefinition.html (name)
 case "$CONTAINER" in
-  "") ;;
-  "$GATEWAY_CONTAINER" | "$MOCK_API_CONTAINER") STREAM_PREFIX="${CONTAINER}/" ;;
-  *) refuse "--container must be ${GATEWAY_CONTAINER} or ${MOCK_API_CONTAINER}: got '${CONTAINER}'" ;;
+  *[!A-Za-z0-9_-]*) refuse "--container must be a container's name, letters, digits, hyphens and underscores: got '${CONTAINER}'" ;;
 esac
+STREAM_PREFIX=""
+[ -z "$CONTAINER" ] || STREAM_PREFIX="${CONTAINER}/"
 if [ -n "$REQUESTS" ]; then
-  # The requests are the gateway's own lines; the mock API's never are one.
-  [ "$CONTAINER" != "$MOCK_API_CONTAINER" ] ||
-    refuse "--requests reads the ${GATEWAY_CONTAINER} container's requests: drop --container ${MOCK_API_CONTAINER}"
+  # The requests are the gateway's own lines; no other container's are one.
+  [ -z "$CONTAINER" ] || [ "$CONTAINER" = "$GATEWAY_CONTAINER" ] ||
+    refuse "--requests reads the ${GATEWAY_CONTAINER} container's requests: drop --container ${CONTAINER}"
   STREAM_PREFIX="${GATEWAY_CONTAINER}/"
 fi
 
@@ -128,6 +127,20 @@ redact_clients
 
 # From the outputs document, never from state (contracts/infra-outputs.schema.json).
 LOG_GROUP="$(outputs_field logGroup)"
+# A container other than the gateway is one the service's task definition holds, or nothing is read.
+if [ -n "$CONTAINER" ] && [ "$CONTAINER" != "$GATEWAY_CONTAINER" ]; then
+  CLUSTER="$(outputs_field ecsCluster)"
+  SERVICE="$(outputs_field ecsService)"
+  read_service
+  aws_read "the containers of task definition $(revision_of "$TASK_DEFINITION")" \
+    ecs describe-task-definition --task-definition "$TASK_DEFINITION" --query 'taskDefinition.containerDefinitions[].name'
+  # The names in the definition's order, comma-separated: --output text prints the list on one line.
+  HELD="$(tr '\t' '\n' < "$OUT" | awk 'NF { printf "%s%s", (n++ ? ", " : ""), $0 }')"
+  case ", ${HELD}, " in
+    *", ${CONTAINER}, "*) ;;
+    *) refuse "--container must be one of the containers the task definition holds: ${HELD}: got '${CONTAINER}'" ;;
+  esac
+fi
 note "reading ${LOG_GROUP} since ${SINCE}${CONTAINER:+, the ${CONTAINER} container}${REQUESTS:+, its requests only}${FOLLOW:+, following}"
 
 # Not through aws_call, which holds the whole answer in a file: a followed read never ends. The

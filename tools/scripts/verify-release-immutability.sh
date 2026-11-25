@@ -136,7 +136,7 @@ while [ "$#" -gt 0 ]; do
 done
 
 [ -n "$CELL" ] || refuse "no cell: SPA_CELL is not set and no --cell was given. SPA_CELL is one of the cell's entry values, which have no default."
-# The cell's lexical form, as tools/scripts/poc/certs.sh checks it.
+# The cell's lexical form: lowercase letters, digits and inner hyphens, as a cell name is.
 case "$CELL" in
   *[!a-z0-9-]* | "" | -* | *-) refuse "--cell must be lowercase letters, digits and inner hyphens: got '${CELL}'" ;;
 esac

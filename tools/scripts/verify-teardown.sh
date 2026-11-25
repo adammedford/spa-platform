@@ -26,10 +26,24 @@
 #   4. The tag query in the selected Region. An ECS cluster, service or task definition whose
 #      describe says INACTIVE is dropped, and so is a task definition teardown.sh deleted
 #      (DELETE_IN_PROGRESS) or one ECS no longer knows; an EC2 id is dropped when EC2's describe does
-#      not know it, a NAT gateway or a VPC endpoint also when EC2 says it is deleted (#347), the
-#      cell's session table when DynamoDB's does not know it (#338), and the identity root's user
-#      pool when Cognito's does not (#466). Anything else listed stands: the key ring's parameters
-#      among them, which teardown.sh deletes first.
+#      not know it, a NAT gateway or a VPC endpoint also when EC2 says it is deleted (#347), and the
+#      cell's session table when DynamoDB's does not know it (#338). An ARN of any other type goes
+#      to the cell's teardown judge, when the entry value SPA_TEARDOWN_JUDGE names one (below), and
+#      stands when it names none. The key ring's parameters, which teardown.sh deletes first, are of
+#      such a type: they stand when no judge is named or the cell's judge answers stands.
+#
+# The teardown judge (#1351) is the cell's answer for a type this script does not know: a resource
+# a root of the cell's own creates beside the cell module's, which the index can go on listing after
+# it is gone, as it listed the proof cell's user pool for 16 minutes after #242's teardown (#466).
+# SPA_TEARDOWN_JUDGE names an executable, read from the checkout's root when relative, and it is
+# run with the ARN as its one argument, AWS_REGION set to the Region and the operator's credentials.
+# It prints one line: `gone`, which drops the ARN and counts it, or `stands`, which lets it stand,
+# either followed by a space and a reason, which a standing ARN is named with. It exits 0. Any other
+# exit, or any other line, is a judge that failed, and the verification fails with its last line on
+# standard error, as a describe that answers neither found nor not found does. The ARN carries the
+# account id, so the judge's line passes through the redaction; a judge prints the error code of a
+# call it makes, never the message. Unset or empty, there is no judge and such an ARN stands. The
+# proof cell's entry file names its own.
 # A reader that finds something is asked again, every SPA_TEARDOWN_TAG_POLL seconds, until it finds
 # nothing or SPA_TEARDOWN_TAG_WAIT runs out: the tagging API can lag a deletion, so the query retries
 # for a few minutes first (docs/plan/05-infrastructure-and-cost.md, Teardown). A reader that has
@@ -43,12 +57,14 @@
 #
 # Reads only. Run it as the operator's own session, with credentials for the account the cell is in
 # and AWS_REGION set to the cell's Region. The cell is --cell, or else the entry value SPA_CELL
-# (cell-common.sh's header), and with neither it refuses. It needs the AWS CLI and python3, and no
+# (cell-common.sh's header), and with neither it refuses. It reads SPA_TEARDOWN_JUDGE, which may be
+# unset, and refuses one that names no executable. It needs the AWS CLI and python3, and no
 # Terraform state. It never
 # prints the account id: of a resource still standing it names the ARN with the account replaced.
 #
 # Exit status: 0 when no reader finds anything; 1 when one still does after the wait, or a read or a
-# describe answered something other than found or not found; 2 when it did not start.
+# describe answered something other than found or not found, or the judge failed; 2 when it did not
+# start.
 #
 # Written for the bash 3.2 that ships with macOS.
 # Owner: workstream 1, AWS and IaC.
@@ -107,10 +123,18 @@ while [ "$#" -gt 0 ]; do
 done
 
 [ -n "$CELL" ] || refuse "no cell: SPA_CELL is not set and no --cell was given. SPA_CELL is one of the cell's entry values, which have no default."
-# The cell's lexical form, as tools/scripts/poc/certs.sh checks it.
+# The cell's lexical form: lowercase letters, digits and inner hyphens, as a cell name is.
 case "$CELL" in
   *[!a-z0-9-]* | "" | -* | *-) refuse "--cell must be lowercase letters, digits and inner hyphens: got '${CELL}'" ;;
 esac
+# The judge, when one is named: before any call, so a judge that is not there is a refusal, not a
+# verification that fails on the first ARN it would have judged.
+TEARDOWN_JUDGE=""
+if [ -n "${SPA_TEARDOWN_JUDGE:-}" ]; then
+  TEARDOWN_JUDGE="$(entry_path "$SPA_TEARDOWN_JUDGE")"
+  [ -f "$TEARDOWN_JUDGE" ] && [ -x "$TEARDOWN_JUDGE" ] ||
+    refuse "SPA_TEARDOWN_JUDGE names ${SPA_TEARDOWN_JUDGE}, which is not an executable file. Name the cell's teardown judge, or unset it for none."
+fi
 for value in "$TAG_WAIT_SECONDS" "$TAG_POLL_SECONDS"; do
   case "$value" in
     '' | *[!0-9]*) refuse "SPA_TEARDOWN_TAG_WAIT and SPA_TEARDOWN_TAG_POLL are whole seconds: got '${value}'" ;;
@@ -193,7 +217,7 @@ DELETED=0
 UNKNOWN=0
 EGRESS=0
 TABLES=0
-POOLS=0
+JUDGED=0
 
 # An ECS describe's status, or its failure's reason: INACTIVE is dropped (#118 step 2), and so is
 # MISSING, which is how DescribeClusters and DescribeServices answer for one they do not know (a
@@ -267,6 +291,27 @@ ec2_state() {
       done
       fail "describing $(redact "$arn"): ${OUTCOME}"
       ;;
+  esac
+}
+
+# The cell's teardown judge on an ARN of a type judge() does not know (the header). $1 the ARN.
+ask_judge() {
+  local arn="$1" status=0 answer
+  if [ -z "$TEARDOWN_JUDGE" ]; then
+    stands "$arn"
+    return 0
+  fi
+  AWS_REGION="$REGION" "$TEARDOWN_JUDGE" "$arn" > "$OUT" 2> "$ERR" < /dev/null || status=$?
+  [ "$status" -eq 0 ] ||
+    fail "the teardown judge ${SPA_TEARDOWN_JUDGE} exited ${status} on $(redact "$arn"): $(redact "$(awk 'NF { line = $0 } END { print line }' "$ERR")")"
+  # One line and nothing after it: a judge that says more than its answer is not giving one.
+  answer=""
+  [ "$(awk 'END { print NR }' "$OUT")" != "1" ] || answer="$(printed)"
+  case "$answer" in
+    gone | "gone "*) JUDGED=$((JUDGED + 1)) ;;
+    stands) stands "${arn} (the teardown judge says it stands)" ;;
+    "stands "*) stands "${arn} (${answer#stands })" ;;
+    *) fail "the teardown judge ${SPA_TEARDOWN_JUDGE} answered neither gone nor stands on $(redact "$arn")." ;;
   esac
 }
 
@@ -352,22 +397,9 @@ judge() {
         *) fail "describing $(redact "$arn"): ${OUTCOME}" ;;
       esac
       ;;
-    # The identity root's user pool. The index went on listing it 16 minutes after #242's teardown
-    # while DescribeUserPool answered ResourceNotFoundException (#466), so a pool Cognito no longer
-    # knows is dropped and one it still describes stands.
-    # https://docs.aws.amazon.com/cognito-user-identity-pools/latest/APIReference/API_DescribeUserPool.html
-    # The pool's Status is documented as no longer used, so the describe reads the id.
-    # https://docs.aws.amazon.com/cognito-user-identity-pools/latest/APIReference/API_UserPoolType.html
-    cognito-idp:userpool/*)
-      aws_call cognito-idp describe-user-pool --user-pool-id "${resource##*/}" --query UserPool.Id
-      case "$OUTCOME" in
-        success) stands "${arn} (Cognito still describes it)" ;;
-        ResourceNotFoundException) POOLS=$((POOLS + 1)) ;;
-        *) fail "describing $(redact "$arn"): ${OUTCOME}" ;;
-      esac
-      ;;
-    # Every other type the index lists stands: the index lists a resource that carries the tag.
-    *) stands "$arn" ;;
+    # Every other type goes to the cell's judge, and with none it stands: the index lists a
+    # resource that carries the tag.
+    *) ask_judge "$arn" ;;
   esac
 }
 
@@ -378,7 +410,7 @@ read_tag_index() {
   UNKNOWN=0
   EGRESS=0
   TABLES=0
-  POOLS=0
+  JUDGED=0
   # --tag-filters matches a value exactly: no prefix, no wildcard (contracts/resource-tags.md).
   # https://docs.aws.amazon.com/resourcegroupstagging/latest/APIReference/API_TagFilter.html
   aws_read "the platform tag query" resourcegroupstaggingapi get-resources \
@@ -394,7 +426,7 @@ read_tag_index() {
   [ "$UNKNOWN" -eq 0 ] || dropped="${dropped}, ${UNKNOWN} EC2 ids describe does not know"
   [ "$EGRESS" -eq 0 ] || dropped="${dropped}, ${EGRESS} NAT gateways or VPC endpoints EC2 says deleted or does not know"
   [ "$TABLES" -eq 0 ] || dropped="${dropped}, ${TABLES} DynamoDB tables DynamoDB does not know"
-  [ "$POOLS" -eq 0 ] || dropped="${dropped}, ${POOLS} Cognito user pools Cognito does not know"
+  [ "$JUDGED" -eq 0 ] || dropped="${dropped}, ${JUDGED} ARNs the teardown judge says are gone"
   SUMMARY="${count} listed, none standing${dropped:+:}${dropped#,}"
 }
 

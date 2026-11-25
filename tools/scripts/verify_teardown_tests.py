@@ -5,7 +5,10 @@
 the platform tag (#118, #232 Q3): IAM's own listings of roles and customer managed policies, read by
 their tags; the roles the cell declares, confirmed absent by name; and the tagging query in the
 selected Region, which drops ECS records whose describe says INACTIVE and confirms each EC2 id with a
-describe, the session table with DynamoDB's (#338) and the user pool with Cognito's (#466). The
+describe and the session table with DynamoDB's (#338). The user pool is the proof cell's teardown
+judge's, tools/scripts/poc/teardown-judge.sh, which the entry file names (#1351): verify-teardown.sh
+asks the judge about an ARN of a type it does not know, and the judge confirms a pool with Cognito's
+describe (#466). The
 cases are #118 step 2's records, read on the platform project after the platform root's destroy
 (2026-10-21): the cluster, the service and the task definition INACTIVE, a security group and four
 rules the index still listed and EC2 no longer knew, and the cell's two roles gone by name. The
@@ -16,7 +19,8 @@ The doubles, the world they share and the universal every run holds (no output n
 are tools/scripts/cell_doubles.py's.
 
 The proof cell's entry file sets every case's entry values (#1348), so a change to it runs this
-companion.
+companion. Its SPA_TEARDOWN_JUDGE names tools/scripts/poc/teardown-judge.sh, so every case runs that
+judge unless it names another or none, and this companion is the judge's.
 
 Checkout inputs: infra/envs/poc/cell.env infra/envs/poc/outputs-fields.json
 
@@ -72,6 +76,11 @@ ENDPOINTS = ["vpce-0123456789abcdef0", "vpce-0123456789abcdef1"]
 ENDPOINT_ARNS = [f"{EC2}:vpc-endpoint/{endpoint}" for endpoint in ENDPOINTS]
 # The identity root's user pool, as the doubles' destroy of that root names it.
 _, POOL_ARN, POOL = cell.DESTROYED["idp"]
+# The proof cell's teardown judge, as its entry file names it (#1351).
+JUDGE = "tools/scripts/poc/teardown-judge.sh"
+# An ARN of a type verify-teardown.sh has no describe for, and the line it counts the judge's drops on.
+WIDGET_ARN = f"arn:aws:example:{REGION}:{ACCOUNT}:widget/w-0123456789"
+JUDGED_GONE = "ARNs the teardown judge says are gone"
 
 
 def tagged(arn: str, kind: str, value: str = PLATFORM_VALUE, **state) -> dict:
@@ -227,12 +236,14 @@ class ATornDownCellPasses(Verify):
         case, result = self.verify(world)
         self.assertEqual(0, result.status, result.output)
         self.assertEqual([POOL], [call["options"]["user-pool-id"] for call in case.aws("cognito-idp describe-user-pool")])
-        self.assertIn("1 Cognito user pools Cognito does not know", result.stdout)
+        self.assertIn(f"1 {JUDGED_GONE}", result.stdout)
+        # The count names no provider: the judge is the cell's, not verify-teardown.sh's.
+        self.assertNotIn("Cognito", result.stdout)
 
     def test_a_retried_tag_query_counts_each_dropped_record_once(self):
         # #473: a security group EC2 lets go of on the third describe keeps the tag query retrying,
         # and the summary is that last poll's, not the sum of all three. The world holds a record for
-        # each of read_tag_index's six counts, and the whole line is asserted, so a count that one
+        # each of read_tag_index's six counts, the judge's among them, and the whole line is asserted, so a count that one
         # poll does not reset shows as three times its number (#929).
         world = torn_down_world()
         world["tagged"][4]["describe_knows"] = 2
@@ -246,11 +257,11 @@ class ATornDownCellPasses(Verify):
         self.assertEqual(0, result.status, result.output)
         self.assertEqual(3, len(self.index_queries(case)))
         # Counted by hand from the world: the cluster, the service, the task definition, the security
-        # group and its four rules, the NAT gateway, the table and the pool.
+        # group and its four rules, the NAT gateway, the table and the pool, the judge's.
         self.assertIn(f"verify-teardown: the tag query in {REGION}: 11 listed, none standing: "
                       "2 ECS records INACTIVE, 1 ECS records deleted, 5 EC2 ids describe does not know, "
                       "1 NAT gateways or VPC endpoints EC2 says deleted or does not know, "
-                      "1 DynamoDB tables DynamoDB does not know, 1 Cognito user pools Cognito does not know\n",
+                      f"1 DynamoDB tables DynamoDB does not know, 1 {JUDGED_GONE}\n",
                       result.stdout)
 
     def test_the_tagging_index_s_own_lag_is_retried(self):
@@ -359,10 +370,12 @@ class AStandingResourceFails(Verify):
         self.assertGreater(len(self.index_queries(case)), 1)
 
     def test_a_resource_type_no_describe_confirms(self):
+        # The proof cell's judge answers stands for an ARN that is not a user pool, and asks nothing.
         world = torn_down_world()
         world["tagged"].append(tagged(f"arn:aws:logs:{REGION}:{ACCOUNT}:log-group:/spa-platform/poc/stray", "logs:log-group"))
-        _, result = self.failed(world, f"the tag query in {REGION}")
+        case, result = self.failed(world, f"the tag query in {REGION}")
         self.assertIn(f"arn:aws:logs:{REGION}:<account>:log-group:/spa-platform/poc/stray", result.stderr)
+        self.assertEqual([], case.aws("cognito-idp describe-user-pool"))
 
     def test_a_surviving_session_table(self):
         # #338: the table goes with the platform root, and one that survives it fails the verdict by
@@ -419,12 +432,14 @@ class AStandingResourceFails(Verify):
         self.assertGreater(len(self.index_queries(case)), 1)
 
     def test_a_user_pool_describe_refused(self):
+        # The proof cell's judge fails naming the outcome, and the verification fails with it.
         world = torn_down_world()
         world["tagged"].append(tagged(POOL_ARN, "cognito-idp:userpool", describe_knows=0))
         world["faults"]["cognito-idp describe-user-pool"] = ["AccessDeniedException", "DescribeUserPool"]
         _, result = self.verify(world)
         self.assertEqual(1, result.status, result.output)
         self.assertIn("AccessDeniedException", result.stderr)
+        self.assertIn(JUDGE, result.stderr)
         self.assertNotIn("pass:", result.stdout)
 
     def test_a_role_carrying_the_platform_tag_under_a_name_the_cell_does_not_declare(self):
@@ -479,6 +494,112 @@ class AReaderThatCannotJudgeFails(Verify):
         self.assertEqual(1, result.status, result.output)
         self.assertIn("AccessDenied", result.stderr)
         self.assertNotIn("pass:", result.stdout)
+
+
+class ATypeItDoesNotKnowGoesToTheJudge(Verify):
+    """#1351: verify-teardown.sh knows the types of the cell module, and for an ARN of any other type
+    asks the judge SPA_TEARDOWN_JUDGE names, with the ARN. The judge prints gone or stands, a reason
+    after it if it likes, and exits 0; anything else is a judge that failed, which fails the
+    verification as a describe refused does. With no judge named, such an ARN stands."""
+
+    def judged(self, answer: str, status: int = 0, judge: str | None = "judge", stderr: str = ""):
+        world = torn_down_world()
+        world["tagged"].append(tagged(WIDGET_ARN, "example:widget"))
+        case = cell.Case(self, world=world)
+        log = case.dir / "judged.log"
+        path = case.dir / "judge"
+        path.write_text(f"#!/bin/sh\nprintf '%s|%s\\n' \"$*\" \"$AWS_REGION\" >> '{log}'\n"
+                        f"printf '%s' '{stderr}' >&2\nprintf '%b\\n' '{answer}'\nexit {status}\n")
+        path.chmod(0o755)
+        named = None if judge is None else str(path) if judge == "judge" else judge
+        result = case.run(SCRIPT, env=case.env(SPA_TEARDOWN_TAG_WAIT="0", SPA_TEARDOWN_TAG_POLL="0",
+                                               SPA_TEARDOWN_JUDGE=named))
+        self.assertNoUnexpectedCall(case)
+        asked = log.read_text().splitlines() if log.exists() else []
+        return result, asked
+
+    def test_a_judge_that_answers_gone_drops_it_and_is_counted(self):
+        result, asked = self.judged("gone")
+        self.assertEqual(0, result.status, result.output)
+        # The ARN alone, and the Region the verification reads.
+        self.assertEqual([f"{WIDGET_ARN}|{REGION}"], asked)
+        self.assertIn(f"1 {JUDGED_GONE}", result.stdout)
+
+    def test_a_judge_that_answers_stands_lets_it_stand(self):
+        result, asked = self.judged("stands")
+        self.assertEqual(1, result.status, result.output)
+        self.assertEqual(1, len(asked))
+        self.assertIn(f"arn:aws:example:{REGION}:<account>:widget/w-0123456789 (the teardown judge says it stands)",
+                      result.stderr)
+
+    def test_a_reason_after_stands_is_named(self):
+        result, _ = self.judged("stands the widget service still describes it")
+        self.assertEqual(1, result.status, result.output)
+        self.assertIn("widget/w-0123456789 (the widget service still describes it)", result.stderr)
+
+    def test_a_judge_that_fails_fails_the_verification_naming_its_line_without_the_account(self):
+        result, _ = self.judged("", status=3, stderr=f"judge: describing {WIDGET_ARN}: ThrottlingException")
+        self.assertEqual(1, result.status, result.output)
+        self.assertNotIn("pass:", result.stdout)
+        self.assertIn("exited 3", result.stderr)
+        self.assertIn(f"describing arn:aws:example:{REGION}:<account>:widget/w-0123456789: ThrottlingException",
+                      result.stderr)
+
+    def test_a_judge_that_answers_neither_fails_the_verification(self):
+        # A second line is not one answer, whatever the first says.
+        for answer in ("maybe", "", "Gone", "gonestands", "gone\\nstands"):
+            with self.subTest(answer=answer):
+                result, _ = self.judged(answer)
+                self.assertEqual(1, result.status, result.output)
+                self.assertNotIn("pass:", result.stdout)
+                self.assertIn("neither gone nor stands", result.stderr)
+
+    def test_with_no_judge_named_it_stands(self):
+        for value in (None, ""):
+            with self.subTest(value=value):
+                result, asked = self.judged("gone", judge=value)
+                self.assertEqual(1, result.status, result.output)
+                self.assertEqual([], asked)
+                self.assertIn(f"arn:aws:example:{REGION}:<account>:widget/w-0123456789\n", result.stderr)
+
+    def test_a_judge_named_that_is_not_there_exits_2_before_any_call(self):
+        case = cell.Case(self, world=torn_down_world())
+        result = case.run(SCRIPT, env=case.env(SPA_TEARDOWN_TAG_WAIT="0", SPA_TEARDOWN_TAG_POLL="0",
+                                               SPA_TEARDOWN_JUDGE="tools/scripts/no-such-judge.sh"))
+        self.assertEqual(2, result.status, result.output)
+        self.assertIn("SPA_TEARDOWN_JUDGE", result.stderr)
+        self.assertEqual([], case.calls())
+
+    def test_a_known_type_is_never_asked_of_the_judge(self):
+        world = torn_down_world()
+        case = cell.Case(self, world=world)
+        log = case.dir / "judged.log"
+        path = case.dir / "judge"
+        path.write_text(f"#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{log}'\necho stands\n")
+        path.chmod(0o755)
+        result = case.run(SCRIPT, env=case.env(SPA_TEARDOWN_TAG_WAIT="0", SPA_TEARDOWN_TAG_POLL="0",
+                                               SPA_TEARDOWN_JUDGE=str(path)))
+        self.assertEqual(0, result.status, result.output)
+        self.assertFalse(log.exists())
+
+
+class TheProofCellsJudge(Verify):
+    """The proof cell's entry file names tools/scripts/poc/teardown-judge.sh, which holds what
+    verify-teardown.sh's user-pool case held before #1351. Its other outcomes are the cases above that
+    name a user pool."""
+
+    def test_the_entry_file_names_it(self):
+        self.assertEqual(JUDGE, cell.entry_values()["SPA_TEARDOWN_JUDGE"])
+        self.assertTrue((cell.ROOT / JUDGE).is_file())
+
+    def test_a_pool_cognito_does_not_know_is_gone_one_it_describes_stands(self):
+        for knows, status in ((0, 0), (1, 1)):
+            with self.subTest(describes=bool(knows)):
+                world = torn_down_world()
+                world["tagged"].append(tagged(POOL_ARN, "cognito-idp:userpool", describe_knows=knows))
+                case, result = self.verify(world, wait="0")
+                self.assertEqual(status, result.status, result.output)
+                self.assertEqual([POOL], [call["options"]["user-pool-id"] for call in case.aws("cognito-idp describe-user-pool")])
 
 
 class VerifyRefusesToStart(Verify):
