@@ -9,7 +9,7 @@ namespace Gateway.E2ETests.Stack;
 /// records hold: each refresh write's versioned replaces and outcome, each fragment sign-in write's, and
 /// the requests and sessions in a window that a workload did not send. The wording is
 /// src/Platform.Identity's (AccessTokenSource's "Refresh write …" line and FragmentEvents' "Fragment
-/// sign-in … write ended …" line); FragmentsLinesTests reads each from those files and fails when one
+/// sign-in … write ended …" line); FragmentsWorkloadsTests reads each from those files and fails when one
 /// no longer holds it, as FragmentsObserverTests does the registry's (#872's shape).
 /// </summary>
 public static partial class FragmentsLines

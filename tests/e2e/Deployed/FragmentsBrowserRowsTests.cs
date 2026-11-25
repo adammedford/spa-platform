@@ -204,6 +204,8 @@ public sealed class FragmentsBrowserRowsTests
         RowResult result = FragmentsObserver.Fallback(record);
         Assert.True(result.Verdict == Verdict.Passed, result.Message);
         Assert.Equal([true, false, false], chromium.Navigations.Select(each => each.Fill));
+        Assert.Equal((false, false), (record.Inside!.ShowedPage, record.Inside.Prompted));
+        Assert.Equal((true, true), (record.After!.ShowedPage, record.After.Prompted));
         Assert.Equal(Shell.Url("/bff/login?fragment=orders&returnUrl=%2F"), chromium.Navigations[^1].Url);
     }
 
@@ -233,6 +235,10 @@ public sealed class FragmentsBrowserRowsTests
         }
     }
 
+    /// <summary>The releases the live entry gave each of the fixture shell's six fragments.</summary>
+    private static readonly IReadOnlyDictionary<string, string> Releases =
+        Definition()["fragments"]!.AsArray().ToDictionary(fragment => fragment!["fragmentId"]!.GetValue<string>(), fragment => $"{fragment!["fragmentId"]!.GetValue<string>()}-r1", StringComparer.Ordinal);
+
     private static JsonObject Definition() =>
         (JsonObject)JsonNode.Parse(File.ReadAllText(Path.Combine(Gateway.TestHarness.FixtureFiles.RepositoryRoot, "fixtures", "fragments", "shell.json")))!;
 
@@ -242,7 +248,7 @@ public sealed class FragmentsBrowserRowsTests
         // Mutation: dropping the restore from FragmentsBrowserRows.RedirectsAsync leaves the shell at N = 6 here, where it
         // started at 2, and fails the second assertion.
         Spactl spactl = new();
-        O1Lever lever = new(spactl.RunAsync, new InMemoryObjectStore(), Definition(), 2, "platform.json", "outputs.json", TimeSpan.Zero);
+        O1Lever lever = new(spactl.RunAsync, new InMemoryObjectStore(), Definition(), Releases, 2, "platform.json", "outputs.json", TimeSpan.Zero);
         Scripted[] engines = [new("chromium", () => spactl.Live, 19), new("firefox", () => spactl.Live, 20), new("webkit", () => spactl.Live, 20)];
         FragmentsBrowserRows rows = new(new Engines(engines, []), Shell) { Delay = (_, _) => Task.CompletedTask };
 
@@ -250,7 +256,9 @@ public sealed class FragmentsBrowserRowsTests
 
         Assert.Equal([0, 1, 2, 3, 4, 5, 6, 2], spactl.Fragments);
         Assert.Equal(2, spactl.Live);
-        Assert.All(spactl.Commands, command => Assert.Equal(["app", "add", command[2], "--config", "platform.json", "--outputs", "outputs.json"], command));
+        Assert.Equal(["app", "add", spactl.Commands[0][2], "--config", "platform.json", "--outputs", "outputs.json"], spactl.Commands[0]);
+        string[] ids = [.. Definition()["fragments"]!.AsArray().Select(fragment => fragment!["fragmentId"]!.GetValue<string>())];
+        Assert.Equal(["app", "add", spactl.Commands[^1][2], "--fragment-release", $"{ids[0]}={ids[0]}-r1,{ids[1]}={ids[1]}-r1", "--config", "platform.json", "--outputs", "outputs.json"], spactl.Commands[^1]);
         RowResult result = FragmentsObserver.Redirects(record);
         Assert.True(result.Verdict == Verdict.Passed, result.Message);
         Assert.Equal(new BoundaryProbe(19, 20), record.Engines.Single(each => each.Engine == "chromium").Probe);
@@ -258,11 +266,25 @@ public sealed class FragmentsBrowserRowsTests
     }
 
     [Fact]
+    public async Task O1_refuses_to_start_when_the_live_entry_names_no_release_for_a_fragment_it_must_write()
+    {
+        // Mutation: dropping the release check from O1Lever.WriteAsync lets spactl refuse the new fragment mid-row
+        // ("is new to the entry"), and fails the message assertion.
+        Spactl spactl = new();
+        O1Lever lever = new(spactl.RunAsync, new InMemoryObjectStore(), Definition(), new Dictionary<string, string>(StringComparer.Ordinal), 0, "platform.json", "outputs.json", TimeSpan.Zero);
+
+        InvalidOperationException refused = await Assert.ThrowsAsync<InvalidOperationException>(() => lever.WriteAsync(1, Ct));
+
+        Assert.Contains("naming every fragment's release", refused.Message, StringComparison.Ordinal);
+        Assert.Empty(spactl.Commands);
+    }
+
+    [Fact]
     public async Task O1_puts_the_shell_back_when_an_N_is_refused_and_says_the_policy_must_be_raised()
     {
         // Mutation: Restoring.RunAsync rethrowing before its restore leaves the shell at the last N written and fails this test.
         Spactl spactl = new() { Exit = n => n == 6 ? 1 : 0 };
-        O1Lever lever = new(spactl.RunAsync, new InMemoryObjectStore(), Definition(), 2, "platform.json", "outputs.json", TimeSpan.Zero);
+        O1Lever lever = new(spactl.RunAsync, new InMemoryObjectStore(), Definition(), Releases, 2, "platform.json", "outputs.json", TimeSpan.Zero);
         FragmentsBrowserRows rows = new(new Engines([new("chromium", () => spactl.Live, 19)], []), Shell) { Delay = (_, _) => Task.CompletedTask };
 
         InvalidOperationException refused = await Assert.ThrowsAsync<InvalidOperationException>(() => rows.RedirectsAsync(lever, Ct));
@@ -277,7 +299,7 @@ public sealed class FragmentsBrowserRowsTests
     {
         // Mutation: filling a missing engine's runs from another engine's in FragmentsBrowserRows.RedirectsAsync passes this record.
         Spactl spactl = new();
-        O1Lever lever = new(spactl.RunAsync, new InMemoryObjectStore(), Definition(), 6, "platform.json", "outputs.json", TimeSpan.Zero);
+        O1Lever lever = new(spactl.RunAsync, new InMemoryObjectStore(), Definition(), Releases, 6, "platform.json", "outputs.json", TimeSpan.Zero);
         FragmentsBrowserRows rows = new(new Engines([new("chromium", () => spactl.Live, 19), new("webkit", () => spactl.Live, 20)], ["firefox: Failed to launch the browser process."]), Shell)
         {
             Delay = (_, _) => Task.CompletedTask,

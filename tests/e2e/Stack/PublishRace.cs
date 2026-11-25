@@ -53,9 +53,18 @@ public sealed class PublishRaceDrive(PublishRaceSetup setup)
             return new PublishRaceRecord([.. variants.Select(each => each.Race)]);
         }
 
-        string winner = different.Releases[Array.IndexOf([.. different.Race.Runs], completed[0])];
-        string stored = Namespace(appId, fragment.FragmentId) + $"releases/{winner}/{different.File}";
-        string? storedSha = await Sha256Async(setup.Store, stored, ct);
+        int won = Array.IndexOf([.. different.Race.Runs], completed[0]);
+        string winner = different.Releases[won];
+        string loser = different.Releases[1 - won];
+        string? storedSha = await Sha256Async(setup.Store, Namespace(appId, fragment.FragmentId) + $"releases/{winner}/{different.File}", ct);
+
+        // #1005 F-T5: "the loser has no object for the key". The record holds one stored digest, so a loser's object
+        // is recorded in its place, and the observer fails a key holding bytes other than the winner's.
+        if (await Sha256Async(setup.Store, Namespace(appId, fragment.FragmentId) + $"releases/{loser}/{different.File}", ct) is { } loserSha)
+        {
+            storedSha = loserSha;
+        }
+
         string? servedSha = await ServeWinnerAsync(appId, fragment, winner, different.File, ct);
         variants[0] = different with { Race = different.Race with { StoredSha256 = storedSha, ServedSha256 = servedSha } };
         return new PublishRaceRecord([.. variants.Select(each => each.Race)]);
@@ -180,9 +189,13 @@ public sealed record PublishRaceSetup(
     /// <summary>The live path: spactl's own environment with its store replaced, over an S3 client whose responses <paramref name="statuses"/> sees.</summary>
     public static (SpactlRun Spactl, IObjectStore Store) Live(Cell cell, S3Statuses statuses)
     {
-        AmazonS3Client client = new(new AmazonS3Config { RegionEndpoint = RegionEndpoint.GetBySystemName(cell.Region), HttpClientFactory = statuses });
+        AmazonS3Client client = new(Config(cell.Region, statuses));
         return (InProcess, new S3ObjectStore(client, cell.Bucket));
     }
+
+    /// <summary>The S3 client's configuration: the cell's Region, and its HTTP clients from <paramref name="statuses"/>, which is how a refusal's status is seen.</summary>
+    public static AmazonS3Config Config(string region, S3Statuses statuses) =>
+        new() { RegionEndpoint = RegionEndpoint.GetBySystemName(region), HttpClientFactory = statuses };
 
     /// <summary>
     /// <see cref="SpactlApp.RunAsync"/> over the given store, with spactl's own history and HTTP handler, and its
@@ -204,6 +217,8 @@ public sealed record PublishRaceSetup(
         }
         catch (Exception stopped) when (stopped is not OperationCanceledException || !ct.IsCancellationRequested)
         {
+            // The type alone: an SDK or barrier message may name a key, never a secret, but a row's output is its verdict.
+            Console.WriteLine($"spactl {string.Join(' ', arguments.Take(2))} stopped with {stopped.GetType().Name}");
             return null;
         }
     }

@@ -108,7 +108,11 @@ public static class FragmentsNavigations
         })];
     }
 
-    /// <summary>The Fetch Metadata each <c>/bff/chain</c> step that starts a hop carried, in order (#961 O13).</summary>
+    /// <summary>
+    /// The Fetch Metadata each <c>/bff/chain</c> step that starts a hop carried, in order (#961 O13), as the browser
+    /// sent it: #1005 O13 says "from its request line", but the gateway's request line carries no
+    /// <c>Sec-Fetch-*</c> field (contracts/telemetry.md, "Log fields"), so the request the engine sent is the record.
+    /// </summary>
     public static IReadOnlyList<ChainStep> ChainSteps(Navigation navigation) =>
         [.. HopStarts(navigation).Select(i => navigation.Hops[i]).Select(hop => new ChainStep(hop.Site, hop.Mode, hop.Dest))];
 
@@ -166,7 +170,9 @@ public sealed class PlaywrightEngines(DeployedStack stack, HarnessApp shell) : I
             catch (PlaywrightException failed)
             {
                 // The launch error names the engine's executable and profile directory, never a URL of the cell.
-                refused.Add($"{name}: {Redacted.Url(failed.Message.Split('\n')[0])}");
+                string reason = $"{name}: {Redacted.Text(failed.Message.Split('\n')[0], [])}";
+                refused.Add(reason);
+                Console.WriteLine($"not launched: {reason}");
             }
         }
 

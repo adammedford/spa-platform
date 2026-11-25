@@ -131,8 +131,9 @@ public sealed class FragmentsBrowserRows(IEngines engines, HarnessAppUrl shell)
     {
         DateTimeOffset at = Clock.GetUtcNow();
         Navigation fallback = await page.NavigateAsync(Login(fragment.FragmentId), fill: false, ReturnUrl, ct);
+        // A page is anything the fallback stopped on short of returnUrl; a prompt is the provider's form among them.
         bool ended = fallback.Landed == ReturnUrl || fallback.Prompted;
-        return new FallbackHalf(at, ended ? fallback.Prompted : null, ended ? fallback.Prompted : null);
+        return new FallbackHalf(at, ended ? fallback.Landed != ReturnUrl : null, ended ? fallback.Prompted : null);
     }
 
     /// <summary>
@@ -151,7 +152,7 @@ public sealed class FragmentsBrowserRows(IEngines engines, HarnessAppUrl shell)
         {
             for (int n = 0; n <= FragmentsObserver.MaxN; n++)
             {
-                await lever.ActivateAsync(n, ct);
+                await lever.WriteAsync(n, ct);
                 await Delay(lever.Propagation, ct);
                 foreach (IEngine engine in launched)
                 {
@@ -166,7 +167,7 @@ public sealed class FragmentsBrowserRows(IEngines engines, HarnessAppUrl shell)
             }
 
             return new RedirectRecord(engineRecords);
-        }, bound => lever.ActivateAsync(lever.StartN, bound), lever.Restore);
+        }, bound => lever.WriteAsync(lever.StartN, bound), lever.Restore);
     }
 
     private async Task<RedirectRun> RunAsync(IEngine engine, int n, CancellationToken ct)
@@ -206,10 +207,12 @@ public sealed class FragmentsBrowserRows(IEngines engines, HarnessAppUrl shell)
 
 /// <summary>
 /// O1's lever: the shell's definition (fixtures/fragments/&lt;shell&gt;.json, the one the seed's fragment step
-/// writes) with its first N fragments, written by <c>spactl app add</c> with the releases the live registry
-/// already gives it, and the N to put back.
+/// writes) with its first N fragments, written by <c>spactl app add</c>, each fragment at the release the
+/// live entry gave it when the row began, named with <c>--fragment-release</c>: spactl refuses a fragment new
+/// to the entry without one, which every fragment is again after N = 0. Writing the starting N with those
+/// releases puts the entry back as it was.
 /// </summary>
-public sealed class O1Lever(SpactlRun spactl, IObjectStore store, JsonObject definition, int startN, string config, string outputs, TimeSpan propagation)
+public sealed class O1Lever(SpactlRun spactl, IObjectStore store, JsonObject definition, IReadOnlyDictionary<string, string> releases, int startN, string config, string outputs, TimeSpan propagation)
 {
     public int StartN => startN;
 
@@ -220,7 +223,7 @@ public sealed class O1Lever(SpactlRun spactl, IObjectStore store, JsonObject def
     /// <summary>The commands' definitions, for a test that reads what each N wrote.</summary>
     public List<string> Written { get; } = [];
 
-    public async Task ActivateAsync(int n, CancellationToken ct)
+    public async Task WriteAsync(int n, CancellationToken ct)
     {
         JsonObject truncated = (JsonObject)definition.DeepClone();
         if (truncated["fragments"] is JsonArray fragments)
@@ -243,7 +246,15 @@ public sealed class O1Lever(SpactlRun spactl, IObjectStore store, JsonObject def
             string text = truncated.ToJsonString();
             await File.WriteAllTextAsync(path, text, ct);
             Written.Add(text);
-            int? exit = await spactl(["app", "add", path, "--config", config, "--outputs", outputs], store, ct);
+            string[] ids = [.. ((truncated["fragments"] as JsonArray) ?? []).Select(fragment => fragment!["fragmentId"]!.GetValue<string>())];
+            if (ids.FirstOrDefault(id => !releases.ContainsKey(id)) is { } unknown)
+            {
+                throw new InvalidOperationException(
+                    $"O1 starts from the shell's entry naming every fragment's release, and fragment {unknown} has none: activate the six-fragment entry the seed writes first (#1011 row 1).");
+            }
+
+            string[] named = ids.Length == 0 ? [] : ["--fragment-release", string.Join(',', ids.Select(id => $"{id}={releases[id]}"))];
+            int? exit = await spactl(["app", "add", path, .. named, "--config", config, "--outputs", outputs], store, ct);
             if (exit != 0)
             {
                 throw new InvalidOperationException(

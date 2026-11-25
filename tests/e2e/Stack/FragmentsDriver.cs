@@ -235,15 +235,10 @@ public sealed class FragmentsDriver : IAsyncDisposable
     /// <summary>The browser rows over Chromium, Firefox and WebKit on the cell, launched on a row's first use.</summary>
     public FragmentsBrowserRows Browsers => new(engines ??= new PlaywrightEngines(stack, stack.App(Shell)), new HarnessAppUrl(stack.App(Shell).Origin));
 
-    /// <summary>O13's chain (F-42) in each engine that launches; an engine that does not is named on standard output and is not one of the row's user agents.</summary>
+    /// <summary>O13's chain (F-42) in each engine that launches; an engine that does not is named on standard output at its launch and is not one of the row's user agents.</summary>
     public async Task<Driven<ChainRecord>> ChainAsync(CancellationToken ct)
     {
-        (ChainRecord record, IReadOnlyList<string> agents, IReadOnlyList<string> refused) = await Browsers.ChainAsync(ct);
-        foreach (string engine in refused)
-        {
-            Console.WriteLine($"not launched: {engine}");
-        }
-
+        (ChainRecord record, IReadOnlyList<string> agents, _) = await Browsers.ChainAsync(ct);
         return new Driven<ChainRecord>(await ContextAsync(agents, [], ct), [], record);
     }
 
@@ -278,7 +273,8 @@ public sealed class FragmentsDriver : IAsyncDisposable
         System.Text.Json.Nodes.JsonObject definition = System.Text.Json.Nodes.JsonNode.Parse(await File.ReadAllTextAsync(path, ct)) as System.Text.Json.Nodes.JsonObject
             ?? throw new InvalidOperationException($"{path} is not an app definition.");
         (SpactlRun spactl, Platform.Abstractions.IObjectStore store) = PublishRaceSetup.Live(stack.Cell, new S3Statuses());
-        O1Lever lever = new(spactl, store, definition, await Readers.FragmentsOfAsync(Shell, ct),
+        IReadOnlyList<LiveFragment> live = await Readers.LiveFragmentsAsync(Shell, ct);
+        O1Lever lever = new(spactl, store, definition, live.ToDictionary(fragment => fragment.FragmentId, fragment => fragment.Release, StringComparer.Ordinal), live.Count,
             PlatformConfig("O1 writes the shell's entry at each N with spactl app add"), OutputsPath, stack.RegistryPropagation);
         RedirectRecord record = await Browsers.RedirectsAsync(lever, ct);
         return new Driven<RedirectRecord>(await ContextAsync([.. record.Engines.Select(engine => $"{engine.Engine} {engine.Version}")], [], ct), [], record);

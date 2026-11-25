@@ -21,8 +21,8 @@ namespace Gateway.E2ETests.Deployed;
 /// <para>The id-bearing methods carry the names contracts/test-ids.md gives them (F-31, F-37, F-39 to F-42,
 /// N-38 and N-46); the record rows, O1, O2, O4 and O9, have no id and carry their obligation in their name.
 /// A not-proved row is a red test whose message starts <c>not proved:</c>; a broken rule's starts
-/// <c>failed:</c>. O3, O5, O9 and O13's refusals still report <c>not proved: the driver cannot yet …</c>,
-/// naming the part (#1411): O3 waits on #1529's seam and O9 on #1530's fixture.</para>
+/// <c>failed:</c>. A row whose part this driver cannot yet drive reports <c>not proved: the driver cannot yet …</c>
+/// naming the part, so it never passes on a recording nobody made (#1005, decision 2).</para>
 ///
 /// <para>The drives pull the cell's levers they need and put them back (#1411's decision of 2026-11-24):
 /// O1 writes the shell's entry at each N with spactl, so <c>Policy:FragmentsPerShell</c> is raised to 6 for its

@@ -97,6 +97,18 @@ public sealed class PublishRaceTests
         }
     }
 
+    /// <summary>A bucket where every different-bytes release holds an object for the racing key: the loser's, which must not exist.</summary>
+    private sealed class StrayLoser(IObjectStore inner) : IObjectStore
+    {
+        public async Task<StoredObject?> GetAsync(string key, string? ifNoneMatch, CancellationToken ct) =>
+            await inner.GetAsync(key, ifNoneMatch, ct)
+            ?? (key.Contains("/releases/race-20261124120000-different-", StringComparison.Ordinal) && key.EndsWith("/assets/race-20261124120000-different.js", StringComparison.Ordinal)
+                ? new StoredObject(new MemoryStream("export const stray = 1;\n"u8.ToArray()), "\"stray\"", 24, false)
+                : null);
+
+        public Task<bool> PutAsync(string key, Stream body, string? ifMatch, CancellationToken ct) => inner.PutAsync(key, body, ifMatch, ct);
+    }
+
     private sealed class NoHistory : IRegistryHistory
     {
         public Task<IReadOnlyList<string>> ListVersionsAsync(string key, CancellationToken ct) => throw new InvalidOperationException("no history here");
@@ -188,6 +200,17 @@ public sealed class PublishRaceTests
     }
 
     [Fact]
+    public async Task A_loser_with_an_object_for_the_key_fails_the_row()
+    {
+        // Mutation: dropping the loser's read from PublishRaceDrive.RunAsync records the winner's digest here and passes.
+        (PublishRaceSetup setup, Bucket bucket, _) = World(TimeSpan.Zero);
+        setup = setup with { Store = new StrayLoser(bucket) };
+        PublishRaceRecord record = await new PublishRaceDrive(setup).RunAsync(AppId, Orders, "20261124120000", Ct);
+
+        Assert.Equal(Verdict.Failed, FragmentsObserver.PublishRaces(record).Verdict);
+    }
+
+    [Fact]
     public async Task A_losers_refusal_is_the_status_s3_answered_never_spactls_exit()
     {
         // Mutation: setting RefusedWith to 412 whenever a run exits non-zero (PublishRaceDrive.PublishAsync) passes the
@@ -203,11 +226,14 @@ public sealed class PublishRaceTests
     [Fact]
     public async Task A_run_whose_rival_never_reaches_the_barrier_stops_and_is_recorded_as_not_completed()
     {
-        // Mutation: removing the bound from ClaimHold's wait (WaitAsync(wait, ct) to the bare task) hangs this test.
+        // Mutation: widening ClaimHold's bound (WaitAsync(wait * 1000, ct)) leaves the put waiting
+        // past ten seconds and fails the first assertion.
         InMemoryObjectStore store = new();
         ClaimHold hold = new(store, "apps/shell/fragments/orders/claims/assets/x.js", 2, TimeSpan.FromMilliseconds(100));
 
-        await Assert.ThrowsAsync<TimeoutException>(() => hold.PutAsync(hold.ClaimKey, new MemoryStream([1]), null, Ct));
+        Task<bool> put = hold.PutAsync(hold.ClaimKey, new MemoryStream([1]), null, Ct);
+        Assert.Same(put, await Task.WhenAny(put, Task.Delay(TimeSpan.FromSeconds(10), Ct)));
+        await Assert.ThrowsAsync<TimeoutException>(() => put);
 
         Assert.True(await hold.PutAsync("apps/shell/fragments/orders/releases/a/entry.js", new MemoryStream([1]), null, Ct));
         Assert.Equal(1, hold.Arrived);
@@ -216,8 +242,8 @@ public sealed class PublishRaceTests
     [Fact]
     public async Task The_sdks_put_goes_through_the_statuses_and_a_412_is_read_against_the_run_that_sent_it()
     {
-        // Mutation: dropping `HttpClientFactory = statuses` from PublishRaceSetup's client (here, from this test's client,
-        // which mirrors it) sends the PUT past the tap, so RefusalOf answers null and this test fails.
+        // Mutation: dropping `HttpClientFactory = statuses` from PublishRaceSetup.Config sends the PUT past the tap, so
+        // RefusalOf answers null and this test fails.
         int sent = 0;
         S3Statuses statuses = new(() => new Answering(request =>
         {
@@ -227,10 +253,12 @@ public sealed class PublishRaceTests
                 Content = new StringContent("<Error><Code>PreconditionFailed</Code><Message>At least one of the pre-conditions you specified did not hold</Message></Error>", Encoding.UTF8, "application/xml"),
             };
         }));
-        using AmazonS3Client client = new(new BasicAWSCredentials("AKIDEXAMPLE", "example"), new AmazonS3Config
-        {
-            ServiceURL = "http://127.0.0.1:9", ForcePathStyle = true, HttpClientFactory = statuses, MaxErrorRetry = 0, AuthenticationRegion = "eu-west-2",
-        });
+        AmazonS3Config config = PublishRaceSetup.Config("eu-west-2", statuses);
+        config.ServiceURL = "http://127.0.0.1:9";
+        config.ForcePathStyle = true;
+        config.MaxErrorRetry = 0;
+        config.AuthenticationRegion = "eu-west-2";
+        using AmazonS3Client client = new(new BasicAWSCredentials("AKIDEXAMPLE", "example"), config);
         S3ObjectStore store = new(client, "cell-bucket");
         const string claim = "apps/shell/fragments/orders/claims/assets/x.js";
 
