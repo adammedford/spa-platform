@@ -310,10 +310,12 @@ public sealed class RegistrySourceTests
 
         Assert.Equal(["app1"], registry.Current.ByAppId.Keys);
         Assert.Equal(["app2"], source.LeftOut);
+        // On the line's state, not its text: the reference already spells "app2" and "reports", so
+        // only the structured FragmentId can fail when the template drops the fragment's id.
         Assert.Contains(logs.Lines, line =>
-            line.Text.Contains("app2", StringComparison.Ordinal)
-            && line.Text.Contains("reports", StringComparison.Ordinal)
-            && line.Text.Contains(App2ReportsRef, StringComparison.Ordinal));
+            line.State.Contains(new KeyValuePair<string, object?>("AppId", "app2"))
+            && line.State.Contains(new KeyValuePair<string, object?>("FragmentId", "reports"))
+            && line.State.Contains(new KeyValuePair<string, object?>("SecretRef", App2ReportsRef)));
 
         int before = secrets.Preloaded.Count;
         secrets[App2ReportsRef] = App2ReportsSecret;
