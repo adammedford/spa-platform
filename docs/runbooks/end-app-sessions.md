@@ -9,7 +9,8 @@ its registry entry goes or names a new client. So the sequence is to take the en
 the gateway to swap to that registry, and put the entry back unchanged.
 
 **The app is down between steps 2 and 4**: its host answers 404 for about two poll intervals. To end
-every session of every app instead, any gateway deployment does it in Phase 1 ([deploy.md](deploy.md)).
+every session of every app instead, a gateway deployment does it on one task with sessions in
+memory, and on the durable session store it ends none ([deploy.md](deploy.md)).
 
 Start with the operator session in [README.md](README.md): the cell's entry file sourced
 (`set -a; . <entry file>; set +a`; `tools/scripts/cell-common.sh`'s header names its values), `APP`

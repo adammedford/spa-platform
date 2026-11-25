@@ -3,7 +3,9 @@
 Put the previous gateway image back: `rollback.sh` applies the gateway image of the previous task
 definition. The deployment circuit breaker also rolls back on failed health checks.
 
-**It signs every user of every app out**, as a deployment does: it is one.
+**It signs out whom a deployment signs out**, since it is one: on one task with sessions in memory,
+every user of every app; on two tasks with the durable session store, no one ([deploy.md](deploy.md)
+says why).
 
 Start with the operator session in [README.md](README.md).
 
