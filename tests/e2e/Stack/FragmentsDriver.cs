@@ -228,7 +228,69 @@ public sealed class FragmentsDriver : IAsyncDisposable
         return ((int)response.StatusCode, await response.Content.ReadAsByteArrayAsync(ct));
     }
 
-    public ValueTask DisposeAsync() => stack.DisposeAsync();
+    private PlaywrightEngines? engines;
+
+    /// <summary>The browser rows over Chromium, Firefox and WebKit on the cell, launched on a row's first use.</summary>
+    public FragmentsBrowserRows Browsers => new(engines ??= new PlaywrightEngines(stack, stack.App(Shell)), new HarnessAppUrl(stack.App(Shell).Origin));
+
+    /// <summary>O13's chain (F-42) in each engine that launches; an engine that does not is named on standard output and is not one of the row's user agents.</summary>
+    public async Task<Driven<ChainRecord>> ChainAsync(CancellationToken ct)
+    {
+        (ChainRecord record, IReadOnlyList<string> agents, IReadOnlyList<string> refused) = await Browsers.ChainAsync(ct);
+        foreach (string engine in refused)
+        {
+            Console.WriteLine($"not launched: {engine}");
+        }
+
+        return new Driven<ChainRecord>(await ContextAsync(agents, [], ct), [], record);
+    }
+
+    /// <summary>O12 (F-41) on the shell's live fragments, in Chromium.</summary>
+    public async Task<Driven<EntryImportRecord>> EntryImportsAsync(CancellationToken ct)
+    {
+        (EntryImportRecord record, IReadOnlyList<string> agents) = await Browsers.EntryImportsAsync(await Readers.LiveFragmentsAsync(Shell, ct), ct);
+        return new Driven<EntryImportRecord>(await ContextAsync(agents, [], ct), [], record);
+    }
+
+    /// <summary>O8 (F-40) on the shell's last live fragment, in Chromium, across the managed-login hour.</summary>
+    public async Task<Driven<FallbackRecord>> FallbackAsync(CancellationToken ct)
+    {
+        IReadOnlyList<LiveFragment> fragments = await Readers.LiveFragmentsAsync(Shell, ct);
+        if (fragments.Count == 0)
+        {
+            throw new InvalidOperationException($"O8 opens a fragment's fallback, and {Shell}'s live entry names no fragment.");
+        }
+
+        (FallbackRecord record, IReadOnlyList<string> agents) = await Browsers.FallbackAsync(fragments[^1], ct);
+        return new Driven<FallbackRecord>(await ContextAsync(agents, [], ct), [], record);
+    }
+
+    /// <summary>
+    /// O1 (<see cref="FragmentsBrowserRows.RedirectsAsync"/>): the shell's entry written at each N by spactl in this
+    /// process over the cell's bucket, from the fixture definition the seed's fragment step writes, and put back
+    /// at the N the live registry gave it.
+    /// </summary>
+    public async Task<Driven<RedirectRecord>> RedirectsAsync(CancellationToken ct)
+    {
+        string path = Path.Combine(FixtureFiles.RepositoryRoot, "fixtures", "fragments", Shell + ".json");
+        System.Text.Json.Nodes.JsonObject definition = System.Text.Json.Nodes.JsonNode.Parse(await File.ReadAllTextAsync(path, ct)) as System.Text.Json.Nodes.JsonObject
+            ?? throw new InvalidOperationException($"{path} is not an app definition.");
+        (SpactlRun spactl, Platform.Abstractions.IObjectStore store) = PublishRaceSetup.Live(stack.Cell, new S3Statuses());
+        O1Lever lever = new(spactl, store, definition, await Readers.FragmentsOfAsync(Shell, ct),
+            PlatformConfig("O1 writes the shell's entry at each N with spactl app add"), OutputsPath, stack.RegistryPropagation);
+        RedirectRecord record = await Browsers.RedirectsAsync(lever, ct);
+        return new Driven<RedirectRecord>(await ContextAsync([.. record.Engines.Select(engine => $"{engine.Engine} {engine.Version}")], [], ct), [], record);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (engines is not null)
+        {
+            await engines.DisposeAsync();
+        }
+
+        await stack.DisposeAsync();
+    }
 }
 
 /// <summary>

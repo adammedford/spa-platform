@@ -115,6 +115,9 @@ public sealed class DeployedStack : IBrowserStack
 
     public StackKind Kind => StackKind.Deployed;
 
+    /// <summary>The tunnel's local port, which the fragments rows' routing proxy sends the cell's hosts to.</summary>
+    public int TunnelLocalPort => tunnelPort;
+
     /// <summary>The cell's names, from the outputs document.</summary>
     public Cell Cell { get; }
 

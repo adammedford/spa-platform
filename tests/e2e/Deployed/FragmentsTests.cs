@@ -34,8 +34,7 @@ public sealed class FragmentsTests
         await using FragmentsDriver driver = await FragmentsDriver.StartAsync();
         Step control = await driver.ControlAsync(Ct);
         RowResult result = await driver.Run.RowAsync(FragmentsBounds.O1, control,
-            (_, ct) => driver.NotDrivenAsync(new RedirectRecord([]),
-                "drive Chromium, Firefox and WebKit through Cognito's managed login at N = 0 to 6 and record each redirect: the project installs Chromium alone (docs/dependencies.md)", ct),
+            (_, ct) => driver.RedirectsAsync(ct),
             (driven, _) => FragmentsObserver.Redirects(driven.Record),
             Ct);
         result.Assert();
@@ -100,8 +99,7 @@ public sealed class FragmentsTests
         await using FragmentsDriver driver = await FragmentsDriver.StartAsync();
         Step control = await driver.ControlAsync(Ct);
         RowResult result = await driver.Run.RowAsync(FragmentsBounds.O8, control,
-            (_, ct) => driver.NotDrivenAsync(new FallbackRecord(null, null, null),
-                "open a second client's /bff/login?fragment= on the shell's host inside and after Cognito's managed-login hour", ct),
+            (_, ct) => driver.FallbackAsync(ct),
             (driven, _) => FragmentsObserver.Fallback(driven.Record),
             Ct);
         result.Assert();
@@ -138,8 +136,7 @@ public sealed class FragmentsTests
         await using FragmentsDriver driver = await FragmentsDriver.StartAsync();
         Step control = await driver.ControlAsync(Ct);
         RowResult result = await driver.Run.RowAsync(FragmentsBounds.O12, control,
-            (_, ct) => driver.NotDrivenAsync(new EntryImportRecord([]),
-                "import a fragment's entry at entry.js and at another name in the browser and record its chunk's resolved path", ct),
+            (_, ct) => driver.EntryImportsAsync(ct),
             (driven, _) => FragmentsObserver.EntryImports(driven.Record),
             Ct);
         result.Assert();
@@ -151,8 +148,7 @@ public sealed class FragmentsTests
         await using FragmentsDriver driver = await FragmentsDriver.StartAsync();
         Step control = await driver.ControlAsync(Ct);
         RowResult result = await driver.Run.RowAsync(FragmentsBounds.O13Chain, control,
-            (_, ct) => driver.NotDrivenAsync(new ChainRecord([]),
-                "sign in at N = 2 in each sitting browser and record each /bff/chain request's Sec-Fetch-Site, -Mode and -Dest", ct),
+            (_, ct) => driver.ChainAsync(ct),
             (driven, _) => FragmentsObserver.Chain(driven.Record, driven.Context),
             Ct);
         result.Assert();
