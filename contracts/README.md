@@ -82,6 +82,18 @@ The project's own:
 - `changes/`
 <!-- END contracts list -->
 
+**The unit's contracts are written for their readers, not for this project's work.** Every file
+the list names as the unit's, apart from the examples, names its reader by role (the gateway,
+`spactl`, an SPA author, an API owner, whoever writes the bucket policy, whoever reads the
+gateway's telemetry) and names no workstream, no script, no task id and no `infra/`, `fixtures/` or
+`docs/plan/` path, anywhere in its text. It may cite ADR ids, test ids, gate names, change
+requests, `src/Platform.Abstractions` and the project's own contracts: an adopter reads the unit at
+the same ref, with the whole clone present. A markdown contract's header keeps "Freezes at:", which
+is parsed, names its readers under "Read by:", and cites under "Source:" its ADRs and no plan path;
+the "Consumed by" column of "What is here" stays, as the project's index. Moving a rule's home out
+of a unit contract changes no rule, so it is prose and lands between gates as "What may land
+between gates" says; its change request lists each sentence moved and where it went.
+
 ## What G1b froze
 
 Task I-6 prepares these identity parts for the `contracts-v1` freeze using the G0 report and

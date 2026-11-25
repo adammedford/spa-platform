@@ -1,8 +1,7 @@
 # Upstream contract
 
 - **Freezes at:** G1a
-- **Consumed by:** workstream 4 and the mock API
-- **Source:** `docs/plan/02-contracts.md` → Upstream contract
+- **Read by:** an API owner, and the gateway
 
 What an API behind the gateway receives, and what it must check for itself. An upstream is an origin
 the registry names under `apis[].upstream`, bounded by `Policy:AllowedUpstreams`. Not "backend" and
@@ -27,8 +26,8 @@ Phase 1 gives each app one access token, so one audience, and each fragment of a
 only when those upstreams share a trust domain, and the validator warns when one token set's APIs
 name more than one upstream origin: it counts the shell's `apis[]` and each fragment's apart, so an
 upstream the shell and a fragment both name counts once in each and does not by itself warn. The
-warning is not expressible in `registry.schema.json`, which has no notion of a warning; task 2.1
-raises it and keeps it apart from the errors.
+warning is not expressible in `registry.schema.json`, which has no notion of a warning; the
+validator raises it and keeps it apart from the errors.
 
 ## Fragment routes
 
@@ -65,9 +64,8 @@ Silence after the headers and before the first body byte is `502` `upstream_unav
 gateway holds at most a fixed number of HTTP/1.1 connections per task for each of an app's APIs, a
 constant in `Platform.Proxy` on the precedent of the Kestrel limits, so apps that name the same
 upstream each hold up to that number to it, and an upstream that negotiates HTTP/2 is bounded by it
-neither in connections nor in concurrent requests until P2-10 measures that case (`docs/gaps.md`); a
-request that waits for a connection past the entry's timeout is `504` `upstream_timeout`, like any
-other silence before the headers. Nothing bounds a call whose upstream keeps sending, and nothing
-limits requests per client: the first is accepted, and the second stays deferred until a load test
-(P2-10) shows one app's traffic exhausting that connection bound or the task's, which is the trigger
-`docs/plan/06-phase-2-and-risks.md` leaves open.
+neither in connections nor in concurrent requests until a load test measures that case
+(`docs/gaps.md`); a request that waits for a connection past the entry's timeout is `504`
+`upstream_timeout`, like any other silence before the headers. Nothing bounds a call whose upstream
+keeps sending, and nothing limits requests per client: the first is accepted, and the second stays
+deferred until a load test shows one app's traffic exhausting that connection bound or the task's.

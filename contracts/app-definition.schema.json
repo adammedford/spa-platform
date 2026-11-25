@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://spa-platform.internal/contracts/app-definition.schema.json",
   "title": "App definition",
-  "description": "A registry entry without clientId, clientSecretRef and release, and with each fragment without clientId, clientSecretRef and release. One file per app under fixtures/apps/. Terraform reads it to create the OAuth client, and one per fragment; spactl app add completes it from the infrastructure outputs and applies the registry, so each app is described once. Source: docs/plan/02-contracts.md -> Registry document. Freezes at G1a, except the oauth section, which freezes at G1b. Every shared rule is a $ref into registry.schema.json, so the two cannot drift: a consumer must load both schemas into one registry.",
+  "description": "A registry entry without clientId, clientSecretRef and release, and with each fragment without clientId, clientSecretRef and release. One file per app. The infrastructure that creates the app's OAuth client, and one per fragment, reads it; spactl app add completes it from the infrastructure outputs and applies the registry, so each app is described once. Freezes at G1a, except the oauth section, which freezes at G1b. Every shared rule is a $ref into registry.schema.json, so the two cannot drift: a consumer must load both schemas into one registry.",
   "x-freeze": { "gate": "G1a", "status": "frozen-at-g1a" },
   "type": "object",
   "additionalProperties": false,
@@ -15,12 +15,12 @@
       "x-freeze": {
         "gate": "G1b",
         "status": "frozen-at-g1b",
-        "note": "The oauth section is an identity part assigned to G1b. Task I-6 records the G0 report in ADR-0017; the annotated contracts-v1 tag records the freeze."
+        "note": "The oauth section is an identity part assigned to G1b. ADR-0017 records the G0 report; the annotated contracts-v1 tag records the freeze."
       },
       "type": "object",
       "additionalProperties": false,
       "required": ["issuer", "scopes"],
-      "description": "clientId and clientSecretRef are absent on purpose: Terraform creates the client, and spactl app add adds them. Naming either here is rejected, so a definition can never carry a client id that contradicts the one Terraform made.",
+      "description": "clientId and clientSecretRef are absent on purpose: the infrastructure creates the client, and spactl app add adds them. Naming either here is rejected, so a definition can never carry a client id that contradicts the one the infrastructure made.",
       "properties": {
         "issuer": { "$ref": "https://spa-platform.internal/contracts/registry.schema.json#/$defs/issuer" },
         "scopes": { "$ref": "https://spa-platform.internal/contracts/registry.schema.json#/$defs/scopes" },
@@ -41,7 +41,7 @@
         "type": "object",
         "additionalProperties": false,
         "required": ["fragmentId", "oauth"],
-        "description": "A registry fragment without clientId, clientSecretRef and release. Terraform creates the fragment's client from it; spactl app add adds the client fields from the infrastructure outputs' clients.{appId}.fragments.{fragmentId}, and the release from its --fragment-release list or the live entry.",
+        "description": "A registry fragment without clientId, clientSecretRef and release. The infrastructure creates the fragment's client from it; spactl app add adds the client fields from the infrastructure outputs' clients.{appId}.fragments.{fragmentId}, and the release from its --fragment-release list or the live entry.",
         "properties": {
           "fragmentId": { "$ref": "https://spa-platform.internal/contracts/registry.schema.json#/$defs/fragmentId" },
           "oauth": {

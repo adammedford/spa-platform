@@ -1,19 +1,12 @@
 # S3 layout
 
 - **Freezes at:** G1a
-- **Consumed by:** workstreams 1 and 2
-- **Source:** `docs/plan/02-contracts.md` → S3 layout; ADR-0009
+- **Read by:** the gateway, `spactl`, and whoever writes the bucket policy
+- **Source:** ADR-0009
 
-One private bucket per cell holds the registry and every release. Its default name is
-`spa-platform-<cell>-<account id>-<region>-an`, in S3's account regional namespace, so no other
-account can create it between a teardown and the next deployment (change request 1.5a). The cell
-module can override it, so every consumer but one **reads** the platform root's `bucket` output and
-never derives the name: `spactl`, the scripts and the task environment alike. The one that derives
-it is `infra/bootstrap`, for the teardown role's and the CI plan role's grants, because it applies
-before the bucket exists. Its `platform_bucket_name` variable keeps it in step with the cell module:
-empty for the default, and set to the same value when the cell module overrides the name. An
-override changes only what comes before the -<account id>-<region>-an suffix: the bucket is always
-created in the account regional namespace, and the cell module's plan fails on any other name.
+One private bucket per cell holds the registry and every release. Its name is the cell's to
+choose, and neither reader derives it: the gateway **reads** it from platform configuration,
+`Registry:Bucket` and `Assets:Bucket`, and `spactl` from the infrastructure outputs' `bucket`.
 
 ```text
 registry/registry.json                                              one object, every version kept
@@ -41,27 +34,25 @@ release, and `/fragments/{fragmentId}/api/**` maps to no key at all: it is the f
 
 ## Rules
 
-`infra/bootstrap` creates the teardown role ADR-0014 specifies (task 1.5). Nothing here attests to
-an applied stack: P-04 checks the policy against the applied bucket at G3.
+Nothing here attests to an applied stack: P-04 checks the policy against the applied bucket at G3.
 
 - **Each key under a release is written once.** A release can gain a key, but outside teardown it
   never changes or loses one: the bucket enforces write-once per key, not per prefix, and `spactl`'s
   resumable publish adds keys to an existing prefix. `spactl` sends `If-None-Match: *` on every
   object, in single-part uploads. The bucket policy requires that header under `apps/` and denies
-  deletes there to everyone but the teardown role. Without the delete rule, a delete followed by a
-  write would replace a release. The bucket enforces this, not gateway code; P-04 checks it.
-- **The teardown role is `spa-platform-<cell>-teardown`**, created by `infra/bootstrap` and so
-  outliving what it tears down (ADR-0014). Its **name** is derived from the cell, never configured;
-  its ARN comes from AWS, because the platform root looks the role up rather than assembling the
-  string. The value the policy names is the **role** ARN, never the
-  `arn:aws:sts::<account>:assumed-role/<role>/<session>` form that `aws sts get-caller-identity`
-  prints: `aws:PrincipalArn` carries the role ARN for a role session, so the session form would
-  match nothing and the deny would apply to teardown as well. The role may delete under `apps/` and
-  holds **no write permission at all**, which is what stops it replacing a release: a conditional
-  write succeeds when the current version is a delete marker, so the `If-None-Match` rule alone would
-  not stop a principal that could both delete and write. P-04 runs as its own principal and not as
-  this role. A trusted human who can delete with this role and then write with another principal
-  can republish; this exception is break-glass access, not tamper-proof retention.
+  deletes there to every principal but the teardown principal. Without the delete rule, a delete
+  followed by a write would replace a release. The bucket enforces this, not gateway code; P-04
+  checks it.
+- **One principal may delete under `apps/`, and it holds no write permission at all.** It is the
+  teardown principal, the one that empties a cell's releases at teardown (ADR-0014). Holding no
+  write is what stops it replacing a release: a conditional write succeeds when the current version
+  is a delete marker, so the `If-None-Match` rule alone would not stop a principal that could both
+  delete and write. When the principal is a role, the value the policy names is the **role** ARN,
+  never the `arn:aws:sts::<account>:assumed-role/<role>/<session>` form that
+  `aws sts get-caller-identity` prints: `aws:PrincipalArn` carries the role ARN for a role session,
+  so the session form would match nothing and the deny would apply to teardown as well. P-04 runs as
+  its own principal and not as this one. A trusted human who can delete as this principal and then
+  write as another can republish; this exception is break-glass access, not tamper-proof retention.
 - **Activation is a registry change.** Setting `release` on an entry, or on one of its
   `fragments[]`, makes that release live within one poll interval, for the requests that follow; a
   fragment's activation leaves its shell's release alone. Rolling back is the same change in
@@ -102,7 +93,7 @@ an applied stack: P-04 checks the policy against the applied bucket at G3.
 
 ## Who reads and writes what
 
-| Key prefix | Gateway | `spactl` | Terraform |
+| Key prefix | Gateway | `spactl` | Infrastructure |
 | --- | --- | --- | --- |
 | `registry/registry.json` | conditional GET | GET, and PUT conditional on the live version | creates the bucket, writes nothing |
 | `apps/{appId}/releases/{release}/**` | GET | PUT with `If-None-Match: *`; at every registry write, a read of `index.html` | nothing |
