@@ -1,12 +1,12 @@
 # Browser contract
 
 - **Freezes at:** G1a. The cookie table and the `/bff` endpoints describe identity behaviour, so
-  those parts freeze at G1b, recorded by the annotated `contracts-v1` tag (task I-6, ADR-0017).
-- **Consumed by:** workstreams 3, 4, 5 and 6
-- **Source:** `docs/plan/02-contracts.md` → Browser contract; ADR-0007, ADR-0008
+  those parts freeze at G1b, recorded by the annotated `contracts-v1` tag (ADR-0017).
+- **Read by:** an SPA author, and the gateway
+- **Source:** ADR-0007, ADR-0008
 
-What an SPA author needs to know. The fixture SPAs and `bff-client.js` are the reference
-implementation.
+What an SPA author needs to know. The repository's browser client is a reference implementation of
+it, which an SPA may copy and change; this contract is the promise.
 
 ## Endpoints
 
@@ -269,11 +269,11 @@ itself, with 431 and no body.
 Two refusals are not a problem body. A login callback the OpenID Connect handler refuses (a bad
 state, correlation or nonce, or a provider error) is answered with the one static failure page:
 HTML, 400, `Cache-Control: no-store`, nothing reflected from the request, rule id `auth.callback`.
-It is a page because the browser arrived by navigation and a person reads it (task 3.5, N-05,
-N-18). At a fragment's callback, `/signin-oidc/{fragmentId}`, only a foreign or unreadable state
-gets that page, and the session is unchanged; a provider error or a refused code under readable
-state marks the fragment as Fragments → "Sign-in" says, and the chain continues. A refused
-`/bff/chain` step answers 302 to `/` under rule id `auth.chain` (Fragments → "`/bff/chain`").
+It is a page because the browser arrived by navigation and a person reads it (N-05, N-18). At a fragment's
+callback, `/signin-oidc/{fragmentId}`, only a foreign or unreadable state gets that page, and the
+session is unchanged; a provider error or a refused code under readable state marks the fragment
+as Fragments → "Sign-in" says, and the chain continues. A refused `/bff/chain` step answers 302 to
+`/` under rule id `auth.chain` (Fragments → "`/bff/chain`").
 
 The `code` says little on purpose. Which rule fired is in the log line and in
 `security.rejections`, under the rule ids in `contracts/request-gate.md`. Both the method

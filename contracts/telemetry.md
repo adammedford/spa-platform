@@ -1,13 +1,13 @@
 # Telemetry
 
 - **Freezes at:** G1a
-- **Consumed by:** everyone
-- **Source:** `docs/plan/02-contracts.md` → Telemetry; ADR-0007 → Logging rules this forces
+- **Read by:** the gateway, and whoever reads its log stream, traces and metrics
+- **Source:** ADR-0007 → Logging rules this forces
 
-Workstream 6 proposes this contract; the integrator writes it. One JSON log line per request, and
-one event line for each login, refresh, logout and registry swap, a logout's being one line per
-token set (below). Traces carry W3C context to upstreams, and metrics are tagged by app, and
-`gateway.requests` and `security.rejections` by fragment as well, for a request that resolved one.
+One JSON log line per request, and one event line for each login, refresh, logout and registry
+swap, a logout's being one line per token set (below). Traces carry W3C context to upstreams,
+and metrics are tagged by app, and `gateway.requests` and `security.rejections` by fragment as
+well, for a request that resolved one.
 
 | Kind | Names |
 | --- | --- |
@@ -49,7 +49,7 @@ line or a tag. `gateway.requests` and `security.rejections` carry it as a tag on
 `UsePlatformTelemetry` is the first stage, and it writes the request line after the rest of the
 pipeline has returned, so it can read what a later stage left on the request; but neither of these
 values is its own to compute: the stage that rejected the request knows the rule, and only
-workstream 3 holds the session key.
+`Platform.Identity` holds the session key.
 
 `IRequestTelemetryFeature` in `src/Platform.Abstractions` is where they are left. The telemetry
 stage sets the feature on the request before calling the rest of the pipeline and reads it back
@@ -64,8 +64,7 @@ session for this app is `auth.session`, not a null.
 
 Every rejection the application answers reaches the line and `security.rejections` under its rule
 id, including the method allowlist's 405. `MethodAllowlist` runs in `UsePlatformForwardedHeaders`,
-inside the telemetry stage that ADR-0018 made first, and writes `gate.method` to the feature
-(tasks 4.7a and 6.3b). What
+inside the telemetry stage that ADR-0018 made first, and writes `gate.method` to the feature. What
 the server refuses before any stage runs — Kestrel's 431 for oversized headers,
 `contracts/http-contract.md` → Errors — is not a rejection in this contract's sense and carries no
 rule id; `contracts/request-gate.md` says the same.
@@ -81,9 +80,9 @@ starts the activity before any stage runs, so the order of these two stages does
 
 Every platform `Meter` and `ActivitySource` is named `Platform.<Project>` — `Platform.Registry` for
 `registry.*`, `Platform.Identity` for `auth.*` — and a `Meter` is created through `IMeterFactory`
-rather than with `new Meter(...)`. Workstream 6 subscribes metrics to `Platform.*` and nothing else,
-and traces to `Platform.*` plus the proxy's own `Yarp.ReverseProxy`, so an instrument named outside
-that shape is one nobody sees.
+rather than with `new Meter(...)`. `Platform.Telemetry` subscribes metrics to `Platform.*` and
+nothing else, and traces to `Platform.*` plus the proxy's own `Yarp.ReverseProxy`, so an instrument
+named outside that shape is one nobody sees.
 
 `security.rejections` is the first of two exceptions to "the instrument belongs to the project that
 raises the event": `UsePlatformTelemetry` counts it, from the same feature field it logs as `rule`,
@@ -106,9 +105,10 @@ line's field agree over an in-memory metric exporter with Information logging on
 
 The callback carries the authorization code and state in the query string, and ADR-0007 accepts that
 for Phase 1 because Cognito documents no `form_post` mode. Three things follow, and all three are
-this contract's, not a workstream's preference:
+this contract's, not one project's preference:
 
-- The framework's default request log includes the query string, so workstream 6 replaces it.
+- The framework's default request log includes the query string, so `Platform.Telemetry` replaces
+  it.
 - Authentication handlers can log callback error fields at Warning, and the token-management
   library can log a provider's token-endpoint error at Error. Both fields may contain credentials.
   Those vendor categories are suppressed at every level by the filter and the final formatter,
