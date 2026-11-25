@@ -1355,6 +1355,7 @@ class ProviderCacheTests(CheckTestCase):
                 self.assertIn(f"terraform init failed in {ROOTS[0]}.", result.stderr)
                 # The first init started, failed and never ended, and nothing ran after it.
                 self.assertEqual([["start", f"-chdir={ROOTS[0]}"]],
+                                 # `fmt -check -recursive infra` records its event as "-check".
                                  [[event[0], event[2]] for event in self.events(record) if event[0] != "-check"])
                 self.assertFalse((case.home / ".terraform.d" / "plugin-cache" / CACHE_LOCK).exists())
 

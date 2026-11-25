@@ -197,7 +197,10 @@ cache_lock_held=false
 # one whose pid file is not written yet, which is how a holder's lock looks in the instant between
 # its mkdir and its write, is waited on, with a line at once and every 30 seconds after naming the
 # holder. Only "No such process" from kill -0 means gone: a pid of another user's answers
-# "Operation not permitted", and that one still runs.
+# "Operation not permitted", and that one still runs. A known limit: two runs that find the same
+# dead lock at once can both pass the second read, and the later one's rm can remove the lock the
+# earlier one just made. Closing it takes a second lock around the takeover, which a run killed
+# inside it would leave behind for good; a takeover follows only a killed run, so the window stays.
 cache_lock_take() {
   local holder again said_at gone
   said_at=""
@@ -213,7 +216,8 @@ cache_lock_take() {
     case "$holder" in
       '' | *[!0-9]*) ;;
       *)
-        gone="$(kill -0 "$holder" 2>&1)" || true
+        # In the C locale, so the text matched below is not a translation of it.
+        gone="$(LC_ALL=C kill -0 "$holder" 2>&1)" || true
         case "$gone" in
           *"No such process"*)
             # Read again just before removing it: another run may have taken it over already and
