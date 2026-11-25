@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Regressions for PR #14: derived task state and mandatory generated blocks; and for #70: the JSON
-mode prints the derivation the blocks are written from; and for #290: the check refuses a row
-merged both whole and in part. Owner: integrator."""
+mode prints the derivation the blocks are written from; for #290: the check refuses a row
+merged both whole and in part; for #1219: a `closing` clause lands a row no merge names; and for
+#990: a lettered stage, and a stage whose Plan rows line names tickets. Owner: integrator."""
 
 import contextlib
 import importlib.util
@@ -260,6 +261,161 @@ class SplitsAndTicketsTests(Documents):
         self.assertNotIn("issue-66", derived["rows"])
 
 
+class ClosingClauseTests(Documents):
+    """#1219: a row whose last work was a sitting is closed by the next merge's subject.
+
+    Each row here is closed under one head only, so removing the reading under either head fails a
+    case: 1.3 and 6.9 behind a full landing's head, 6.5 behind a part's. 1.4 is named only by
+    "Merge part of task" subjects and stays part-landed; 1.5 is closed twice and counts once. The
+    last subject closes a split and a ticket, which the check refuses on a branch; read anyway, it
+    lands neither them nor the split's row.
+    """
+
+    SUBJECTS = [
+        "Merge task issue-9, closing rows 1.3 and 6.9: the next landing after the sitting",
+        "Merge part of task 2.4, closing row 6.5: half the publisher",
+        "Merge part of task 1.4: the cell's service",
+        "Merge part of task 1.4: the cell's task definition",
+        "Merge task issue-12, closing row 1.5: one landing",
+        "MERGE TASK issue-13, CLOSING ROWS 1.5: the same row closed again",
+        "Merge task issue-14, closing rows 2.1b and issue-15: names that are not plan rows",
+    ]
+    TAGS = {"skeleton-v1", "g0-mechanism", "g3-deployed-slice", "g4-negative-green"}
+
+    def derived(self):
+        code, output = self.invoke(["--json"])
+        self.assertEqual(0, code, self.errors.getvalue())
+        return json.loads(output)
+
+    def test_every_id_after_closing_reads_landed_under_either_head(self):
+        rows = self.derived()["rows"]
+        self.assertEqual("landed", rows["1.3"])
+        self.assertEqual("landed", rows["6.9"])
+        self.assertEqual("landed", rows["6.5"])
+        self.assertEqual("landed", rows["1.5"])
+        self.assertEqual("part-landed", rows["2.4"])
+        self.assertEqual("part-landed", rows["1.4"])
+
+    def test_a_clause_lands_no_ticket_no_split_and_not_the_splits_row(self):
+        derived = self.derived()
+        self.assertEqual("open", derived["rows"]["2.1"])
+        self.assertNotIn("2.1b", derived["splits"])
+        self.assertNotIn("issue-15", derived["tickets"])
+        # The heads' own tickets still read as their merges wrote them.
+        self.assertEqual("landed", derived["tickets"]["issue-9"])
+
+    def test_both_blocks_count_a_closed_row_once_and_owe_none(self):
+        rows = self.derived()["rows"]
+        closed = ("1.3", "1.5", "6.5", "6.9")
+        owes = "\n".join(line.split("|")[4] for line in self.block(roadmap.ROADMAP, "stages")[2:])
+        for row in closed:
+            with self.subTest(row=row):
+                self.assertNotIn(f"`{row}`", owes)
+        self.assertIn("`1.4`", owes)
+        summary = " ".join(self.block("README.md", "summary"))
+        total = re.search(r"\*\*Plan rows landed:\*\* (\d+) of", summary)
+        self.assertEqual(len(closed), int(total.group(1)))
+        self.assertEqual(len(closed), sum(1 for state in rows.values() if state == "landed"))
+
+    def test_the_reading_names_each_closed_id_and_keeps_the_heads_own_form(self):
+        self.assertEqual(
+            [("2.4", "part"), ("6.5", "closed")],
+            roadmap.reading("Merge part of task 2.4, closing row 6.5: half"),
+        )
+        self.assertEqual(
+            [("issue-9", "landed"), ("1.3", "closed"), ("1.6b", "closed"), ("6.9", "closed")],
+            roadmap.reading("Merge task issue-9, closing rows 1.3, 1.6b, and 6.9: x"),
+        )
+        # With no clause the forms read as they did before #1219.
+        self.assertEqual([("2.4", "part")], roadmap.reading("Merge part of task 2.4: half"))
+
+
+class TicketStageTests(Documents):
+    """#990: a stage cut after the export sits between two others under a letter, and its Plan rows
+    line names the GitHub tickets that build it, since the frozen plan has no row for it.
+
+    The case writes a stage of its own, S9a between S9 and S10, into the scratch copy, so it reads
+    no stage the real roadmap happens to hold. Its line names `ISSUE-5` in upper case and `issue-6`;
+    issue-5 merges whole and issue-6 in part.
+    """
+
+    SUBJECTS = [
+        "Merge task issue-5: the first ticket of the lettered stage",
+        "Merge part of task issue-6: half the second",
+    ]
+    ROW = "| S9a | Do what the lettered stage adds | G99 | `g99-lettered` |"
+    SECTION = (
+        "### S9a Lettered: a stage the plan did not foresee\n\n"
+        "A stage cut after the export.\n\n"
+        "**Plan rows.** `ISSUE-5`,\n`issue-6`\n\n"
+    )
+
+    def setUp(self):
+        super().setUp()
+        path = self.root / roadmap.ROADMAP
+        text = path.read_text()
+        for anchor, insert in (("| S10 |", self.ROW + "\n"), ("### S10 ", self.SECTION)):
+            self.assertEqual(1, text.count("\n" + anchor), anchor)
+            text = text.replace("\n" + anchor, "\n" + insert + anchor)
+        path.write_text(text)
+        self.assertEqual(0, self.invoke([])[0], self.errors.getvalue())
+
+    def derived(self):
+        code, output = self.invoke(["--json"])
+        self.assertEqual(0, code, self.errors.getvalue())
+        return json.loads(output)
+
+    def test_a_lettered_row_and_heading_read_as_one_stage_in_order(self):
+        stages, problems = roadmap.ladder(self.root)
+        self.assertEqual([], problems)
+        ids = [stage.id for stage in stages]
+        self.assertEqual(ids.index("S9") + 1, ids.index("S9a"))
+        self.assertEqual(ids.index("S9a") + 1, ids.index("S10"))
+        lettered = stages[ids.index("S9a")]
+        self.assertEqual("Lettered: a stage the plan did not foresee", lettered.name)
+        self.assertEqual(("G99", "g99-lettered"), (lettered.gate, lettered.tag))
+
+    def test_a_plan_rows_line_of_tickets_yields_them_in_lower_case(self):
+        stages = {stage.id: stage for stage in roadmap.ladder(self.root)[0]}
+        self.assertEqual(["issue-5", "issue-6"], stages["S9a"].rows)
+
+    def test_a_ticket_in_one_stage_is_no_coverage_problem_and_in_two_stages_is(self):
+        stages = roadmap.ladder(self.root)[0]
+        rows = roadmap.plan_rows(self.root)
+        self.assertEqual([], roadmap.coverage(stages, rows))
+        again = roadmap.Stage("S9b", "", "G98", "g98-again")
+        again.rows = ["issue-5"]
+        problems = roadmap.coverage(stages + [again], rows)
+        self.assertEqual(
+            [f"{roadmap.ROADMAP}: 'issue-5' is in both stage S9a and stage S9b"], problems
+        )
+
+    def test_a_tickets_merges_count_in_its_stages_block_and_the_summary(self):
+        line = next(
+            line for line in self.block(roadmap.ROADMAP, "stages") if line.startswith("| S9a ")
+        )
+        self.assertEqual(
+            "| S9a Lettered: a stage the plan did not foresee | G99, not tagged | 1 of 2 | "
+            "part-landed: `issue-6` |",
+            line,
+        )
+        summary = " ".join(self.block("README.md", "summary"))
+        landed, total = re.search(r"\*\*Plan rows landed:\*\* (\d+) of (\d+)", summary).groups()
+        gated = [
+            row for stage in roadmap.ladder(self.root)[0] if stage.tag for row in stage.rows
+        ]
+        self.assertEqual((1, len(gated)), (int(landed), int(total)))
+        self.assertIn("issue-5", gated)
+        self.assertIn(", with 1 part-landed", summary)
+
+    def test_the_json_rows_still_name_no_ticket(self):
+        derived = self.derived()
+        self.assertEqual(roadmap.plan_rows(self.root), list(derived["rows"]))
+        self.assertFalse([row for row in derived["rows"] if roadmap.TICKET.match(row)])
+        self.assertEqual("landed", derived["tickets"]["issue-5"])
+        self.assertEqual("part-landed", derived["tickets"]["issue-6"])
+
+
 class LandedInsideAMergeTests(unittest.TestCase):
     """#70: rows that landed inside a merge whose own subject names no id read as landed.
 
@@ -314,15 +470,9 @@ class LandedInsideAMergeTests(unittest.TestCase):
                     self.assertNotIn("open", [rows[row] for row in expected])
 
 
-class MergedBothWaysTests(unittest.TestCase):
-    """#290: --check refuses a history that both completes a row and leaves it unfinished.
-
-    #287's run branch was rebuilt so row 6.7's merge said "Merge part of task 6.7" (fedb593), but
-    the old "Merge task 6.7" (032eb43) was still reachable through the second parents of the rebuilt
-    lane merges. Every subject in the ancestry counts, and one full landing marks a row done for
-    good, so --check passed and the roadmap said S7 owed nothing. These cases build those histories
-    in a scratch repository, with origin/main at its first commit, and run the real script on them.
-    """
+class ScratchHistory(unittest.TestCase):
+    """A scratch repository holding copies of the documents, with origin/main at its first commit,
+    on which a case builds the history it is about and runs the real script."""
 
     def setUp(self):
         self.scratch = tempfile.TemporaryDirectory()
@@ -375,6 +525,17 @@ class MergedBothWaysTests(unittest.TestCase):
         with contextlib.redirect_stdout(output), contextlib.redirect_stderr(io.StringIO()):
             code = roadmap.main(["--check"])
         return code, output.getvalue()
+
+
+class MergedBothWaysTests(ScratchHistory):
+    """#290: --check refuses a history that both completes a row and leaves it unfinished.
+
+    #287's run branch was rebuilt so row 6.7's merge said "Merge part of task 6.7" (fedb593), but
+    the old "Merge task 6.7" (032eb43) was still reachable through the second parents of the rebuilt
+    lane merges. Every subject in the ancestry counts, and one full landing marks a row done for
+    good, so --check passed and the roadmap said S7 owed nothing. These cases build those histories
+    and run --check on them.
+    """
 
     def test_287s_second_head_a_part_merge_on_the_first_parent_and_a_full_one_beside_it_is_red(self):
         # The old lane merge, from before the rebuild, and the rebuilt one that says "part of".
@@ -431,6 +592,59 @@ class MergedBothWaysTests(unittest.TestCase):
         self.git("update-ref", "refs/remotes/origin/main", trunk)
         self.head(self.merge("Merge task 6.7: the rest of the notes", trunk))
 
+        self.assertEqual(0, self.checked()[0])
+
+
+class ClosingCheckTests(ScratchHistory):
+    """#1219: --check refuses a `closing` clause, between the trunk and HEAD, that names anything but
+    a plan row, or that closes a row the same range merges in part, naming the commit."""
+
+    def test_a_clause_closing_plan_rows_passes(self):
+        self.head(self.merge("Merge task issue-9, closing rows 1.3 and 6.9: the sitting's rows",
+                             self.base))
+        code, output = self.checked()
+        self.assertEqual(0, code, output)
+
+    def test_a_clause_naming_anything_but_a_plan_row_fails_and_names_the_commit(self):
+        for token in ("issue-15", "2.1b", "9.9", "1.3x"):
+            with self.subTest(token=token):
+                sha = self.merge(f"Merge task issue-9, closing rows 1.3 and {token}: x", self.base)
+                self.head(sha)
+                code, output = self.checked()
+                self.assertEqual(1, code, output)
+                self.assertIn(f"{sha[:7]} 'Merge task issue-9, closing rows 1.3 and {token}: x' "
+                              f"closes '{token}'", output)
+                self.assertNotIn("closes '1.3'", output)
+
+    def test_a_clause_that_names_nothing_fails(self):
+        sha = self.merge("Merge part of task 2.4, closing: x", self.base)
+        self.head(sha)
+        code, output = self.checked()
+        self.assertEqual(1, code, output)
+        self.assertIn(f"{sha[:7]} 'Merge part of task 2.4, closing: x' has a `closing` clause that "
+                      "names no row", output)
+
+    def test_closing_a_row_the_range_merges_in_part_fails_and_names_both_commits(self):
+        part = self.merge("Merge part of task 6.9: the walk", self.base)
+        closing = self.merge("Merge task issue-9, closing row 6.9: the next landing", part)
+        self.head(closing)
+        code, output = self.checked()
+        self.assertEqual(1, code, output)
+        self.assertIn("'6.9' is merged whole by", output)
+        self.assertIn(part[:7], output)
+        self.assertIn(closing[:7], output)
+
+    def test_a_part_head_closing_its_own_row_fails(self):
+        sha = self.merge("Merge part of task 6.9, closing row 6.9: x", self.base)
+        self.head(sha)
+        code, output = self.checked()
+        self.assertEqual(1, code, output)
+        self.assertIn("'6.9' is merged whole by", output)
+
+    def test_a_clause_the_trunk_already_holds_is_not_judged(self):
+        trunk = self.merge("Merge task issue-9, closing row 9.9: before the check", self.base)
+        self.git("update-ref", "refs/remotes/origin/main", trunk)
+        self.head(self.merge("Merge task issue-10: the next lane", trunk))
         self.assertEqual(0, self.checked()[0])
 
 

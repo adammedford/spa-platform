@@ -12,7 +12,7 @@ run without one.
 
 **What runs is the script itself.** The prelude finds the repository from git, as the skill's line
 does, so each case makes a throwaway git repository, copies the tracked .gitignore,
-tools/wiz_prelude.sh, tools/aws-project.env and tools/wiz_redact.py into it whole, and starts /bin/bash there, the shell
+tools/wiz_prelude.sh, tools/aws-project.env, infra/envs/poc/cell.env and tools/wiz_redact.py into it whole, and starts /bin/bash there, the shell
 the Bash tool runs (#183), which on macOS is 3.2. The environment is built, not inherited: PATH is
 the directories of git and python3 and the system's own, HOME is inside the case's directory, and
 git reads no configuration of the machine's.
@@ -67,15 +67,32 @@ or the record. The same sitting asked three times for alice's password and got a
 clipboard and nothing else, the clipboard is emptied after 45 seconds by a job that does not hold the
 call's output open, and a failed read touches the clipboard not at all.
 
-**Sitting D's levers and drafts (#1205).** The run of 2026-11-14 found four gaps in `d.md` by failing:
+**Sitting D's levers and drafts (#1205, #1216).** The run of 2026-11-14 found four gaps in `d.md` by failing:
 D6 gave no launch time, a driver fixed mid-run had no route, D1's `Value` reads came back elided and
 D7 asked for lines its test never prints. `SkillRunsSittingDsLeversAndDrafts` holds D6 to the driver's
-`LaunchLine` and to flags `tools/wiz_d6.sh` takes, on the file the row's run writes; each row's run to
+`LaunchLine` and to flags `tools/wiz_d6.sh` takes, on the file the row's run writes, and holds D6's run
+to the suite's console runner, which passes the driver's standard output to that file; each row's run to
 the output file `tools/wiz_row_post.py` reads; D1's `Value` reads to `--output text`, with the
 redactor's own elision of a JSON `Value` as the reason; and the worktree route to `SPA_E2E_OUTPUTS`
 as `DeployedStack.cs` names it. It holds the wording and the names, not a run: D runs on a cell.
 
-Checkout inputs: .claude/skills/wiz/*.md .gitignore infra/modules/idp-cognito/main.tf tests/e2e/Program.cs tests/e2e/Stack/RollingDeployLoop.cs tests/e2e/Stack/ContinuityObserver.cs tests/e2e/Stack/DeployedStack.cs tools/wiz_d6.sh tools/wiz_row_post.py tools/wiz_redact.py tests/e2e/SittingBrowser/Observations.cs tests/e2e/SittingBrowser/ObservationLine.cs tests/e2e/SittingBrowser/SittingBrowser.cs tests/e2e/SittingBrowser/SittingCommand.cs
+**D0's login kinds (#1199).** The sitting of 2026-11-13 met rows 5 and 7's hold timing out at the
+provider's form only at D5, after the cutover, and D0 read `login-prompt` and went on.
+`SkillProvesD0sLoginKinds` reads D0's `--filter-class` and holds that tests/e2e/Deployed declares the
+class with exactly the two facts D0 names, that the step sets the switch `StackSwitch.cs` reads, keeps
+its flags before any `--`, runs after D0's reads and before its post, and reads its verdict from the
+summary, since an all-skipped run exits 0; and that D0's retry is one `reload`, with the sitting
+browser's own verbs and `signed-in` token, and every failed D0 a rule 7 stop that offers D10.
+
+**The bastion in sitting D and from nothing (#1395).** `deploy.sh` and `tunnel.sh` refuse a platform
+root without `bastion = true` (#1168), and Stage 0 took the bastion's keys for G6 inputs while N
+step 3 wrote neither. `SkillAdmitsTheBastionToSittingD` runs Stage 0's own check against the tree's
+example and a file holding every key `platform-tfvars.sh` writes, read from the script: it lists no G6
+key there and still lists a continuity key set beside them. It holds N step 3 to `--bastion` in both
+forms, step 4's count to the bastion's service, D0 and D2 to the bastion's two keys, and C1 to the
+bastion's task as the hop.
+
+Checkout inputs: .claude/skills/wiz/*.md .gitignore infra/envs/poc/platform/terraform.tfvars.example tools/scripts/poc/platform-tfvars.sh infra/modules/idp-cognito/main.tf tests/e2e/Program.cs tests/e2e/Deployed/LoginKindsTests.cs tests/e2e/Stack/StackSwitch.cs tests/e2e/Stack/RollingDeployLoop.cs tests/e2e/Stack/ContinuityObserver.cs tests/e2e/Stack/DeployedStack.cs tools/wiz_d6.sh tools/wiz_row_post.py tools/wiz_redact.py tests/e2e/SittingBrowser/Observations.cs tests/e2e/SittingBrowser/ObservationLine.cs tests/e2e/SittingBrowser/SittingBrowser.cs tests/e2e/SittingBrowser/SittingCommand.cs
 """
 from __future__ import annotations
 
@@ -97,7 +114,8 @@ PRELUDE = ROOT / "tools" / "wiz_prelude.sh"
 # .gitignore is the checkout's own, copied whole rather than restated, so the case reads the rule
 # that keeps the pin, the record and the bundle out of git: .scratch/sitting/ is tracked, its log/
 # is not (CODING_STANDARDS.md, "A guard reads the thing it guards").
-COPIED = (".gitignore", "tools/wiz_prelude.sh", "tools/aws-project.env", "tools/wiz_redact.py")
+COPIED = (".gitignore", "tools/wiz_prelude.sh", "tools/aws-project.env", "infra/envs/poc/cell.env",
+          "tools/wiz_redact.py")
 SKILL = ROOT / ".claude" / "skills" / "wiz"
 SKILL_FILES = (SKILL / "SKILL.md", SKILL / "c.md", SKILL / "d.md", SKILL / "a-and-b.md")
 # The skill a sitting runs by: the main file, then sittings C and D, which #1198 moved beside it.
@@ -131,6 +149,7 @@ class Sitting(unittest.TestCase):
         self.repo = self.dir / "repo"
         (self.repo / "tools").mkdir(parents=True)
         for path in COPIED:
+            (self.repo / path).parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(ROOT / path, self.repo / path)
         empty = self.dir / "gitconfig"
         empty.write_text("")
@@ -194,9 +213,19 @@ class PinnedDate(Sitting):
         self.assertIn('SittingBrowserCommand = "sitting-browser"', entry_point)
         self.assertIn('BundleOption = "--bundle"', entry_point)
 
+    def test_the_prelude_exports_the_proof_cells_entry_values(self) -> None:
+        self.pin(utc_day(-1) + "\n")
+        done = self.bash(SOURCE + ' && /usr/bin/env')
+        self.assertEqual(done.returncode, 0, done.stderr)
+        exported = dict(line.split("=", 1) for line in done.stdout.splitlines() if "=" in line)
+        entry = re.findall(r"^(SPA_[A-Z_]+)=(.*)$", (ROOT / "infra" / "envs" / "poc" / "cell.env").read_text(), re.M)
+        self.assertGreater(len(entry), 3, "cell.env's keys were not read")
+        for name, value in entry:
+            self.assertEqual(exported.get(name), value, f"{name} from cell.env is not exported")
+
     def test_a_call_from_a_subdirectory_runs_at_the_top_level(self) -> None:
         self.pin(utc_day(-1) + "\n")
-        (self.repo / "infra").mkdir()
+        (self.repo / "infra").mkdir(exist_ok=True)  # cell.env, copied, already made it
         done = self.bash(". ../tools/wiz_prelude.sh && pwd -P", cwd=self.repo / "infra")
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertEqual(done.stdout, f"{self.repo}\n")
@@ -220,6 +249,16 @@ class NoPinnedDate(Sitting):
             with self.subTest(pin=text):
                 self.pin(text)
                 self.assertRefuses()
+
+
+class NoEntryFile(Sitting):
+    def test_a_missing_cell_env_exits_the_call(self) -> None:
+        self.pin(utc_day(-1) + "\n")
+        (self.repo / "infra" / "envs" / "poc" / "cell.env").unlink()
+        done = self.bash(SOURCE + "; echo the call went on")
+        self.assertNotEqual(done.returncode, 0)
+        self.assertIn("cell.env", done.stderr)
+        self.assertNotIn("the call went on", done.stdout)
 
 
 class StageZeroPins(Sitting):
@@ -259,7 +298,7 @@ class SkillHoldsNoCopy(unittest.TestCase):
 
     # The commands a hand copy of the old block carried, written out here rather than read from the
     # prelude, so a copy is caught even when the prelude changes.
-    SIGNATURES = ("date -u", ".docker/bin", "umask 077;", "aws-project.env && set +a", "shown() {", "captured() {",
+    SIGNATURES = ("date -u", ".docker/bin", "umask 077;", "aws-project.env && set +a", ". infra/envs/poc/cell.env && set +a", "shown() {", "captured() {",
                   "spactl() {", "sitting_browser() {", "wiz_password() {", "guarded_init() {", "wiz_redact.py --stream; echo", "git check-ignore -q \"$E/x\"")
 
     def skill_lines(self) -> list[tuple[str, int, str]]:
@@ -867,6 +906,15 @@ class SkillRunsSittingDsLeversAndDrafts(unittest.TestCase):
         self.assertEqual(len(written), 1, "D6 should start the row once in the background, its output to a file")
         self.assertEqual(read, written)
 
+    def test_d6_runs_the_row_through_the_console_runner(self) -> None:
+        # Under `dotnet test` the testing platform keeps the driver's launch line from the output file (#1216).
+        d6 = self.d6()
+        self.assertIn('dotnet run --project tests/e2e -- -method "Gateway.E2ETests.Deployed.ContinuityTests.Row6_*"', d6)
+        self.assertRegex(d6, r'-result-junit "\$E/results-row6/[^"/]+\.junit\.xml"')
+        # The bullet still names `dotnet test`, to say why the row does not run under it.
+        self.assertNotIn("shown dotnet test", d6)
+        self.assertIn("return await ConsoleRunner.Run(args);", (ROOT / "tests" / "e2e" / "Program.cs").read_text())
+
     def test_d6s_confirm_on_launch_is_given_before_the_levers_call(self) -> None:
         rule = self.flat(self.section("**Rule 2 for D.**", "**Parts read from the tree"))
         self.assertIn("D6's is given before `tools/wiz_d6.sh`", rule)
@@ -915,6 +963,207 @@ class SkillRunsSittingDsLeversAndDrafts(unittest.TestCase):
         self.assertIn(f'{variable.group(1)}="$PWD/infra/envs/poc/outputs.json"', way_out)
         self.assertIn("after row 3 passes from that worktree", way_out)
         self.assertIn("names the branch and the commit the driver came from", way_out)
+
+
+class SkillProvesD0sLoginKinds(unittest.TestCase):
+    """D0 runs each kind of login the rows use before D2, and its login verdict is a stop (#1199)."""
+
+    DEPLOYED = ROOT / "tests" / "e2e" / "Deployed"
+    STACK = ROOT / "tests" / "e2e" / "Stack"
+
+    def setUp(self) -> None:
+        found = re.search(r"\*\*D0, the fresh deploy.*?(?=\*\*D2, the cutover)", (SKILL / "d.md").read_text(), re.S)
+        self.assertIsNotNone(found, "d.md has no D0 section ending at D2")
+        self.d0 = found.group(0)
+
+    @staticmethod
+    def flat(text: str) -> str:
+        return " ".join(text.split())
+
+    def step(self) -> str:
+        """The one fenced block of D0 that runs dotnet test."""
+        blocks = [block for block in re.findall(r"^```bash\n(.*?)^```$", self.d0, re.M | re.S) if "dotnet test" in block]
+        self.assertEqual(len(blocks), 1, f"D0 should run dotnet test in one block: {blocks}")
+        return blocks[0]
+
+    def filter_class(self) -> str:
+        named = re.findall(r"--filter-class (\S+)", self.step())
+        self.assertEqual(len(named), 1, f"D0's step should name one class: {named}")
+        return named[0]
+
+    def test_the_steps_class_declares_exactly_the_two_facts_d0_names(self) -> None:
+        namespace, _, name = self.filter_class().rpartition(".")
+        declaring = [path for path in self.DEPLOYED.glob("*.cs")
+                     if f"namespace {namespace};" in path.read_text() and re.search(rf"\bclass {name}\b", path.read_text())]
+        self.assertEqual(len(declaring), 1, f"tests/e2e/Deployed should declare {namespace}.{name} once: {declaring}")
+        facts = re.findall(r"\[Fact\]\s*public \S+ (\w+)\(", declaring[0].read_text())
+        # One of each kind the rows use (#1199 Q1): a rename leaves D0 naming a fact the run does not hold.
+        self.assertEqual(len(facts), 2, f"{name} should hold the two login kinds: {facts}")
+        for fact in facts:
+            self.assertIn(f"`{fact}`", self.d0, f"D0 does not name {fact}")
+        self.assertIn(f"`total: {len(facts)}`, `succeeded: {len(facts)}`", self.flat(self.d0))
+
+    def test_the_step_sets_the_switch_deployed_stack_reads(self) -> None:
+        variable = re.search(r'public const string Variable = "([^"]+)";', (self.STACK / "StackSwitch.cs").read_text())
+        self.assertIsNotNone(variable, "StackSwitch.cs has no Variable")
+        self.assertIn(f"export {variable.group(1)}=deployed\n", self.step())
+
+    def test_the_verdict_counts_a_skip_and_zero_tests_as_a_failed_d0(self) -> None:
+        # An all-skipped run exits 0, so an exit-code verdict would pass the switch left unset.
+        text = self.flat(self.d0)
+        self.assertIn("The verdict is the run's summary, never its exit", text)
+        self.assertIn("`skipped: 0`. Anything else is a failed D0", text)
+        self.assertIn("a skip; zero tests; or an exit of 5", text)
+
+    def test_the_flags_come_before_any_double_dash(self) -> None:
+        # After `--`, dotnet test reads an existing --results-directory as the project and refuses the call.
+        line = self.flat(self.step().split("\n", 1)[1])
+        self.assertTrue(line.startswith("shown dotnet test --project tests/e2e --filter-class "), line)
+        self.assertNotIn(" -- ", line)
+
+    def test_the_step_runs_after_d0s_reads_and_before_its_post(self) -> None:
+        step = self.d0.index(self.step())
+        self.assertLess(self.d0.index("shown aws ecs describe-tasks"), step)
+        self.assertLess(step, self.d0.index("Post `## D0` on #348"))
+
+    def test_the_retry_is_one_reload_with_the_browsers_verb_and_token(self) -> None:
+        verbs = dict(re.findall(r'public const string (Login|Reload) = "([^"]+)";',
+                                (SITTING_BROWSER / "SittingCommand.cs").read_text()))
+        token = re.search(r'public const string SignedInToken = "([^"]+)";',
+                          (SITTING_BROWSER / "Observations.cs").read_text()).group(1)
+        lines = self.d0.splitlines()
+        self.assertEqual(len([line for line in lines if line.startswith(f"shown sitting_browser {verbs['Reload']} main")]), 1)
+        # A second login would refill the provider's form and hide the flake the retry tells apart (#1199 Q6).
+        self.assertEqual(len([line for line in lines if line.startswith(f"shown sitting_browser {verbs['Login']} ")]), 1)
+        text = self.flat(self.d0)
+        self.assertIn(f"A `{verbs['Login']}` line that is not `{token}` is followed by one reload", text)
+        self.assertIn(f"a second line that is not `{token}` is a failed D0", text)
+
+    def test_every_failed_d0_is_a_rule_7_stop_that_offers_d10(self) -> None:
+        self.assertIn("**Every failed D0 is a rule 7 stop that offers D10", self.d0)
+
+
+class SkillAdmitsTheBastionToSittingD(unittest.TestCase):
+    """N step 3 declares the bastion, and Stage 0 and D0 admit what it writes (#1395).
+
+    `deploy.sh` and `tunnel.sh` refuse a platform root without `bastion = true` (#1168). Stage 0's
+    check took every key of the example beyond the Phase 1 eight as a G6 input, so a file that set
+    the bastion held D back, and N step 3 wrote no bastion key, so D0 and sitting C from nothing
+    reached a `tunnel.sh` that refused.
+    """
+
+    PLATFORM = ROOT / "infra" / "envs" / "poc" / "platform"
+    TFVARS_SCRIPT = ROOT / "tools" / "scripts" / "poc" / "platform-tfvars.sh"
+
+    @staticmethod
+    def flat(text: str) -> str:
+        return " ".join(text.split())
+
+    def stage_0_check(self) -> str:
+        """The one Python block of "Offering D" in SKILL.md, as the sitting runs it."""
+        section = re.search(r"\*\*Offering D\.\*\*.*?(?=^## )", (SKILL / "SKILL.md").read_text(), re.S | re.M)
+        self.assertIsNotNone(section, "SKILL.md has no Offering D section")
+        blocks = re.findall(r"^python3 -I - <<'EOF'\n(.*?)^EOF$", section.group(0), re.M | re.S)
+        self.assertEqual(len(blocks), 1, f"Offering D should hold one Python block: {blocks}")
+        return blocks[0]
+
+    def written_keys(self) -> set[str]:
+        """The keys platform-tfvars.sh writes with --bastion, read from the script: issuers and its scalars."""
+        keys = set(re.findall(r'set_scalar\("([a-z_]+)"', self.TFVARS_SCRIPT.read_text()))
+        self.assertIn("bastion", keys, "platform-tfvars.sh writes no bastion key")
+        return keys | {"issuers"}
+
+    def run_check(self, extra: str = "", example_extra: str = "") -> list[str]:
+        """Runs the check from a root holding the tree's example plus example_extra, and a file N step 3 with --bastion leaves."""
+        work = pathlib.Path(tempfile.mkdtemp(prefix="wiz-stage0-")).resolve()
+        self.addCleanup(shutil.rmtree, work, True)
+        root = work / "infra" / "envs" / "poc" / "platform"
+        root.mkdir(parents=True)
+        example = (self.PLATFORM / "terraform.tfvars.example").read_text() + example_extra
+        (root / "terraform.tfvars.example").write_text(example)
+        written = self.written_keys()
+        # The example with each key the script writes uncommented, as the script leaves it, and an issuers block.
+        tfvars = re.sub(r"^#\s*([a-z_]+)(\s*=)", lambda m: m.group(1) + m.group(2) if m.group(1) in written else m.group(0),
+                        example, flags=re.M)
+        tfvars += '\nissuers = {\n  "cognito-poc" = {\n    authority = "https://example.test"\n  }\n}\n' + extra
+        (root / "terraform.tfvars").write_text(tfvars)
+        done = subprocess.run(["python3", "-I", "-"], input=self.stage_0_check(), cwd=work, capture_output=True,
+                              text=True, timeout=60, check=False)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        return done.stdout.splitlines()
+
+    def test_a_file_n_step_3_writes_with_the_bastion_sets_no_g6_key(self) -> None:
+        lines = self.run_check()
+        self.assertEqual(lines[1], "G6 keys set in terraform.tfvars: []", lines)
+
+    def test_the_bastion_keys_are_not_g6_keys_and_the_continuity_keys_are(self) -> None:
+        listed = self.run_check()[0]
+        for key in ("bastion", "bastion_image"):
+            self.assertNotIn(f"'{key}'", listed)
+        for key in ("multi_task", "session_store", "data_protection_parameter_prefix", "data_protection_kms_key_id"):
+            self.assertIn(f"'{key}'", listed)
+
+    def test_the_gateways_writable_root_is_a_phase_1_key_not_a_g6_key(self) -> None:
+        # #1380's example names the key uncommented beside health_check_path, and N step 3 writes it on every
+        # run (#1441): the example here names it as #1380's does, so the check meets it whether or not the
+        # tree's example carries it yet. The file copies that uncommented line, so it sets the key once, as N
+        # step 3 leaves it: a second assignment would be a file no sitting writes (Terraform refuses it at plan).
+        lines = self.run_check(example_extra='\ngateway_writable_root = true\n')
+        self.assertNotIn("'gateway_writable_root'", lines[0], lines)
+        self.assertEqual(lines[1], "G6 keys set in terraform.tfvars: []", lines)
+
+    def test_n_step_3_names_the_writable_root_platform_tfvars_writes(self) -> None:
+        self.assertIn('with `health_check_path = "/"` and `gateway_writable_root = true` (#1380: the sample image '
+                      "cannot start on the gateway's read-only root)", self.n_step_3())
+
+    def test_a_continuity_key_beside_the_bastion_still_holds_d_back(self) -> None:
+        lines = self.run_check("multi_task = true\n")
+        self.assertEqual(lines[1], "G6 keys set in terraform.tfvars: ['multi_task']", lines)
+
+    def test_stage_0s_bullet_and_d0_name_the_bastion_keys_as_admitted(self) -> None:
+        skill = self.flat((SKILL / "SKILL.md").read_text())
+        self.assertIn("beyond the Phase 1 nine and the bastion's two, `bastion` and `bastion_image`", skill)
+        d0 = re.search(r"\*\*D0, the fresh deploy.*?(?=\*\*D2, the cutover)", (SKILL / "d.md").read_text(), re.S)
+        self.assertIsNotNone(d0, "d.md has no D0 section ending at D2")
+        self.assertIn("with `bastion = true` and `bastion_image` beside the Phase 1 keys, and no G6 key",
+                      self.flat(d0.group(0)))
+
+    def test_d2_appends_no_bastion_key_d0s_file_already_sets(self) -> None:
+        # A key set twice in terraform.tfvars is an error at plan, so the cutover appends the continuity block alone.
+        d2 = re.search(r"\*\*D2, the cutover.*?(?=^\*\*D)", (SKILL / "d.md").read_text(), re.S | re.M)
+        self.assertIsNotNone(d2, "d.md has no D2 section")
+        self.assertIn("never the bastion's two, which D0's file already sets", self.flat(d2.group(0)))
+
+    def n_step_3(self) -> str:
+        n_section = re.search(r"\*\*N, from nothing.*?(?=\*\*C4, the gate tags\.\*\*)", SKILL_TEXT, re.S)
+        self.assertIsNotNone(n_section)
+        step = re.search(r"^3\. (.*?)(?=^4\. )", n_section.group(0), re.M | re.S)
+        self.assertIsNotNone(step)
+        return self.flat(step.group(1))
+
+    def test_n_step_3_runs_platform_tfvars_with_the_bastion_in_both_forms(self) -> None:
+        runs = re.findall(r"`shown tools/scripts/poc/platform-tfvars\.sh([^`]*)`", self.n_step_3())
+        self.assertEqual(len(runs), 2, f"N step 3 should run the script in two forms: {runs}")
+        self.assertEqual(runs[0], " --bastion")
+        self.assertEqual(runs[1], " --bastion --sample-digest sha256:<64 hex>")
+        # The option is the script's own: a rename there has to fail here.
+        self.assertRegex(self.TFVARS_SCRIPT.read_text(), re.compile(r"^\s*--bastion\)", re.M))
+
+    def test_n_step_4_counts_the_bastions_service_beside_the_gateways(self) -> None:
+        n_section = re.search(r"\*\*N, from nothing.*?(?=\*\*C4, the gate tags\.\*\*)", SKILL_TEXT, re.S)
+        step = re.search(r"^4\. (.*?)(?=^5\. )", n_section.group(0), re.M | re.S)
+        self.assertIsNotNone(step)
+        text = self.flat(step.group(1))
+        self.assertIn("one gateway service and, under `bastion`, the bastion's one", text)
+        self.assertNotIn("one target group, one service,", text)
+
+    def test_c1_names_the_bastions_task_as_the_tunnels_hop(self) -> None:
+        c1 = re.search(r"\*\*C1, the deploy.*?(?=\*\*C2, )", (SKILL / "c.md").read_text(), re.S)
+        self.assertIsNotNone(c1, "c.md has no C1 section")
+        text = self.flat(c1.group(0))
+        self.assertIn("Its hop is the bastion's task (#1168), never a gateway task", text)
+        for stale in ("a task of the new deployment", "a task the deployment replaced"):
+            self.assertNotIn(stale, text)
 
 
 class GuardedInit(Sitting):

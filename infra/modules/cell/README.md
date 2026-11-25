@@ -6,13 +6,13 @@ name carries `var.cell`.
 
 ## What is here
 
-| File | Task | Holds |
+| File | Tickets | Holds |
 | --- | --- | --- |
-| `network.tf` | 1.2 | The VPC, two public subnets in two zones, the internet gateway, one route table, the two security groups, and the VPC's default security group, adopted with no rule |
-| `storage.tf` | 1.5, #784 | The platform bucket and its policy, and the two image repositories, each scanning on push at the basic level with a lifecycle policy that keeps the five most recent tagged images, so `rollback.sh`'s previous digest survives |
-| `alb.tf` | 1.3 | The internal load balancer, its one HTTPS listener, its one target group, and the lookup of the imported wildcard certificate |
-| `ecs.tf` | 1.4a, #1168 | The ECS cluster, the log group, the task environment, the two container definitions, the task definition and the service; behind `bastion`, the bastion's task definition and service |
-| `iam.tf` | 1.4a, #1168 | The two roles: the ECS agent's execution role and the gateway process's task role; behind `bastion`, the bastion task's role |
+| `network.tf` | | The VPC, two public subnets in two zones, the internet gateway, one route table, the two security groups, and the VPC's default security group, adopted with no rule |
+| `storage.tf` | #784, #1342 | The platform bucket and its policy, and the image repositories, `gateway` and each of `extra_repositories`, each scanning on push at the basic level with a lifecycle policy that keeps the five most recent tagged images, so `rollback.sh`'s previous digest survives |
+| `alb.tf` | | The internal load balancer, its one HTTPS listener, its one target group, and the lookup of the imported wildcard certificate |
+| `ecs.tf` | #787, #1168, #1342 | The ECS cluster, the log group, the task environment, the gateway's container definition followed by `extra_containers`, the task definition and the service; behind `bastion`, the bastion's task definition and service |
+| `iam.tf` | #787, #1168 | The two roles: the ECS agent's execution role and the gateway process's task role; behind `bastion`, the bastion task's role |
 | `sessions.tf` | #338, #417 | The DynamoDB session table, planned only under `session_store = "dynamodb"` |
 
 `tests/module.tftest.hcl` and `tests/network.tftest.hcl` check it against a mock
@@ -25,7 +25,7 @@ Resources are named `spa-platform-{cell}` and its derivatives, matching
 `infra/bootstrap`'s `name_prefix`. The exceptions come from
 `contracts/infra-outputs.example.json`, which fixes them: the bucket is
 `spa-platform-{cell}-{account id}-{region}-an`, the image repositories are
-`spa-{cell}/gateway` and `spa-{cell}/mock-api`, and the load balancer and its target
+`spa-{cell}/gateway` and `spa-{cell}/{name}` for each of `extra_repositories`, and the load balancer and its target
 group are `spa-{cell}`. The last is also forced: both names are capped at 32
 characters, and `spa-platform-{cell}` reaches 35 at the cell name's maximum length.
 
@@ -37,24 +37,42 @@ requires; resources here add only `Name`, which merges with those three.
 
 The bucket is created in S3's account regional namespace, which no other account can
 create a bucket in, so its name cannot be claimed between a teardown and the next
-deployment (change request 1.5a, `contracts/s3-layout.md`). The name carries the
-namespace's suffix, `-{account id}-{region}-an`, built from the account and Region
-the root's provider points at, and `bucket_namespace = "account-regional"` is what
-opts in: the suffix alone does not.
+deployment (change request 1.5a). Its default name is
+`spa-platform-<cell>-<account id>-<region>-an`. The name carries the namespace's
+suffix, `-<account id>-<region>-an`, built from the account and Region the root's
+provider points at, and `bucket_namespace = "account-regional"` is what opts in: the
+suffix alone does not.
 
 - **`bucket_name` overrides the name, not the namespace.** Empty means the
-  convention. An override keeps this account's and Region's suffix, and the plan
-  fails on one that does not. Otherwise the provider would refuse it only at apply,
+  convention. An override changes only what comes before the
+  `-<account id>-<region>-an` suffix: it keeps this account's and Region's suffix, and
+  the plan fails on one that does not. Otherwise the provider would refuse it only at apply,
   and Terraform would still create everything that does not depend on the bucket.
 - **The plan fails, and never falls back to a global name,** when the name is longer
   than S3's 63 characters (the suffix counts, so the limit follows the Region), or the
   Region is one AWS does not offer the namespace in: Bahrain and the UAE.
 - **The provider floor is 6.37,** the release that added `bucket_namespace`; init
   refuses an older one.
-- **Nothing derives the name but `infra/bootstrap`.** Every consumer reads the
-  platform root's `bucket` output, which is the configured name and so known at plan.
-  Bootstrap applies first and derives the same default for its teardown and CI plan
-  grants; its tests plan this module and fail if the two drift.
+- **Nothing derives the name but `infra/bootstrap`.** Every consumer, `spactl`, the
+  scripts and the task environment alike, reads the platform root's `bucket` output,
+  which is the configured name and so known at plan. `infra/bootstrap` is the one that
+  derives it, for the teardown role's and the CI plan role's grants, because it
+  applies before the bucket exists; its tests plan this module and fail if the two
+  drift.
+- **`infra/bootstrap`'s `platform_bucket_name` keeps it in step with this module.**
+  It is empty for the default name, and set to the same value as `bucket_name` when
+  this module overrides the name.
+- **The teardown role is `spa-platform-<cell>-teardown`,** created by
+  `infra/bootstrap` and so outliving what it tears down (ADR-0014). Its name is
+  derived from the cell, never configured, and its ARN comes from AWS: the platform
+  root looks the role up by that name rather than assembling the string, and passes
+  it first in `teardown_principal_arns`. The value the bucket policy names is the
+  **role** ARN, never the `arn:aws:sts::<account>:assumed-role/<role>/<session>` form
+  that `aws sts get-caller-identity` prints: `aws:PrincipalArn` carries the role ARN
+  for a role session
+  ([AWS](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_condition-keys.html#condition-keys-principalarn)),
+  so the session form would match nothing and the deny would apply to teardown as
+  well.
 
 ## What the network does not have
 
@@ -77,7 +95,7 @@ is what the switch adds.
   allowlist in `tests/module.tftest.hcl` fails on an instance, but names the gated
   types, so it cannot tell a gated one from an ungated one. All of them read the
   configuration (ADR-0016). P-06's deployed half, a connection from outside to the task's port
-  timing out, runs against the applied cell at G3 (task 6.9).
+  timing out, runs against the applied cell at G3.
 - **No rule in the default security group.** AWS creates one in every VPC, admitting
   all traffic from its own members, and puts some resources created without a group of
   their own into it, an EC2 instance for one. The module adopts it as
@@ -87,7 +105,7 @@ is what the switch adds.
   query asks only for zones that need no opt-in. A Local Zone's name sorts ahead of
   every Availability Zone in its Region, so without that filter, opting into one
   would move both subnets.
-- **No VPC endpoint, flow log or IPv6 range** in Phase 1 (ticket 03, question 7).
+- **No VPC endpoint, flow log or IPv6 range** in Phase 1.
   The task's 443 goes out through its public address, and the S3 gateway endpoint
   belongs with Phase 2's private subnets.
 
@@ -110,7 +128,7 @@ Under `multi_task = true` (#347, #332 D6):
   public subnet ([AWS](https://docs.aws.amazon.com/vpc/latest/userguide/nat-gateways-regional.html)).
 - **The S3 and DynamoDB gateway endpoints** on both private tables, with AWS's
   default policy, at no charge ([AWS](https://docs.aws.amazon.com/vpc/latest/privatelink/gateway-endpoints.html)).
-  They are not a destination allowlist, which is P2-9's.
+  They are not a destination allowlist, which is a later hardening's.
 - **The task's egress stays 443 alone**, and `ForwardedHeaders:TrustedNetworks` still
   names only the load balancer's public subnets, so no private subnet is trusted.
 - **About $70.50 a month** for the whole cell left running, $0.10 an hour applied
@@ -132,7 +150,7 @@ the gateway's port. That connection never leaves the task, so no security group 
 it, and the gateway trusts the `X-Forwarded-For` and `X-Forwarded-Proto` it carries.
 A forward to 127.0.0.1 is not trusted, because the gateway clears the framework's
 loopback proxies (`src/Platform.Security/PlatformForwardedHeaders.cs`). Phase 1 accepts
-this (ticket 03, question 5). The register's entry is `docs/gaps.md` → GAP-1, which
+this. The register's entry is `docs/gaps.md` → GAP-1, which
 holds who can reach it, the risk it leaves and what closes it; this section holds the
 module's part, the path through the subnets.
 
@@ -145,7 +163,7 @@ gateway, which resolves the app by exact authority match.
   tunnel reaches it. This module pins a TLS 1.2/1.3 policy as an implementation choice.
 - **Host header preserved, invalid header fields dropped.** The gateway reads the
   `Host` the browser sent, port included.
-- **The certificate is found, not created.** `tools/scripts/certs.sh import` puts
+- **The certificate is found, not created.** `tools/scripts/poc/certs.sh import` puts
   `*.{certificate_domain}` into ACM tagged with this cell, and `alb.tf` looks it up by
   that domain, the `Cell` tag and the key types `certs.sh` searches. Run it before the
   first apply, or the plan fails on the lookup.
@@ -154,38 +172,52 @@ gateway, which resolves the app by exact authority match.
 
 ## The compute, and what a green plan does not say
 
-Task 1.4a wrote the ECS half and proved everything about it a plan can prove. It did
-not prove row 1.4's own done-when — a steady service, a healthy target, a successful
-image pull or a working tunnel — because each of those needs the apply, and the apply
-needs credentials, a state bucket and the first-deployment order in
-`docs/plan/05-infrastructure-and-cost.md`. **A green plan here is not a running cell.**
+The suites prove everything about the ECS half a plan can prove. They do not prove a
+steady service, a healthy target, a successful image pull or a working tunnel, because
+each of those needs the apply, and the apply needs credentials, a state bucket and a
+deployment. **A green plan here is not a running cell.**
 
 - **The task.** ARM64, 0.25 vCPU, 1 GB, Fargate only, in this cell's two public
   subnets with a public address, because the no-NAT design leaves that as the task's
   only route out; under `multi_task`, two of them in the private subnets with none. ECS
-  Exec is off and both containers' root filesystems are read-only (#787): the tunnel's
+  Exec is off and the gateway's root filesystem is read-only (#787): the tunnel's
   hop is the bastion's task, below, so nothing in the shipping task is reachable for an
   incident, which uses the logs, `/readyz` and the bastion's network path (#780,
   answer 2). The task's one writable path is the gateway's `/tmp`, a volume of the
-  task's own ephemeral storage (#780, answer 3); the mock API has none. That the
+  task's own ephemeral storage (#780, answer 3). That the
   gateway's user can write there is not shown by a test here: ECS gives a task volume
   `0755` and the owner `root` unless the image says otherwise, and a write by
-  `$APP_UID` is seen only on a running task. Both containers drop every Linux capability
-  (`capabilities.drop = ["ALL"]`) and run an init process (`initProcessEnabled`), which
-  forwards SIGTERM to `dotnet` and reaps zombies (#786); neither process needs a
-  capability, since each runs as its image's non-root user on a port above 1024.
-  Both containers also spell out the values ECS fills in when they are left out
-  (`capabilities.add = []`, the gateway's `hostPort` and its `/tmp` mount point's
-  `readOnly = false`, the mock API's empty `mountPoints`, and empty `systemControls` and
-  `volumesFrom`), so the definition ECS reads back after an apply
-  is the configured one and a re-plan replaces nothing (#1006).
+  `$APP_UID` is seen only on a running task. The sample image a fresh cell starts on
+  cannot start on that `/tmp`: nginx-unprivileged runs as uid 101 and creates its temp
+  directories there. `gateway_writable_root = true`, which
+  `tools/scripts/poc/platform-tfvars.sh` writes beside the sample's pin, gives the
+  gateway's container a writable root and no `/tmp` volume, the shape the sample ran
+  on before #787; `deploy.sh` and `rollback.sh` apply the gateway with `false`, and
+  the module refuses `true` beside any health check but `/` (#1380). The gateway's container drops every Linux
+  capability (`capabilities.drop = ["ALL"]`) and runs an init process
+  (`initProcessEnabled`), which forwards SIGTERM to `dotnet` and reaps zombies (#786);
+  the process needs no capability, since it runs as its image's non-root user on a port
+  above 1024. It also spells out the values ECS fills in when they are left out
+  (`capabilities.add = []`, `hostPort`, its `/tmp` mount point's `readOnly = false`,
+  and empty `systemControls` and `volumesFrom`), so the definition ECS reads back after
+  an apply is the configured one and a re-plan replaces nothing (#1006).
+- **Extra containers** (#1342). `extra_containers` appends container definitions to
+  the task after the gateway's, each exactly as written; the module adds nothing to
+  one, so its read-only root, hardening, log configuration and the values ECS fills
+  in are the caller's, and the gateway's container shows each. An extra container
+  shares the task's network namespace, so the gateway reaches it on loopback, and it
+  **holds the task's role**: the role is the task's, so a sidecar can do whatever the
+  gateway's role allows. Its image comes from a repository `extra_repositories` names
+  or a public registry: the execution role pulls from this module's repositories and
+  no other private one. With both inputs empty, the default, the task is the gateway
+  alone and the module creates the `gateway` repository alone; the `ecr_repositories`
+  output maps each repository's name to its URL, and `container_definitions` is the
+  task's JSON.
 - **The deployment.** One service, desired count 1 (2 under `multi_task`), circuit breaker on with rollback,
   minimum healthy 100% and maximum 200%, so a roll starts the replacement before it
-  stops a task. Both images are variables with no default that names a tag:
+  stops a task. The gateway's image is a variable with no default that names a tag:
   `deploy.sh` passes a digest and every other apply passes the digest already in
   state, which is what keeps a routine apply from moving a running image.
-  `mock_api_image` defaults to absent, so the service applies before task 5.3's image
-  exists.
 - **The shutdown** (#332 F1, #347). A roll stops a task in this order: the target
   group's `deregistration_delay`, 30 s, drains it, then ECS sends SIGTERM, then after
   the gateway container's `stopTimeout`, 30 s, SIGKILL. The gateway's own
@@ -218,7 +250,7 @@ during it. It holds exactly two grants, each asserted on its own:
 | `ReadRegistryAndReleases` | `s3:GetObject` on this bucket's `registry/*` and `apps/*`, the two prefixes `contracts/s3-layout.md` lays out. No write, no delete, no listing, and not the bucket's own ARN |
 | `ReadClientSecrets` | `ssm:GetParameter` and `ssm:GetParameters` on `/spa-platform/{cell}/apps/*`. Another cell's secret is outside it |
 
-Plan row 1.4 names a third, the four `ssmmessages` permissions the tunnel needed while
+A third once stood beside them, the four `ssmmessages` permissions the tunnel needed while
 this task was its hop. They went with ECS Exec on the gateway's service (#787), and are
 the bastion role's whole grant; a test fails on any `ssmmessages` action in the task
 role, under whatever statement it sits. A third statement fails a test. So does a
@@ -273,18 +305,18 @@ at one ECS service. The task definition's family and the role carry an underscor
 which no cell name holds, so neither can be another cell's. On and applied, the task
 runs, and is billed, until an apply turns it off. Since #787 it is the cell's only
 task with ECS Exec on: the gateway's service has it off, its task role holds no
-`ssmmessages` permission and its containers' roots are read-only.
+`ssmmessages` permission and its containers' roots are read-only, except the gateway
+container's while `gateway_writable_root` runs the sample image (#1380).
 
 ## Plan policy
 
-Plan row 1.9's checks read the configuration against a mock provider, because CI holds
+The plan policy checks read the configuration against a mock provider, because CI holds
 no AWS credentials (ADR-0016). They prove the plan this module produces, never the
 account.
 
-- **P-01, the platform plan allowlist,** is in
-  `infra/envs/poc/platform/tests/root.tftest.hcl`. It holds this module to being the
-  platform root's whole plan, counts every type in that plan against the plan rows'
-  numbers, and fails on a NAT gateway, an EC2 instance or a database whatever the
+- **P-01, the platform plan allowlist,** is in the platform root's suite, which
+  calls this module. It holds this module to being the platform root's whole plan,
+  counts every type in that plan against an allowlist of types and counts, and fails on a NAT gateway, an EC2 instance or a database whatever the
   allowlist says, save the gated session table and the two-task cell's gated NAT
   gateway (#583), which it holds at no instance on the default inputs, the table at
   one under `dynamodb` and the gateway at one under `multi_task`. It admits the
@@ -313,8 +345,10 @@ bucket.
 `teardown_principal_arns` has no default and refuses to be empty: a bucket nobody may
 empty cannot be destroyed, and P-05 would then fail for ever. The platform root fills
 it with the teardown role `infra/bootstrap` creates, `spa-platform-<cell>-teardown`,
-looked up by that derived name, followed by any `additional_teardown_principal_arns`
-(change request 1.5, ADR-0014). Bootstrap grants that role the delete on this
+looked up by that derived name and never assembled, followed by any
+`additional_teardown_principal_arns` (change request 1.5, ADR-0014). Each is a role or
+user ARN, never an assumed-role session ARN, which `aws:PrincipalArn` never carries;
+"The bucket's name" above says why. Bootstrap grants that role the delete on this
 module's default bucket name, derived the same way; override `bucket_name` only
 together with bootstrap's `platform_bucket_name`.
 

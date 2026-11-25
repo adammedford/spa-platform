@@ -6,6 +6,11 @@ Task 1.7 (#58): "rollback.sh applies the digest of the previous task definition"
 share and the universal every run holds (no output names the account id) are
 tools/scripts/cell_doubles.py's.
 
+The proof cell's entry file sets every case's entry values (#1348), so a change to it runs this
+companion.
+
+Checkout inputs: infra/envs/poc/cell.env infra/envs/poc/outputs-fields.json tools/scripts/poc/mock-api.sh
+
 Run: python3 -I tools/scripts/rollback_tests.py
 """
 
@@ -57,6 +62,12 @@ def deployed_twice() -> dict:
     return world
 
 
+def write_mock_api_tfvars(case, image: str):
+    """The mock API's tfvars in the case's platform root, as tools/scripts/poc/mock-api.sh leaves it
+    (#1349)."""
+    (case.repo / "infra/envs/poc/platform" / cell.mock_api_tfvars_name()).write_text(f'mock_api_image = "{image}"\n')
+
+
 def setUpModule():
     cell.bash_banner("rollback_tests")
 
@@ -75,14 +86,20 @@ class RollbackAppliesThePreviousTaskDefinitionsImages(cell.CompanionTestCase):
         self.assertEqual(1, len(applies))
         return applies[0]["vars"]
 
-    def test_the_previous_revision_s_gateway_and_mock_api_are_applied_and_asserted(self):
+    def test_the_previous_revision_s_gateway_is_applied_and_asserted(self):
         case, result = self.rolled_back(deployed_twice())
-        self.assertEqual({"gateway_image": A, "mock_api_image": MOCK_A, "health_check_path": "/readyz"},
-                         self.applied(case))
+        # #1349: the gateway alone. No mock_api_image is passed, in the plan or the apply.
+        for call in [c for c in case.calls("terraform") if c.get("command") in ("plan", "apply")]:
+            self.assertEqual({"gateway_image": A, "health_check_path": "/readyz", "gateway_writable_root": "false"},
+                             call["vars"])
+            self.assertEqual([], [t for t in call["argv"] if "mock_api_image" in t], call["argv"])
         self.assertEqual(1, len(case.aws("ecs wait services-stable")))
         self.assertIn("pass:", result.stdout)
         tfvars = (case.repo / "infra/envs/poc/platform/images.auto.tfvars").read_text()
         self.assertIn(f'gateway_image     = "{A}"', tfvars)
+        self.assertEqual(["gateway_image", "gateway_writable_root", "health_check_path"],
+                         sorted(line.split("=", 1)[0].strip() for line in tfvars.splitlines()
+                                if "=" in line and not line.startswith("#")))
         # The cell's names are the outputs document's, never state's (contracts/infra-outputs.schema.json;
         # Q49 on #129 excepts teardown.sh alone). Review of #58.
         self.assertEqual([], [c for c in case.calls("terraform") if c.get("command") == "output" and "-raw" in c["argv"]])
@@ -110,11 +127,34 @@ class RollbackAppliesThePreviousTaskDefinitionsImages(cell.CompanionTestCase):
         # #251, as deploy_tests.py's case of the same name: the plan shows the mock API's
         # environment, which carries both apps' client ids.
         world = deployed_twice()
-        _, result = self.rolled_back(world)
+        case = cell.Case(self, outputs=True, world=world)
+        write_mock_api_tfvars(case, MOCK_B)
+        result = case.run(SCRIPT)
+        self.assertEqual(0, result.status, result.output)
         for app, entry in world["roots"]["apps"]["clients"].items():
             self.assertNotIn(entry["clientId"], result.output, f"{app}'s client id was printed")
         self.assertIn('name = "MockApi__App1Client", value = "<client-id:app1>"', result.stdout)
         self.assertIn('name = "MockApi__App2Client", value = "<client-id:app2>"', result.stdout)
+
+    def test_it_reads_no_container_image_but_the_gateway_s_and_the_mock_api_stays_at_its_tfvars(self):
+        # #1349: the target revision ran MOCK_A beside A, and the mock API's own file holds MOCK_B.
+        # The rollback moves the gateway and leaves the mock API at MOCK_B.
+        world = deployed_twice()
+        case = cell.Case(self, outputs=True, world=world)
+        write_mock_api_tfvars(case, MOCK_B)
+        result = case.run(SCRIPT)
+        self.assertEqual(0, result.status, result.output)
+        self.assertNoUnexpectedCall(case)
+        for call in case.aws("ecs describe-task-definition"):
+            query = call["options"].get("query", "")
+            if "containerDefinitions" in query and "name==" in query:
+                self.assertIn(f"name=='{cell.GATEWAY}'", query, query)
+        world = case.load()
+        running = world["task_definitions"][world["service"]["taskDefinition"]]["containers"]
+        self.assertEqual(A, running[cell.GATEWAY]["image"])
+        self.assertEqual(MOCK_B, running[cell.MOCK_API]["image"])
+        self.assertNotIn("MOCK_API_CONTAINER", (cell.SCRIPTS / SCRIPT).read_text())
+        self.assertNotIn("mock-api", (cell.SCRIPTS / SCRIPT).read_text())
 
     def test_a_rollout_in_progress_after_the_waiter_that_then_completes_passes(self):
         # #467: rollback.sh shares deploy.sh's wait_and_assert, which reads the primary's
@@ -193,6 +233,35 @@ class RollbackRefuses(cell.CompanionTestCase):
 
     def test_a_revision_that_is_not_a_number(self):
         self.refused(deployed_twice(), "must be a revision number", "--to-revision", "x2", status=2)
+
+
+class RollbackTakesTheCellFromTheEntryValues(cell.CompanionTestCase):
+    """#1348: the four entry values it reads, each refused by name before any call."""
+
+    READS = ("SPA_PLATFORM_ROOT", "SPA_ROOTS", "SPA_FIELD_MAP", "SPA_OUTPUTS_FILE")
+
+    def test_each_entry_value_it_reads_unset_exits_2_naming_it_before_any_call(self):
+        for name in self.READS:
+            for value in (None, ""):
+                with self.subTest(name=name, value=value):
+                    case = cell.Case(self, outputs=True, world=deployed_twice())
+                    result = case.run(SCRIPT, env=case.env(**{name: value}))
+                    self.assertEqual(2, result.status, result.output)
+                    self.assertIn(f"{name} is not set", result.stderr)
+                    self.assertEqual([], case.calls())
+
+    def test_it_needs_no_certificate_domain(self):
+        case = cell.Case(self, outputs=True, world=deployed_twice())
+        result = case.run(SCRIPT, env=case.env(SPA_CERT_DOMAIN=None, SPA_CELL=None))
+        self.assertEqual(0, result.status, result.output)
+
+    def test_help_reads_no_entry_value_and_names_no_profile(self):
+        case = cell.Case(self)
+        result = case.run(SCRIPT, "--help", env=case.env(**{name: None for name in cell.ENTRY_NAMES}))
+        self.assertEqual(0, result.status, result.output)
+        self.assertNotIn("the spa-platform profile", result.stdout)
+        self.assertNotIn("tools/aws-project.env", result.stdout)
+        self.assertNotIn("infra/envs/", result.stdout)
 
 
 if __name__ == "__main__":

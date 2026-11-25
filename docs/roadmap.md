@@ -20,10 +20,11 @@ plan is right and this file is stale.
 ## Where the gateway stands
 
 Derived, never typed. `tools/roadmap.py` writes the block below from `git tag`, from the merge
-subjects whose form `docs/agents/landing-work.md` fixes, and from the plan's own task tables. Run it
-after landing a row; `--check` runs in `.githooks/pre-push` and in CI. A program reads the same
-derivation with `--json`: the closed gates, and each plan row as landed, part-landed, open or
-ongoing.
+subjects whose form `docs/agents/landing-work.md` fixes, and from the plan's own task tables, or,
+for a stage cut after the export, from the tickets its Plan rows line names. Run it after landing a
+row; `--check` runs in `.githooks/pre-push` and in CI. A program reads the same derivation with
+`--json`: the closed gates, each plan row as landed, part-landed, open or ongoing, and each ticket a
+merge subject names.
 
 <!-- BEGIN GENERATED stages -->
 | Stage | Gate | Plan rows landed | What the stage still owes |
@@ -32,10 +33,11 @@ ongoing.
 | S2 The mechanism holds on the shipped parts | G0, tagged `g0-mechanism` | 6 of 6 | nothing |
 | S3 The identity surface is frozen | G1b, tagged `contracts-v1` | 1 of 1 | nothing |
 | S4 Feature complete, hermetically | G2, tagged `g2-local-slice` | 29 of 29 | nothing |
-| S5 The same gateway on real infrastructure | G3, tagged `g3-deployed-slice` | 2 of 9 | `6.9`; part-landed: `1.3`, `1.4`, `1.5`, `1.6b`, `1.7`, `6.5` |
-| S6 Hardened: every attempt is refused | G4, tagged `g4-negative-green` | 0 of 1 | part-landed: `6.3` |
+| S5 The same gateway on real infrastructure | G3, tagged `g3-deployed-slice` | 9 of 9 | nothing |
+| S6 Hardened: every attempt is refused | G4, tagged `g4-negative-green` | 1 of 1 | nothing |
 | S7 Operable, and accepted for Phase 1 | G5, tagged `g5-phase-1-accepted` | 0 of 1 | part-landed: `6.7` |
 | S8 Continuous: it survives its own deployment | G6, tagged `g6-continuity` | 5 of 5 | nothing |
+| S8a Composed: one host, many clients | G9, not tagged | 12 of 13 | `issue-1007` |
 | S9 Portable: a second provider behind the same seam | G7, not tagged | 0 of 1 | `P2-6` |
 | S10 Mature: bounded, assured and supported | G8, not tagged | 0 of 4 | `P2-7`, `P2-8`, `P2-9`, `P2-10` |
 | SX Throughout | none | ongoing | — |
@@ -97,11 +99,15 @@ below a gate about a feature.
 
 ## The ladder
 
-Ten stages and one lane that runs across them. Each stage ends at a gate from
-`docs/plan/01-plan.md`, and a gate closes as an annotated tag — the tag column gives the name the
+Eleven stages and one lane that runs across them. Each stage ends at a gate from
+`docs/plan/01-plan.md` or, for a gate defined after the export, from the gate register
+`contracts/gates.md`, and a gate closes as an annotated tag — the tag column gives the name the
 tag takes, and `tools/roadmap.py` reads this table to tell a closed gate from an open one. Only
 `skeleton-v1` and `contracts-v1` are named by the plan; the rest are named here so that closure is
 detectable, and renaming one means editing this table, which is the only place the name lives.
+S8a was cut after the plan's stages were numbered and sits between S8 and S9 under a letter, so
+that no "S9" already written in the tracker changes meaning (#776); gate numbers already do not
+follow the ladder.
 
 | Stage | What the gateway can do that it could not before | Gate | Tag |
 | --- | --- | --- | --- |
@@ -113,6 +119,7 @@ detectable, and renaming one means editing this table, which is the only place t
 | S6 | Refuse every attempt in the negative suite, in both tiers | G4 | `g4-negative-green` |
 | S7 | Take on a new app while serving, with no restart and no new resource | G5 | `g5-phase-1-accepted` |
 | S8 | Run as more than one task, and survive its own deployment | G6 | `g6-continuity` |
+| S8a | Compose one shell and its fragments at one host, each fragment with its own client and release | G9 | `g9-fragments` |
 | S9 | Work against a second identity provider, unchanged | G7 | `g7-pingfederate` |
 | S10 | Be adopted: assured, bounded, cell-isolated, supportable | G8 | `g8-enterprise-ready` |
 | SX | — | none | — |
@@ -151,8 +158,8 @@ tenant-aware client stack. That branch is still live for the Cognito items.
 
 **Plan rows.** `1.0`, `1.6a`, `1.1`, `1.8`, `5.5`, `3.0`
 
-**What it buys the gateway.** The right to write `src/Platform.Identity` at all. `AGENTS.md` forbids
-starting it before G1b, and G1b cannot close until this reports.
+**What it buys the gateway.** The right to write `src/Platform.Identity` at all. `contracts/README.md`
+→ "What G1b froze" blocks workstream 3 until G1b closes, and G1b cannot close until this reports.
 
 ### S3 The identity surface is frozen
 
@@ -263,6 +270,33 @@ rolling deployment and a killed task costing no session and no login.
 availability, session durability, key durability, revocation across tasks. Until it does, the honest
 description of the gateway is "one replica, in-memory, restarts sign everyone out", which is what
 `docs/plan/06-phase-2-and-risks.md` says and what nobody should read past.
+
+### S8a Composed: one host, many clients
+
+The first stage the plan did not foresee. Until it, one host serves one app with one OAuth client,
+so a team that wants to ship a unit of UI into another team's SPA either hands over its code, and
+its release and its API's trust wait on the other team, or stands up a second host, a second origin
+and a second login. Here a shell's registry entry nests fragments, each with its own client, release,
+APIs and policy additions. The shell's login chains one silent code flow per fragment into the one
+session record; each fragment's APIs live under `/fragments/{fragmentId}/api/` and receive only its
+own client's token; each fragment's owner publishes and activates its own release with no restart;
+and one logout revokes every token set. The boundary between fragments is logical, not isolation:
+same-origin scripts cannot be told apart, and the gap register says so.
+
+Proved by gate G9's exit test in `contracts/gates.md`, hermetic against TestIdp and deployed on one
+sitting on Cognito with a real browser, after G6's: one login giving the shell and every fragment a
+token set with no second interactive sign-in inside the provider session, each fragment's API
+seeing only its own client's token, and a fragment's release activating with no restart and leaving
+the shell's release alone. The sitting also replaces two placeholders with measurements: the
+fragments-per-shell cap of 5 and the callback merge budget of 3 attempts.
+
+**Plan rows.** `issue-991`, `issue-992`, `issue-993`, `issue-994`, `issue-995`, `issue-996`,
+`issue-997`, `issue-998`, `issue-999`, `issue-1007`, `issue-1000`, `issue-1002`, `issue-1005`
+
+**What it buys the gateway.** Ownership that matches the organisation: a unit's owner registers and
+rotates its own credentials, its API trusts only its own client, and its release cadence is its
+own, while the user still sees one app and signs in once. It also places PingFederate's
+`private_key_jwt` as a per-client profile concern before S9 reaches it.
 
 ### S9 Portable: a second provider behind the same seam
 
@@ -413,7 +447,9 @@ Three mechanisms, because a roadmap is the document most likely to be quietly wr
   the push that updates it.
 - **The ladder is checked against the plan.** The same script fails if a plan row is in no stage, in
   two stages, or named here but absent from the plan. The ladder cannot read as coverage it does not
-  have, and a fresh plan export that adds a row fails the check until this file places it.
+  have, and a fresh plan export that adds a row fails the check until this file places it. A ticket
+  a stage names is checked only for being in one stage: the script does not ask GitHub whether it
+  exists, so the change that writes a ticket into a Plan rows line checks its number.
 - **The prose is not checked.** Every sentence outside the generated block is a judgement that can go
   stale without a check noticing. When a gate's content changes, this file is the second thing to
   edit, after the ADR that records the change.

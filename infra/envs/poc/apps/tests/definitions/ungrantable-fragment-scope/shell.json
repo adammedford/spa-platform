@@ -1,0 +1,20 @@
+{
+  "appId": "shell",
+  "host": "shell.spa-poc.test:8443",
+  "oauth": {
+    "issuer": "cognito-poc",
+    "scopes": ["openid", "profile"],
+    "resource": "https://orders.spa-poc.test"
+  },
+  "session": { "lifetimeMinutes": 480 },
+  "fragments": [
+    {
+      "fragmentId": "orders",
+      "oauth": {
+        "issuer": "cognito-poc",
+        "scopes": ["openid", "https://orders.spa-poc.test/read"],
+        "resource": "https://orders.spa-poc.test"
+      }
+    }
+  ]
+}

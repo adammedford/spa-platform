@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "revision": 42,
   "apps": [
     {
@@ -17,7 +17,25 @@
         { "name": "orders", "upstream": "http://127.0.0.1:5080", "timeoutSeconds": 30 }
       ],
       "csp": { "img-src": ["data:"] },
-      "session": { "lifetimeMinutes": 480 }
+      "session": { "lifetimeMinutes": 480 },
+      "fragments": [
+        {
+          "fragmentId": "reports",
+          "oauth": {
+            "issuer": "cognito-poc",
+            "clientId": "2example34567890",
+            "clientSecretRef": "ssm:/spa-platform/poc/apps/app1/fragments/reports/client-secret:1",
+            "scopes": ["openid", "https://reports.spa-poc.test/read"],
+            "resource": "https://reports.spa-poc.test"
+          },
+          "release": "2026-10-12.1",
+          "apis": [
+            { "name": "reports", "upstream": "http://127.0.0.1:5081", "timeoutSeconds": 20 }
+          ],
+          "csp": { "img-src": ["https://images.spa-poc.test"] },
+          "entry": "entry.js"
+        }
+      ]
     }
   ]
 }

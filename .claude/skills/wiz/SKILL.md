@@ -11,12 +11,13 @@ Tracked in the repository since #135; #468 rewrote sitting C as the sittings of 
 Sittings A and B are done; they, and the H items that no longer fire, are in `a-and-b.md` beside
 this file, for a cell that needs the read pass again.
 
-Read first: `docs/agents/aws-rules.md` (one Region, managed IAM, the spend limit, help level
-HIGH: explain each step before running it), `tools/aws-project.env`, `GLOSSARY.md` → *Sitting*,
-*Unattended run*, *Read-back*, *Sample image*, *Platform project*, and the tickets this sitting
-serves: #242 (the four scripts), #63 (the deployed gate rows), #236 (seed with the profile alone),
-#244 (the runbook walks, their observables and their end state), and for D #348 (the G6 run, its
-rows and their questions) and #358 (the deployed continuity class).
+Read first: `docs/agents/aws-rules.md` (one Region, managed IAM, the spend limit, help level HIGH:
+explain each step before running it), `tools/aws-project.env` and the proof cell's entry file
+`infra/envs/poc/cell.env`, `GLOSSARY.md` → *Sitting*, *Unattended run*, *Read-back*, *Sample image*,
+*Platform project*, and the tickets this sitting serves: #242 (the four scripts), #63 (the deployed
+gate rows), #236 (seed with the profile alone), #244 (the runbook walks, their observables and their
+end state), and for D #348 (the G6 run, its rows and their questions) and #358 (the deployed
+continuity class).
 
 ## Rules that hold in every stage
 
@@ -75,13 +76,14 @@ touches AWS begins with this one line, and runs each read and script as `shown <
 
 The prelude is `tools/wiz_prelude.sh`, one file (#1010), so no call carries a hand copy that can
 leave a line out: in sitting D one left out the Docker `PATH` line and `platform-tfvars.sh` failed
-on `docker-credential-desktop`. Its header says what it does, and `tools/wiz_prelude_tests.py`
-holds it to cases. Sourced, it moves to the main checkout's top level (rule 8), exports the profile
-and Region of `tools/aws-project.env`, puts the per-user Docker Desktop on `PATH`, sets the
-owner-only file mask, names the record `R` and the bundle `E` (rule 6) and makes the bundle's
-directory once git confirms it is ignored, and defines `shown`, `captured`, `spactl`, a function so
-`SPACTL` stays unset (Q80), `sitting_browser`, which D0 and D2 drive, `wiz_password`, and
-`guarded_init`, which N's step 2 runs. Never copy its commands into a call or into this file.
+on `docker-credential-desktop`. Its header says what it does, and `tools/wiz_prelude_tests.py` holds
+it to cases. Sourced, it moves to the main checkout's top level (rule 8), exports the profile and
+Region of `tools/aws-project.env` and the proof cell's entry values of `infra/envs/poc/cell.env`,
+puts the per-user Docker Desktop on `PATH`, sets the owner-only file mask, names the record `R` and
+the bundle `E` (rule 6) and makes the bundle's directory once git confirms it is ignored, and
+defines `shown`, `captured`, `spactl`, a function so `SPACTL` stays unset (Q80), `sitting_browser`,
+which D0 and D2 drive, `wiz_password`, and `guarded_init`, which N's step 2 runs. Never copy its
+commands into a call or into this file.
 
 The record and bundle are named after the sitting's pinned date, never the clock's: a sitting that
 crossed midnight UTC once moved both to the next day mid-sitting, and a test run did nothing.
@@ -217,7 +219,7 @@ Each miss among the three is a rule 7 stop naming its cause. The CA line matches
 keychain's certificates by the SHA-256 of `.certs/spa-platform-poc-ca.pem`, not by name, since a name
 also finds an older authority left there by `certs.sh --new-ca`, and `security verify-cert` also
 passes through the login keychain's copy (#1140). An older one beside the current one is listed and
-passes. The CA's trust step is at the screen, and `tools/scripts/certs.sh trust` adds nothing while
+passes. The CA's trust step is at the screen, and `tools/scripts/poc/certs.sh trust` adds nothing while
 the login keychain's copy verifies (#1094 step 1). A sleeping mini takes the session with it.
 preflight reports a stopped engine as `later` and still ends ready, which is why the row is read
 here; Docker Desktop's engine needs the live login session (#1090 Q6).
@@ -245,8 +247,9 @@ python3 -I - <<'EOF'
 import os, re
 root = "infra/envs/poc/platform/"
 def keys(path, commented): return {m.group(1) for m in re.finditer(r"^(?:#\s*)?([a-z_]+)\s*=" if commented else r"^([a-z_]+)\s*=", open(root + path).read(), re.M)}
-phase1 = {"region", "cell", "vpc_cidr", "certificate_domain", "health_check_path", "additional_teardown_principal_arns", "gateway_image", "issuers"}
-g6 = keys("terraform.tfvars.example", True) - phase1
+phase1 = {"region", "cell", "vpc_cidr", "certificate_domain", "health_check_path", "gateway_writable_root", "additional_teardown_principal_arns", "gateway_image", "issuers"}
+bastion = {"bastion", "bastion_image"}   # the tunnel's hop (#1168), which N step 3 writes: never a G6 input (#1395)
+g6 = keys("terraform.tfvars.example", True) - phase1 - bastion
 present = os.path.exists(root + "terraform.tfvars")   # git-ignored: absent on a fresh checkout, and N step 3 writes it
 print("G6 keys of the example:", sorted(g6)); print("G6 keys set in terraform.tfvars:", sorted(g6 & keys("terraform.tfvars", False)) if present else "none (the file is absent)")
 EOF
@@ -261,9 +264,12 @@ EOF
 - The platform root is absent: Stage 0's `describe-services` answers no service, or one with no
   running task and no deployment. D0 deploys from nothing, and a part-run D never resumes.
 - `infra/envs/poc/platform/terraform.tfvars` carries none of the G6 keys. The script prints the
-  example's G6 keys (every key it names, set or commented out, beyond the Phase 1 eight) and the
-  ones `terraform.tfvars` sets; a second list that is not empty is a G6 input, and D is not offered
-  until the human removes it, since D0 needs the Phase 1 shape and D2 is what adds the block. A
+  example's G6 keys (every key it names, set or commented out, beyond the Phase 1 nine and the
+  bastion's two, `bastion` and `bastion_image`) and the ones `terraform.tfvars` sets; a second
+  list that is not empty is a G6 input, and D is not offered until the human removes it, since D0
+  needs the Phase 1 shape and D2 is what adds the block. The bastion's two do not hold D back: the
+  bastion is the tunnel's hop (#1168), `deploy.sh` and `tunnel.sh` refuse a root without it, and N
+  step 3 writes both into the file D0 applies. A
   `terraform.tfvars` that is absent (it is git-ignored, and N step 3 writes it) carries no key and
   holds nothing against D. An empty first list means the block is not in the tree yet (#338, #347),
   and D is not offered.

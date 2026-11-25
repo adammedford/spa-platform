@@ -71,7 +71,9 @@ public static class PlatformHostingExtensions
     /// <summary>
     /// The request authority must equal a registry <c>host</c> exactly; the app and the snapshot
     /// are pinned for the request as <see cref="IAppFeature"/>, and any other host gets 404 before
-    /// routing runs (contracts/pipeline.md; N-08, S-A3).
+    /// routing runs (contracts/pipeline.md; N-08, S-A3). A request under
+    /// <c>/fragments/{fragmentId}/</c> of one of that entry's fragments also has the fragment pinned
+    /// as <see cref="IFragmentFeature"/>, from the same snapshot; no other request carries one (#992).
     /// </summary>
     public static IApplicationBuilder UsePlatformHostResolution(this IApplicationBuilder app)
     {
@@ -85,7 +87,9 @@ public static class PlatformHostingExtensions
     /// 2.4; contracts/s3-layout.md). The key is built from registry values and a validated path,
     /// <c>If-None-Match</c> is passed through, the content type comes from the extension, the cache
     /// policy from the path, an extensionless path that accepts HTML gets <c>index.html</c>, and
-    /// the platform's reserved paths are never read.
+    /// the platform's reserved paths are never read. <c>/fragments/{fragmentId}/{rest}</c> is served
+    /// from the pinned fragment's live release, with no <c>index.html</c> fallback, and never from the
+    /// shell's (#992).
     /// </summary>
     public static IEndpointRouteBuilder MapPlatformAssets(this IEndpointRouteBuilder endpoints)
     {

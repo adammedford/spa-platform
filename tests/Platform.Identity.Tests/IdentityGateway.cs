@@ -59,7 +59,9 @@ internal sealed class IdentityGateway : IAsyncDisposable
     /// A path standing in for the proxy's token step (task 4.2): it asks <see cref="IAccessTokenSource"/>
     /// for the session's token and answers 200 with the token as the body, or the outcome's status with
     /// its code from contracts/http-contract.md -> Errors as the body: 401 <c>unauthenticated</c>, 401
-    /// <c>session_ended</c>, 503 <c>idp_unavailable</c> or 503 <c>session_store_unavailable</c>. An outcome it does not know throws, as the
+    /// <c>session_ended</c>, 401 <c>fragment_login_required</c> (#995), 503 <c>idp_unavailable</c> or 503
+    /// <c>session_store_unavailable</c>. A request sent with a fragment is pinned to it, as host resolution
+    /// pins one, so the source answers that fragment's set. An outcome it does not know throws, as the
     /// proxy's step refuses one, so no test reads an unknown outcome as a known one. It hands the source
     /// the request's own cancellation token on purpose, so a test can prove the source never lets a
     /// disconnecting browser cancel a refresh (T-B16).
@@ -123,6 +125,7 @@ internal sealed class IdentityGateway : IAsyncDisposable
                     AccessTokenResult.SessionEnded => (401, "session_ended"),
                     AccessTokenResult.ProviderUnavailable => (503, "idp_unavailable"),
                     AccessTokenResult.StoreUnavailable => (503, "session_store_unavailable"),
+                    AccessTokenResult.FragmentLoginRequired => (401, "fragment_login_required"),
                     _ => throw new InvalidOperationException($"The probe knows no outcome {result.GetType().Name}."),
                 };
                 await context.Response.WriteAsync(body, CancellationToken.None);
@@ -201,8 +204,25 @@ internal sealed class IdentityGateway : IAsyncDisposable
     public static IReadOnlySet<string> PostLogoutUrisOf(AppDefinition app) =>
         new HashSet<string>(StringComparer.Ordinal) { $"https://{app.Host}/signout-callback-oidc", $"https://{app.Host}/" };
 
-    private static void Register(TestIdentityProvider idp, AppDefinition app) =>
+    /// <summary>The secret the provider and the fake secret source agree on for a fragment's client.</summary>
+    public static string SecretOf(FragmentDefinition fragment) => "secret-" + fragment.OAuth.ClientId;
+
+    /// <summary>A fragment's redirect URI on its shell's host: <c>/signin-oidc/{fragmentId}</c> (#994).</summary>
+    public static string RedirectUriOf(AppDefinition app, FragmentDefinition fragment) =>
+        $"https://{app.Host}{PlatformPaths.FragmentCallback(fragment.FragmentId)}";
+
+    private static void Register(TestIdentityProvider idp, AppDefinition app)
+    {
         idp.AddClient(app.OAuth.ClientId, SecretOf(app), RedirectUriOf(app), PostLogoutUrisOf(app));
+        foreach (FragmentDefinition fragment in app.Fragments)
+        {
+            idp.AddClient(fragment.OAuth.ClientId, SecretOf(fragment), RedirectUriOf(app, fragment), PostLogoutUrisOf(app));
+        }
+    }
+
+    /// <summary>The secret references of an entry and of each of its fragments, with the secrets the provider holds.</summary>
+    private static IEnumerable<(string Ref, string Secret)> SecretsOf(AppDefinition app) =>
+        [(app.OAuth.ClientSecretRef, SecretOf(app)), .. app.Fragments.Select(f => (f.OAuth.ClientSecretRef, SecretOf(f)))];
 
     /// <param name="apps">The registry's entries.</param>
     /// <param name="services">Registrations made after <c>AddPlatformIdentity</c>.</param>
@@ -268,10 +288,13 @@ internal sealed class IdentityGateway : IAsyncDisposable
                 Register(idp, app);
             }
 
-            secrets[app.OAuth.ClientSecretRef] = SecretOf(app);
+            foreach ((string reference, string secret) in SecretsOf(app))
+            {
+                secrets[reference] = secret;
+            }
         }
 
-        await secrets.PreloadAsync(entries.Select(a => a.OAuth.ClientSecretRef), TestContext.Current.CancellationToken);
+        await secrets.PreloadAsync(entries.SelectMany(a => SecretsOf(a).Select(s => s.Ref)), TestContext.Current.CancellationToken);
 
         InMemoryRegistry registry = new(InMemoryRegistry.SnapshotOf(1, "\"r1\"", entries));
         StubIdpProfile profile = new(stubProfile ? issuerProfile : "stub-unused");
@@ -315,13 +338,22 @@ internal sealed class IdentityGateway : IAsyncDisposable
     /// </summary>
     public async Task<RegistrySnapshot> SwapAsync(params AppDefinition[] apps)
     {
-        foreach (AppDefinition app in apps.Where(a => !Idp.Clients.ContainsKey(a.OAuth.ClientId)))
+        foreach (AppDefinition app in apps)
         {
-            Register(Idp, app);
-            Secrets[app.OAuth.ClientSecretRef] = SecretOf(app);
+            if (!Idp.Clients.ContainsKey(app.OAuth.ClientId))
+            {
+                Idp.AddClient(app.OAuth.ClientId, SecretOf(app), RedirectUriOf(app), PostLogoutUrisOf(app));
+                Secrets[app.OAuth.ClientSecretRef] = SecretOf(app);
+            }
+
+            foreach (FragmentDefinition fragment in app.Fragments.Where(f => !Idp.Clients.ContainsKey(f.OAuth.ClientId)))
+            {
+                Idp.AddClient(fragment.OAuth.ClientId, SecretOf(fragment), RedirectUriOf(app, fragment), PostLogoutUrisOf(app));
+                Secrets[fragment.OAuth.ClientSecretRef] = SecretOf(fragment);
+            }
         }
 
-        await Secrets.PreloadAsync(apps.Select(a => a.OAuth.ClientSecretRef), TestContext.Current.CancellationToken);
+        await Secrets.PreloadAsync(apps.SelectMany(a => SecretsOf(a).Select(s => s.Ref)), TestContext.Current.CancellationToken);
 
         RegistrySnapshot previous = Registry.Current;
         Registry.Swap(InMemoryRegistry.SnapshotOf(previous.Revision + 1, $"\"r{previous.Revision + 1}\"", apps));
@@ -356,7 +388,8 @@ internal sealed class IdentityGateway : IAsyncDisposable
         string method = "GET",
         IReadOnlyDictionary<string, string>? headers = null,
         RegistrySnapshot? pinnedTo = null,
-        CancellationTokenSource? browser = null)
+        CancellationTokenSource? browser = null,
+        FragmentDefinition? fragment = null)
     {
         RegistrySnapshot snapshot = pinnedTo ?? Snapshot;
         if (!snapshot.ByHost.ContainsKey(app.Host))
@@ -367,6 +400,12 @@ internal sealed class IdentityGateway : IAsyncDisposable
         using IServiceScope scope = Services.CreateScope();
         HttpContext context = Pin(app, snapshot);
         context.RequestServices = scope.ServiceProvider;
+        if (fragment is not null)
+        {
+            // Host resolution's pinning of a request under /fragments/{fragmentId}/ (contracts/pipeline.md).
+            context.Features.Set<IFragmentFeature>(new SettableFragmentFeature(fragment));
+        }
+
         context.Request.Method = method;
         // The browser going away, when a test cancels this source: what the server's RequestAborted is.
         context.RequestAborted = browser?.Token ?? CancellationToken.None;

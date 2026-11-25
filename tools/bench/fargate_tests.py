@@ -25,11 +25,13 @@ answered. As the real CLI does, `ssm start-session` and `ecs execute-command` ha
 session-manager-plugin: for a port forward the plugin double listens on the local port with TLS
 under a test authority and answers every request the OpenID Connect challenge, a 302 whose headers
 carry a state and a cookie canary; for an exec it prints what the case's world says the session
-printed.
+printed. The world is a cell applied since #787 unless a case says otherwise: the gateway's tasks run
+with ECS Exec off, an exec on one fails and a port forward reaches only the bastion's container
+(#1167), as AWS refuses a session to a container that runs no Exec agent (#1378).
 
 **The world's names are read from the Terraform that makes them** (CODING_STANDARDS.md, "A guard
-reads the thing it guards"): the cluster, the service, the gateway container and the log group are
-the locals in infra/modules/cell/ecs.tf.
+reads the thing it guards"): the cluster, the service, the gateway container, the bastion's service
+and container and the log group are the locals in infra/modules/cell/ecs.tf.
 
 **Canaries.** The account id is in every ARN the doubles hand out (task, task definition, target
 group, the stop reason's target group) and in the gateway image's repository URI; the 302 carries a
@@ -42,14 +44,20 @@ inside one, which TheSecrecyMatrix proves while checking that no string holds it
 alone proves nothing of a canary that never came in, so TheSecrecyMatrix asserts where each one's
 placeholder lands, and names each source and outcome no path connects.
 
+**The cases run side by side** (#1473): Concurrently, at the foot of this file, runs the loaded
+tests a few at a time with their fixtures' scopes kept, and reports in unittest's own form.
+
 Run: python3 -I tools/bench/fargate_tests.py
 """
 
 from __future__ import annotations
 
+import concurrent.futures
 import http.server
 import importlib.util
 import json
+import operator
+import os
 import pathlib
 import re
 import shutil
@@ -58,7 +66,13 @@ import subprocess
 import sys
 import tempfile
 import threading
+import types
 import unittest
+# Stock unittest's entry for a fixture's outcome, so Concurrently names one as TestSuite does. It and
+# the other private names Concurrently reads, TestCase.tearDown_exceptions, _class_cleanups and
+# __unittest_skip__, are CPython's Lib/unittest/suite.py and case.py, read on 3.9.6 and 3.14; TheRunner
+# compares the two runners on whichever interpreter runs it.
+from unittest.suite import _ErrorHolder
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 SCRIPT = ROOT / "tools" / "bench" / "fargate.py"
@@ -86,11 +100,25 @@ LOG_GROUP, DIGEST, IMAGE, TG_ARN, ALB = doubles.LOG_GROUP, doubles.DIGEST, doubl
 SECRETS, APP_HOST, REPOSITORY_TAIL = doubles.SECRETS, doubles.APP_HOST, doubles.REPOSITORY_TAIL
 FOREIGN, FOREIGN_FORMS = doubles.FOREIGN, doubles.FOREIGN_FORMS
 plan, world, task_id, save = doubles.plan, doubles.world, doubles.task_id, doubles.save
+BASTION_SERVICE, BASTION_CONTAINER, BASTION_N = doubles.BASTION_SERVICE, doubles.BASTION_CONTAINER, doubles.BASTION_N
+# The bastion's session target, as Session Manager names its container (#1167).
+BASTION_TARGET = f"ecs:{CLUSTER}_{task_id(BASTION_N)}_{task_id(BASTION_N)}-3333"
 
 
 # --- the cases ------------------------------------------------------------------------------------
 
 AUTHORITY = None
+
+
+def python() -> list:
+    """The interpreter every case runs, the script and each double call alike: python3 -I, with the
+    bytecode of what it imports cached under the module's temporary directory (#1473). A case makes
+    up to about 270 calls to the doubles, each a fresh interpreter, and an interpreter whose standard
+    library ships without bytecode in a directory it cannot write, as the Xcode one does, compiles
+    some 47 modules from source on every start: most of the suite's time. -X pycache_prefix holds under -I,
+    which ignores PYTHONPYCACHEPREFIX, and changes where bytecode is kept, not what runs.
+    https://docs.python.org/3/using/cmdline.html#cmdoption-X"""
+    return [sys.executable, "-I", "-X", f"pycache_prefix={pathlib.Path(AUTHORITY) / 'pycache'}"]
 
 
 def setUpModule():
@@ -125,10 +153,24 @@ def tearDownModule():
         shutil.rmtree(AUTHORITY, ignore_errors=True)
 
 
+HANDED_OUT = set()
+HANDED_OUT_LOCK = threading.Lock()
+
+
 def free_port() -> int:
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        return probe.getsockname()[1]
+    """A port nothing listened on when asked, and one free_port gave no other caller in this run: cases
+    run side by side (Concurrently), and two scripts handed the same port would see each other's
+    forward. Every listener this file opens takes its port here, the script's forward and
+    TheOneLiner's endpoint alike. It cannot hold the port: between the answer and the bind, another
+    process, or an outgoing connection's ephemeral port, can still take it."""
+    with HANDED_OUT_LOCK:
+        while True:
+            with socket.socket() as probe:
+                probe.bind(("127.0.0.1", 0))
+                port = probe.getsockname()[1]
+            if port not in HANDED_OUT:
+                HANDED_OUT.add(port)
+                return port
 
 
 class Run:
@@ -167,7 +209,7 @@ def run_case(document: dict, outputs: dict = None, region: str = REGION, extra=(
                    "ecrMockApi": f"{ACCOUNT}.dkr.ecr.{REGION}.amazonaws.com/spa-poc/mock-api", "gatewayImage": IMAGE,
                    "issuer": f"https://cognito-idp.{REGION}.amazonaws.com/{REGION}_EXAMPLE",
                    "cognitoDomain": f"spa-platform-poc-{ACCOUNT}.auth.{REGION}.amazoncognito.com",
-                   "clients": {}, "testUsers": {}, "logGroup": LOG_GROUP}
+                   "clients": {}, "testUsers": {}, "logGroup": LOG_GROUP, "ecsBastionService": BASTION_SERVICE}
         written.update(outputs or {})
         (repo / OUTPUTS).write_text(json.dumps(written))
     for name in ("leaf.pem", "leaf.key", "ca.pem", "other.pem"):
@@ -176,7 +218,8 @@ def run_case(document: dict, outputs: dict = None, region: str = REGION, extra=(
     bin_dir.mkdir()
     for name in ("aws", "session-manager-plugin"):
         wrapper = bin_dir / name
-        wrapper.write_text(f"#!/bin/sh\nexec '{sys.executable}' -I '{DOUBLES}' {name} '{case}' \"$@\"\n")
+        interpreter = " ".join(f"'{word}'" for word in python())
+        wrapper.write_text(f"#!/bin/sh\nexec {interpreter} '{DOUBLES}' {name} '{case}' \"$@\"\n")
         wrapper.chmod(0o755)
     git = shutil.which("git")
     if git_stdout is not None:
@@ -191,7 +234,7 @@ def run_case(document: dict, outputs: dict = None, region: str = REGION, extra=(
     if region is None:
         env.pop("AWS_REGION")
     env.update(env_changes or {})
-    argv = [sys.executable, "-I", str(repo / "tools" / "bench" / "fargate.py"), "--txt", str(case / txt_name),
+    argv = [*python(), str(repo / "tools" / "bench" / "fargate.py"), "--txt", str(case / txt_name),
             "--json", str(case / "out.json"), "--ca", str(case / ca), "--local-port", str(free_port()),
             "--poll-seconds", "0", "--probe-interval", "0", "--task-timeout", "20", "--health-timeout", "20",
             "--log-timeout", "1", "--probe-attempts", "5", "--forward-timeout", "20", *extra]
@@ -229,13 +272,15 @@ class CaseBase(unittest.TestCase):
 
 
 class TenCleanRestarts(CaseBase):
-    """One clean run, read by every test here."""
+    """One clean run, read by every test here, on a cell last applied before #787, whose gateway
+    tasks still ran ECS Exec: the one shape in which the zero is the metadata StartedAt (Q1, Q11).
+    AfterExecOff runs the shape a cell applied since #787 has."""
 
     @classmethod
     def setUpClass(cls):
         plans = [plan() for _ in range(10)]
         plans[1] = plan(probe_lands=["old", "old", "new"])
-        cls.result = run_case(world(plans))
+        cls.result = run_case(world(plans, gateway_exec=True))
 
     def test_exits_0_and_writes_both_files_complete(self):
         self.assertEqual(0, self.result.code, self.result.stderr)
@@ -327,12 +372,13 @@ class TenCleanRestarts(CaseBase):
         self.assertIn("S - T0", self.result.txt)
         self.assertIn("cross-clock", self.result.txt)
 
-    def test_each_hop_is_its_own_port_forward_through_the_outgoing_task(self):
+    def test_each_hop_is_its_own_port_forward_through_the_bastion_task(self):
+        # Through the bastion even where the gateway's tasks still run Exec (#1167): never through
+        # a task of the gateway's service.
         sessions = self.result.aws("ssm", "start-session")
         self.assertEqual(10, len(sessions))
-        hops = [task_id(1)] + [task_id(100 + 2 * i) for i in range(9)]
-        for argv, hop in zip(sessions, hops):
-            self.assertEqual(f"ecs:{CLUSTER}_{hop}_{hop}-2222", argv[argv.index("--target") + 1])
+        for argv in sessions:
+            self.assertEqual(BASTION_TARGET, argv[argv.index("--target") + 1])
             parameters = json.loads(argv[argv.index("--parameters") + 1])
             self.assertEqual([ALB], parameters["host"])
             self.assertEqual(["443"], parameters["portNumber"])
@@ -342,12 +388,14 @@ class TenCleanRestarts(CaseBase):
                          [s for s in shapes if s in ("ssm start-session", "ecs update-service")])
 
     def test_the_302_probe_is_a_cookieless_navigation_retried_until_the_new_stream_holds_a_302(self):
-        # Restart 2's first two probes land on the old task; the third reaches the new one.
-        by_hop = {}
+        # Restart 2's first two probes land on the old task; the third reaches the new one. Every
+        # probe goes through the bastion.
+        by_restart = {}
         for probe in self.result.probes:
-            by_hop.setdefault(probe["hop"], []).append(probe)
-        second = by_hop[100]
+            by_restart.setdefault(probe["restart"], []).append(probe)
+        second = by_restart[2]
         self.assertEqual([100, 100, 102], [probe["task"] for probe in second])
+        self.assertEqual({BASTION_N}, {probe["hop"] for probe in self.result.probes})
         self.assertEqual(3, len(self.result.json["restarts"][1]["probes"]))
         for probe in self.result.probes:
             self.assertEqual("GET / HTTP/1.1", probe["request"])
@@ -382,6 +430,103 @@ class TenCleanRestarts(CaseBase):
     def test_no_call_ran_with_a_credential_in_its_environment(self):
         self.assertTrue(self.result.calls)
         self.assertEqual([], [call for call in self.result.calls if call["credential_env"]])
+
+
+class AfterExecOff(CaseBase):
+    """Ten clean restarts of a cell applied since #787: the gateway service's tasks run with ECS
+    Exec off and no Exec agent, and the bastion (#1167) is the only container a session reaches. The
+    doubles refuse a session to any other target and an exec on a task run with Exec off, as AWS
+    does (#1378)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.result = run_case(world())
+
+    def test_exits_0_with_ten_complete_restarts(self):
+        self.assertEqual(0, self.result.code, self.result.stderr)
+        self.assertNoUnexpectedCalls(self.result)
+        self.assertEqual("clean", self.result.json["ending"])
+        self.assertEqual([True] * 10, [restart["complete"] for restart in self.result.json["restarts"]])
+        self.assertNoSecrets(self.result)
+
+    def test_every_forward_goes_through_the_bastion_task(self):
+        sessions = self.result.aws("ssm", "start-session")
+        self.assertEqual(10, len(sessions))
+        self.assertEqual([BASTION_TARGET] * 10, [argv[argv.index("--target") + 1] for argv in sessions])
+        self.assertEqual([task_id(BASTION_N)] * 10, [restart["hop_task"] for restart in self.result.json["restarts"]])
+        # Its tasks are listed from the bastion service the outputs document names.
+        listed = self.result.aws("ecs", "list-tasks", "--cluster", CLUSTER, "--service-name", BASTION_SERVICE)
+        self.assertEqual(10, len(listed))
+
+    def test_no_exec_is_sent_and_every_zero_is_pull_stopped_at_saying_why(self):
+        # Asserted, not left to assertNoUnexpectedCalls: an exec the doubles refuse would read as
+        # one more fallback.
+        self.assertEqual([], self.result.aws("ecs", "execute-command"))
+        for restart in self.result.json["restarts"]:
+            self.assertEqual({"source": "pullStoppedAt", "ns": restart["pull_stopped_ns"], "fallback": fargate.NO_EXEC},
+                             restart["zero"])
+        self.assertIn(f"#1 pullStoppedAt (fallback: {fargate.NO_EXEC})", self.result.txt)
+        # From pullStoppedAt, 1500 ms before the container started: listening at 900 ms after that.
+        self.assertRegex(self.result.txt, r"listening \(log\)\s+2400\s+2400\n")
+
+
+class TheHop(CaseBase):
+    """The forward's hop is the bastion's task (#1167), refused before restart 1 when there is none
+    a session can reach, and incomplete when one goes missing later."""
+
+    def assertRefusedSaying(self, run, says):
+        self.assertEqual(2, run.code, run.stderr)
+        self.assertIsNone(run.txt)
+        self.assertIsNone(run.json)
+        self.assertEqual([], run.aws("ecs", "update-service"))
+        self.assertEqual([], run.aws("ssm", "start-session"))
+        self.assertIn(says, run.stderr)
+        self.assertNoUnexpectedCalls(run)
+        self.assertNoSecrets(run)
+
+    def test_an_outputs_document_naming_no_bastion_is_refused_before_any_aws_call(self):
+        for given in (None, ""):
+            with self.subTest(repr(given)):
+                run = run_case(world(), outputs={"ecsBastionService": given})
+                self.assertRefusedSaying(run, "names no ecsBastionService, so the cell has no bastion")
+                self.assertIn("bastion = true", run.stderr)
+                self.assertEqual([], run.calls)
+
+    def test_a_bastion_with_no_running_task_is_refused(self):
+        run = run_case(world(bastion_tasks={}))
+        self.assertRefusedSaying(run, f"{BASTION_SERVICE} has no running task, so the port forward has no hop.")
+
+    def test_a_bastion_task_no_session_can_reach_is_refused(self):
+        for name, change in (("stopping", {"last": "DEACTIVATING"}), ("Exec off", {"exec": False}),
+                             ("agent not running", {"agent": "STOPPED"}), ("no runtime id", {"runtime": False})):
+            with self.subTest(name):
+                # Each is listed, since list-tasks reads the desired status, and described as it is.
+                tasks = {str(BASTION_N): dict(world()["bastion_tasks"][str(BASTION_N)], **change)}
+                run = run_case(world(bastion_tasks=tasks))
+                self.assertRefusedSaying(run, f"no task of {BASTION_SERVICE} can carry a session")
+
+    def test_the_first_bastion_task_a_session_can_reach_is_the_hop(self):
+        tasks = {"899": {"n": 899, "last": "RUNNING", "exec": True, "agent": "PENDING"},
+                 str(BASTION_N): {"n": BASTION_N, "last": "RUNNING", "exec": True, "agent": "RUNNING"}}
+        run = run_case(world([plan(stable=False)], bastion_tasks=tasks))
+        self.assertEqual(4, run.code, run.stderr)
+        self.assertEqual([BASTION_TARGET], [argv[argv.index("--target") + 1] for argv in run.aws("ssm", "start-session")])
+
+    def test_a_bastion_gone_after_restart_1_is_incomplete(self):
+        document = world()
+        document["bastion_gone_after"] = 1
+        run = run_case(document)
+        self.assertEqual(4, run.code, run.stderr)
+        self.assertEqual(1, len(run.aws("ecs", "update-service")))
+        self.assertEqual("incomplete", run.json["ending"])
+        self.assertEqual(f"{BASTION_SERVICE} has no running task, so the port forward has no hop. Is the service steady?",
+                         run.json["reason"])
+        self.assertEqual([True, False], [restart["complete"] for restart in run.json["restarts"]])
+        self.assertNoUnexpectedCalls(run)
+        self.assertNoSecrets(run)
+
+    def test_the_container_name_is_the_one_ecs_tf_gives_the_bastion(self):
+        self.assertEqual(BASTION_CONTAINER, fargate.BASTION_CONTAINER)
 
 
 class Endings(CaseBase):
@@ -602,6 +747,7 @@ class Endings(CaseBase):
             "no Region": dict(region=None),
             "no outputs document": dict(outputs=False),
             "an outputs document for another Region": dict(outputs={"region": "eu-west-1"}),
+            "an outputs document naming no bastion": dict(outputs={"ecsBastionService": None}),
             "no credentials": dict(document=world(credentials=False)),
             "not on gatewayImage": dict(document=world(td_image=IMAGE.replace("a1" * 32, "ff" * 32))),
             "not stable": dict(document=world(initially_stable=False)),
@@ -695,8 +841,9 @@ class TheOneTaskShape(CaseBase):
 
 class TheZero(CaseBase):
     def test_every_failure_of_the_exec_read_falls_back_to_pull_stopped_at_with_its_reason(self):
+        # A cell last applied before #787, where the session can open and its read can fail.
         plans = [plan(exec="no-session"), plan(exec="no-endpoint"), plan(exec="no-parse")] + [plan() for _ in range(7)]
-        run = run_case(world(plans))
+        run = run_case(world(plans, gateway_exec=True))
         self.assertEqual(0, run.code, run.stderr)
         zeros = [restart["zero"] for restart in run.json["restarts"][:4]]
         self.assertEqual(["pullStoppedAt"] * 3 + ["metadata StartedAt"], [zero["source"] for zero in zeros])
@@ -710,6 +857,23 @@ class TheZero(CaseBase):
         # The fallback zero is pullStoppedAt itself, so listening is 900 + 1500 ms after it.
         self.assertEqual(2400.0, fargate.clocks(run.json["restarts"][1])["listening"])
         self.assertNoSecrets(run)
+
+    def test_a_new_task_describe_tasks_did_not_describe_still_gets_the_exec_try(self):
+        # #1378: only an answer saying Exec is off skips the session. One that describes nothing
+        # says nothing about Exec, so the session is tried: here it opens, on a pre-#787 cell, and
+        # off it, the double's refusal is the fallback with its own code, never NO_EXEC.
+        for exec_on, source in ((True, "metadata StartedAt"), (False, "pullStoppedAt")):
+            with self.subTest(gateway_exec=exec_on):
+                run = run_case(world([plan(undescribed_once_stable=True), plan(stable=False)], gateway_exec=exec_on))
+                self.assertEqual(4, run.code, run.stderr)
+                self.assertNoUnexpectedCalls(run)
+                self.assertEqual(1, len(run.aws("ecs", "execute-command")))
+                zero = run.json["restarts"][0]["zero"]
+                self.assertEqual(source, zero["source"])
+                self.assertNotEqual(fargate.NO_EXEC, zero.get("fallback"))
+                if not exec_on:
+                    self.assertIn("InvalidParameterException", zero["fallback"])
+                self.assertNoSecrets(run)
 
 
 class TheOneLiner(unittest.TestCase):
@@ -727,7 +891,7 @@ class TheOneLiner(unittest.TestCase):
                 self.end_headers()
                 self.wfile.write(json.dumps(body or {}).encode())
 
-        server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+        server = http.server.HTTPServer(("127.0.0.1", free_port()), Handler)
         threading.Thread(target=server.serve_forever, daemon=True).start()
         self.addCleanup(server.server_close)
         self.addCleanup(server.shutdown)
@@ -1076,8 +1240,10 @@ class TheSecrecyMatrix(CaseBase):
     def setUpClass(cls):
         cls.path_name = f"report{FOREIGN}.txt"
         plans = [plan(exec="no-session") for _ in range(10)]
-        cls.clean = run_case(world(plans, platform_version=f"LATEST-{FOREIGN}", exec_error_code=f"Target{FOREIGN}Exception"),
-                             txt_name=cls.path_name)
+        # gateway_exec: a cell last applied before #787, so the exec is sent and its error code is
+        # free text on its way in.
+        cls.clean = run_case(world(plans, platform_version=f"LATEST-{FOREIGN}", exec_error_code=f"Target{FOREIGN}Exception",
+                                   gateway_exec=True), txt_name=cls.path_name)
 
     def test_clean(self):
         run = self.clean
@@ -1103,9 +1269,11 @@ class TheSecrecyMatrix(CaseBase):
         self.assertIn("000000000000", first)
         self.assertIn(f"#1 task {first} complete", run.txt)
         self.assertEqual(first, run.json["restarts"][0]["task_id"])
-        self.assertIn(f"restart 2/10: deployment ecs-svc/2000000000000000001, hop through task {first}", run.stdout)
+        hop = task_id(BASTION_N)
+        self.assertIn("000000000000", hop)
+        self.assertIn(f"restart 2/10: deployment ecs-svc/2000000000000000001, hop through task {hop}", run.stdout)
         self.assertEqual("ecs-svc/2000000000000000000", run.json["restarts"][0]["deployment"])
-        self.assertEqual(task_id(1), run.json["restarts"][0]["hop_task"])
+        self.assertEqual(hop, run.json["restarts"][0]["hop_task"])
 
     def test_the_commit_keeps_a_long_digit_run_where_arbitrary_text_would_lose_it(self):
         # Digits of its own: the designated source keeps its run, so a canary in SECRETS cannot stand in it.
@@ -1180,7 +1348,7 @@ class TheSecrecyMatrix(CaseBase):
                ["health", 200, 3000],
                ["raw", {"msg": "Request", "route": "health", "status": 200, "duration_ms": 1.2,
                         "_event_timestamp": ACCOUNT_IN_A_NUMBER_MS}, 3100]]
-        finished = run_case(world([plan(created_at=created, log=log), plan(stable=False)]))
+        finished = run_case(world([plan(created_at=created, log=log), plan(stable=False)], gateway_exec=True))
         self.assertEqual(4, finished.code, finished.stderr)
         first = finished.json["restarts"][0]
         self.assertEqual(ACCOUNT_IN_A_NUMBER_NS, first["created_ns"])
@@ -1257,8 +1425,8 @@ class TheMalformedValues(CaseBase):
                 self.assertRefused(run_case(world(account_answer=answer)), "no well-formed account id", answer)
 
     def test_a_malformed_task_id_on_the_hop_of_restart_1_is_refused(self):
-        run = run_case(world(arn_ids={"1": self.BAD}))
-        self.assertRefused(run, "holds no well-formed task id", self.BAD)
+        run = run_case(world(arn_ids={str(BASTION_N): self.BAD}))
+        self.assertRefused(run, "a bastion task's ARN holds no well-formed task id.", self.BAD)
 
     def test_a_malformed_task_id_on_the_new_task_is_incomplete(self):
         run = run_case(world(arn_ids={"100": self.BAD}))
@@ -1315,7 +1483,7 @@ class TheMalformedValues(CaseBase):
             ["raw", {"ts": self.BAD, "msg": "Request", "route": "health", "status": 200}, 3300]]
         plans = [plan(log=log, exec="bad-drift", probe_status_line=f"HTTP/1.1 {FOREIGN} Found"),
                  plan(stable=False, probe_status_line="HTTP/1.1 BADVALUE Found")]
-        run = run_case(world(plans, health_reason=[self.BAD]), git_stdout=self.BAD)
+        run = run_case(world(plans, health_reason=[self.BAD], gateway_exec=True), git_stdout=self.BAD)
         self.assertEqual(4, run.code, run.stderr)
         self.assertEqual(2, len(run.aws("ecs", "update-service")))
         first = run.json["restarts"][0]
@@ -1410,12 +1578,34 @@ class TheDoubles(unittest.TestCase):
     def test_an_unknown_call_shape_is_recorded_and_exits_97(self):
         case = pathlib.Path(tempfile.mkdtemp(prefix="fargate-double-"))
         save(case, world())
-        done = subprocess.run([sys.executable, "-I", str(DOUBLES), "aws", str(case),
+        done = subprocess.run([*python(), str(DOUBLES), "aws", str(case),
                                "--region", REGION, "ecs", "delete-service", "--cluster", CLUSTER, "--output", "json"],
                               capture_output=True, text=True, env={"PATH": "/usr/bin:/bin"})
         self.assertEqual(97, done.returncode)
         calls = [json.loads(line) for line in (case / "calls.jsonl").read_text().splitlines()]
         self.assertEqual("ecs delete-service", calls[-1]["unexpected"])
+
+    def double(self, document, *argv):
+        case = pathlib.Path(tempfile.mkdtemp(prefix="fargate-double-"))
+        save(case, document)
+        return subprocess.run([*python(), str(DOUBLES), "aws", str(case), "--region", REGION, *argv, "--output", "json"],
+                              capture_output=True, text=True, env={"PATH": "/usr/bin:/bin"})
+
+    def test_a_session_to_a_gateway_container_is_refused_once_exec_is_off(self):
+        # The double this ticket's script once passed against (#1378): Session Manager reaches no
+        # container whose task runs Exec off, so a forward through a gateway task fails here as there.
+        gateway = f"ecs:{CLUSTER}_{task_id(1)}_{task_id(1)}-2222"
+        parameters = json.dumps({"host": [ALB], "portNumber": ["443"], "localPortNumber": ["9"]})
+        forward = ("ssm", "start-session", "--target", gateway, "--document-name", "AWS-StartPortForwardingSessionToRemoteHost",
+                   "--parameters", parameters)
+        done = self.double(world(), *forward)
+        self.assertEqual(254, done.returncode)
+        self.assertIn("(TargetNotConnected)", done.stderr)
+        # Its exec, likewise.
+        done = self.double(world(), "ecs", "execute-command", "--cluster", CLUSTER, "--task", task_id(1), "--container", GATEWAY,
+                           "--interactive", "--command", fargate.EXEC_COMMAND)
+        self.assertEqual(254, done.returncode)
+        self.assertIn("(InvalidParameterException)", done.stderr)
 
     def test_the_tests_and_the_script_import_nothing_from_tools_scripts(self):
         for path in (SCRIPT, DOUBLES, pathlib.Path(__file__).resolve()):
@@ -1429,5 +1619,400 @@ class TheDoubles(unittest.TestCase):
         self.assertTrue(any(call["credential_env"] for call in run.calls))
 
 
+# --- running the cases side by side ---------------------------------------------------------------
+
+
+class TheRunner(unittest.TestCase):
+    """Concurrently against stock unittest, on small suites whose every outcome is known: a failing
+    test turns the run red, a fixture that raises is reported under the fixture's own name, and the
+    count, the failures, the errors, the skips and which fixtures ran agree with unittest.TestSuite's."""
+
+    # unittest keeps one list of module cleanups for the process, and on 3.9 one list of class
+    # cleanups for every TestCase, which stock unittest's runs here share: the cases take turns.
+    RUNNERS = threading.Lock()
+
+    @staticmethod
+    def classes(module: str):
+        calls = []
+
+        class Passing(unittest.TestCase):
+            def test_passes(self):
+                pass
+
+            def test_one_subtest_fails(self):
+                for i in (1, 2):
+                    with self.subTest(i=i):
+                        self.assertEqual(1, i)
+
+        class Failing(unittest.TestCase):
+            def test_fails(self):
+                self.fail("inner failure")
+
+            def test_raises(self):
+                raise RuntimeError("inner error")
+
+        class SetUpRaises(unittest.TestCase):
+            @classmethod
+            def setUpClass(cls):
+                cls.addClassCleanup(calls.append, "SetUpRaises cleanup")
+                raise RuntimeError("setUpClass raised")
+
+            def test_never_runs(self):
+                calls.append("SetUpRaises test")
+
+        class SetUpSkips(unittest.TestCase):
+            @classmethod
+            def setUpClass(cls):
+                raise unittest.SkipTest("setUpClass skipped")
+
+            def test_never_runs(self):
+                calls.append("SetUpSkips test")
+
+        @unittest.skip("class skipped")
+        class Skipped(unittest.TestCase):
+            @classmethod
+            def setUpClass(cls):
+                calls.append("Skipped setUpClass")
+
+            def test_skipped(self):
+                calls.append("Skipped test")
+
+        class TearDownRaises(unittest.TestCase):
+            @classmethod
+            def tearDownClass(cls):
+                cls.addClassCleanup(calls.append, "TearDownRaises cleanup")
+                raise RuntimeError("tearDownClass raised")
+
+            def test_passes(self):
+                pass
+
+        class CleanupRaises(unittest.TestCase):
+            @classmethod
+            def setUpClass(cls):
+                cls.addClassCleanup(calls.append, "CleanupRaises cleanup")
+                cls.addClassCleanup(operator.truediv, 1, 0)
+
+            def test_passes(self):
+                pass
+
+        class CleansUp(unittest.TestCase):
+            @classmethod
+            def setUpClass(cls):
+                cls.addClassCleanup(calls.append, "CleansUp cleanup")
+
+            def test_before_its_cleanup(self):
+                calls.append("CleansUp test, its cleanup already run" if "CleansUp cleanup" in calls else "CleansUp test")
+
+        found = [Passing, Failing, SetUpRaises, SetUpSkips, Skipped, TearDownRaises, CleanupRaises, CleansUp]
+        for cls in found:
+            cls.__module__ = module
+        return calls, found
+
+    @staticmethod
+    def outcome(run, classes) -> dict:
+        result = unittest.TestResult()
+        run(unittest.TestSuite(unittest.defaultTestLoader.loadTestsFromTestCase(cls) for cls in classes))(result)
+        return {"run": result.testsRun, "success": result.wasSuccessful(),
+                "failures": [str(test) for test, _ in result.failures], "errors": [str(test) for test, _ in result.errors],
+                "skipped": [(str(test), reason) for test, reason in result.skipped]}
+
+    def both(self, module: str, pick=None, runner=None):
+        """The outcome and the calls of each runner, Concurrently unless named, each on classes of its own."""
+        found = []
+        with self.RUNNERS:
+            for run in (lambda suite: suite, runner or Concurrently):
+                calls, classes = self.classes(module)
+                found.append((self.outcome(run, pick(classes) if pick else classes), sorted(calls)))
+        return found
+
+    def module(self, **fixtures) -> str:
+        name = f"fargate_runner_probe_{id(self)}_{len(fixtures)}_{sorted(fixtures)}"
+        sys.modules[name] = types.ModuleType(name)
+        for key, value in fixtures.items():
+            setattr(sys.modules[name], key, value)
+        self.addCleanup(sys.modules.pop, name, None)
+        return name
+
+    def test_every_outcome_and_every_fixture_call_is_stock_unittests(self):
+        (stock, stock_calls), (mine, mine_calls) = self.both(f"fargate_runner_probe_{id(self)}_unregistered")
+        self.assertEqual(stock, mine)
+        self.assertEqual(stock_calls, mine_calls)
+        # Not two runners agreeing on nothing: what each case must have reported.
+        self.assertFalse(mine["success"])
+        self.assertEqual(8, mine["run"])
+        self.assertEqual(["CleansUp cleanup", "CleansUp test", "CleanupRaises cleanup", "SetUpRaises cleanup",
+                          "TearDownRaises cleanup"], mine_calls)
+        self.assertEqual(4, len(mine["errors"]))
+        self.assertTrue(mine["errors"][1].startswith("setUpClass (") and mine["errors"][1].endswith("SetUpRaises)"), mine["errors"])
+        self.assertTrue(mine["errors"][2].startswith("tearDownClass (") and mine["errors"][2].endswith("TearDownRaises)"), mine["errors"])
+        # A class cleanup that raises is an error of the class's tearDownClass, as unittest reports it.
+        self.assertTrue(mine["errors"][3].startswith("tearDownClass (") and mine["errors"][3].endswith("CleanupRaises)"), mine["errors"])
+        self.assertEqual(2, len(mine["failures"]))
+        self.assertEqual({"class skipped", "setUpClass skipped"}, {reason for _, reason in mine["skipped"]})
+
+    def test_a_class_whose_setup_raises_runs_its_own_cleanups_and_no_others(self):
+        # One worker opens CleansUp and then SetUpRaises before any test runs, so on Python 3.9, where
+        # every class shares one cleanup list, SetUpRaises' cleanups would run CleansUp's before its test.
+        class OneAtATime(Concurrently):
+            WORKERS = 1
+
+        (stock, stock_calls), (mine, mine_calls) = self.both(f"fargate_runner_probe_{id(self)}_unregistered",
+                                                             lambda classes: [classes[7], classes[2]], OneAtATime)
+        self.assertEqual(stock, mine)
+        self.assertEqual(stock_calls, mine_calls)
+        self.assertEqual(["CleansUp cleanup", "CleansUp test", "SetUpRaises cleanup"], mine_calls)
+
+    def test_a_failing_test_alone_turns_the_run_red(self):
+        (stock, _), (mine, _) = self.both(f"fargate_runner_probe_{id(self)}_unregistered",
+                                          lambda classes: [classes[1]])
+        self.assertEqual(stock, mine)
+        self.assertEqual({"run": 2, "success": False}, {key: mine[key] for key in ("run", "success")})
+
+    def test_a_module_whose_setup_raises_runs_nothing_more_and_says_so(self):
+        torn = []
+
+        def raises():
+            unittest.addModuleCleanup(torn.append, "module cleanup")
+            raise RuntimeError("setUpModule raised")
+
+        name = self.module(setUpModule=raises, tearDownModule=lambda: torn.append("tearDownModule"))
+        (stock, stock_calls), (mine, mine_calls) = self.both(name)
+        self.assertEqual(stock, mine)
+        self.assertEqual(stock_calls, mine_calls)
+        self.assertEqual({"run": 0, "success": False, "failures": [], "errors": [f"setUpModule ({name})"], "skipped": []}, mine)
+        self.assertEqual(["module cleanup", "module cleanup"], torn, "each runner ran the cleanup and no tearDownModule")
+
+    def test_a_module_whose_teardown_raises_is_an_error_of_its_own(self):
+        def raises():
+            raise RuntimeError("tearDownModule raised")
+
+        name = self.module(tearDownModule=raises)
+        (stock, _), (mine, _) = self.both(name, lambda classes: [classes[0]])
+        self.assertEqual(stock, mine)
+        self.assertEqual([f"tearDownModule ({name})"], mine["errors"])
+        self.assertEqual(2, mine["run"])
+
+    def test_a_modules_cleanups_run_last(self):
+        torn = []
+
+        def opens():
+            unittest.addModuleCleanup(torn.append, "module cleanup")
+
+        # With a tearDownModule, since Python 3.9's unittest runs a module's cleanups only after one.
+        name = self.module(setUpModule=opens, tearDownModule=lambda: torn.append("tearDownModule"))
+        (stock, _), (mine, _) = self.both(name, lambda classes: [classes[0]])
+        self.assertEqual(stock, mine)
+        self.assertEqual({"run": 2, "success": False}, {key: mine[key] for key in ("run", "success")})
+        self.assertEqual(["tearDownModule", "module cleanup"] * 2, torn, "each runner ran the cleanup after tearDownModule")
+
+    def test_the_flags_it_cannot_keep_are_refused_by_name(self):
+        # One quick test named, so that a broken refusal runs it and not the whole file again.
+        done = subprocess.run([*python(), str(pathlib.Path(__file__).resolve()), "-f", "-b", "-c", "TheProse"],
+                              capture_output=True, text=True, timeout=60)
+        self.assertEqual(2, done.returncode, done.stderr)
+        for flag in ("-f/--failfast", "-b/--buffer", "-c/--catch"):
+            self.assertIn(flag, done.stderr)
+        self.assertNotIn("Ran ", done.stderr)
+
+
+class Recorded(unittest.TestResult):
+    """What one test reported, kept to be replayed onto the run's own result in the main thread."""
+
+    def __init__(self):
+        super().__init__()
+        self.events = []
+
+    def __getattribute__(self, name):
+        if name.startswith("add"):
+            events = object.__getattribute__(self, "events")
+            return lambda *args: events.append((name, args))
+        return object.__getattribute__(self, name)
+
+
+def each_test(suite):
+    for item in suite:
+        if isinstance(item, unittest.TestSuite):
+            yield from each_test(item)
+        else:
+            yield item
+
+
+def report(events: list, description: str, exc_info) -> None:
+    """A fixture's outcome as stock unittest reports it: under the fixture's name, a SkipTest a skip."""
+    holder = _ErrorHolder(description)
+    if issubclass(exc_info[0], unittest.SkipTest):
+        events.append(("addSkip", (holder, str(exc_info[1]))))
+    else:
+        events.append(("addError", (holder, exc_info)))
+
+
+def fixture(call, description: str, events: list) -> bool:
+    """Calls a fixture, if there is one, and reports what it raised. True when it raised."""
+    if call is None:
+        return False
+    try:
+        call()
+    except Exception:
+        report(events, description, sys.exc_info())
+        return True
+    return False
+
+
+class Concurrently(unittest.TestSuite):
+    """The loaded tests of one module, run WORKERS at a time (#1473). Each case is a run of fargate.py
+    of up to about 270 calls to the doubles, waiting on a subprocess almost throughout, and no case
+    reads another's directory, port or result, so a serial run spends its time waiting.
+
+    What it keeps of unittest.TestSuite, which TheRunner holds it to: setUpModule once before
+    anything, and on its failure nothing else but the module's cleanups; each class's setUpClass once
+    before its tests and tearDownClass after them, with the class's own cleanups after either, and a
+    cleanup that raises an error of that fixture; no class fixture for a class skipped whole; a
+    setUpClass that raises runs none of its tests, and is an error, or a skip for SkipTest, named
+    "setUpClass (module.Class)", as each other fixture is named;
+    tearDownModule and the module's cleanups last. Each test reports into a Recorded of its own, and
+    everything is replayed in load order onto the run's result, so the output, the count and the
+    exit status are unittest's own.
+
+    What it does not keep: the order in which tests and fixtures run, which is concurrent; what a test
+    prints, which reaches the terminal as it is printed, not beside the test's result; and three of
+    unittest's flags, -f, -b and -c, which Program refuses rather than half honour. A module's cleanups
+    run even when it has no tearDownModule, as Python 3.11's unittest has it and 3.9's does not.
+
+    What TheRunner cannot hold it to: TheRunner reports through this runner too, so a fault that
+    drops the replay itself, every outcome at once, would pass TheRunner with everything else. So the
+    run raises, failing it, unless every event recorded was replayed, every test that ran recorded at
+    least one, and the result holds one more failure, error or skip for each one replayed."""
+
+    # One worker drives one case, a chain of subprocesses one at a time, so it holds about one core,
+    # and the run cannot finish before its longest chain, a ten-restart case of about 12 s. On the
+    # 12-core Mac this was written on, two runs each under the load of other lanes (load average 48
+    # to 90, #1473), the suite took 90 and 40 s with 4 workers, 37 and 49 s with 8, 59 and 33 s with
+    # 12: under that noise no count beat 8, and the cap leaves cores to the lanes beside it.
+    WORKERS = min(8, os.cpu_count() or 1)
+
+    def __init__(self, suite):
+        super().__init__()
+        self.tests = list(each_test(suite))
+        names = sorted({type(test).__module__ for test in self.tests})
+        if len(names) > 1:
+            raise ValueError(f"Concurrently runs one module's tests, and was given {names}")
+
+    def run(self, result, debug=False):
+        if not self.tests:
+            return result
+        name = type(self.tests[0]).__module__
+        module = sys.modules.get(name)
+
+        replayed = [0]
+        held = ("failures", "errors", "skipped", "expectedFailures", "unexpectedSuccesses")
+        before = sum(len(getattr(result, entries)) for entries in held)
+
+        def replay(events):
+            for method, args in events:
+                getattr(result, method)(*args)
+                replayed[0] += 1
+
+        if module is not None:
+            opening = []
+            if fixture(getattr(module, "setUpModule", None), f"setUpModule ({name})", opening):
+                fixture(unittest.case.doModuleCleanups, f"setUpModule ({name})", opening)
+                replay(opening)
+                return result
+        classes = list(dict.fromkeys(type(test) for test in self.tests))
+        with concurrent.futures.ThreadPoolExecutor(self.WORKERS) as pool:
+            opened = dict(zip(classes, pool.map(self.set_up, classes)))
+            recorded = list(pool.map(lambda test: None if opened[type(test)][1] == "failed" else self.one(test), self.tests))
+            closed = dict(zip(classes, pool.map(lambda cls: self.tear_down(cls) if opened[cls][1] == "up" else [], classes)))
+        last = {type(test): index for index, test in enumerate(self.tests)}
+        begun = set()
+        for index, (test, events) in enumerate(zip(self.tests, recorded)):
+            cls = type(test)
+            if cls not in begun:
+                begun.add(cls)
+                replay(opened[cls][0])
+            if events is not None:
+                result.startTest(test)
+                replay(events)
+                result.stopTest(test)
+            if last[cls] == index:
+                replay(closed[cls])
+        closing = []
+        if module is not None:
+            fixture(getattr(module, "tearDownModule", None), f"tearDownModule ({name})", closing)
+            fixture(unittest.case.doModuleCleanups, f"tearDownModule ({name})", closing)
+            replay(closing)
+        silent = [str(test) for test, events in zip(self.tests, recorded) if events == []]
+        lists = [events for events, _ in opened.values()] + [events for events in recorded if events] + list(closed.values())
+        expected = sum(len(events) for events in lists + [closing])
+        # Each of these adds one entry to a TestResult, and addSubTest one when the subtest failed;
+        # addSuccess, and 3.12's addDuration, leave none.
+        adding = ("addFailure", "addError", "addSkip", "addExpectedFailure", "addUnexpectedSuccess")
+        outcomes = sum(1 for events in lists + [closing] for method, args in events
+                       if method in adding or (method == "addSubTest" and args[2] is not None))
+        grown = sum(len(getattr(result, entries)) for entries in held) - before
+        if silent or replayed[0] != expected or grown != outcomes:
+            raise RuntimeError(f"Concurrently replayed {replayed[0]} of {expected} events, and the result holds {grown} "
+                               f"of {outcomes} outcomes; tests that reported nothing: {silent}")
+        return result
+
+    @staticmethod
+    def set_up(cls):
+        """The class's opening events, and "skipped", "failed" or "up"."""
+        events = []
+        if getattr(cls, "__unittest_skip__", False):
+            return events, "skipped"
+        description = f"setUpClass ({cls.__module__}.{cls.__qualname__})"
+        # Python 3.9's unittest keeps one _class_cleanups list on TestCase, shared by every subclass
+        # (Lib/unittest/case.py, 3.9: `_class_cleanups = []` in the class body); 3.11 gives each
+        # subclass its own in TestCase.__init_subclass__. A serial run empties the list before the next
+        # class opens, so the sharing is harmless there; here every class is open at once, and one
+        # class's doClassCleanups would run the others' cleanups before their tests.
+        if "_class_cleanups" not in vars(cls):
+            cls._class_cleanups = []
+        if fixture(cls.setUpClass, description, events):
+            Concurrently.class_cleanups(cls, description, events)
+            return events, "failed"
+        return events, "up"
+
+    @staticmethod
+    def tear_down(cls):
+        events = []
+        description = f"tearDownClass ({cls.__module__}.{cls.__qualname__})"
+        fixture(cls.tearDownClass, description, events)
+        Concurrently.class_cleanups(cls, description, events)
+        return events
+
+    @staticmethod
+    def class_cleanups(cls, description: str, events: list) -> None:
+        cls.doClassCleanups()
+        for exc_info in cls.tearDown_exceptions:
+            report(events, description, exc_info)
+
+    @staticmethod
+    def one(test):
+        recorded = Recorded()
+        test(recorded)
+        return recorded.events
+
+
+class Runner(unittest.TextTestRunner):
+    def run(self, test):
+        return super().run(Concurrently(test))
+
+
+class Program(unittest.TestProgram):
+    """unittest.main with Runner, refusing the flags Concurrently cannot keep: -f stops at the first
+    failure, but the tests after it have already run; -b swaps sys.stdout, which the threads share;
+    -c's handler stops a serial run between tests, which this one does not have."""
+
+    def runTests(self):
+        refused = [flag for flag, given in (("-f/--failfast", self.failfast), ("-b/--buffer", self.buffer),
+                                            ("-c/--catch", self.catchbreak)) if given]
+        if refused:
+            sys.stderr.write(f"fargate_tests.py: {', '.join(refused)} refused: the cases run side by side (Concurrently)\n")
+            sys.exit(2)
+        super().runTests()
+
+
 if __name__ == "__main__":
-    unittest.main()
+    Program(testRunner=Runner)

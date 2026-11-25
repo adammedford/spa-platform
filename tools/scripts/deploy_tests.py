@@ -6,6 +6,11 @@ registry, applies, waits for steady state, then asserts the running digest." The
 they share and the universal every run holds (no output names the account id) are
 tools/scripts/cell_doubles.py's; its docstring says what a case can and cannot show.
 
+The proof cell's entry file sets every case's entry values (#1348), so a change to it runs this
+companion.
+
+Checkout inputs: infra/envs/poc/cell.env infra/envs/poc/outputs-fields.json tools/scripts/poc/mock-api.sh
+
 Run: python3 -I tools/scripts/deploy_tests.py
 """
 
@@ -27,6 +32,10 @@ import time
 _spec = importlib.util.spec_from_file_location("cell_doubles", pathlib.Path(__file__).resolve().parent / "cell_doubles.py")
 cell = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(cell)
+# The fields the scripts write, from the field map they write them from (the proof cell's, which
+# its entry file names; #1348), not from the schema's root required: the contract may require fewer
+# of every cell than this cell's scripts write (#1367). The optional ones are left out.
+WRITTEN_FIELDS = sorted(entry["field"] for entry in cell.field_map()["fields"] if not entry.get("optional"))
 
 import unittest  # noqa: E402
 
@@ -41,6 +50,18 @@ def seeded_world(bastion: bool = True) -> dict:
                          "apps": [{"appId": "app1", "release": "r1"}, {"appId": "app2", "release": "r1"}]}
     world["objects"] = [{"Key": "registry/registry.json", "VersionId": "r2"}]
     return world
+
+
+def write_mock_api_tfvars(case, image: str):
+    """The mock API's tfvars in the case's platform root, under the name tools/scripts/poc/mock-api.sh
+    writes, as that script leaves it after a push (#1349)."""
+    (case.repo / "infra/envs/poc/platform" / cell.mock_api_tfvars_name()).write_text(f'mock_api_image = "{image}"\n')
+
+
+def tfvars_names(text: str) -> list[str]:
+    """The variables a tfvars file assigns, sorted."""
+    return sorted(line.split("=", 1)[0].strip() for line in text.splitlines()
+                  if "=" in line and not line.lstrip().startswith("#"))
 
 
 @contextlib.contextmanager
@@ -94,12 +115,13 @@ class DeployBuildsPushesAppliesAndAsserts(cell.CompanionTestCase):
         self.assertNoUnexpectedCall(case)
         return case, result
 
-    def test_both_images_are_built_for_arm64_from_the_repository_root_and_pushed(self):
+    def test_the_gateway_image_alone_is_built_for_arm64_from_the_repository_root_and_pushed(self):
+        # #1349: the deploy an adopter's operator copies builds the product and no fixture. The
+        # proof cell's mock API has a script of its own, tools/scripts/poc/mock-api.sh.
         case, _ = self.deployed()
         builds = [call for call in case.calls("docker") if call["argv"][:2] == ["buildx", "build"]]
-        self.assertEqual(2, len(builds))
-        for call, dockerfile, repository in ((builds[0], "src/Gateway/Dockerfile", cell.ECR_GATEWAY),
-                                             (builds[1], "fixtures/MockApi/Dockerfile", cell.ECR_MOCK_API)):
+        self.assertEqual(1, len(builds), builds)
+        for call, dockerfile, repository in ((builds[0], "src/Gateway/Dockerfile", cell.ECR_GATEWAY),):
             argv = call["argv"]
             self.assertEqual("linux/arm64", argv[argv.index("--platform") + 1])
             self.assertEqual(str(case.repo / dockerfile), argv[argv.index("--file") + 1])
@@ -138,23 +160,60 @@ class DeployBuildsPushesAppliesAndAsserts(cell.CompanionTestCase):
         # tag's current image fixes (#273).
         case, _ = self.deployed()
         builds = [call for call in case.calls("docker") if call["argv"][:2] == ["buildx", "build"]]
-        self.assertEqual(2, len(builds))
+        self.assertEqual(1, len(builds))
         for call in builds:
             self.assertIn("--pull", call["argv"], call["argv"])
 
-    def test_the_apply_names_each_image_by_the_digest_ecr_holds_and_the_health_path_is_readyz(self):
+    def test_the_apply_names_the_gateway_by_the_digest_ecr_holds_and_the_health_path_is_readyz(self):
         case, _ = self.deployed()
         world = case.load()
         gateway_tag = next(c["tag"] for c in case.calls("docker") if c.get("tag", "").startswith(cell.ECR_GATEWAY))
-        mock_tag = next(c["tag"] for c in case.calls("docker") if c.get("tag", "").startswith(cell.ECR_MOCK_API))
         # The digest is ECR's, read back by tag, not one the script made up or took from Docker.
         gateway = f"{cell.ECR_GATEWAY}@{world['repositories'][cell.GATEWAY_REPOSITORY][gateway_tag.rpartition(':')[2]]}"
-        mock = f"{cell.ECR_MOCK_API}@{world['repositories'][cell.MOCK_API_REPOSITORY][mock_tag.rpartition(':')[2]]}"
+        plans = [c for c in case.calls("terraform") if c.get("command") == "plan"]
         applies = [c for c in case.calls("terraform") if c.get("command") == "apply"]
         self.assertEqual(1, len(applies))
-        self.assertEqual({"gateway_image": gateway, "mock_api_image": mock, "health_check_path": "/readyz"},
-                         applies[0]["vars"])
+        # #1349: the gateway's image and health path, and no mock_api_image, which stays at what the
+        # root's tfvars holds. gateway_writable_root is the sample's (#1380): the gateway is applied on
+        # its read-only root, whatever terraform.tfvars still says from the sample's first apply.
+        for call in plans + applies:
+            self.assertEqual({"gateway_image": gateway, "health_check_path": "/readyz", "gateway_writable_root": "false"},
+                             call["vars"])
+            self.assertEqual([], [t for t in call["argv"] if "mock_api_image" in t], call["argv"])
         self.assertEqual("platform", applies[0]["root"])
+
+    def test_it_reads_no_ecr_mock_api_and_names_no_fixtures_path(self):
+        # #1349: deploying the product builds no fixture. An outputs document with no ecrMockApi, as
+        # an adopter's cell writes it, deploys; and the script's text names neither.
+        case = cell.Case(self, outputs=True, world=seeded_world())
+        path = case.outputs_path()
+        document = json.loads(path.read_text())
+        del document["ecrMockApi"]
+        path.write_text(json.dumps(document))
+        result = case.run(SCRIPT)
+        self.assertEqual(0, result.status, result.output)
+        self.assertNoUnexpectedCall(case)
+        text = (cell.SCRIPTS / SCRIPT).read_text()
+        self.assertNotIn("ecrMockApi", text)
+        self.assertNotIn("fixtures/", text)
+
+    def test_the_mock_api_container_stays_at_the_digest_its_tfvars_holds(self):
+        # The proof cell's mock API moves by its own script's file, which sorts after
+        # images.auto.tfvars, so a stale mock_api_image an older deploy.sh left there loses (#1349).
+        world = seeded_world()
+        case = cell.Case(self, outputs=True, world=world)
+        platform = case.repo / "infra/envs/poc/platform"
+        stale = f"{cell.ECR_MOCK_API}@{cell.digest_of('mock-stale')}"
+        current = f"{cell.ECR_MOCK_API}@{cell.digest_of('mock-current')}"
+        (platform / "images.auto.tfvars").write_text(f'gateway_image = "x"\nmock_api_image    = "{stale}"\n')
+        write_mock_api_tfvars(case, current)
+        result = case.run(SCRIPT)
+        self.assertEqual(0, result.status, result.output)
+        world = case.load()
+        running = world["task_definitions"][world["service"]["taskDefinition"]]["containers"]
+        self.assertEqual(current, running[cell.MOCK_API]["image"])
+        # And deploy.sh's rewrite of its own file drops the stale value.
+        self.assertNotIn("mock_api_image", (platform / "images.auto.tfvars").read_text())
 
     def test_the_saved_plan_is_what_is_applied(self):
         case, _ = self.deployed()
@@ -171,8 +230,11 @@ class DeployBuildsPushesAppliesAndAsserts(cell.CompanionTestCase):
         applied = next(c for c in case.calls("terraform") if c.get("command") == "apply")["vars"]
         tfvars = (case.repo / "infra/envs/poc/platform/images.auto.tfvars").read_text()
         self.assertIn(f'gateway_image     = "{applied["gateway_image"]}"', tfvars)
-        self.assertIn(f'mock_api_image    = "{applied["mock_api_image"]}"', tfvars)
         self.assertIn('health_check_path = "/readyz"', tfvars)
+        # Loaded after terraform.tfvars, so a later plain apply keeps the read-only root too (#1380).
+        self.assertIn("\ngateway_writable_root = false\n", tfvars)
+        # #1349: the gateway's values and nothing else; the mock API's digest is its own file's.
+        self.assertEqual(["gateway_image", "gateway_writable_root", "health_check_path"], tfvars_names(tfvars))
 
     def test_it_waits_for_a_steady_service_after_the_apply(self):
         case, result = self.deployed()
@@ -197,9 +259,8 @@ class DeployBuildsPushesAppliesAndAsserts(cell.CompanionTestCase):
     def test_it_writes_the_outputs_document_with_the_running_image(self):
         case, _ = self.deployed()
         document = json.loads((case.repo / "infra/envs/poc/outputs.json").read_text())
-        schema = json.loads((cell.ROOT / "contracts/infra-outputs.schema.json").read_text())
-        # Every required field, and the bastion's optional one, which this cell publishes (#1167).
-        self.assertEqual(sorted(schema["required"] + ["ecsBastionService"]), sorted(document))
+        # Every field the scripts write, and the bastion's optional one, which this cell publishes (#1167).
+        self.assertEqual(sorted(WRITTEN_FIELDS + ["ecsBastionService"]), sorted(document))
         self.assertEqual(cell.BASTION_SERVICE, document["ecsBastionService"])
         applied = next(c for c in case.calls("terraform") if c.get("command") == "apply")["vars"]
         self.assertEqual(applied["gateway_image"], document["gatewayImage"])
@@ -229,8 +290,13 @@ class DeployBuildsPushesAppliesAndAsserts(cell.CompanionTestCase):
         # client ids are not in cell_doubles.SECRETS (logs_tests.py says why), so this case searches
         # for them itself, and names what took their place so a script that dropped the plan's
         # lines would not pass.
+        # The mock API is in the task from its own script's tfvars (#1349), and a replaced task
+        # definition's plan shows it whichever image moved.
         world = seeded_world()
-        _, result = self.deployed(world)
+        case = cell.Case(self, outputs=True, world=world)
+        write_mock_api_tfvars(case, f"{cell.ECR_MOCK_API}@{cell.digest_of('mock-a')}")
+        result = case.run(SCRIPT)
+        self.assertEqual(0, result.status, result.output)
         for app, entry in world["roots"]["apps"]["clients"].items():
             self.assertNotIn(entry["clientId"], result.output, f"{app}'s client id was printed")
         self.assertIn('name = "MockApi__App1Client", value = "<client-id:app1>"', result.stdout)
@@ -508,6 +574,7 @@ class DeployRefusesAnEmptyRegistry(cell.CompanionTestCase):
     def refused(self, world: dict, fragment: str):
         case = cell.Case(self, outputs=True, world=world)
         result = case.run(SCRIPT)
+        case.last = result
         self.assertEqual(1, result.status, result.output)
         self.assertIn(fragment, result.stderr)
         self.assertEqual([], [c for c in case.calls("docker") if c["argv"][:2] == ["buildx", "build"]])
@@ -515,14 +582,25 @@ class DeployRefusesAnEmptyRegistry(cell.CompanionTestCase):
         self.assertNoUnexpectedCall(case)
         return case
 
+    # #1349: an adopter's equivalent of the proof cell's seed.sh is these two commands, and no message
+    # of a reference script names seed.sh.
+    SPACTL = "publish an app with spactl: spactl release publish, then spactl app add"
+
     def test_a_registry_with_no_app(self):
         world = seeded_world()
         world["registry"]["apps"] = []
-        self.refused(world, "holds no app")
+        case = self.refused(world, "holds no app")
+        self.names_spactl_not_seed(case)
 
     def test_no_registry_at_all(self):
         world = cell.with_bastion(cell.default_world())
-        self.refused(world, "Run tools/scripts/seed.sh first")
+        case = self.refused(world, "there is no live registry")
+        self.names_spactl_not_seed(case)
+
+    def names_spactl_not_seed(self, case):
+        stderr = case.last.stderr
+        self.assertIn(self.SPACTL, stderr)
+        self.assertNotIn("seed.sh", stderr)
 
     def test_a_registry_with_no_revision_to_wait_for(self):
         # Step 5 waits for the revision step 1 read (#309), so a document without one stops before
@@ -814,6 +892,7 @@ class DeployRefusesToStart(cell.CompanionTestCase):
         self.assertEqual(2, result.status, result.output)
         self.assertIn(fragment, result.stderr)
         self.assertEqual([], [c for c in case.calls("docker") if c["argv"][:2] == ["buildx", "build"]])
+        return result
 
     def test_without_docker(self):
         case = cell.Case(self, outputs=True, world=seeded_world())
@@ -834,7 +913,8 @@ class DeployRefusesToStart(cell.CompanionTestCase):
         # contracts/infra-outputs.schema.json: the scripts read outputs.json and none of them reads
         # Terraform state, teardown.sh excepted (Q49 on #129). Review of #58.
         case = cell.Case(self, world=seeded_world())
-        self.refused(case, "Run tools/scripts/seed.sh first")
+        result = self.refused(case, "written from the cell's roots' outputs after an apply")
+        self.assertNotIn("seed.sh", result.stderr)
         self.assertEqual([], case.calls("terraform"))
 
     def test_an_outputs_document_for_another_region(self):
@@ -867,6 +947,47 @@ class TheDoublesWorldIsReplacedWholeByRename(unittest.TestCase):
             self.assertEqual(new, json.loads((case / "world.json").read_text()))
             self.assertEqual(["world.json"], sorted(path.name for path in case.iterdir()),
                              "a staged world was left beside world.json")
+
+
+class DeployTakesTheCellFromTheEntryValues(cell.CompanionTestCase):
+    """#1348: the platform root, the roots, the field map, the outputs document and, without --url,
+    the certificate's domain are entry values with no default, each refused by name before anything
+    is built."""
+
+    READS = ("SPA_PLATFORM_ROOT", "SPA_ROOTS", "SPA_FIELD_MAP", "SPA_OUTPUTS_FILE", "SPA_CERT_DOMAIN")
+
+    def test_each_entry_value_it_reads_unset_exits_2_naming_it_before_any_call(self):
+        for name in self.READS:
+            for value in (None, ""):
+                with self.subTest(name=name, value=value):
+                    case = cell.Case(self, outputs=True, world=seeded_world())
+                    result = case.run(SCRIPT, env=case.env(**{name: value}))
+                    self.assertEqual(2, result.status, result.output)
+                    self.assertIn(f"{name} is not set", result.stderr)
+                    self.assertEqual([], case.calls())
+
+    def test_with_url_the_domain_is_not_read(self):
+        with listening() as port:
+            case = cell.Case(self, outputs=True, world=seeded_world())
+            result = case.run(SCRIPT, "--url", f"https://app2.spa-poc.test:{port}", env=case.env(SPA_CERT_DOMAIN=None))
+        self.assertEqual(0, result.status, result.output)
+
+    def test_the_wait_reads_through_the_domain_the_entry_value_names(self):
+        case = cell.Case(self, outputs=True, world=seeded_world())
+        result = case.run(SCRIPT, env=case.env(SPA_CERT_DOMAIN="cells.example.test"))
+        self.assertEqual(0, result.status, result.output)
+        wait = next(c["spactl"] for c in case.calls("dotnet") if c["spactl"][:1] == ["wait"])
+        self.assertTrue(wait[wait.index("--url") + 1].startswith("https://app1.cells.example.test:"), wait)
+
+    def test_help_reads_no_entry_value_and_names_no_profile(self):
+        case = cell.Case(self)
+        result = case.run(SCRIPT, "--help", env=case.env(**{name: None for name in cell.ENTRY_NAMES}))
+        self.assertEqual(0, result.status, result.output)
+        self.assertNotIn("the spa-platform profile", result.stdout)
+        self.assertNotIn("tools/aws-project.env", result.stdout)
+        self.assertNotIn("infra/envs/", result.stdout)
+        for name in self.READS:
+            self.assertIn(name, result.stdout)
 
 
 if __name__ == "__main__":

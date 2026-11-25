@@ -10,8 +10,9 @@
 # lookup with a 429, and the file was left with gateway_image = "public.ecr.aws/nginx/nginx-unprivileged@".
 # This script does the rewrite, and leaves the file as it was unless every value is well formed.
 #
-#   tools/scripts/platform-tfvars.sh
-#   tools/scripts/platform-tfvars.sh --sample-digest sha256:<64 hex>   # no lookup
+#   tools/scripts/poc/platform-tfvars.sh
+#   tools/scripts/poc/platform-tfvars.sh --sample-digest sha256:<64 hex>   # no lookup
+#   tools/scripts/poc/platform-tfvars.sh --bastion                         # and the tunnel's hop
 #
 # It writes into infra/envs/poc/platform/terraform.tfvars, which you copy from
 # terraform.tfvars.example first:
@@ -22,11 +23,21 @@
 #     --sample-digest gives, or else by the current digest of its stable-alpine tag, read with
 #     `docker buildx imagetools inspect`.
 #   - health_check_path = "/", the sample image's (infra/modules/cell/variables.tf -> health_check_path).
+#   - gateway_writable_root = true, the sample image's shape (#1380): it runs as uid 101 and writes
+#     under /tmp, which the gateway's read-only root mounts root-owned 0755, so it needs a writable
+#     root and no /tmp volume (infra/modules/cell/variables.tf -> gateway_writable_root). deploy.sh
+#     applies the gateway with false and records it in images.auto.tfvars, which Terraform loads
+#     after this file.
+#   - with --bastion only, bastion = true and bastion_image, the sample image pinned by the same digest
+#     as gateway_image (#1397). The bastion is the tunnel's hop (#1167), off by default (#1168), and
+#     deploy.sh and tunnel.sh refuse a cell whose outputs document names none, so a from-nothing
+#     sitting that deploys passes it; without it neither key is written, and any the file sets is
+#     left as it is. The bastion runs, and is billed, until an apply sets it back to false.
 # A key the file sets is changed in place, its comments and every other line kept; a key it does not
-# set is added, gateway_image under the example's commented line for it. Every value is checked
-# first, and the new file is written beside the old one and moved over it only then, so a failed or
-# malformed lookup leaves the file byte for byte as it was. A run that would change nothing writes
-# nothing.
+# set is added, gateway_image, bastion and bastion_image under the example's commented line for each.
+# Every value is checked first, and the new file is written beside the old one and moved over it
+# only then, so a failed or malformed lookup leaves the file byte for byte as it was. A run that
+# would change nothing writes nothing.
 #
 # It prints which keys changed and which did not, and no value but the sample digest: the issuer
 # names the user pool, and the Cognito domain carries the account id.
@@ -44,7 +55,7 @@
 # named, and the file is unchanged; 2 when it did not start (a usage error, a malformed
 # --sample-digest, a missing tool, no terraform.tfvars).
 #
-# Written for the bash 3.2 that ships with macOS, like tools/scripts/certs.sh.
+# Written for the bash 3.2 that ships with macOS, like tools/scripts/poc/certs.sh.
 # Owner: workstream 1, AWS and IaC.
 
 set -euo pipefail
@@ -52,13 +63,18 @@ umask 077
 
 PROGRAM="platform-tfvars"
 # shellcheck source=tools/scripts/cell-common.sh
-. "$(dirname -- "$0")/cell-common.sh"
+. "$(dirname -- "$0")/../cell-common.sh"
 
 # The sample image the platform root's first apply runs (Q5 on #98; terraform.tfvars.example).
 SAMPLE_REPOSITORY="public.ecr.aws/nginx/nginx-unprivileged"
 SAMPLE_TAG="stable-alpine"
 # The one issuer of Assumption A4, named as contracts/platform-config.example.json names it.
 ISSUER_NAME="cognito-poc"
+# The proof cell's own roots, named here: cell-common.sh holds no cell's paths (#1348), and this
+# script writes the platform root's inputs from the identity root's outputs before the platform
+# root's first apply, so it needs no entry value.
+IDP_ROOT="${REPO_ROOT}/infra/envs/poc/idp"
+PLATFORM_ROOT="${REPO_ROOT}/infra/envs/poc/platform"
 TFVARS="${PLATFORM_ROOT}/terraform.tfvars"
 
 # A SHA-256 digest in full: 64 lowercase hex.
@@ -73,6 +89,7 @@ DOMAIN_FORM='^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$'
 
 SAMPLE_DIGEST=""
 DIGEST_GIVEN=""
+BASTION=""
 
 usage() {
   # The header above, up to the Owner line, is this script's manual.
@@ -81,6 +98,7 @@ usage() {
 
 Options
   --sample-digest sha256:<64 hex>   Pin the sample image by this digest, with no lookup.
+  --bastion                         Also write bastion = true and bastion_image, the same pin.
   -h, --help                        This text.
 EOF
 }
@@ -93,6 +111,7 @@ while [ "$#" -gt 0 ]; do
       DIGEST_GIVEN="yes"
       shift
       ;;
+    --bastion) BASTION="yes" ;;
     -h | --help)
       usage
       exit 0
@@ -149,7 +168,7 @@ pin = re.fullmatch(r"gateway_image\s*=\s*\"" + re.escape(sys.argv[2]) + r"@(sha2
 if pin:
     print(pin[1])' "$TFVARS" "$SAMPLE_REPOSITORY" 2> /dev/null || true)"
   if [[ "$pinned" =~ $DIGEST_FORM ]]; then
-    printf 'It already pins the sample image at %s. To reuse that pin, run:\n  tools/scripts/platform-tfvars.sh --sample-digest %s' \
+    printf 'It already pins the sample image at %s. To reuse that pin, run:\n  tools/scripts/poc/platform-tfvars.sh --sample-digest %s' \
       "$pinned" "$pinned"
   else
     printf 'Try again later, or pass --sample-digest.'
@@ -180,7 +199,7 @@ fi
 
 # --- the rewrite -----------------------------------------------------------------------------------
 
-python3 -I - "$TFVARS" "$ISSUER_NAME" "$ISSUER" "https://${DOMAIN}" "${SAMPLE_REPOSITORY}@${SAMPLE_DIGEST}" "/" <<'PY' ||
+python3 -I - "$TFVARS" "$ISSUER_NAME" "$ISSUER" "https://${DOMAIN}" "${SAMPLE_REPOSITORY}@${SAMPLE_DIGEST}" "/" "$BASTION" <<'PY' ||
 """Rewrites the named keys of a terraform.tfvars in place, line by line, and moves the result over
 the file only when every key is in a shape it can edit. It changes the value between a key's quotes
 and nothing else on the line, so a trailing comment stays. Its messages name keys, never values."""
@@ -190,7 +209,7 @@ import stat
 import sys
 import tempfile
 
-path, issuer_name, authority, origin, image, health = sys.argv[1:7]
+path, issuer_name, authority, origin, image, health, bastion = sys.argv[1:8]
 
 
 class Refused(Exception):
@@ -252,16 +271,23 @@ def set_line(index: int, match: re.Match, value: str):
     lines[index] = match[1] + value + match[3]
 
 
-def set_scalar(key: str, value: str, after_comment: bool):
+def bool_line(index: int, key: str) -> tuple[re.Match, str]:
+    match = re.match(r'^(\s*' + re.escape(key) + r'\s*=\s*)(true|false)((?:\s+(?:#|//).*)?\s*)$', lines[index], re.DOTALL)
+    if match is None:
+        raise Refused(f"{key} is not a plain true or false")
+    return match, match[2]
+
+
+def set_scalar(key: str, value: str, after_comment: bool, boolean: bool = False):
     starts = [i for i in top_level() if re.match(r'^' + re.escape(key) + r'\s*=', lines[i])]
     if len(starts) > 1:
         raise Refused(f"{key} is set {len(starts)} times")
     if starts:
-        match, before = string_line(starts[0], key, key)
+        match, before = bool_line(starts[0], key) if boolean else string_line(starts[0], key, key)
         set_line(starts[0], match, value)
         record(key, before, value)
         return
-    new = f'{key} = "{value}"\n'
+    new = f'{key} = {value}\n' if boolean else f'{key} = "{value}"\n'
     commented = [i for i, line in enumerate(lines) if re.match(r'^#\s*' + re.escape(key) + r'\s*=', line)]
     if after_comment and commented:
         lines.insert(commented[0] + 1, new)
@@ -318,7 +344,11 @@ def set_issuer():
 try:
     set_scalar("gateway_image", image, after_comment=True)
     set_scalar("health_check_path", health, after_comment=False)
+    set_scalar("gateway_writable_root", "true", after_comment=False, boolean=True)
     set_issuer()
+    if bastion:
+        set_scalar("bastion", "true", after_comment=True, boolean=True)
+        set_scalar("bastion_image", image, after_comment=True)
 except Refused as refused:
     print(f"platform-tfvars: {refused}, so the file is unchanged. Edit that key by hand, or remove it "
           "for this script to write.", file=sys.stderr)
@@ -350,4 +380,8 @@ PY
   fail "$(root_name "$TFVARS") was not rewritten; it is unchanged."
 
 note "the sample image is pinned at ${SAMPLE_DIGEST}"
-note "pass: $(root_name "$TFVARS") holds the identity root's issuer and the sample image pin. The platform root's first apply is next."
+if [ -n "$BASTION" ]; then
+  note "pass: $(root_name "$TFVARS") holds the identity root's issuer, the sample image pin and the bastion, pinned the same. The platform root's first apply is next."
+else
+  note "pass: $(root_name "$TFVARS") holds the identity root's issuer and the sample image pin. The platform root's first apply is next."
+fi

@@ -27,6 +27,18 @@ internal static class Documents
     public static JsonObject RegistryApi(Action<JsonObject> change) =>
         RegistryEntry(entry => change(entry["apis"]![0]!.AsObject()));
 
+    /// <summary>The registry document with its single entry's first fragment changed.</summary>
+    public static JsonObject RegistryFragment(Action<JsonObject> change) =>
+        RegistryEntry(entry => change(entry["fragments"]![0]!.AsObject()));
+
+    /// <summary>The registry document with its single entry's fragments removed, then changed.</summary>
+    public static JsonObject RegistryWithoutFragments(Action<JsonObject>? change = null) =>
+        Registry(document =>
+        {
+            document["apps"]![0]!.AsObject().Remove("fragments");
+            change?.Invoke(document);
+        });
+
     public static JsonObject AppDefinition(Action<JsonObject>? change = null)
     {
         var document = ContractFiles.Example(ContractFiles.AppDefinitionExample).AsObject();

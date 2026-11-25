@@ -8,7 +8,7 @@ region   = "us-east-2"
 cell     = "poc"
 vpc_cidr = "10.20.0.0/16"
 
-# The wildcard certificate tools/scripts/certs.sh imported, without the wildcard.
+# The wildcard certificate tools/scripts/poc/certs.sh imported, without the wildcard.
 certificate_domain = "spa-poc.test"
 
 # The first apply runs the sample image, because the gateway image does not
@@ -18,13 +18,18 @@ certificate_domain = "spa-poc.test"
 # nginx image listens on 80 and its target would never turn healthy:
 # https://github.com/nginx/docker-nginx-unprivileged
 # The tag moves to each new build, so pin the image by the digest the tag
-# points to when you apply: tools/scripts/platform-tfvars.sh writes the pin
+# points to when you apply: tools/scripts/poc/platform-tfvars.sh writes the pin
 # below this line, with the issuers block from the identity root's outputs,
 # and leaves this file unchanged if a lookup fails (#470).
 # gateway_image = "public.ecr.aws/nginx/nginx-unprivileged@sha256:<digest>"
 
 # / on the sample image, /readyz once the gateway runs.
 health_check_path = "/"
+
+# true on the sample image, which writes under /tmp as uid 101 and cannot start
+# on the gateway's read-only root, whose /tmp volume is root-owned 0755 (#1380).
+# deploy.sh applies the gateway with false, and records it in images.auto.tfvars.
+gateway_writable_root = true
 
 # Deletes under apps/ are allowed to the teardown role infra/bootstrap creates,
 # spa-platform-<cell>-teardown, which this root looks up by name: nothing to set
@@ -56,7 +61,7 @@ additional_teardown_principal_arns = []
 # under a role holding only the four ssmmessages permissions, and tunnel.sh
 # forwards through it; it runs, and is billed, until an apply sets it back.
 # Its image is the sample image pinned by digest, as gateway_image is above. The
-# outputs document names the bastion once seed.sh, deploy.sh or rollback.sh
-# rewrites it after the apply.
+# outputs document names the bastion once tools/scripts/poc/seed.sh, deploy.sh
+# or rollback.sh rewrites it after the apply.
 # bastion       = true
 # bastion_image = "public.ecr.aws/nginx/nginx-unprivileged@sha256:<digest>"

@@ -35,20 +35,23 @@
 # task of the bastion service a session can reach is a failure that names it, never a fall back to
 # another.
 #
-# Its names come from the outputs document, infra/envs/poc/outputs.json, and from nowhere else: the
+# Its names come from the outputs document, $SPA_OUTPUTS_FILE, and from nowhere else: the
 # ECS cluster is its ecsCluster, the service its ecsBastionService and the load balancer its
 # albDnsName (contracts/infra-outputs.schema.json: "The scripts and the deployed tests read it").
-# seed.sh, deploy.sh and rollback.sh write it after every apply, so it names the last apply's cell,
-# and it has an ecsBastionService only when that apply declared the bastion. Nothing is looked up in
-# AWS by name and nothing is read from Terraform state (#198); without the document, with one for
+# It is written from the cell's roots' outputs after every apply, deploy.sh's and rollback.sh's
+# among them, so it names the last apply's cell, and it has an ecsBastionService only when that
+# apply declared the bastion. Nothing is looked up in AWS by name and nothing is read from Terraform
+# state (#198); without the document, with one for
 # another Region, or with one that names no bastion, it refuses. AWS is asked only for the bastion
 # service's running tasks, and the hop is a task's bastion container (infra/modules/cell/ecs.tf),
 # never a task of the gateway's service, ecsService. The load balancer is the cell module's, which
 # is internal (alb.tf).
 #
-# Run it as the operator's own session: the spa-platform profile, with tools/aws-project.env
-# sourced, after seed.sh. It needs the AWS CLI v2, the Session Manager plugin and python3, and
-# curl with --keepalive.
+# Run it as the operator's own session, with credentials for the account the cell is in and
+# AWS_REGION set to the cell's Region, once the outputs document is written. It reads the entry
+# value SPA_OUTPUTS_FILE and, with --keepalive, SPA_CERT_DOMAIN, which have no default
+# (cell-common.sh's header), and refuses, exit 2, when one it needs is unset. It needs the AWS CLI
+# v2, the Session Manager plugin and python3, and curl with --keepalive.
 #
 # It never prints the account id: of a task it names only the id, never the ARN. The session's own
 # stderr goes through the same rule as its reads: an AWS error reaches the terminal as its code
@@ -58,11 +61,11 @@
 #
 # Exit status: the AWS CLI's once the session is handed to it, 254 when StartSession itself is
 # refused (`aws help return-codes`); 1 when the cell has no task a session can reach, or the task
-# --task names is not one; 2 when it did not start (a usage error, a missing tool, no Region, the
-# local port already held, no outputs document with the three names for this Region, or one that
-# names no bastion).
+# --task names is not one; 2 when it did not start (a usage error, an entry value unset, a missing
+# tool, no Region, the local port already held, no outputs document with the three names for this
+# Region, or one that names no bastion).
 #
-# Written for the bash 3.2 that ships with macOS, like tools/scripts/certs.sh.
+# Written for the bash 3.2 that ships with macOS.
 # Owner: workstream 1, AWS and IaC.
 
 set -euo pipefail
@@ -79,9 +82,10 @@ TASK=""
 TASK_GIVEN=0
 KEEPALIVE=""
 KEEPALIVE_GIVEN=0
-# The host --keepalive asks, as verify-tunnel.sh names it. Its name is pinned to the loopback for
-# the request, so it needs no hosts-file line.
-KEEPALIVE_HOST="app1.${SPA_CERT_DOMAIN:-spa-poc.test}"
+# The host --keepalive asks, as verify-tunnel.sh names it, under the certificate's domain once
+# need_entry has read it. Its name is pinned to the loopback for the request, so it needs no
+# hosts-file line.
+KEEPALIVE_HOST=""
 
 # The hop: the bastion task's one container (#1167).
 CONTAINER="$BASTION_CONTAINER"
@@ -143,7 +147,10 @@ if [ "$KEEPALIVE_GIVEN" = "1" ]; then
     '' | *[!0-9]* | 0*) refuse "--keepalive must be a whole number of seconds above 0: got '${KEEPALIVE}'" ;;
   esac
   need_tool curl "It makes --keepalive's requests. brew install curl"
+  need_entry SPA_CERT_DOMAIN
+  KEEPALIVE_HOST="app1.${CERT_DOMAIN}"
 fi
+need_entry SPA_OUTPUTS_FILE
 
 command -v aws > /dev/null 2>&1 || refuse "the AWS CLI is not on PATH. brew install awscli"
 # The CLI hands a session to the plugin and cannot start one without it.
@@ -155,17 +162,17 @@ command -v session-manager-plugin > /dev/null 2>&1 ||
 need_tool python3 "xcode-select --install"
 
 REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-}}"
-[ -n "$REGION" ] || refuse "no Region in AWS_REGION or AWS_DEFAULT_REGION. set -a; . tools/aws-project.env; set +a"
+[ -n "$REGION" ] || refuse "no Region in AWS_REGION or AWS_DEFAULT_REGION: set AWS_REGION to the cell's Region."
 
 # The three names, before any AWS call. The cluster and the load balancer each refuse, exit 2, when
-# the document is absent, is for another Region or lacks the name, and say to run seed.sh
-# (cell-common.sh, outputs_field). Then the service, the bastion's: a document that names none is a
-# cell with no hop, refused, exit 2, with what turns the bastion on (#1167). The gateway's service,
-# ecsService, is never read: no task of it is the hop.
+# the document is absent, is for another Region or lacks the name, and say how the document is
+# written (cell-common.sh, outputs_field). Then the service, the bastion's: a document that names
+# none is a cell with no hop, refused, exit 2, with what turns the bastion on (#1167). The gateway's
+# service, ecsService, is never read: no task of it is the hop.
 CLUSTER="$(outputs_field ecsCluster)"
 ALB="$(outputs_field albDnsName)"
 SERVICE="$(outputs_bastion)"
-[ -n "$SERVICE" ] || refuse "$NO_BASTION"
+[ -n "$SERVICE" ] || refuse "$(no_bastion)"
 
 # Something already answering on the port would take the browser's connections, or the plugin
 # would fail to bind it after the session had started. bash's /dev/tcp connects, so a refusal means

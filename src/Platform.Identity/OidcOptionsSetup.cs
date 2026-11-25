@@ -37,16 +37,24 @@ public sealed class OidcOptionsSetup(
         // Held, not called: building this setup builds the invalidator, so it has subscribed to the
         // registry before the first options it would evict exist (plan row 3.6).
         _ = invalidator;
-        if (AppFor(name) is not { } app)
+        if (ClientFor(name) is not { } found)
         {
             return;
         }
 
-        IssuerDefinition issuer = issuers.Get(app.OAuth.Issuer);
-        SharedOidc shared = issuers.Shared(app.OAuth.Issuer);
+        // For a fragment's scheme, the client is the fragment's and everything else the shell's: its
+        // issuer equals the shell's (registry schema), and it signs in to the shell's cookie scheme
+        // (SchemeNames, #994). The profile is handed the shell's entry with the fragment's client, so a
+        // profile reads one client whichever scheme it refines.
+        (AppDefinition app, FragmentDefinition? fragment) = found;
+        OAuthDefinition client = fragment?.OAuth ?? app.OAuth;
+        AppDefinition profiled = fragment is null ? app : app with { OAuth = client };
 
-        options.ClientId = app.OAuth.ClientId;
-        options.ClientSecret = secrets.Get(app.OAuth.ClientSecretRef);
+        IssuerDefinition issuer = issuers.Get(client.Issuer);
+        SharedOidc shared = issuers.Shared(client.Issuer);
+
+        options.ClientId = client.ClientId;
+        options.ClientSecret = secrets.Get(client.ClientSecretRef);
 
         // Discovery and keys through the issuer's shared manager, never a per-app one (R-A7). The
         // handler's timeout reads what the shared client's is, the provider deadline (#332 F1).
@@ -67,13 +75,21 @@ public sealed class OidcOptionsSetup(
         options.MapInboundClaims = false;
 
         options.Scope.Clear();
-        foreach (string scope in app.OAuth.Scopes)
+        foreach (string scope in client.Scopes)
         {
             options.Scope.Add(scope);
         }
 
-        options.Resource = app.OAuth.Resource;
-        options.CallbackPath = CallbackPath;
+        options.Resource = client.Resource;
+
+        // A fragment's callback is its own exact path, GET only, and SkipUnrecognizedRequests stays off,
+        // so each callback has one handler and the failure page (#994). A fragment never signs out on
+        // its own: the shell's logout is the one provider logout (contracts/http-contract.md -> Logout).
+        options.CallbackPath = fragment is null ? CallbackPath : PlatformPaths.FragmentCallback(fragment.FragmentId);
+        if (fragment is not null)
+        {
+            options.SignedOutCallbackPath = PathString.Empty;
+        }
 
         // Named rather than left to the default sign-in scheme, so the callback can only ever sign in
         // to this app's own cookie scheme.
@@ -103,7 +119,7 @@ public sealed class OidcOptionsSetup(
         // RP-initiated one.
         if (profiles.FirstOrDefault(p => string.Equals(p.Name, issuer.Profile, StringComparison.Ordinal)) is { } profile)
         {
-            profile.Configure(options, app, issuer);
+            profile.Configure(options, profiled, issuer);
             CodeExchange.Apply(options, profile.ClientCredentialStyle, shared);
 
             // The redirect to the provider's logout is the profile's (plan row 3.7): the handler raises
@@ -114,14 +130,40 @@ public sealed class OidcOptionsSetup(
             options.Events.OnRedirectToIdentityProviderForSignOut = context => profile.RedirectToSignOutAsync(context, app, issuer);
         }
 
-        // The gateway's events after the profile, so they wrap what it set (plan row 3.5).
+        // The gateway's events after the profile, so they wrap what it set (plan row 3.5), and a
+        // fragment's sign-in and failure after those, since they replace the stock sign-in (#994).
         AuthenticationEvents.Apply(options);
+        if (fragment is null)
+        {
+            FragmentEvents.ApplyShell(options, app);
+        }
+        else
+        {
+            FragmentEvents.ApplyFragment(options, fragment);
+        }
     }
 
-    private AppDefinition? AppFor(string? name) =>
-        name is not null && name.StartsWith(Prefix, StringComparison.Ordinal)
-            ? SchemeApp.Find(accessor, registry, name[Prefix.Length..])
+    /// <summary>
+    /// The entry and, for a fragment's scheme, the fragment the name names, parsed by the one parser
+    /// (<see cref="SchemeNames.ParseOidc"/>): an entry that does not list the fragment configures nothing.
+    /// </summary>
+    private (AppDefinition App, FragmentDefinition? Fragment)? ClientFor(string? name)
+    {
+        if (name is null || SchemeNames.ParseOidc(name) is not { } parsed
+            || SchemeApp.Find(accessor, registry, parsed.AppId) is not { } app)
+        {
+            return null;
+        }
+
+        if (parsed.FragmentId is not { } fragmentId)
+        {
+            return (app, null);
+        }
+
+        return app.Fragments.FirstOrDefault(f => string.Equals(f.FragmentId, fragmentId, StringComparison.Ordinal)) is { } fragment
+            ? (app, fragment)
             : null;
+    }
 }
 
 /// <summary>

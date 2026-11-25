@@ -72,6 +72,7 @@ public sealed class ContinuityRun(ContinuityEvidence evidence, ContinuityLog log
             }
 
             await WriteBesideAsync(stopped, () => evidence.WriteAsync(row, result, attempts, wall.Elapsed, CancellationToken.None, ShownBy(stopped)));
+            FailUnlessPassedOn(stopped, result);
             throw;
         }
 
@@ -106,6 +107,7 @@ public sealed class ContinuityRun(ContinuityEvidence evidence, ContinuityLog log
             }
 
             await WriteBesideAsync(stopped, () => evidence.WriteAsync(row, result, recorded is null ? [] : [recorded], wall.Elapsed, CancellationToken.None, ShownBy(stopped)));
+            FailUnlessPassedOn(stopped, result);
             throw;
         }
 
@@ -125,12 +127,27 @@ public sealed class ContinuityRun(ContinuityEvidence evidence, ContinuityLog log
     };
 
     /// <summary>
-    /// A stopped row's reason: the failure's kind, and for a hold whose handler failed, the kind of what
-    /// the handler met (#1029), which the hold's own kind would otherwise hide.
+    /// A stopped row's reason: the failure's kind and its message (#1194), the message through
+    /// <see cref="Redacted.Text"/> so no URL's query and no JWT reaches the evidence file or the output.
+    /// A hold whose handler failed names the kind of what the handler met in its own message (#1029).
     /// </summary>
-    private static string StoppedWith(Exception stopped) => stopped is HoldFailedException failed
-        ? $"the driver stopped with {nameof(HoldFailedException)}: the hold's handler met {failed.Failure}"
-        : $"the driver stopped with {stopped.GetType().Name}";
+    private static string StoppedWith(Exception stopped) =>
+        $"the driver stopped with {stopped.GetType().Name}: {Redacted.Text(stopped.Message, [])}";
+
+    /// <summary>
+    /// After the evidence is written, a row whose driver stopped fails as a judged not-proved row does,
+    /// through <see cref="RowResult.Assert"/>, so the test's message is the verdict line the file holds
+    /// (<c>not proved: the driver stopped with …</c>, Q138, #1194) and carries no inner exception,
+    /// whose message xUnit would print unredacted. A cancellation and a precondition refusal
+    /// (<see cref="RowRefusedException"/>) are passed on as they came, the refusal keeping its own line.
+    /// </summary>
+    private static void FailUnlessPassedOn(Exception stopped, RowResult result)
+    {
+        if (stopped is not (OperationCanceledException or RowRefusedException))
+        {
+            result.Assert();
+        }
+    }
 
     /// <summary>
     /// The evidence write after the row has already failed: a write that fails too is reported beside the
@@ -155,6 +172,14 @@ public sealed class ContinuityRun(ContinuityEvidence evidence, ContinuityLog log
         return await log.ReadAsync(control.At - ClockMargin, last + ContinuityBounds.LogDelivery, ct);
     }
 }
+
+/// <summary>
+/// A row's precondition refusal, which spends no attempt and stops nothing: row 4's lever when the
+/// gateway's service does not run exactly two tasks (#1382). <see cref="ContinuityRun"/> writes its
+/// evidence as not proved and rethrows it as it came, so the test's output keeps the refusal's own line,
+/// the one wiz's D4 posts (#1194); any other failure of the driver is reported <c>not proved:</c>.
+/// </summary>
+public sealed class RowRefusedException(string message) : InvalidOperationException(message);
 
 /// <summary>
 /// The raw client's requests as a continuity row sends them (Q137): each with a fresh sampled
@@ -228,14 +253,11 @@ public sealed record EcsTaskState(string Id, string LastStatus, string DesiredSt
 /// <summary>
 /// What the continuity rows read and pull on ECS, through the AWS CLI: the gateway service's tasks
 /// with their states, timestamps and image digests (row 6, Q146), and row 4's <c>stop-task</c>
-/// (Q140, Q145), which drains (#348 Q21). <see cref="CellAws.RunningTasksAsync"/> reads the service's
+/// (Q140, Q145 as #1382 changes it), which drains (#348 Q21). <see cref="CellAws.RunningTasksAsync"/> reads the service's
 /// tasks through it (#873), so the two share one list and one describe.
 /// </summary>
 public sealed class ContinuityEcs(Cell cell, ICommandRunner runner)
 {
-    /// <summary>The variable naming the task the tunnel's hop runs on, which row 4 never stops (Q145).</summary>
-    public const string TunnelTaskVariable = "SPA_TUNNEL_TASK";
-
     /// <summary>The gateway's container in the task definition (infra/modules/cell/ecs.tf, <c>gateway_container_name</c>).</summary>
     public const string GatewayContainer = "gateway";
 
@@ -290,23 +312,26 @@ public sealed class ContinuityEcs(Cell cell, ICommandRunner runner)
             : null) ?? "no failure reported";
 
     /// <summary>
-    /// Row 4's lever (Q145): refuses unless the tunnel's task is exactly one of exactly two RUNNING
-    /// tasks, then stops the other and returns its id.
+    /// Row 4's lever: refuses unless exactly two of the gateway service's tasks are RUNNING, then stops
+    /// the first of them by ordinal id and returns both ids. Q145 had the operator name the tunnel's
+    /// hop for the lever to spare, but the hop is the bastion's task (#1168), never one of these, so
+    /// any of them may stop and the lever takes no id (#1382). The choice is fixed by the ids alone,
+    /// so wiz's D4 can say which task will stop from a <c>list-tasks</c> read before it asks.
     /// </summary>
-    public async Task<string> StopTheOtherAsync(string? tunnelTask, CancellationToken ct)
+    public async Task<(string Survivor, string Stopped)> StopOneAsync(CancellationToken ct)
     {
-        string[] running = [.. (await ListedAsync(ct)).Where(task => task.LastStatus == "RUNNING").Select(task => task.Id)];
-        if (string.IsNullOrEmpty(tunnelTask) || running.Length != 2 || running.Count(id => id == tunnelTask) != 1)
+        string[] running = [.. (await ListedAsync(ct)).Where(task => task.LastStatus == "RUNNING").Select(task => task.Id).Order(StringComparer.Ordinal)];
+        if (running.Length != 2)
         {
-            throw new InvalidOperationException(
-                $"row 4 stops nothing: {TunnelTaskVariable} must name exactly one of the service's two RUNNING tasks, and it is '{tunnelTask}' with {running.Length} running ({string.Join(", ", running)}).");
+            throw new RowRefusedException(
+                $"row 4 stops nothing: it needs exactly two RUNNING tasks of the gateway's service, one to stop and one to survive, and {running.Length} {(running.Length == 1 ? "runs" : "run")} ({string.Join(", ", running)}).");
         }
 
-        string other = running.Single(id => id != tunnelTask);
+        string stopped = running[0];
         // https://docs.aws.amazon.com/cli/latest/reference/ecs/stop-task.html: SIGTERM, then stopTimeout, as a drain.
         await runner.RunAsync("aws",
-            ["ecs", "stop-task", "--cluster", cell.Cluster, "--task", other, "--reason", "continuity row 4 (#348)", "--output", "json", "--region", cell.Region], ct);
-        return other;
+            ["ecs", "stop-task", "--cluster", cell.Cluster, "--task", stopped, "--reason", "continuity row 4 (#348)", "--output", "json", "--region", cell.Region], ct);
+        return (running[1], stopped);
     }
 
     private static DateTimeOffset? Time(JsonElement task, string name) =>

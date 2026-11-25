@@ -62,6 +62,33 @@ REGION = "us-east-2"
 CELL = "poc"
 PASSWORD = "ecr-login-password-0123456789"
 
+# The proof cell's entry file and the field map it names (#1348): every case's environment carries
+# the file's values, as an operator's session that sourced it does, and a case that tests one unset
+# leaves it out. The scripts read a relative value from their checkout's root, which is the case's.
+CELL_ENV = ROOT / "infra" / "envs" / "poc" / "cell.env"
+
+
+def entry_values(path: pathlib.Path = CELL_ENV) -> dict[str, str]:
+    """The KEY=value lines of an entry file, comments and blank lines left out."""
+    values = {}
+    for line in path.read_text().splitlines():
+        if line.strip() and not line.lstrip().startswith("#"):
+            name, _, value = line.partition("=")
+            values[name.strip()] = value.strip()
+    return values
+
+
+ENTRY = entry_values()
+
+
+def field_map() -> dict:
+    """The proof cell's field map, the file its entry file names."""
+    return json.loads((ROOT / ENTRY["SPA_FIELD_MAP"]).read_text())
+
+# The entry values each reference script reads, which its companion holds one at a time unset.
+ENTRY_NAMES = ("SPA_CELL", "SPA_CERT_DOMAIN", "SPA_PLATFORM_ROOT", "SPA_ROOTS", "SPA_OUTPUTS_FILE", "SPA_FIELD_MAP")
+assert set(ENTRY) == set(ENTRY_NAMES), f"{CELL_ENV.name} sets {sorted(ENTRY)}"
+
 # The real tools the scripts use. Everything else is absent.
 TOOLS = ("awk", "sed", "tr", "cat", "mktemp", "rm", "dirname", "basename", "python3", "sleep", "date")
 
@@ -77,7 +104,8 @@ def terraform_local(path: pathlib.Path, name: str, cell: str = CELL) -> str:
 CLUSTER = terraform_local(MODULE / "ecs.tf", "cluster_name")
 SERVICE = terraform_local(MODULE / "ecs.tf", "service_name")
 GATEWAY = terraform_local(MODULE / "ecs.tf", "gateway_container_name")
-MOCK_API = terraform_local(MODULE / "ecs.tf", "mock_api_container_name")
+# The mock API is the proof-cell root's extra container since #1342, so its name lives in that root.
+MOCK_API = terraform_local(ROOT / "infra" / "envs" / "poc" / "platform" / "main.tf", "mock_api_container_name")
 LOG_GROUP = terraform_local(MODULE / "ecs.tf", "log_group_name")
 FAMILY = terraform_local(MODULE / "network.tf", "name_prefix")
 # The bastion, the tunnel's hop (#1167): its service in the cluster, its one container and its task
@@ -884,16 +912,22 @@ def terraform_double(argv: list[str], case: pathlib.Path) -> int:
             if root != "platform" or "-input=false" not in rest or not any(t.startswith("-out=") for t in rest):
                 raise Unexpected(f"terraform plan {rest}")
             plan = next(t for t in rest if t.startswith("-out="))[len("-out="):]
-            pathlib.Path(plan).write_text(json.dumps(variables))
+            # What the plan applies: the root's *.auto.tfvars, then each -var over them, as Terraform
+            # loads them (auto_tfvars). The record keeps the -var values alone, which are what the
+            # script passed.
+            effective = {**auto_tfvars(directory), **variables}
+            record["effective"] = effective
+            pathlib.Path(plan).write_text(json.dumps({"vars": variables, "effective": effective}))
             # The task definition's container_definitions as a real plan shows them: the mock API's
             # environment carries both apps' client ids (MockApi__App1Client and MockApi__App2Client
-            # in infra/modules/cell/ecs.tf), which the platform root reads from the apps root's state
-            # and the scripts never pass, and the module's variable for them is not sensitive (#251).
+            # in infra/envs/poc/platform/main.tf), which the platform root reads from the apps root's
+            # state and the scripts never pass, and the variable for them is not sensitive (#251). A
+            # replaced task definition shows every container, the mock API's whichever image moved.
             clients = (world["roots"]["apps"] or {}).get("clients", {})
             sys.stdout.write(f"  # module.cell.aws_ecs_task_definition.gateway must be replaced\n"
-                             f"      ~ image = \"{variables.get('gateway_image')}\"\n")
-            if variables.get("mock_api_image"):
-                sys.stdout.write(f"      ~ image = \"{variables['mock_api_image']}\"\n")
+                             f"      ~ image = \"{effective.get('gateway_image')}\"\n")
+            if effective.get("mock_api_image"):
+                sys.stdout.write(f"      ~ image = \"{effective['mock_api_image']}\"\n")
                 for app, name in (("app1", "MockApi__App1Client"), ("app2", "MockApi__App2Client")):
                     if app in clients:
                         sys.stdout.write(f"          + {{ name = \"{name}\", value = \"{clients[app]['clientId']}\" }},\n")
@@ -904,8 +938,10 @@ def terraform_double(argv: list[str], case: pathlib.Path) -> int:
             plan = rest[-1]
             if root != "platform" or "-input=false" not in rest or "-auto-approve" in rest:
                 raise Unexpected(f"terraform apply {rest}: the saved plan is what is applied")
-            variables = json.loads(pathlib.Path(plan).read_text())
-            record["vars"] = variables
+            saved = json.loads(pathlib.Path(plan).read_text())
+            variables = saved["effective"]
+            record["vars"] = saved["vars"]
+            record["effective"] = variables
             if world["faults"].get("apply"):
                 sys.stderr.write("Error: creating ECS Task Definition: ClientException\n")
                 status = 1
@@ -929,6 +965,36 @@ def terraform_double(argv: list[str], case: pathlib.Path) -> int:
     log(case, record)
     save_world(case, world)
     return status
+
+
+def mock_api_tfvars_name() -> str:
+    """The name of the file tools/scripts/poc/mock-api.sh writes mock_api_image to in the platform
+    root, read from the script rather than typed (#1349)."""
+    found = re.search(r'^MOCK_API_TFVARS_NAME="([^"/]+)"$', (SCRIPTS / "poc" / "mock-api.sh").read_text(), re.M)
+    if not found:
+        raise AssertionError("tools/scripts/poc/mock-api.sh sets no MOCK_API_TFVARS_NAME")
+    return found[1]
+
+
+# One assignment of a *.auto.tfvars file as the scripts write them: a name, and a quoted string or a
+# bare true or false.
+_ASSIGNMENT = re.compile(r'^\s*([A-Za-z_][A-Za-z0-9_-]*)\s*=\s*(?:"([^"]*)"|(true|false))\s*$')
+
+
+def auto_tfvars(directory: pathlib.Path) -> dict[str, str]:
+    """The values a root's *.auto.tfvars files set, as Terraform loads them: in lexical order of
+    their names, a later file's value for a variable winning
+    (https://developer.hashicorp.com/terraform/language/values/variables#variable-definition-precedence).
+    Each value as a string, as a -var carries it. terraform.tfvars, loaded before them, sets the three
+    variables the scripts pass (gateway_image, health_check_path and gateway_writable_root,
+    tools/scripts/poc/platform-tfvars.sh), and a -var overrides it, so it is not read."""
+    values: dict[str, str] = {}
+    for path in sorted(directory.glob("*.auto.tfvars"), key=lambda p: p.name):
+        for line in path.read_text().splitlines():
+            found = _ASSIGNMENT.match(line)
+            if found:
+                values[found[1]] = found[2] if found[2] is not None else found[3]
+    return values
 
 
 def world_root(case: pathlib.Path) -> pathlib.Path:
@@ -1282,13 +1348,42 @@ def spactl_wait(world: dict, args: list[str], stdout, stderr) -> int:
     return 1
 
 
+def default_entry() -> str:
+    """contracts/registry.schema.json's default entry module, read from the contract."""
+    return json.loads((ROOT / "contracts" / "registry.schema.json").read_text())["$defs"]["entry"]["default"]
+
+
 def spactl_change(world: dict, args: list[str], record: dict) -> int:
-    """`spactl release publish` and `spactl app add`, the two commands seed.sh runs."""
+    """`spactl release publish`, `spactl fragment publish` and `spactl app add`, the commands seed.sh
+    runs. The two fragment shapes are #993's: `fragment publish <appId> <fragmentId> <dir> <release>
+    --entry <file>`, which refuses a <dir> without its entry and writes the entry last, and app add's
+    `--fragment-release id=rel,id=rel`, which completes each fragment from the outputs' nested client
+    and refuses a fragment the outputs lack, one the list does not name, and one whose release has no
+    entry file under the definition's entry. A fault "fragment publish <fragmentId>" fails that
+    fragment's publish, as a refused claim or a lost connection would."""
     status = 0
     options = {args[i]: args[i + 1] for i in range(len(args)) if args[i].startswith("--") and i + 1 < len(args)}
     outputs = json.loads(pathlib.Path(options["--outputs"]).read_text())
     bucket = outputs["bucket"]
-    if args[:2] == ["release", "publish"]:
+    if args[:2] == ["fragment", "publish"]:
+        if len(args) != 10 or set(options) != {"--entry", "--outputs"}:
+            raise Unexpected(f"spactl {args}")
+        app, fragment, directory, release = args[2:6]
+        entry = options["--entry"]
+        root = pathlib.Path(directory)
+        if world["faults"].get(f"fragment publish {fragment}"):
+            sys.stderr.write(f"Could not publish fragment {fragment}: the claim for a key is held by another release.\n")
+            return 1
+        if not (root / entry).is_file():
+            sys.stderr.write(f"{directory} has no {entry}.\n")
+            return 1
+        files = sorted((p for p in root.rglob("*") if p.is_file()), key=lambda p: p == root / entry)
+        for file in files:
+            key = f"apps/{app}/fragments/{fragment}/releases/{release}/{file.relative_to(root).as_posix()}"
+            if not any(item["Key"] == key for item in world["objects"]):
+                world["objects"].append({"Key": key, "VersionId": f"v{len(world['objects'])}"})
+        sys.stdout.write(f"Published apps/{app}/fragments/{fragment}/releases/{release}/ to {bucket}.\n")
+    elif args[:2] == ["release", "publish"]:
         app, directory, release = args[2:5]
         root = pathlib.Path(directory)
         for file in sorted(p for p in root.rglob("*") if p.is_file()):
@@ -1301,13 +1396,34 @@ def spactl_change(world: dict, args: list[str], record: dict) -> int:
         config = json.loads(pathlib.Path(options["--config"]).read_text())
         record["config"] = config
         app = definition["appId"]
+        listed = definition.get("fragments", [])
+        named = {}
+        if "--fragment-release" in options:
+            named = dict(pair.split("=", 1) for pair in options["--fragment-release"].split(","))
+            record["fragmentReleases"] = named
+        nested = (outputs["clients"].get(app) or {}).get("fragments", {})
+        missing = ([f["fragmentId"] for f in listed if f["fragmentId"] not in nested or f["fragmentId"] not in named]
+                   + [name for name in named if name not in {f["fragmentId"] for f in listed}])
+        unfinished = [f["fragmentId"] for f in listed if f["fragmentId"] in named and not any(
+            item["Key"] == f"apps/{app}/fragments/{f['fragmentId']}/releases/{named[f['fragmentId']]}/{f.get('entry', default_entry())}"
+            for item in world["objects"])]
         if app not in outputs["clients"]:
             sys.stderr.write(f"The infrastructure outputs name no client for '{app}'.\n")
+            status = 1
+        elif missing:
+            sys.stderr.write(f"Fragments {missing} of '{app}' have no client in the outputs, or no release named, or are not the definition's.\n")
+            status = 1
+        elif unfinished:
+            sys.stderr.write(f"Fragments {unfinished} of '{app}': no entry file: publish it first.\n")
             status = 1
         else:
             registry = world["registry"] or {"schemaVersion": 1, "revision": 0, "apps": []}
             registry["apps"] = [entry for entry in registry["apps"] if entry["appId"] != app]
-            registry["apps"].append({"appId": app, "release": options["--release"]})
+            added = {"appId": app, "release": options["--release"]}
+            if listed:
+                registry["schemaVersion"] = 2
+                added["fragments"] = [{"fragmentId": f["fragmentId"], "release": named[f["fragmentId"]]} for f in listed]
+            registry["apps"].append(added)
             registry["revision"] += 1
             world["registry"] = registry
             world["objects"].append({"Key": "registry/registry.json", "VersionId": f"r{registry['revision']}"})
@@ -1356,7 +1472,96 @@ import shlex  # noqa: E402 -- below the doubles, which start once per call
 import shutil  # noqa: E402
 import subprocess  # noqa: E402
 import tempfile  # noqa: E402
+import threading  # noqa: E402
 import unittest  # noqa: E402
+
+# --- what every case of a run shares (#1474) ------------------------------------------------------
+
+# Where the doubles and the case's python3 keep their imports' bytecode, one directory for the run.
+# The python3 a case runs on the workstation the companions are written on is the Xcode framework's
+# 3.9, and no __pycache__ beside its standard library could be found or written there. That is this
+# machine's measurement, not a documented property of Xcode, which no Apple page found states: on
+# 2026-11-22, `ls` found no lib/python3.9/__pycache__ in the framework, and `python3 -I -S -v -c
+# "import re"` printed "code object from .../re.py" with no "matches" line for a cached file, so
+# each process compiled json, re, pathlib and the rest from source. Timed over 40 runs each, a
+# double took 68 ms, and 32 ms with its bytecode kept. -X pycache_prefix keeps the bytecode here,
+# and -I does not ignore an -X option as it does PYTHONPYCACHEPREFIX
+# (https://docs.python.org/3/using/cmdline.html#cmdoption-X,
+# https://docs.python.org/3/library/sys.html#sys.pycache_prefix). Where a stdlib's bytecode is
+# already cached, as on CI's Linux runner, this costs a directory and changes nothing else: only
+# where bytecode is kept changes, and every process runs the same source.
+BYTECODE = tempfile.TemporaryDirectory(prefix="cell-doubles-bytecode-")
+PYCACHE = f"-X pycache_prefix={shlex.quote(BYTECODE.name)}"
+# How a wrapper runs a file as __main__, with the argument list a run of the file itself would
+# have, from the bytecode kept in BYTECODE: the one home of that, which the doubles' wrappers
+# (case_wrapper) and cell_doubles_tests.py's recorder both run. A file run by name is compiled
+# afresh each time, never cached: Python "always recompiles and does not store the result for the
+# module that's loaded directly from the command line"
+# (https://docs.python.org/3/tutorial/modules.html#compiled-python-files), which for this one cost
+# 6 ms of the 32 a double took. importlib.machinery is the loader the import system itself uses,
+# so it costs no import of its own, as importlib.util's 8 ms would
+# (https://docs.python.org/3/library/importlib.html#importlib.machinery.SourceFileLoader).
+LAUNCH = ("import sys; from importlib.machinery import SourceFileLoader; del sys.argv[0]; "
+          "exec(SourceFileLoader('__main__', sys.argv[0]).get_code('__main__'), "
+          "{'__name__': '__main__', '__file__': sys.argv[0], '__builtins__': __builtins__})")
+
+
+def case_wrapper(script: pathlib.Path, before: list[str], after: list[str] = ()) -> str:
+    """A wrapper for a case's bin, shared by every case of the run: it runs `script` through LAUNCH
+    with `before`, the case's directory, `after` and the call's own arguments. The case is the
+    directory above the bin the wrapper was run from, the one home of that rule: a case's PATH is
+    its bin alone, by absolute path (Case.env), so a call by name runs <case>/bin/<name>, and $0 is
+    that path even through the link to this file. Used for the doubles and for
+    cell_doubles_tests.py's recorder."""
+    def words(values) -> str:
+        return "".join(f" {shlex.quote(str(value))}" for value in values)
+
+    return ('#!/bin/sh\nbin="${0%/*}"\n'
+            f"exec {shlex.quote(os.path.realpath(sys.executable))} -I -S {PYCACHE} -c {shlex.quote(LAUNCH)} "
+            f'{shlex.quote(str(script))}{words(before)} "${{bin%/*}}"{words(after)} "$@"\n')
+
+
+class ToolWrappers:
+    """One wrapper per real tool and per double for the run, which each case's bin links to: each
+    case wrote and ran sixteen of its own, and a newly written executable costs about 35 ms more the
+    first time it runs. That cost is this machine's measurement, not a documented one, as no Apple
+    page found states it: on 2026-11-22 a loop that wrote 50 two-line `#!/bin/sh` wrappers and ran
+    each took 2.11 s the first time and 0.34 s the second, 42 ms against 7 ms a run, while
+    syspolicyd and XprotectService were busy; tools/companion_runner.py's docstring measured 45 ms
+    the same way. A wrapper is read-only, so a write through a case's link fails rather than
+    changing the tool for every case; Case.write_executable replaces the link instead."""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.directory = tempfile.TemporaryDirectory(prefix="cell-doubles-tools-")
+        self.made: dict[tuple[str, str], pathlib.Path] = {}
+
+    def wrapper(self, tool: str, found: str) -> pathlib.Path:
+        options = f" {PYCACHE}" if tool == "python3" else ""
+        return self.made_once(tool, f'#!/bin/sh\nexec {shlex.quote(os.path.realpath(found))}{options} "$@"\n')
+
+    def double(self, name: str) -> pathlib.Path:
+        return self.made_once(name, case_wrapper(pathlib.Path(__file__).resolve(), ["--double", name]))
+
+    def made_once(self, name: str, content: str) -> pathlib.Path:
+        """The wrapper named `name` that holds `content`, written the first time it is asked for.
+        The key is the name and the whole content, so it covers every input a wrapper is made from
+        (the tool's resolved path, the interpreter, the bytecode directory, the script): two asks
+        that differ in any one get two wrappers. Each has a folder of its own, so two of one name
+        never share a path."""
+        with self.lock:
+            key = (name, content)
+            if key not in self.made:
+                folder = pathlib.Path(self.directory.name) / str(len(self.made))
+                folder.mkdir()
+                path = folder / name
+                path.write_text(content)
+                path.chmod(0o555)
+                self.made[key] = path
+            return self.made[key]
+
+
+TOOL_WRAPPERS = ToolWrappers()
 
 
 # --- a case ----------------------------------------------------------------------------------------
@@ -1391,41 +1596,52 @@ class Case:
                             ignore=shutil.ignore_patterns("__pycache__", "*_tests.py", "cell_doubles.py"))
         for relative in ROOT_NAMES:
             (self.repo / relative).mkdir(parents=True, exist_ok=True)
+        # The entry file and the field map, beside the roots as in the checkout.
+        for relative in (CELL_ENV.relative_to(ROOT), pathlib.Path(ENTRY["SPA_FIELD_MAP"])):
+            shutil.copyfile(ROOT / relative, self.repo / relative)
         (self.dir / "repo-root").write_text(str(self.repo))
         for tool in TOOLS:
             found = shutil.which(tool)
             test.assertIsNotNone(found, f"{tool} is required to run this companion and is not on PATH")
-            self.write_executable(tool, f'#!/bin/sh\nexec {shlex.quote(os.path.realpath(found))} "$@"\n')
+            (self.bin / tool).symlink_to(TOOL_WRAPPERS.wrapper(tool, found))
         for name in DOUBLES:
-            self.write_executable(name, (
-                f"#!/bin/sh\nexec {shlex.quote(os.path.realpath(sys.executable))} -I -S "
-                f"{shlex.quote(str(pathlib.Path(__file__).resolve()))} --double {name} "
-                f"{shlex.quote(str(self.dir))} \"$@\"\n"))
+            (self.bin / name).symlink_to(TOOL_WRAPPERS.double(name))
         self.world = world if world is not None else default_world()
         self.save()
         if outputs:
             self.write_outputs()
 
     def write_outputs(self):
-        """infra/envs/poc/outputs.json as seed.sh leaves it, from the world's roots, by the real
-        assembler in cell_documents.py: deploy.sh and rollback.sh read the cell's names from it and
-        never from state (contracts/infra-outputs.schema.json). Nothing is written while a root has
-        no state, as seed.sh could not have written it then."""
+        """The outputs document as seed.sh leaves it, from the world's roots on the entry file's
+        roots list, through its field map, by the real assembler in cell_documents.py: deploy.sh and
+        rollback.sh read the cell's names from it and never from state
+        (contracts/infra-outputs.schema.json). Nothing is written while a root has no state, as
+        seed.sh could not have written it then."""
         roots = self.world["roots"]
-        if not all(roots.get(name) for name in ("idp", "apps", "platform")):
+        names = [directory.rstrip("/").rsplit("/", 1)[-1] for directory in ENTRY["SPA_ROOTS"].split(":")]
+        if not all(roots.get(name) for name in names):
             return
         spec = importlib.util.spec_from_file_location("cell_documents", SCRIPTS / "cell_documents.py")
         documents = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(documents)
-        paths = []
-        for name in ("idp", "apps", "platform"):
+        pairs = []
+        for name in names:
             path = self.dir / f"{name}-outputs.json"
             path.write_text(json.dumps({key: {"value": value} for key, value in roots[name].items()}))
-            paths.append(str(path))
-        documents.outputs(self.world["region"], *paths, str(self.repo / "infra/envs/poc/outputs.json"))
+            pairs += [name, str(path)]
+        documents.outputs(self.world["region"], str(self.repo / ENTRY["SPA_FIELD_MAP"]),
+                          str(self.outputs_path()), *pairs)
+
+    def outputs_path(self) -> pathlib.Path:
+        """Where the entry file puts the outputs document, in the case's repository."""
+        return self.repo / ENTRY["SPA_OUTPUTS_FILE"]
 
     def write_executable(self, name: str, content: str):
         path = self.bin / name
+        # A tool's or a double's name is a link to the run's shared wrapper: replaced, never written
+        # through.
+        if path.is_symlink():
+            path.unlink()
         path.write_text(content)
         path.chmod(0o755)
 
@@ -1455,7 +1671,7 @@ class Case:
 
     def env(self, **extra: str | None) -> dict[str, str]:
         env = {"PATH": str(self.bin), "HOME": str(self.home), "LC_ALL": "C",
-               "AWS_PROFILE": "spa-platform", "AWS_REGION": REGION, "TMPDIR": str(self.dir)}
+               "AWS_PROFILE": "spa-platform", "AWS_REGION": REGION, "TMPDIR": str(self.dir), **ENTRY}
         env.update(extra)
         return {name: value for name, value in env.items() if value is not None}
 

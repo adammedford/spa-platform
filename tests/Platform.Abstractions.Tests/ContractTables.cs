@@ -10,7 +10,10 @@ namespace Platform.Abstractions.Tests;
 ///
 /// Each parser reads one section, stops at the next "## " heading, skips the header and rule rows,
 /// and refuses an empty table, so that a renamed heading cannot pass as an empty contract.
-/// <c>RuleIdsTests</c> is the prior art.
+/// <c>RuleIdsTests</c> is the prior art. A list the contract writes as one prose sentence, the
+/// reserved paths and the fragment directives (#1432), is read instead between the sentence's fixed
+/// opening and closing, and refuses a missing opening, a missing closing or an empty list for the
+/// same reason.
 /// </summary>
 internal static class ContractTables
 {
@@ -47,6 +50,120 @@ internal static class ContractTables
                 .Where(cells => cells[^1] != "—")
                 .Select(cells => (cells[0].Trim('`'), cells[^1].Trim('`'))),
         ];
+    }
+
+    /// <summary>
+    /// The directives of contracts/http-contract.md -> "The baseline content security policy", in the
+    /// order its text block writes them.
+    /// </summary>
+    public static string[] BaselineCspDirectives() =>
+        ParseBaselineCspDirectives(File.ReadAllLines(Path.Combine(ContractsDirectory(), "http-contract.md")));
+
+    /// <summary>
+    /// The paths of contracts/http-contract.md -> Endpoints' "A path reserved outright" sentence, as
+    /// it writes them, templated ones and trailing slashes included, in its order.
+    /// </summary>
+    public static string[] ReservedOutrightPaths() =>
+        ParseReservedOutrightPaths(File.ReadAllLines(Path.Combine(ContractsDirectory(), "http-contract.md")));
+
+    /// <summary>
+    /// The backticked paths after "A path reserved outright is served from no release, the shell's or a
+    /// fragment's:" and before the sentence's full stop, so that the next sentence's
+    /// <c>/fragments/</c>, reserved only from the shell's release, is not read.
+    /// </summary>
+    public static string[] ParseReservedOutrightPaths(IEnumerable<string> lines) =>
+        BacktickedBetween(
+            lines,
+            "A path reserved outright is served from no release, the shell's or a fragment's:",
+            ". ");
+
+    /// <summary>
+    /// The directives of contracts/http-contract.md's "A fragment's <c>csp</c> adds sources to"
+    /// sentence, in its order.
+    /// </summary>
+    public static string[] FragmentCspDirectives() =>
+        ParseFragmentCspDirectives(File.ReadAllLines(Path.Combine(ContractsDirectory(), "http-contract.md")));
+
+    /// <summary>
+    /// The backticked directives after "A fragment's `csp` adds sources to" and before "only", so that
+    /// the same sentence's later <c>script-src</c> and <c>'strict-dynamic'</c> are not read. The whole
+    /// phrase is the anchor: an entry's <c>csp</c> sentence also "adds sources to".
+    /// </summary>
+    public static string[] ParseFragmentCspDirectives(IEnumerable<string> lines) =>
+        BacktickedBetween(lines, "A fragment's `csp` adds sources to", " only");
+
+    /// <summary>
+    /// The backticked spans of the prose between <paramref name="opening"/> and the first
+    /// <paramref name="closing"/> after it, the lines joined so that a sentence may wrap. A missing
+    /// opening or closing fails, and so does a span with no backticked text, so that a reworded
+    /// sentence cannot pass as an empty list.
+    /// </summary>
+    private static string[] BacktickedBetween(IEnumerable<string> lines, string opening, string closing)
+    {
+        string text = string.Join(' ', lines.Select(line => line.Trim()));
+
+        int start = text.IndexOf(opening, StringComparison.Ordinal);
+        Assert.True(start >= 0, $"the contract has no sentence opening \"{opening}\"");
+        start += opening.Length;
+
+        int end = text.IndexOf(closing, start, StringComparison.Ordinal);
+        Assert.True(end >= 0, $"the sentence opening \"{opening}\" has no \"{closing}\"");
+
+        string[] spans = [.. text[start..end].Split('`').Where((_, index) => index % 2 == 1)];
+        Assert.NotEmpty(spans);
+        return spans;
+    }
+
+    /// <summary>
+    /// The first fenced block under the "### The baseline content security policy" heading, joined and
+    /// split on <c>;</c>, each part's first word. A missing heading or an empty block fails, so a
+    /// renamed heading cannot pass as an empty policy.
+    /// </summary>
+    public static string[] ParseBaselineCspDirectives(IEnumerable<string> lines)
+    {
+        List<string> block = [];
+        bool inSection = false;
+        bool inFence = false;
+
+        foreach (string line in lines)
+        {
+            string trimmed = line.Trim();
+            if (!inSection)
+            {
+                inSection = trimmed == "### The baseline content security policy";
+                continue;
+            }
+
+            if (trimmed.StartsWith("```", StringComparison.Ordinal))
+            {
+                if (inFence)
+                {
+                    break;
+                }
+
+                inFence = true;
+                continue;
+            }
+
+            if (inFence)
+            {
+                block.Add(trimmed);
+            }
+            else if (trimmed.StartsWith('#'))
+            {
+                break;
+            }
+        }
+
+        string[] directives =
+        [
+            .. string.Join(' ', block)
+                .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Select(part => part.Split(' ')[0]),
+        ];
+
+        Assert.NotEmpty(directives);
+        return directives;
     }
 
     private static IEnumerable<string[]> Rows(IEnumerable<string> lines, string heading, string header)

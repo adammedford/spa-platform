@@ -212,6 +212,105 @@ public sealed class SecurityHeadersTests
         Assert.DoesNotContain(response.Headers, h => h.Key.StartsWith("Access-Control-", StringComparison.OrdinalIgnoreCase));
     }
 
+    // ---- The merged policy of a shell and its fragments (#996) ----
+
+    /// <summary>
+    /// A shell and two fragments whose additions overlap: each other's, the shell's and the baseline's.
+    /// Registry order is frag-b before frag-a, so an order taken from the ids would show.
+    /// </summary>
+    private static readonly AppDefinition Shell = TestApps.Entry(
+        "shell",
+        csp: Csp(
+            ("script-src", ["https://cdn.example.test"]),
+            ("connect-src", ["https://api.example.test"])),
+        fragments:
+        [
+            TestApps.Fragment("frag-b", appId: "shell", csp: Csp(
+                ("script-src", ["https://b.example.test", "https://cdn.example.test", "'self'"]),
+                ("img-src", ["data:"]))),
+            TestApps.Fragment("frag-a", appId: "shell", csp: Csp(
+                ("script-src", ["https://a.example.test", "https://b.example.test"]),
+                ("img-src", ["data:", "https://img.example.test"]),
+                ("connect-src", ["https://api.example.test", "wss://live.example.test"]))),
+        ]);
+
+    /// <summary>Written out by hand from the contract: baseline, then the shell, then each fragment in registry order, once each.</summary>
+    private const string ShellPolicy =
+        "default-src 'self'; script-src 'self' https://cdn.example.test https://b.example.test https://a.example.test; "
+        + "style-src 'self'; img-src 'self' data: https://img.example.test; font-src 'self'; "
+        + "connect-src 'self' https://api.example.test wss://live.example.test; frame-ancestors 'none'; "
+        + "base-uri 'self'; object-src 'none'; form-action 'self' https://login.idp.test";
+
+    public static TheoryData<string, string, string?, int> ShellResponses() => new()
+    {
+        { "shell", "/", null, 200 },
+        { "fragment asset", "/fragments/frag-a/entry.js", null, 200 },
+        { "fragment api", "/fragments/frag-b/api/orders/7", "same-origin", 200 },
+        { "fragment api refusal", "/fragments/frag-b/api/orders/7", "cross-site", 403 },
+        { "shell api", "/api/orders/7", "same-origin", 200 },
+    };
+
+    [Theory]
+    [MemberData(nameof(ShellResponses))]
+    public async Task Every_response_of_a_shells_host_carries_the_ordered_deduplicated_union_of_baseline_shell_and_fragments(
+        string kind, string path, string? fetchSite, int status)
+    {
+        await using HeadersHost host = await HeadersHost.StartAsync(Ct, [Shell]);
+
+        using HttpResponseMessage response = fetchSite is null
+            ? await host.SendAsync(Shell, "GET", path, Ct)
+            : await host.SendAsync(Shell, "GET", path, Ct, ("Sec-Fetch-Site", fetchSite));
+
+        Assert.True(status == (int)response.StatusCode, kind);
+        string policy = Single(response, "Content-Security-Policy");
+        Assert.Equal(ShellPolicy, policy);
+
+        // And the function spactl's import-map check reads, so the policy sent and the policy checked
+        // cannot differ.
+        Assert.Equal(ContentSecurityPolicy.Merge(Shell, HeadersHost.BrowserOrigin).HeaderValue(), policy);
+    }
+
+    [Fact]
+    public async Task A_fragments_addition_outside_its_five_directives_is_not_sent()
+    {
+        // The validator refuses it; the header never carries it either.
+        AppDefinition shell = TestApps.Entry("shell", fragments:
+        [
+            TestApps.Fragment("frag1", appId: "shell", csp: Csp(
+                ("frame-ancestors", ["https://framer.example.test"]),
+                ("form-action", ["https://post.example.test"]),
+                ("default-src", ["https://any.example.test"]))),
+        ]);
+        await using HeadersHost host = await HeadersHost.StartAsync(Ct, [shell]);
+
+        using HttpResponseMessage response = await host.SendAsync(shell, "GET", "/", Ct);
+
+        Assert.Equal(Baseline, Single(response, "Content-Security-Policy"));
+    }
+
+    [Fact]
+    public async Task A_fragments_source_carrying_a_separator_is_dropped_and_logged_by_app_fragment_and_directive()
+    {
+        AppDefinition shell = TestApps.Entry("shell", fragments:
+        [
+            TestApps.Fragment("frag1", appId: "shell", csp: Csp(
+                ("script-src", ["https://cdn.example.test;script-src", "https://ok.example.test"]))),
+        ]);
+        await using HeadersHost host = await HeadersHost.StartAsync(Ct, [shell]);
+
+        using HttpResponseMessage response = await host.SendAsync(shell, "GET", "/", Ct);
+
+        Assert.Equal(
+            "default-src 'self'; script-src 'self' https://ok.example.test; style-src 'self'; img-src 'self'; "
+            + "font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; object-src 'none'; "
+            + "form-action 'self' https://login.idp.test",
+            Single(response, "Content-Security-Policy"));
+        Assert.Single(host.Log.Lines, line => line.Text.Contains("app=shell", StringComparison.Ordinal)
+            && line.Text.Contains("fragment=frag1", StringComparison.Ordinal)
+            && line.Text.Contains("directive=script-src", StringComparison.Ordinal));
+        Assert.False(host.Log.Contains("cdn.example.test"), "the dropped source was logged");
+    }
+
     private static ImmutableDictionary<string, ImmutableArray<string>> Csp(params (string Directive, string[] Sources)[] additions) =>
         additions.ToImmutableDictionary(a => a.Directive, a => a.Sources.ToImmutableArray(), StringComparer.Ordinal);
 }

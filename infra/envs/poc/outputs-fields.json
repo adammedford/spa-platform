@@ -1,0 +1,20 @@
+{
+  "$comment": "The proof cell's field map, named by SPA_FIELD_MAP in cell.env beside it. Owner: workstream 1. Each entry is one field of the outputs document (contracts/infra-outputs.schema.json), the root that answers it, named as the last segment of its directory on SPA_ROOTS, and that root's Terraform output. write_outputs (tools/scripts/cell-common.sh) writes these fields, in this order, and nothing else. A field marked optional is written when its root publishes a non-null value and left out when not: the platform root's ecs_bastion_service is null with its bastion input false (#1167).",
+  "fields": [
+    {"field": "region", "root": "platform", "output": "region"},
+    {"field": "cell", "root": "platform", "output": "cell"},
+    {"field": "bucket", "root": "platform", "output": "bucket"},
+    {"field": "albDnsName", "root": "platform", "output": "alb_dns_name"},
+    {"field": "ecsCluster", "root": "platform", "output": "ecs_cluster"},
+    {"field": "ecsService", "root": "platform", "output": "ecs_service"},
+    {"field": "ecrGateway", "root": "platform", "output": "ecr_gateway"},
+    {"field": "ecrMockApi", "root": "platform", "output": "ecr_mock_api"},
+    {"field": "gatewayImage", "root": "platform", "output": "gateway_image"},
+    {"field": "issuer", "root": "idp", "output": "issuer"},
+    {"field": "cognitoDomain", "root": "idp", "output": "cognito_domain"},
+    {"field": "clients", "root": "apps", "output": "clients"},
+    {"field": "testUsers", "root": "idp", "output": "test_users"},
+    {"field": "logGroup", "root": "platform", "output": "log_group"},
+    {"field": "ecsBastionService", "root": "platform", "output": "ecs_bastion_service", "optional": true}
+  ]
+}

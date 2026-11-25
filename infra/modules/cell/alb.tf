@@ -1,4 +1,4 @@
-# Task 1.3. The cell's one load balancer: internal, one HTTPS listener with the
+# The cell's one load balancer: internal, one HTTPS listener with the
 # imported wildcard certificate, and one target group.
 #
 # ADR-0010 is the whole design: a wildcard certificate on one listener, forwarding to
@@ -14,13 +14,13 @@ locals {
   lb_name = "spa-${var.cell}"
 }
 
-# The certificate tools/scripts/certs.sh imported. Terraform does not create it, it
-# finds it, the way docs/plan/05-infrastructure-and-cost.md says: by domain name.
+# The certificate tools/scripts/poc/certs.sh imported. Terraform does not create it, it
+# finds it: by domain name.
 #
 # The Cell tag prevents a lookup from selecting another cell's certificate. Tags
 # are exact-match filters, not merely returned metadata:
 # https://registry.terraform.io/providers/hashicorp/aws/6.68.0/docs/data-sources/acm_certificate
-# Key types mirror tools/scripts/certs.sh's lookup, including a future non-RSA leaf.
+# Key types mirror tools/scripts/poc/certs.sh's lookup, including a future non-RSA leaf.
 # A lookup that finds nothing fails the plan: the listener needs the certificate.
 data "aws_acm_certificate" "wildcard" {
   domain      = "*.${var.certificate_domain}"
@@ -50,7 +50,7 @@ resource "aws_lb" "cell" {
   # the registry's host carries (app1.spa-poc.test:8443 through the tunnel).
   preserve_host_header = true
 
-  # Task 1.3 requires invalid header names to be dropped before the gateway.
+  # Invalid header names are dropped before the gateway, which never sees one.
   # AWS documents routing.http.drop_invalid_header_fields.enabled here:
   # https://docs.aws.amazon.com/cli/latest/reference/elbv2/modify-load-balancer-attributes.html
   drop_invalid_header_fields = true
@@ -71,11 +71,11 @@ resource "aws_lb" "cell" {
   # string (T13). ADR-0007's logging rules say a query string is never logged, for
   # exactly that reason. T13 and ADR-0007 accept the code appearing "in URLs and
   # ALB access logs" in Phase 1; with no access_logs block, only the URL half is
-  # live (Q93 in .scratch/overnight/questions-2026-10-15-answered.md, answered yes).
+  # live.
   # Delivered to S3, the logs would also need a bucket of their own: the cell's one
   # bucket holds the registry and the releases (contracts/s3-layout.md), and P-01
-  # allows no second. Phase 1 runs one log stream and no ALB access logs
-  # (docs/plan/06-phase-2-and-risks.md -> Enterprise gaps).
+  # allows no second. Phase 1 runs one log stream and no ALB access logs; an
+  # estate that needs them adds the bucket and the block together.
   # https://docs.aws.amazon.com/elasticloadbalancing/latest/application/load-balancer-access-logs.html
 
   tags = { Name = local.lb_name }

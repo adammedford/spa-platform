@@ -61,7 +61,22 @@
 // integrates. A last short run has the live read find tickets relabelled since collect (#721), #544's case relabelled
 // ready-for-human among them, and checks that none is implemented, that each takes its live status, and that a read
 // that died fails closed. One more has the subject selector refuse a merge (#1052), and checks that the ticket fails at
-// integrate as neither a conflict nor a red gate. Every house-rules prompt sends docker to ~/.docker/bin before an agent may call it
+// integrate as neither a conflict nor a red gate. One more has integrate agents return a merge with no verdict line
+// (#1469), answering ok and not ok, and checks that each fails at integrate, is never re-run as a flake, advances no
+// verified tip, and is reset to <old> before the next merge, and runs the check prompt's three commands against a fake
+// tools/check.sh to prove the start returns at once and the wait repeats until the verdict line. One case of each
+// answers ok with no verdict on a merge already on the run branch, which fails and is reset by nothing. Short runs on
+// two or three tickets prove the path-wait release (#1385): a predecessor's disjoint committed implement diff
+// releases its edge before it settles, while a true overlap,
+// a missing or empty file list, one holding an entry git --name-only never prints (blank, non-string, absolute,
+// quoted, or with a . or .. segment), a waiter or a predecessor with no readable Touches path, and a forecast that
+// did not run keep the edge until settle; a release before the lane is free costs no wait; and two predecessors are
+// judged edge by edge, the waiter starting at its last release or settle, reported per predecessor, its wait clocked to
+// that point and its fork the last verified tip. One more holds the lanes whose implement check's last line is red and
+// whose own change request blocks them (#1470): neither gets a review or integrate agent, each names its request, the
+// report lists it under that request, its dependant skips at once naming it, and neither counts as a failure; a red
+// check whose request blocks nothing or another ticket, a green check with a self-blocking request, and a self-blocking
+// request with no verdict line keep today's routing. Every house-rules prompt sends docker to ~/.docker/bin before an agent may call it
 // absent (#742). No agent, gh or git call is made.
 import fs from 'node:fs'
 import os from 'node:os'
@@ -232,7 +247,7 @@ async function runForecast(fixtureArg, script) {
     answer: (kind, id) => {
       if (kind === 'implement') return { outcome: 'resolved', branch: `b-${id}`, forkSha: 'f', headSha: 'h', complete: true, outstanding: '', summary: 'forecast', question: '', delegatedDecisions: [], changeRequests: [] }
       if (kind === 'review') return { outcome: 'committed', headSha: 'h', findingsFixed: [], findingsSkipped: [], summary: 'forecast', question: '', changeRequests: [], changedFiles: [`files/${id}.txt`] }
-      if (kind === 'integrate') return { ok: true, mergeSha: 'm', notes: '', conflictFiles: [], headSha: `verified-${id}`, old: '', redHead: '', reach: '' }
+      if (kind === 'integrate') return { ok: true, mergeSha: 'm', notes: '', conflictFiles: [], headSha: `verified-${id}`, old: '', redHead: '', reach: '', lastLine: 'check: pass: companion.' }
       if (kind === 'closing') return { ok: true, headSha: 'd'.repeat(40), lastLine: 'check: pass: forecast.', notes: '' }
       throw new Error(`unexpected agent label ${kind}:${id} in the forecast run`)
     },
@@ -433,19 +448,19 @@ globalThis.agent = mockAgent({ tickets, byId, events, now: () => tick, prompts: 
   if (kind === 'resolve') return { outcome: 'resolved', headSha: 'h2', tip: RESOLVE_TIP, notes: 'companion' }
   if (kind === 'integrate') {
     const k = merges[id] = (merges[id] || 0) + 1
-    if (id === CONFLICT_ALWAYS || (id === CONFLICT_ONCE && k === 1)) return { ok: false, mergeSha: '', notes: 'conflict\n  CONFLICT (content): Merge conflict in .github/workflows/ci.yml', conflictFiles: CONFLICT_FILES, headSha: '', old: '', redHead: '', reach: '' }
-    if (id in reachLine) return { ok: false, mergeSha: '', notes: 'check: fail: the tests failed.', conflictFiles: [], headSha: '', old: OLD, redHead: RED, reach: reachLine[id] }
+    if (id === CONFLICT_ALWAYS || (id === CONFLICT_ONCE && k === 1)) return { ok: false, mergeSha: '', notes: 'conflict\n  CONFLICT (content): Merge conflict in .github/workflows/ci.yml', conflictFiles: CONFLICT_FILES, headSha: '', old: '', redHead: '', reach: '', lastLine: '' }
+    if (id in reachLine) return { ok: false, mergeSha: '', notes: 'check: fail: the tests failed.', conflictFiles: [], headSha: '', old: OLD, redHead: RED, reach: reachLine[id], lastLine: 'check: fail: the tests failed.' }
     greens.push({ at: tick, head: `verified-${id}` })
-    return { ok: true, mergeSha: 'm', notes: '', conflictFiles: [], headSha: `verified-${id}`, old: '', redHead: '', reach: '' }
+    return { ok: true, mergeSha: 'm', notes: '', conflictFiles: [], headSha: `verified-${id}`, old: '', redHead: '', reach: '', lastLine: 'check: pass: companion.' }
   }
   if (kind === 'rerun') {
     const projects = JSON.parse(reachLine[id]).projects.map((p) => ({ project: p.project, log: `log-${p.project}`, passed: id === FLAKE_KEPT }))
-    if (id === FLAKE_KEPT) { greens.push({ at: tick, head: RED }); return { ok: true, mergeSha: 'm-kept', headSha: RED, notes: 'passed alone; check green with --skip-tests', projects } }
+    if (id === FLAKE_KEPT) { greens.push({ at: tick, head: RED }); return { ok: true, mergeSha: 'm-kept', headSha: RED, notes: 'passed alone; check green with --skip-tests', lastLine: 'check: pass: companion.', projects } }
     // An answer of ok the script must not keep (#397): tests/e2e did not pass, or every project passed on another head.
-    if (id === FLAKE_CLAIMED) return { ok: true, mergeSha: 'm-claimed', headSha: RED, notes: 'passed alone; check green with --skip-tests', projects: projects.map((p) => ({ ...p, passed: p.project !== 'tests/e2e' })) }
-    if (id === FLAKE_ELSEWHERE) return { ok: true, mergeSha: 'm-elsewhere', headSha: ELSEWHERE, notes: 'passed alone; check green with --skip-tests', projects: projects.map((p) => ({ ...p, passed: true })) }
+    if (id === FLAKE_CLAIMED) return { ok: true, mergeSha: 'm-claimed', headSha: RED, notes: 'passed alone; check green with --skip-tests', lastLine: 'check: pass: companion.', projects: projects.map((p) => ({ ...p, passed: p.project !== 'tests/e2e' })) }
+    if (id === FLAKE_ELSEWHERE) return { ok: true, mergeSha: 'm-elsewhere', headSha: ELSEWHERE, notes: 'passed alone; check green with --skip-tests', lastLine: 'check: pass: companion.', projects: projects.map((p) => ({ ...p, passed: true })) }
     if (id === FLAKE_DIED) return null
-    return { ok: false, mergeSha: '', headSha: '', notes: AGAIN_NOTE, projects }
+    return { ok: false, mergeSha: '', headSha: '', notes: AGAIN_NOTE, lastLine: '', projects }
   }
   if (kind === 'reset') return { ok: true, head: OLD, notes: `${id}: the run branch is at ${OLD}` }
   // The closing check (#629) answers red, the case the report has to carry without resetting any merge.
@@ -1221,10 +1236,12 @@ for (const c of allPrompts.filter((x) => x.label.startsWith('review:'))) {
   // CONFLICT_ALWAYS's three entries come only from the impl, rev1 and rev its failed result keeps, and
   // REQUEST_DECIDED's only from a grill that carried a decision, so a list that drops either kind fails here.
   const conflict = { id: CONFLICT_ALWAYS, issue: byId[CONFLICT_ALWAYS].issue }
+  // No lane of this run is held (#1470), so every request reads held false; the held-lane run below proves true.
+  const notHeld = { held: false }
   const want = {
-    filed: [{ id: AFTER_CLOSE.id, issue: AFTER_CLOSE.issue, ...FILED }, { ...conflict, ...KEPT_IMPL }],
-    edges: [{ id: TRIAGED.id, issue: TRIAGED.issue, ...EDGE }, { ...conflict, ...KEPT_REV }, { ...conflict, ...KEPT_REV1 }],
-    queued: [{ id: HELD_BY, issue: byId[HELD_BY].issue, ...QUEUED }],
+    filed: [{ id: AFTER_CLOSE.id, issue: AFTER_CLOSE.issue, ...FILED, ...notHeld }, { ...conflict, ...KEPT_IMPL, ...notHeld }],
+    edges: [{ id: TRIAGED.id, issue: TRIAGED.issue, ...EDGE, ...notHeld }, { ...conflict, ...KEPT_REV, ...notHeld }, { ...conflict, ...KEPT_REV1, ...notHeld }],
+    queued: [{ id: HELD_BY, issue: byId[HELD_BY].issue, ...QUEUED, ...notHeld }],
     awaiting: [{ id: REQUEST_HUMAN.id, issue: REQUEST_HUMAN.issue, title: REQUEST_HUMAN.title, draftDecision: DRAFT_URL }],
     decided: [{ id: REQUEST_DECIDED.id, issue: REQUEST_DECIDED.issue, title: REQUEST_DECIDED.title, decided: DECIDED_LINE }],
   }
@@ -1420,7 +1437,7 @@ for (const c of allPrompts.filter((x) => x.label.startsWith('review:'))) {
   const closings = allPrompts.filter((c) => c.label === 'closing')
   if (closings.length !== 1) fail(`#629: the run rendered ${closings.length} closing-check prompts, not 1`)
   const p = (closings[0] || {}).prompt || ''
-  const cmd = (/^ {2}cd (\S+) && \{ echo "HEAD=\$\(git -C \S+ rev-parse HEAD\)"; tools\/check\.sh --full --base (\S+) --port (\d+); \} > (\S+) 2>&1; tail -25 \S+$/m.exec(p) || [])
+  const cmd = (/^ {2}2\. cd (\S+) && \{ nohup bash -c '\{ echo "HEAD=\$\(git -C \S+ rev-parse HEAD\)"; tools\/check\.sh --full --base (\S+) --port (\d+); \} > (\S+) 2>&1' < \/dev\/null > \/dev\/null 2>&1 & echo \$! > \4\.pid; \}$/m.exec(p) || [])
   if (!cmd.length) fail('#629: the closing-check prompt does not run tools/check.sh --full as the one check command')
   else {
     if (cmd[1] !== INT_WT) fail(`#629: the closing check runs in ${cmd[1]}, not the integration worktree ${INT_WT}`)
@@ -1463,7 +1480,7 @@ for (const c of allPrompts.filter((x) => x.label.startsWith('review:'))) {
       if (kind === 'live') return LIVE_READY   // the live read (#721): still ready-for-agent
       if (kind === 'implement') return { outcome: 'resolved', branch: 'b', forkSha: 'f', headSha: 'h', complete: true, outstanding: '', summary: 's', question: '', delegatedDecisions: [], changeRequests: [] }
       if (kind === 'review') return { outcome: 'committed', headSha: 'h', findingsFixed: [], findingsSkipped: [], summary: 's', question: '', changeRequests: [], changedFiles: [`files/${id}.txt`] }
-      if (kind === 'integrate') return { ok: true, mergeSha: 'm', notes: '', conflictFiles: [], headSha: `verified-${id}`, old: '', redHead: '', reach: '' }
+      if (kind === 'integrate') return { ok: true, mergeSha: 'm', notes: '', conflictFiles: [], headSha: `verified-${id}`, old: '', redHead: '', reach: '', lastLine: 'check: pass: companion.' }
       if (kind === 'closing') return closingAnswer
       if (kind === 'report') return { questions: 0, mainCheckoutClean: true, leftovers: '', issue: 0, url: '' }
       throw new Error(`unexpected agent label ${opts.label} in a closing-check run`)
@@ -1504,7 +1521,7 @@ const DOWNSTREAM_CASES = 5
       if (kind === 'live') return LIVE_READY   // the live read (#721): still ready-for-agent
       if (kind === 'implement') { starts.push(id); return { outcome: 'resolved', branch: 'b', forkSha: 'f', headSha: 'h', complete: true, outstanding: '', summary: 's', question: '', delegatedDecisions: [], changeRequests: [] } }
       if (kind === 'review') return { outcome: 'committed', headSha: 'h', findingsFixed: [], findingsSkipped: [], summary: 's', question: '', changeRequests: [], changedFiles: [`files/${id}.txt`] }
-      if (kind === 'integrate') return { ok: true, mergeSha: 'm', notes: '', conflictFiles: [], headSha: `verified-${id}`, old: '', redHead: '', reach: '' }
+      if (kind === 'integrate') return { ok: true, mergeSha: 'm', notes: '', conflictFiles: [], headSha: `verified-${id}`, old: '', redHead: '', reach: '', lastLine: 'check: pass: companion.' }
       if (kind === 'closing') return { ok: true, headSha: CLOSING_TIP, lastLine: 'check: pass: companion.', notes: '' }
       if (kind === 'report') return { questions: 0, mainCheckoutClean: true, leftovers: '', issue: 0, url: '' }
       throw new Error(`unexpected agent label ${opts.label} in a downstream-order run`)
@@ -1599,7 +1616,7 @@ const LIMIT_HALTED = 'usage limit; resume after 10pm (America/Chicago)'
     if (kind === 'implement') return { outcome: 'resolved', branch: 'b', forkSha: 'f', headSha: 'h', complete: true, outstanding: '', summary: 's', question: '', delegatedDecisions: [], changeRequests: [] }
     if (kind === 'review' && id === 'issue-1005') return { outcome: 'failed', headSha: 'h', findingsFixed: [], findingsSkipped: [], summary: 'a real failure', question: '', changeRequests: [], changedFiles: [] }
     if (kind === 'review') return { outcome: 'committed', headSha: 'h', findingsFixed: [], findingsSkipped: [], summary: 's', question: '', changeRequests: [], changedFiles: [`files/${id}.txt`] }
-    if (kind === 'integrate') return { ok: true, mergeSha: 'm', notes: '', conflictFiles: [], headSha: `verified-${id}`, old: '', redHead: '', reach: '' }
+    if (kind === 'integrate') return { ok: true, mergeSha: 'm', notes: '', conflictFiles: [], headSha: `verified-${id}`, old: '', redHead: '', reach: '', lastLine: 'check: pass: companion.' }
     throw new Error(`unexpected agent label ${opts.label} in the usage-limit run`)
   }
   const lane710 = (n, owner) => ({ ...synthetic(n, `issue-${n}`, 'ready-for-agent', [], 1), owner })
@@ -1648,7 +1665,7 @@ const LIMIT_HALTED = 'usage limit; resume after 10pm (America/Chicago)'
     if (kind === 'grill' || kind === 'rerun') throw new Error(LIMIT_MESSAGE)
     if (kind === 'implement') return { outcome: 'resolved', branch: 'b', forkSha: 'f', headSha: 'h', complete: true, outstanding: '', summary: 's', question: '', delegatedDecisions: [], changeRequests: [] }
     if (kind === 'review') return { outcome: 'committed', headSha: 'h', findingsFixed: [], findingsSkipped: [], summary: 's', question: '', changeRequests: [], changedFiles: ['tools/bench/report.py'] }
-    if (kind === 'integrate') return { ok: false, mergeSha: '', notes: TESTS_FAILED, conflictFiles: [], headSha: '', old: OLD, redHead: RED, reach }
+    if (kind === 'integrate') return { ok: false, mergeSha: '', notes: TESTS_FAILED, conflictFiles: [], headSha: '', old: OLD, redHead: RED, reach, lastLine: TESTS_FAILED }
     throw new Error(`unexpected agent label ${opts.label} in the usage-limit merge run`)
   }
   const src = fs.readFileSync(scriptPath, 'utf8').replace(/^export const meta/m, 'const meta')
@@ -1700,10 +1717,10 @@ const LIMIT_HALTED = 'usage limit; resume after 10pm (America/Chicago)'
       ? { outcome: 'resolved', branch: `task/${id}`, forkSha: mergeOf(id), headSha: mergeOf(id), complete: true, outstanding: '', summary: 'changed nothing', question: '', delegatedDecisions: [], changeRequests: [] }
       : { outcome: 'resolved', branch: `task/${id}`, forkSha: 'f', headSha: 'h', complete: true, outstanding: '', summary: 's', question: '', delegatedDecisions: [], changeRequests: [] }
     if (kind === 'review') return { outcome: 'committed', headSha: 'h', findingsFixed: [], findingsSkipped: [], summary: 's', question: '', changeRequests: [], changedFiles: [`files/${id}.txt`] }
-    if (kind === 'integrate') return { ok: true, mergeSha: 'm', notes: '', conflictFiles: [], headSha: `verified-${id}`, old: '', redHead: '', reach: '' }
+    if (kind === 'integrate') return { ok: true, mergeSha: 'm', notes: '', conflictFiles: [], headSha: `verified-${id}`, old: '', redHead: '', reach: '', lastLine: 'check: pass: companion.' }
     if (kind === 'gate') {
-      if (id === GATE_RED) return { ok: false, ran: true, mergeSha: mergeOf(id), headSha: '', notes: `the merge stays on the run branch, unverified: later merges sit on it. ${RED_LINE}` }
-      return { ok: true, ran: id !== AS_677, mergeSha: mergeOf(id), headSha: id === AS_677 ? mergeOf(id) : `verified-${id}`, notes: '' }
+      if (id === GATE_RED) return { ok: false, ran: true, mergeSha: mergeOf(id), headSha: '', lastLine: RED_LINE, notes: `the merge stays on the run branch, unverified: later merges sit on it. ${RED_LINE}` }
+      return { ok: true, ran: id !== AS_677, mergeSha: mergeOf(id), headSha: id === AS_677 ? mergeOf(id) : `verified-${id}`, lastLine: 'check: pass: companion.', notes: '' }
     }
     throw new Error(`unexpected agent label ${opts.label} in the resumed-lane run`)
   }
@@ -1817,10 +1834,10 @@ const LIMIT_HALTED = 'usage limit; resume after 10pm (America/Chicago)'
     if (kind === 'resume') return id === MERGED_LIVE ? { merged: true, mergeSha: '8'.repeat(40), subject: `Merge task ${id}: companion`, notes: '' } : NOT_MERGED
     if (kind === 'live') return id in liveOf ? liveOf[id] : LIVE_READY
     if (kind === 'grill') return { questions: [], changeRequests: [], adrCandidates: [], draftDecision: '', decided: '', summary: CARRIED_GRILL_SUMMARY }
-    if (kind === 'gate') return { ok: true, ran: false, mergeSha: '8'.repeat(40), headSha: '8'.repeat(40), notes: '' }
+    if (kind === 'gate') return { ok: true, ran: false, mergeSha: '8'.repeat(40), headSha: '8'.repeat(40), lastLine: 'check: pass: companion.', notes: '' }
     if (kind === 'implement') return { outcome: 'resolved', branch: `task/${id}`, forkSha: 'f', headSha: 'h', complete: true, outstanding: '', summary: 's', question: '', delegatedDecisions: [], changeRequests: [] }
     if (kind === 'review') return { outcome: 'committed', headSha: 'h', findingsFixed: [], findingsSkipped: [], summary: 's', question: '', changeRequests: [], changedFiles: [`files/${id}.txt`] }
-    if (kind === 'integrate') return { ok: true, mergeSha: 'm', notes: '', conflictFiles: [], headSha: `verified-${id}`, old: '', redHead: '', reach: '' }
+    if (kind === 'integrate') return { ok: true, mergeSha: 'm', notes: '', conflictFiles: [], headSha: `verified-${id}`, old: '', redHead: '', reach: '', lastLine: 'check: pass: companion.' }
     throw new Error(`unexpected agent label ${opts.label} in the live-label run`)
   }
   const CARRIED_GRILL_SUMMARY = 'carried from an earlier night, not re-grilled'
@@ -2066,7 +2083,7 @@ const forkOf = (prompt) => (/Otherwise fork from [^:]+: forkSha = (\S+?)\. Take 
     if (kind === 'implement' && tid === id(1)) return { outcome: 'failed', branch: 'b', forkSha: 'f', headSha: 'f', complete: false, outstanding: '', summary: 'failed on purpose', question: '', delegatedDecisions: [], changeRequests: [] }
     if (kind === 'implement') return { outcome: 'resolved', branch: 'b', forkSha: 'f', headSha: 'h', complete: true, outstanding: '', summary: 's', question: '', delegatedDecisions: [], changeRequests: [] }
     if (kind === 'review') return { outcome: 'committed', headSha: 'h', findingsFixed: [], findingsSkipped: [], summary: 's', question: '', changeRequests: [], changedFiles: [`files/${tid}.txt`] }
-    if (kind === 'integrate') { pGreens.push({ at: tick, head: `verified-${tid}` }); return { ok: true, mergeSha: 'm', notes: '', conflictFiles: [], headSha: `verified-${tid}`, old: '', redHead: '', reach: '' } }
+    if (kind === 'integrate') { pGreens.push({ at: tick, head: `verified-${tid}` }); return { ok: true, mergeSha: 'm', notes: '', conflictFiles: [], headSha: `verified-${tid}`, old: '', redHead: '', reach: '', lastLine: 'check: pass: companion.' } }
     throw new Error(`unexpected agent label ${opts.label} in the path-wait run`)
   }
   const src = fs.readFileSync(scriptPath, 'utf8').replace(/^export const meta/m, 'const meta')
@@ -2178,8 +2195,8 @@ const forkOf = (prompt) => (/Otherwise fork from [^:]+: forkSha = (\S+?)\. Take 
       if (kind === 'live') return LIVE_READY
       if (kind === 'implement') return { outcome: 'resolved', branch: 'b', forkSha: RUN_BASE_665, headSha: 'h', complete: true, outstanding: '', summary: 's', question: '', delegatedDecisions: [], changeRequests: [] }
       if (kind === 'review') return { outcome: 'committed', headSha: 'h', findingsFixed: [], findingsSkipped: [], summary: 's', question: '', changeRequests: [], changedFiles: ['solo/a'] }
-      if (kind === 'integrate') return ++merged === 1 ? { ok: false, mergeSha: '', notes: 'conflict', conflictFiles: ['solo/a'], headSha: '', old: '', redHead: '', reach: '' }
-        : { ok: true, mergeSha: 'm', notes: '', conflictFiles: [], headSha: 'v'.repeat(40), old: '', redHead: '', reach: '' }
+      if (kind === 'integrate') return ++merged === 1 ? { ok: false, mergeSha: '', notes: 'conflict', conflictFiles: ['solo/a'], headSha: '', old: '', redHead: '', reach: '', lastLine: '' }
+        : { ok: true, mergeSha: 'm', notes: '', conflictFiles: [], headSha: 'v'.repeat(40), old: '', redHead: '', reach: '', lastLine: 'check: pass: companion.' }
       if (kind === 'resolve') return { outcome: 'resolved', headSha: 'h2', tip: RUN_BASE_665, notes: 'companion' }
       if (kind === 'closing') return { ok: true, headSha: 'v'.repeat(40), lastLine: 'check: pass: companion', notes: '' }
       if (kind === 'report') return { questions: 0, mainCheckoutClean: true, leftovers: '', issue: 0, url: '' }
@@ -2231,7 +2248,7 @@ const forkOf = (prompt) => (/Otherwise fork from [^:]+: forkSha = (\S+?)\. Take 
     ev.push({ at: tick, kind, id: tid, edge: 'end' })
     if (kind === 'implement') return { outcome: 'resolved', branch: 'b', forkSha: 'f', headSha: 'h', complete: true, outstanding: '', summary: 's', question: '', delegatedDecisions: [], changeRequests: [] }
     if (kind === 'review') return { outcome: 'committed', headSha: 'h', findingsFixed: [], findingsSkipped: [], summary: 's', question: '', changeRequests: [], changedFiles: [`files/${tid}.txt`] }
-    if (kind === 'integrate') return { ok: true, mergeSha: 'm', notes: '', conflictFiles: [], headSha: `verified-${tid}`, old: '', redHead: '', reach: '' }
+    if (kind === 'integrate') return { ok: true, mergeSha: 'm', notes: '', conflictFiles: [], headSha: `verified-${tid}`, old: '', redHead: '', reach: '', lastLine: 'check: pass: companion.' }
     throw new Error(`unexpected agent label ${opts.label} in the lane-order path-wait run`)
   }
   const src = fs.readFileSync(scriptPath, 'utf8').replace(/^export const meta/m, 'const meta')
@@ -2305,7 +2322,7 @@ const forkOf = (prompt) => (/Otherwise fork from [^:]+: forkSha = (\S+?)\. Take 
     ev.push({ kind, id: tid, edge: 'end', seq: ++seq })
     if (kind === 'implement') return { outcome: 'resolved', branch: 'b', forkSha: 'f', headSha: 'h', complete: true, outstanding: '', summary: 's', question: '', delegatedDecisions: [], changeRequests: [] }
     if (kind === 'review') return { outcome: 'committed', headSha: 'h', findingsFixed: [], findingsSkipped: [], summary: 's', question: '', changeRequests: [], changedFiles: [`files/${tid}.txt`] }
-    if (kind === 'integrate') return { ok: true, mergeSha: 'm', notes: '', conflictFiles: [], headSha: `verified-${tid}`, old: '', redHead: '', reach: '' }
+    if (kind === 'integrate') return { ok: true, mergeSha: 'm', notes: '', conflictFiles: [], headSha: `verified-${tid}`, old: '', redHead: '', reach: '', lastLine: 'check: pass: companion.' }
     throw new Error(`unexpected agent label ${opts.label} in the blocked path-wait run`)
   }
   const src = fs.readFileSync(scriptPath, 'utf8').replace(/^export const meta/m, 'const meta')
@@ -2364,7 +2381,7 @@ const forkOf = (prompt) => (/Otherwise fork from [^:]+: forkSha = (\S+?)\. Take 
       ev.push({ at: tick, kind, id: tid, edge: 'end' })
       if (kind === 'implement') return { outcome: 'resolved', branch: 'b', forkSha: 'f', headSha: 'h', complete: true, outstanding: '', summary: 's', question: '', delegatedDecisions: [], changeRequests: [] }
       if (kind === 'review') return { outcome: 'committed', headSha: 'h', findingsFixed: [], findingsSkipped: [], summary: 's', question: '', changeRequests: [], changedFiles: [`files/${tid}.txt`] }
-      if (kind === 'integrate') return { ok: true, mergeSha: 'm', notes: '', conflictFiles: [], headSha: `verified-${tid}`, old: '', redHead: '', reach: '' }
+      if (kind === 'integrate') return { ok: true, mergeSha: 'm', notes: '', conflictFiles: [], headSha: `verified-${tid}`, old: '', redHead: '', reach: '', lastLine: 'check: pass: companion.' }
       throw new Error(`unexpected agent label ${opts.label} in the forward cycle run ${label}`)
     }
     const src = fs.readFileSync(scriptPath, 'utf8').replace(/^export const meta/m, 'const meta')
@@ -2403,6 +2420,179 @@ const forkOf = (prompt) => (/Otherwise fork from [^:]+: forkSha = (\S+?)\. Take 
     if (r === STALLED) { fail(`#916: forward cycle run ${c.label} did not finish: the cycle guard let a path wait close a cycle through a wait that points forwards in n`); continue }
     for (const x of [1, 2, 3, 4, 5, 6].map(id)) if (!(r.integrated || []).includes(x)) fail(`#916: ${x} did not integrate in forward cycle run ${c.label}: ${JSON.stringify((r.reasons || []).find((y) => y.id === x))}`)
     if (!logged.some((l) => l.text === c.drop(id))) fail(`#916: forward cycle run ${c.label} did not log "${c.drop(id)}": ` + JSON.stringify(logged.filter((l) => l.text.includes('no path wait behind')).map((l) => l.text)))
+  }
+}
+
+// 49. A path wait releases on its predecessor's committed implement diff (#1385; #1419 Q1 to Q8). An edge ends before
+//     its predecessor settles once that predecessor's implement resolves with a readable, nonempty changedFiles list
+//     none of whose files overlaps the waiter's Touches paths; it stays until settle on a true overlap, a missing,
+//     empty list, one holding an entry git --name-only never prints (blank, non-string, absolute, quoted, or with a .
+//     or .. segment), a waiter or a predecessor with no readable Touches path, and a forecast that did not run.
+//     #1292's night is the disjoint case: its predecessor named the directory tests/e2e/Stack and changed one other
+//     file under it. Each predecessor's review is slow, so a wait that releases is told from one that settles by
+//     whether the waiter started its implement before the predecessor's tail ended (ordered by seq, not by tick).
+//     Two runs with two predecessors each prove that each edge is judged on its own: one where the edge that releases
+//     goes first and the waiter starts at the other's settle, and one where the release comes last and the waiter
+//     starts on it, its wait clocked to end there and its fork the last verified tip, never its predecessor's merge.
+{
+  const T = (base, n, owner, touches) => ({ n, id: `issue-${base + n}`, slug: `r${base + n}`, issue: base + n, url: `https://example.invalid/${base + n}`,
+    title: `Release ${base + n}`, status: 'ready-for-agent', owner, blockedBy: [], why: 'companion', openBoxes: 1, changeRequest: false, willEndPartial: [], touches })
+  const NONE = Symbol('no changedFiles')
+  // cfg: id -> {impl, review: ms, files: the implement's changedFiles, NONE to leave the field out}
+  const run = async (set, cfg, label, forecastFailed = '') => {
+    const ev = [], logged = [], prompts = [], clockSeq = {}, greens = []
+    let seq = 0
+    globalThis.args = { ...fixture.args, skills: OTHER_SKILLS, only: null, skip: [], maxParallel: 6, maxFailures: 8 }
+    globalThis.log = (text) => logged.push({ at: tick, seq: ++seq, text })
+    globalThis.agent = async (prompt, opts) => {
+      prompts.push({ label: opts.label, prompt, schema: opts.schema })
+      const [kind, tid, edge] = opts.label.split(':')
+      if (kind === 'collect') return { outcome: 'ok', reason: 'companion', tickets: set.map((t) => ({ ...t })), landed: [], base: RUN_BASE_665, shell: '3.2', shellCommand: '/bin/bash', forecastFailed }
+      if (kind === 'resume') return NOT_MERGED
+      if (kind === 'live') return LIVE_READY
+      if (kind === 'clock') { clockSeq[`${tid}:${edge}`] = ++seq; return { epoch: tick * 6 } }
+      if (kind === 'report') return { questions: 0, mainCheckoutClean: true, leftovers: '', issue: 0, url: '' }
+      if (kind === 'closing') return { ok: true, headSha: 'd'.repeat(40), lastLine: 'check: pass: companion', notes: '' }
+      const c = cfg[tid] || {}
+      ev.push({ kind, id: tid, edge: 'start', seq: ++seq })
+      await sleep(kind === 'implement' ? (c.impl || 15) : kind === 'review' ? (c.review || 15) : 15)
+      ev.push({ kind, id: tid, edge: 'end', seq: ++seq })
+      if (kind === 'implement') {
+        const out = { outcome: 'resolved', branch: `b-${tid}`, forkSha: 'f', headSha: 'h', complete: true, outstanding: '', summary: 's', question: '', delegatedDecisions: [], changeRequests: [] }
+        if (c.files !== NONE) out.changedFiles = c.files || [`files/${tid}.txt`]
+        return out
+      }
+      if (kind === 'review') return { outcome: 'committed', headSha: 'h', findingsFixed: [], findingsSkipped: [], summary: 's', question: '', changeRequests: [], changedFiles: [`files/${tid}.txt`] }
+      if (kind === 'integrate') { greens.push({ seq, head: `verified-${tid}` }); return { ok: true, mergeSha: 'm', notes: '', conflictFiles: [], headSha: `verified-${tid}`, old: '', redHead: '', reach: '', lastLine: 'check: pass: companion.' } }
+      throw new Error(`unexpected agent label ${opts.label} in the release run ${label}`)
+    }
+    const src = fs.readFileSync(scriptPath, 'utf8').replace(/^export const meta/m, 'const meta')
+    const releaseTick = setInterval(() => { tick++ }, 1)
+    let stop
+    const r = await Promise.race([new Function('return (async () => {' + src + '\n})()')(), new Promise((res) => { stop = setTimeout(() => res(STALLED), LIMIT_MS) })])
+    clearTimeout(stop)
+    clearInterval(releaseTick)
+    const startSeq = (x) => (ev.find((e) => e.kind === 'implement' && e.id === x && e.edge === 'start') || {}).seq
+    const implEnd = (x) => (ev.find((e) => e.kind === 'implement' && e.id === x && e.edge === 'end') || {}).seq
+    const settledSeq = (x) => Math.max(...ev.filter((e) => e.id === x && e.edge === 'end').map((e) => e.seq))
+    return { r, ev, logged, prompts, clockSeq, greens, startSeq, implEnd, settledSeq }
+  }
+  const released = (x, w, p) => (x.r.pathReleases || []).find((e) => e.id === w && e.behind === p)
+  const said = (x, s) => x.logged.some((l) => l.text.startsWith(s))
+
+  // One waiter, one predecessor: the release, then each case that keeps the edge until settle.
+  const single = [
+    // [label, P's touches, W's touches, same lane, P's files, forecastFailed, releases, why the edge stays]
+    ['disjoint', ['tests/e2e/Stack'], ['tests/e2e/Stack/NavigationHold.cs'], false, ['tests/e2e/Stack/FragmentsRun.cs'], '', true, ''],
+    ['overlap', ['tests/e2e/Stack'], ['tests/e2e/Stack/NavigationHold.cs'], false, ['tests/e2e/Stack/NavigationHold.cs'], '', false, 'implement diff changes tests/e2e/Stack/NavigationHold.cs'],
+    ['overlap under a waiter directory', ['tests/e2e'], ['tests/e2e/Stack'], false, ['tests/e2e/Stack/FragmentsRun.cs'], '', false, 'implement diff changes tests/e2e/Stack/FragmentsRun.cs'],
+    ['missing', ['tests/e2e/Stack'], ['tests/e2e/Stack/NavigationHold.cs'], false, NONE, '', false, 'implement returned no changedFiles'],
+    ['empty', ['tests/e2e/Stack'], ['tests/e2e/Stack/NavigationHold.cs'], false, [], '', false, 'implement diff lists no file'],
+    ['blank entry', ['tests/e2e/Stack'], ['tests/e2e/Stack/NavigationHold.cs'], false, ['tests/e2e/Stack/FragmentsRun.cs', ' '], '', false, 'lists an entry that is no repo-relative path'],
+    // Entries git --name-only never prints, each naming the waiter's own file: judged, they would match no Touches path.
+    ['non-string entry', ['tests/e2e/Stack'], ['tests/e2e/Stack/NavigationHold.cs'], false, ['tests/e2e/Stack/FragmentsRun.cs', 42], '', false, 'lists an entry that is no repo-relative path'],
+    ['absolute entry', ['tests/e2e/Stack'], ['tests/e2e/Stack/NavigationHold.cs'], false, ['/w/integrator-issue-1/tests/e2e/Stack/NavigationHold.cs'], '', false, 'lists an entry that is no repo-relative path'],
+    ['quoted entry', ['tests/e2e/Stack'], ['tests/e2e/Stack'], false, ['"tests/e2e/Stack/Navigation\\tHold.cs"'], '', false, 'lists an entry that is no repo-relative path'],
+    ['dot segment', ['tests/e2e/Stack'], ['tests/e2e/Stack/NavigationHold.cs'], false, ['./tests/e2e/Stack/NavigationHold.cs'], '', false, 'lists an entry that is no repo-relative path'],
+    ['parent segment', ['tests/e2e/Stack'], ['tests/e2e/Stack/NavigationHold.cs'], false, ['tests/e2e/Stack/../Stack/NavigationHold.cs'], '', false, 'lists an entry that is no repo-relative path'],
+    ['waiter unreadable', ['tests/e2e/Stack'], [], true, ['tests/e2e/Stack/FragmentsRun.cs'], '', false, 'has no readable Touches path'],
+    ['predecessor unreadable', [], ['tests/e2e/Stack/NavigationHold.cs'], true, ['tests/e2e/Stack/FragmentsRun.cs'], '', false, 'has no readable Touches path'],
+    ['forecast failed', ['tests/e2e/Stack'], ['tests/e2e/Stack/NavigationHold.cs'], false, ['tests/e2e/Stack/FragmentsRun.cs'], 'exit 1', false, 'the forecast did not run (exit 1)'],
+  ]
+  for (const [i, [label, pT, wT, sameLane, files, ff, releases, why]] of single.entries()) {
+    const base = 7000 + 10 * i, P = `issue-${base + 1}`, W = `issue-${base + 2}`
+    const set = [T(base, 1, 'ws1-infra', pT), T(base, 2, sameLane ? 'ws1-infra' : 'ws2-hosting', wT)]
+    const x = await run(set, { [P]: { impl: 25, review: 200, files } }, label, ff)
+    if (x.r === STALLED) { fail(`#1385: the release run "${label}" did not finish: a wait never cleared`); continue }
+    for (const t of [P, W]) if (!(x.r.integrated || []).includes(t)) fail(`#1385 "${label}": ${t} did not integrate: ${JSON.stringify((x.r.reasons || []).find((y) => y.id === t))}`)
+    if (!said(x, `${W}: waiting to start behind ${P} (`)) { fail(`#1385 "${label}": ${W} never waited behind ${P}, so the case read nothing: ${JSON.stringify(x.logged.map((l) => l.text).filter((t) => t.startsWith(W)))}`); continue }
+    const w = (x.r.pathWaits || []).find((e) => e.id === W)
+    const b = w && w.behind.find((e) => e.id === P)
+    if (releases) {
+      const rel = released(x, W, P)
+      if (!rel || !String(rel.why).includes(`#${base + 1}'s implement diff shares no file`) || JSON.stringify(rel.files) !== JSON.stringify(files) || rel.behindIssue !== base + 1)
+        fail(`#1385 "${label}": the disjoint committed diff did not record a release of ${W} behind ${P}: ${JSON.stringify(x.r.pathReleases)}`)
+      if (!said(x, `${W}: path wait behind ${P} released: `)) fail(`#1385 "${label}": the release of ${W} behind ${P} is not logged`)
+      if (!(x.startSeq(W) > x.implEnd(P)) || !(x.startSeq(W) < x.settledSeq(P))) fail(`#1385 "${label}": ${W} started at ${x.startSeq(W)}, not between ${P}'s implement end ${x.implEnd(P)} and its settle ${x.settledSeq(P)}`)
+      if (!b || !b.released) fail(`#1385 "${label}": ${W}'s path wait does not carry the release behind ${P}: ${JSON.stringify(w)}`)
+      const e = x.clockSeq[`${W}:end`]
+      if (!(e > x.implEnd(P)) || !(e < x.settledSeq(P))) fail(`#1385 "${label}": ${W}'s wait was clocked to end at ${e}, not at the release (between ${x.implEnd(P)} and ${x.settledSeq(P)})`)
+    } else {
+      if ((x.r.pathReleases || []).length) fail(`#1385 "${label}": the edge was released: ${JSON.stringify(x.r.pathReleases)}`)
+      if (!(x.startSeq(W) > x.settledSeq(P))) fail(`#1385 "${label}": ${W} started at ${x.startSeq(W)}, before ${P} settled at ${x.settledSeq(P)}`)
+      if (!x.logged.some((l) => l.text.startsWith(`${W}: path wait behind ${P} kept until it settles: `) && l.text.includes(why))) fail(`#1385 "${label}": no "kept until it settles" line naming "${why}": ${JSON.stringify(x.logged.map((l) => l.text).filter((t) => t.includes('path wait behind')))}`)
+      if (!b || b.released !== '') fail(`#1385 "${label}": ${W}'s wait behind ${P} does not read as settled (released ""): ${JSON.stringify(w)}`)
+    }
+    if (i === 0) {
+      // The implementer is asked for the list, and its schema requires it (#1419 Q4).
+      const ip = x.prompts.find((p) => p.label === `implement:${P}`)
+      if (!ip || !ip.prompt.includes('changedFiles (after your last commit, every path `git -C ') || !ip.prompt.includes(' diff --no-renames --name-only <forkSha> HEAD` prints')) fail('#1385: the implement prompt does not ask for changedFiles from the committed fork-to-head diff')
+      if (!ip || !ip.schema || !(ip.schema.required || []).includes('changedFiles') || !ip.schema.properties.changedFiles) fail('#1385: the IMPL schema does not require changedFiles')
+      const rep = x.prompts.find((p) => p.label === 'report')
+      const item = rep ? (rep.prompt.split('\n').find((l) => l.includes('- Path waits (#665)')) || '') : ''
+      for (const rule of ['`released: <its released, as printed>`', 'the count of early releases', '"pathReleases"', 'a release made before the waiter\'s lane was free']) if (!item.includes(rule)) fail(`#1385: the report prompt's Path waits item lacks "${rule}"`)
+      const sum = rep ? JSON.parse((/^Run results \(JSON\): (.*)$/m.exec(rep.prompt) || [, 'null'])[1]) : null
+      if (!sum || JSON.stringify(sum.pathReleases) !== JSON.stringify(x.r.pathReleases)) fail('#1385: the report\'s results do not carry the run\'s pathReleases')
+    }
+  }
+
+  // A release before the waiter's lane is free: P and W share a lane, so the lane implements P first, and P's
+  // disjoint diff releases W before the lane looks again. W then starts at once, before P's tail ends, with no wait
+  // logged or clocked, since it cost none, and the release is still recorded.
+  {
+    const base = 6100, P = `issue-${base + 1}`, W = `issue-${base + 2}`
+    const set = [T(base, 1, 'ws1-infra', ['tests/e2e/Stack']), T(base, 2, 'ws1-infra', ['tests/e2e/Stack/NavigationHold.cs'])]
+    const x = await run(set, { [P]: { impl: 25, review: 200, files: ['tests/e2e/Stack/FragmentsRun.cs'] } }, 'same lane')
+    if (x.r === STALLED) fail('#1385: the same-lane release run did not finish')
+    else {
+      for (const t of [P, W]) if (!(x.r.integrated || []).includes(t)) fail(`#1385 same lane: ${t} did not integrate`)
+      if (!released(x, W, P)) fail(`#1385 same lane: ${W}'s edge behind ${P} was not released: ${JSON.stringify(x.r.pathReleases)}`)
+      if (!(x.startSeq(W) < x.settledSeq(P))) fail(`#1385 same lane: ${W} started at ${x.startSeq(W)}, not before ${P} settled at ${x.settledSeq(P)}`)
+      if (said(x, `${W}: waiting to start behind ${P} (`) || (x.r.pathWaits || []).some((e) => e.id === W)) fail(`#1385 same lane: ${W} logged or reported a wait behind ${P}, whose edge had released before its lane was free`)
+    }
+  }
+
+  // Two predecessors, each edge judged on its own. Run A: P1 (disjoint diff, slow review) releases first, P2 (true
+  // overlap, quick) holds until it settles, and W starts at P2's settle, still before P1's. Run B: Q1 (overlap,
+  // quick) settles first and Q2 (disjoint, slow implement and review) releases last, and W starts on the release.
+  {
+    const base = 6200, P1 = `issue-${base + 1}`, P2 = `issue-${base + 2}`, W = `issue-${base + 3}`
+    const set = [T(base, 1, 'ws1-infra', ['m']), T(base, 2, 'ws2-hosting', ['m/w.txt']), T(base, 3, 'ws3-identity', ['m/w.txt'])]
+    const x = await run(set, { [P1]: { impl: 20, review: 400, files: ['m/other.txt'] }, [P2]: { impl: 60, review: 15, files: ['m/w.txt'] } }, 'two, release first')
+    if (x.r === STALLED) fail('#1385: the two-predecessor run (release first) did not finish')
+    else {
+      for (const t of [P1, P2, W]) if (!(x.r.integrated || []).includes(t)) fail(`#1385 two, release first: ${t} did not integrate`)
+      if (!released(x, W, P1)) fail(`#1385 two, release first: ${W}'s edge behind ${P1}, whose diff is disjoint, was not released: ${JSON.stringify(x.r.pathReleases)}`)
+      if (released(x, W, P2)) fail(`#1385 two, release first: ${W}'s edge behind ${P2}, whose diff overlaps, was released`)
+      if (!(x.startSeq(W) > x.settledSeq(P2)) || !(x.startSeq(W) < x.settledSeq(P1))) fail(`#1385 two, release first: ${W} started at ${x.startSeq(W)}, not after ${P2} settled (${x.settledSeq(P2)}) and before ${P1} settled (${x.settledSeq(P1)})`)
+      const w = (x.r.pathWaits || []).find((e) => e.id === W)
+      const by = Object.fromEntries(((w && w.behind) || []).map((e) => [e.id, e]))
+      if (!by[P1] || !by[P1].released || !by[P2] || by[P2].released !== '') fail(`#1385 two, release first: ${W}'s wait does not report ${P1} released and ${P2} settled: ${JSON.stringify(w)}`)
+      const e = x.clockSeq[`${W}:end`]
+      if (!(e > x.settledSeq(P2)) || !(e < x.settledSeq(P1))) fail(`#1385 two, release first: ${W}'s wait was clocked to end at ${e}, not at ${P2}'s settle, the last edge to clear`)
+      // P2 path-waits behind P1 too (m holds m/w.txt), and P1's diff releases it: two releases in all.
+      if (!released(x, P2, P1) || (x.r.pathReleases || []).length !== 2) fail(`#1385 two, release first: the releases are not ${W} and ${P2} behind ${P1}: ${JSON.stringify(x.r.pathReleases)}`)
+      if (!x.logged.some((l) => l.text.startsWith('path waits: ') && l.text.includes(`\n  ${W} behind ${P1} (released), ${P2}: `))) fail('#1385 two, release first: the path waits log line does not mark the released edge: ' + JSON.stringify((x.logged.find((l) => l.text.startsWith('path waits: ')) || {}).text))
+      if (!x.logged.some((l) => l.text.startsWith('path releases: 2\n') && l.text.includes(`\n  ${W} behind ${P1}: `))) fail('#1385 two, release first: the path releases log line does not count and name the release: ' + JSON.stringify((x.logged.find((l) => l.text.startsWith('path releases: ')) || {}).text))
+    }
+  }
+  {
+    const base = 6300, Q1 = `issue-${base + 1}`, Q2 = `issue-${base + 2}`, W = `issue-${base + 3}`
+    const set = [T(base, 1, 'ws1-infra', ['m/w.txt']), T(base, 2, 'ws2-hosting', ['m']), T(base, 3, 'ws3-identity', ['m/w.txt'])]
+    const x = await run(set, { [Q1]: { impl: 20, review: 15, files: ['m/w.txt'] }, [Q2]: { impl: 120, review: 400, files: ['m/other.txt'] } }, 'two, release last')
+    if (x.r === STALLED) fail('#1385: the two-predecessor run (release last) did not finish')
+    else {
+      for (const t of [Q1, Q2, W]) if (!(x.r.integrated || []).includes(t)) fail(`#1385 two, release last: ${t} did not integrate`)
+      if (!released(x, W, Q2) || released(x, W, Q1)) fail(`#1385 two, release last: the releases are not ${W} behind ${Q2} alone: ${JSON.stringify(x.r.pathReleases)}`)
+      if (!(x.settledSeq(Q1) < x.implEnd(Q2))) fail(`#1385 two, release last: ${Q1} did not settle before ${Q2}'s implement returned, so the case read nothing`)
+      if (!(x.startSeq(W) > x.implEnd(Q2)) || !(x.startSeq(W) < x.settledSeq(Q2))) fail(`#1385 two, release last: ${W} started at ${x.startSeq(W)}, not at ${Q2}'s release (after ${x.implEnd(Q2)}, before its settle ${x.settledSeq(Q2)})`)
+      const e = x.clockSeq[`${W}:end`]
+      if (!(e > x.implEnd(Q2)) || !(e < x.settledSeq(Q2))) fail(`#1385 two, release last: ${W}'s wait was clocked to end at ${e}, not at ${Q2}'s release`)
+      const fork = forkOf((x.prompts.find((p) => p.label === `implement:${W}`) || {}).prompt || '')
+      const before = x.greens.filter((g) => g.seq < x.startSeq(W))
+      const want = before.length ? before[before.length - 1].head : RUN_BASE_665
+      if (fork !== want || fork === `verified-${Q2}`) fail(`#1385 two, release last: ${W} forks from ${fork}, not ${want}, the last verified tip when it started`)
+    }
   }
 }
 
@@ -2542,8 +2732,8 @@ const forkOf = (prompt) => (/Otherwise fork from [^:]+: forkSha = (\S+?)\. Take 
     if (kind === 'implement') return { outcome: 'resolved', branch: `b-${id}`, forkSha: 'f', headSha: 'h', complete: true, outstanding: '', summary: 's', question: '', delegatedDecisions: [], changeRequests: [] }
     if (kind === 'review' && id === 'issue-1103') await Promise.race([refusal, sleep(500)])
     if (kind === 'review') return { outcome: 'committed', headSha: 'h', findingsFixed: [], findingsSkipped: [], summary: 's', question: '', changeRequests: [], changedFiles: [`files/${id}.txt`] }
-    if (kind === 'integrate' && id === 'issue-1101') { refused(); return { ok: false, mergeSha: '', notes: `no subject: ${LINE}`, conflictFiles: [], headSha: '', old: '', redHead: '', reach: '' } }
-    if (kind === 'integrate') return { ok: true, mergeSha: 'm', notes: '', conflictFiles: [], headSha: `verified-${id}`, old: '', redHead: '', reach: '' }
+    if (kind === 'integrate' && id === 'issue-1101') { refused(); return { ok: false, mergeSha: '', notes: `no subject: ${LINE}`, conflictFiles: [], headSha: '', old: '', redHead: '', reach: '', lastLine: '' } }
+    if (kind === 'integrate') return { ok: true, mergeSha: 'm', notes: '', conflictFiles: [], headSha: `verified-${id}`, old: '', redHead: '', reach: '', lastLine: 'check: pass: companion.' }
     throw new Error(`unexpected agent label ${opts.label} in the refused-merge run`)
   }
   const src = fs.readFileSync(scriptPath, 'utf8').replace(/^export const meta/m, 'const meta')
@@ -2566,6 +2756,311 @@ const forkOf = (prompt) => (/Otherwise fork from [^:]+: forkSha = (\S+?)\. Take 
   }
 }
 
+
+// 50. An integrate that returns with a merge and no verdict line keeps no merge (#1469). A full check can run past
+//     the Bash tool's 600 s; on 2026-11-22 #1349's integrate agent returned while it ran, with no verdict, and its
+//     merge stayed on the run branch until the closing check found the tip red. Now the script judges the gate from
+//     the log's last line the agent returns: only "check: pass:" with ok keeps a merge; a "check: fail:" line is the
+//     red path, whose agent reset the branch itself; anything else after a merge was made sends a reset agent, under
+//     the same lock, that stops the check still running and puts the run branch back to <old>. One short run models
+//     the run branch's head: issue-1471 answers ok with a merge and a log still running, issue-1474 answers not ok
+//     with no last line at all (the #1349 answer), issue-1472 is blocked by issue-1471, and issue-1473 is free. Each
+//     unverified merge fails at integrate, is never re-run as a flake, advances no verified tip, and the next merge
+//     starts only once the branch is back at <old>. Two more answer ok with no verdict on a merge already on the run
+//     branch, which the script resets nothing for (#712): issue-1475's gate alone, after the resume probe found it, and
+//     issue-1476's integrate STEP 0, which gives no <old>. Each fails at integrate and advances no verified tip.
+{
+  const NO_VERDICT = { 'issue-1471': { ok: true, lastLine: '  build: Platform.Gateway.Tests (running)' }, 'issue-1474': { ok: false, lastLine: '' } }
+  const logged = [], labels = [], prompts = {}, events = []
+  let head = OLD, seq = 0
+  globalThis.args = { ...fixture.args, skills: OTHER_SKILLS }
+  globalThis.log = (m) => { logged.push(String(m)) }
+  const set = [
+    { ...synthetic(1471, 'issue-1471', 'ready-for-agent', [], 1), owner: 'integrator' },
+    { ...synthetic(1472, 'issue-1472', 'ready-for-agent', ['issue-1471'], 1), owner: 'integrator' },
+    { ...synthetic(1473, 'issue-1473', 'ready-for-agent', [], 1), owner: 'integrator' },
+    { ...synthetic(1474, 'issue-1474', 'ready-for-agent', [], 1), owner: 'integrator' },
+    { ...synthetic(1475, 'issue-1475', 'ready-for-agent', [], 1), owner: 'integrator' },
+    { ...synthetic(1476, 'issue-1476', 'ready-for-agent', [], 1), owner: 'integrator' },
+  ]
+  const ALREADY_IN = ['issue-1475', 'issue-1476']
+  globalThis.agent = async (prompt, opts) => {
+    labels.push(opts.label)
+    ;(prompts[opts.label] = prompts[opts.label] || []).push(prompt)
+    const [kind, id] = opts.label.split(':')
+    if (kind === 'collect') return { outcome: 'ok', reason: 'companion', tickets: set.map((t) => ({ ...t })), landed: [], base: 'a'.repeat(40), shell: '3.2', shellCommand: '/bin/bash' }
+    if (kind === 'resume') return id === 'issue-1475' ? { merged: true, mergeSha: '7'.repeat(40), subject: 'Merge task issue-1475: companion', notes: '' } : NOT_MERGED
+    if (kind === 'live') return LIVE_READY
+    if (kind === 'report') return { questions: 0, mainCheckoutClean: true, leftovers: '', issue: 0, url: '' }
+    if (kind === 'closing') return { ok: true, headSha: CLOSING_TIP, lastLine: 'check: pass: companion.', notes: '' }
+    if (kind === 'gate') return { ok: true, ran: true, mergeSha: '7'.repeat(40), headSha: `unverified-${id}`, lastLine: '  test: Platform.Gateway.Tests (running)', notes: '' }
+    if (kind === 'integrate' && id === 'issue-1476') return { ok: true, mergeSha: '6'.repeat(40), notes: 'the merge was already in', conflictFiles: [], headSha: `unverified-${id}`, old: '', redHead: '', reach: '', lastLine: '' }
+    events.push({ label: opts.label, edge: 'start', seq: ++seq, head })
+    await sleep(5)
+    let out
+    if (kind === 'implement') out = { outcome: 'resolved', branch: `b-${id}`, forkSha: 'f', headSha: 'h', complete: true, outstanding: '', summary: 's', question: '', delegatedDecisions: [], changeRequests: [] }
+    else if (kind === 'review') out = { outcome: 'committed', headSha: 'h', findingsFixed: [], findingsSkipped: [], summary: 's', question: '', changeRequests: [], changedFiles: [`files/${id}.txt`] }
+    else if (kind === 'integrate') {
+      if (head !== OLD) fail(`#1469: ${id}'s merge started on ${head}, not on <old> ${OLD}: an unverified merge was left on the run branch`)
+      head = `merge-${id}`
+      const nv = NO_VERDICT[id]
+      out = nv ? { ok: nv.ok, mergeSha: head, notes: 'the check moved to the background; no verdict yet', conflictFiles: [], headSha: nv.ok ? `unverified-${id}` : '', old: OLD, redHead: '', reach: '', lastLine: nv.lastLine }
+        : { ok: true, mergeSha: head, notes: '', conflictFiles: [], headSha: `verified-${id}`, old: OLD, redHead: '', reach: '', lastLine: 'check: pass: companion.' }
+      if (!nv) head = OLD   // the mock keeps every green merge off the modelled branch, so each merge starts on <old>
+    } else if (kind === 'reset') {
+      const to = (/reset --hard ([0-9a-f]{40})/.exec(prompt) || [])[1]
+      if (to && head.startsWith('merge-')) head = to
+      out = { ok: head === OLD, head, notes: '' }
+    } else throw new Error(`unexpected agent label ${opts.label} in the no-verdict run`)
+    events.push({ label: opts.label, edge: 'end', seq: ++seq, head })
+    return out
+  }
+  const src = fs.readFileSync(scriptPath, 'utf8').replace(/^export const meta/m, 'const meta')
+  let res = null
+  try { res = await new Function('return (async () => {' + src + '\n})()')() } catch (e) { fail(`#1469: the no-verdict run threw: ${e && e.message ? e.message : e}`) }
+  if (res) {
+    for (const id of Object.keys(NO_VERDICT)) {
+      const r = (res.reasons || []).find((x) => x.id === id)
+      if (!r || r.outcome !== 'failed' || r.stage !== 'integrate' || !r.reason.includes('no verdict')) fail(`#1469: ${id}, merged with no verdict, does not fail at integrate saying so: ${JSON.stringify(r)}`)
+      if ((res.integrated || []).includes(id)) fail(`#1469: ${id}, merged with no verdict, counts as integrated`)
+      const about = labels.filter((l) => l.endsWith(`:${id}`))
+      if (about.some((l) => l.startsWith('rerun:'))) fail(`#1469: ${id}'s merge with no verdict was re-run as a flake`)
+      const resets = prompts[`reset:${id}`] || []
+      if (resets.length !== 1) { fail(`#1469: ${id}'s merge with no verdict launched ${resets.length} reset agents, not one`); continue }
+      const rp = resets[0]
+      if (!rp.includes(`reset --hard ${OLD}`)) fail(`#1469: the reset of ${id} does not put the run branch back to <old> ${OLD}`)
+      if (!rp.includes(`${LOG}/${id}-integrate.txt.pid`)) fail(`#1469: the reset of ${id} does not stop the check still running from its pid file`)
+      if (!rp.includes('"## Integration gate: no verdict"')) fail(`#1469: the reset of ${id} records no "## Integration gate: no verdict" comment on its ticket`)
+      const end = events.find((e) => e.label === `reset:${id}` && e.edge === 'end')
+      if (!end || end.head !== OLD) fail(`#1469: after ${id}'s reset the run branch is at ${end ? end.head : 'nothing'}, not <old> ${OLD}`)
+      const integEnd = events.find((e) => e.label === `integrate:${id}` && e.edge === 'end')
+      const between = events.filter((e) => e.edge === 'start' && /^(integrate|reset):/.test(e.label) && integEnd && end && e.label !== `reset:${id}` && e.seq > integEnd.seq && e.seq < end.seq)
+      if (between.length) fail(`#1469: ${between.map((e) => e.label).join(', ')} started between ${id}'s merge with no verdict and its reset`)
+      for (const [label, ps] of Object.entries(prompts)) if (label.startsWith('implement:') && ps.some((p) => p.includes(`unverified-${id}`))) fail(`#1469: ${label} forks from ${id}'s unverified head`)
+    }
+    if (!(res.skipped || []).includes('issue-1472')) fail(`#1469: issue-1472, blocked by a merge with no verdict, was not skipped: ${JSON.stringify(res.skipped)}`)
+    if (!(res.integrated || []).includes('issue-1473')) fail(`#1469: a merge with no verdict stopped issue-1473, which it does not hold: ${JSON.stringify(res.integrated)}`)
+    if (head !== OLD) fail(`#1469: the run ended with the run branch at ${head}, not <old> ${OLD}`)
+    for (const id of ALREADY_IN) {
+      const r = (res.reasons || []).find((x) => x.id === id)
+      if (!r || r.outcome !== 'failed' || r.stage !== 'integrate' || !r.reason.includes('no verdict')) fail(`#1469: ${id}, already on the run branch and answered ok with no verdict, does not fail at integrate saying so: ${JSON.stringify(r)}`)
+      if (labels.some((l) => l === `reset:${id}` || l === `rerun:${id}`)) fail(`#1469: ${id}'s merge, already on the run branch, was reset or re-run by the script`)
+      for (const [label, ps] of Object.entries(prompts)) if (label.startsWith('implement:') && ps.some((p) => p.includes(`unverified-${id}`))) fail(`#1469: ${label} forks from ${id}'s unverified head`)
+    }
+  }
+  // The check prompt's three commands, rendered for the closing check, run against a fake tools/check.sh that prints its
+  // verdict only after the first wait has returned: the wait is repeated, ends on the verdict line, and each wait stays
+  // under the Bash tool's 600 s. A fake whose check dies with no verdict ends the wait at once, its last line no verdict:
+  // its wait is rendered with a bound of 30 s, so only the wait's own process-gone test ends it within the few seconds
+  // allowed, and the test's outer loop, which also asks kill -0, never gets a second wait to stop on.
+  const closing = (allPrompts.find((c) => c.label === 'closing') || {}).prompt || ''
+  const steps = ['1', '2'].map((n) => (new RegExp(`^ {2}${n}\\. (.+)$`, 'm').exec(closing) || [])[1])
+  const wait = (/^ {2}(P=\$\(cat .+)$/m.exec(closing) || [])[1]
+  const bound = (/for i in \$\(seq (\d+)\);.*sleep (\d+); done/.exec(wait || '') || [])
+  if (steps.some((x) => !x) || !wait || !bound.length) fail('#1469: the closing-check prompt does not give the three commands of the detached check')
+  else if (Number(bound[1]) * Number(bound[2]) >= 590) fail(`#1469: one wait of the check prompt can run ${Number(bound[1]) * Number(bound[2])} s, at the Bash tool's 600 s limit`)
+  else {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'overnight-gate-'))
+    const INT_WT = `${fixture.args.wt}/overnight`, CLOSING_LOG = `${LOG}/closing-check.txt`
+    const render = (cmd, log, n = 2) => cmd.split(INT_WT).join(dir).split(CLOSING_LOG).join(log).replace(/seq \d+/, `seq ${n}`).replace(/sleep \d+/, 'sleep 1')
+    for (const [name, body, want, n] of [['verdict', 'sleep 3; echo "check: pass: fake."', 'check: pass: fake.', 2], ['dies', 'echo "  build: running"; exit 3', '  build: running', 30]]) {
+      const log = path.join(dir, `${name}.txt`)
+      fs.mkdirSync(path.join(dir, 'tools'), { recursive: true })
+      fs.writeFileSync(path.join(dir, 'tools', 'check.sh'), `#!/bin/bash\n${body}\n`, { mode: 0o755 })
+      spawnSync('git', ['init', '-q', dir])
+      for (const c of steps) {
+        const t0 = Date.now(), r = spawnSync('bash', ['-c', render(c, log)], { encoding: 'utf8' })
+        if (r.status !== 0) fail(`#1469: the check prompt's command ${render(c, log)} exited ${r.status}: ${r.stderr}`)
+        if (Date.now() - t0 > 1500) fail(`#1469: the check prompt's command ${render(c, log)} took ${Date.now() - t0} ms: its call waits for the check instead of starting it`)
+      }
+      let last = '', waits = 0, firstMs = 0
+      for (; waits < 6; waits++) {
+        const t0 = Date.now(), r = spawnSync('bash', ['-c', render(wait, log, n)], { encoding: 'utf8', timeout: 45000 })
+        if (!waits) firstMs = Date.now() - t0
+        last = String(r.stdout || '').trimEnd().split('\n').pop()
+        if (/^check: (pass|fail):/.test(last)) break
+        const pid = fs.readFileSync(`${log}.pid`, 'utf8').trim()
+        if (spawnSync('kill', ['-0', pid]).status !== 0) break
+      }
+      if (last !== want) fail(`#1469: the ${name} check's wait ended on ${JSON.stringify(last)}, not ${JSON.stringify(want)}`)
+      if (name === 'verdict' && waits < 1) fail('#1469: the verdict came within the first wait, so the repeat was not exercised')
+      if (name === 'dies' && (waits !== 0 || firstMs > 8000)) fail(`#1469: the wait for a check that died with no verdict ran ${firstMs} ms and ${waits + 1} waits, not one wait of a few seconds: it does not stop when the check's process is gone`)
+    }
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+}
+
+// 50, continued. The answers whose ok and verdict line disagree, and the paths the first run never reaches (#1469). One
+//     run of its own, with room for its failures (maxFailures 8). issue-1481 answers ok on a "check: fail:" line and
+//     issue-1482 not ok on a "check: pass:" line: each merge is unverified, so a reset agent puts the branch back.
+//     issue-1483 answers ok naming no merge and no <old>, with no verdict: it fails, and nothing is reset. issue-1484's
+//     gate alone answers ok with no verdict, and issue-1485's implement, which starts only once that answer is read,
+//     forks from no head of it. issue-1487's re-run answers ok, every project passed alone on the gate's head, but its
+//     skip-tests check's last line is no verdict: the merge is not kept, and the reset stops that check from its pid
+//     file. issue-1489's reset agent answers ok on a head that is not <old>: the run branch is not back, so the run halts.
+{
+  const ELSE = 'e'.repeat(40), RUNNING = '  test: Platform.Gateway.Tests (running)'
+  const labels = [], prompts = {}
+  globalThis.args = { ...fixture.args, skills: OTHER_SKILLS, only: null, skip: [], maxParallel: 6, maxFailures: 8 }
+  globalThis.log = () => {}
+  const ids = [1481, 1482, 1483, 1484, 1485, 1487, 1489]
+  const set = ids.map((n) => ({ ...synthetic(n, `issue-${n}`, 'ready-for-agent', [], 1), owner: 'integrator' }))
+  let gateRead = null
+  const gateDone = new Promise((r) => { gateRead = r })
+  let liveWaited = 'not reached'
+  const reach = JSON.stringify({ failedAt: 'tests', verdict: TESTS_FAILED, projects: [{ project: 'tests/Spactl.Tests', reachedBy: [] }], changed: ['tools/bench/report.py'] })
+  globalThis.agent = async (prompt, opts) => {
+    labels.push(opts.label)
+    ;(prompts[opts.label] = prompts[opts.label] || []).push(prompt)
+    const [kind, id] = opts.label.split(':')
+    if (kind === 'collect') return { outcome: 'ok', reason: 'companion', tickets: set.map((t) => ({ ...t })), landed: [], base: 'a'.repeat(40), shell: '3.2', shellCommand: '/bin/bash' }
+    if (kind === 'resume') return id === 'issue-1484' ? { merged: true, mergeSha: '8'.repeat(40), subject: 'Merge task issue-1484: companion', notes: '' } : NOT_MERGED
+    if (kind === 'live') {
+      // issue-1485's implement prompt is built after this answer: hold it until the script has read issue-1484's gate.
+      if (id === 'issue-1485') liveWaited = await Promise.race([gateDone.then(() => sleep(5)).then(() => 'after the gate'), sleep(5000).then(() => 'timed out')])
+      return LIVE_READY
+    }
+    if (kind === 'report') return { questions: 0, mainCheckoutClean: true, leftovers: '', issue: 0, url: '' }
+    if (kind === 'closing') return { ok: true, headSha: 'd'.repeat(40), lastLine: 'check: pass: companion.', notes: '' }
+    if (kind === 'gate') { setTimeout(gateRead, 0); return { ok: true, ran: true, mergeSha: '8'.repeat(40), headSha: `unverified-${id}`, lastLine: RUNNING, notes: '' } }
+    await sleep(2)
+    if (kind === 'implement') return { outcome: 'resolved', branch: `b-${id}`, forkSha: 'f', headSha: 'h', complete: true, outstanding: '', summary: 's', question: '', delegatedDecisions: [], changeRequests: [] }
+    if (kind === 'review') return { outcome: 'committed', headSha: 'h', findingsFixed: [], findingsSkipped: [], summary: 's', question: '', changeRequests: [], changedFiles: [`files/${id}.txt`] }
+    if (kind === 'integrate') {
+      const merged = { mergeSha: `merge-${id}`, notes: 'companion', conflictFiles: [], old: OLD, redHead: '', reach: '' }
+      if (id === 'issue-1481') return { ...merged, ok: true, headSha: `unverified-${id}`, lastLine: TESTS_FAILED }
+      if (id === 'issue-1482') return { ...merged, ok: false, headSha: '', lastLine: 'check: pass: companion.' }
+      if (id === 'issue-1483') return { ok: true, mergeSha: '', notes: 'companion', conflictFiles: [], headSha: `unverified-${id}`, old: '', redHead: '', reach: '', lastLine: '' }
+      if (id === 'issue-1487') return { ok: false, mergeSha: '', notes: TESTS_FAILED, conflictFiles: [], headSha: '', old: OLD, redHead: RED, reach, lastLine: TESTS_FAILED }
+      if (id === 'issue-1489') return { ...merged, ok: true, headSha: `unverified-${id}`, lastLine: RUNNING }
+      return { ok: true, mergeSha: `merge-${id}`, notes: '', conflictFiles: [], headSha: `verified-${id}`, old: '', redHead: '', reach: '', lastLine: 'check: pass: companion.' }
+    }
+    if (kind === 'rerun') return { ok: true, mergeSha: `merge-${id}`, headSha: RED, notes: 'passed alone', lastLine: RUNNING, projects: [{ project: 'tests/Spactl.Tests', log: 'l', passed: true }] }
+    if (kind === 'reset') return id === 'issue-1489' ? { ok: true, head: ELSE, notes: '' } : { ok: true, head: OLD, notes: '' }
+    throw new Error(`unexpected agent label ${opts.label} in the contradiction run`)
+  }
+  const src = fs.readFileSync(scriptPath, 'utf8').replace(/^export const meta/m, 'const meta')
+  let res = null
+  try { res = await new Function('return (async () => {' + src + '\n})()')() } catch (e) { fail(`#1469: the contradiction run threw: ${e && e.message ? e.message : e}`) }
+  if (res) {
+    const reason = (id) => ((res.reasons || []).find((x) => x.id === id) || {})
+    const failedAt = (id, says) => {
+      const r = reason(id)
+      if (r.outcome !== 'failed' || r.stage !== 'integrate' || !String(r.reason || '').includes(says)) fail(`#1469: ${id} does not fail at integrate saying "${says}": ${JSON.stringify(r)}`)
+      if ((res.integrated || []).includes(id)) fail(`#1469: ${id} counts as integrated`)
+    }
+    const resets = (id) => prompts[`reset:${id}`] || []
+    for (const [id, says] of [['issue-1481', 'the agent answered ok on a gate whose last line is'], ['issue-1482', 'the agent answered not ok on a gate whose last line is']]) {
+      failedAt(id, says)
+      if (resets(id).length !== 1 || !resets(id)[0].includes(`reset --hard ${OLD}`)) fail(`#1469: ${id}'s merge, whose ok contradicts its verdict line, launched ${resets(id).length} reset agents to <old>, not one`)
+    }
+    failedAt('issue-1483', 'the answer names no merge and no <old>, so nothing was reset')
+    if (resets('issue-1483').length) fail('#1469: issue-1483 names no merge, yet the script launched a reset for it')
+    failedAt('issue-1484', 'no verdict at integrate')
+    if (liveWaited !== 'after the gate') fail(`#1469: issue-1485's live read was ${liveWaited}, so whether it forks from issue-1484's unverified gate was not exercised`)
+    for (const p of prompts['implement:issue-1485'] || []) if (p.includes('unverified-issue-1484')) fail('#1469: issue-1485 forks from issue-1484\'s head, whose gate alone gave no verdict')
+    if (!(res.integrated || []).includes('issue-1485')) fail(`#1469: issue-1485 did not integrate: ${JSON.stringify(reason('issue-1485'))}`)
+    failedAt('issue-1487', 'its skip-tests check\'s last line is')
+    const flake = (res.flakes || []).find((f) => f.id === 'issue-1487')
+    if (!flake || flake.kept !== false) fail(`#1469: issue-1487's re-run with no verdict line was kept: ${JSON.stringify(flake)}`)
+    if (resets('issue-1487').length !== 1 || !resets('issue-1487')[0].includes(`${LOG}/issue-1487-rerun.txt.pid`)) fail('#1469: the reset of issue-1487\'s re-run does not stop the skip-tests check still running from its pid file')
+    failedAt('issue-1489', `not reset to ${OLD}: the reset agent answered ok on head ${ELSE}`)
+    if (!String(res.halted || '').includes(`not reset to ${OLD}`)) fail(`#1469: issue-1489's reset agent answered ok on ${ELSE}, not <old>, yet the run did not halt: ${JSON.stringify(res.halted)}`)
+  }
+}
+
+// 51. A lane whose implement check is red and whose own change request blocks it stops after implement (#1470). On
+//     2026-11-22 #1349's implementer returned resolved, partial, with change request #1466 blocking #1349, on a red
+//     check; the run still reviewed and integrated it, each a full red check, while three tickets waited behind it.
+//     The script now routes on the check log's last line, which the implementer returns as lastLine, and on its
+//     changeRequests, not on its outcome. One short run, with every review and integrate mocked green, so a lane the
+//     rule does not stop integrates: issue-1491 (resolved, its filed request blocking it) and issue-1495 (failed, its
+//     queued request blocking it) are held, launch no review or integrate agent, name the request in their result and
+//     count as no failure (maxFailures 1); issue-1492, blocked by issue-1491, is skipped naming issue-1491 and its
+//     request, with no implement of its own. Today's routing is kept for a red check whose request blocks nothing
+//     (issue-1493), a red check whose request blocks another ticket (issue-1496), a green check with a self-blocking
+//     request (issue-1494), and a self-blocking request with no verdict line (issue-1497): each is reviewed and
+//     integrated. A needs-human answer on a red check with a self-blocking request (issue-1498) keeps its own routing,
+//     the grill, and is not held (the implementer's decision 2 on #1470, pinned by its review). The report's summary
+//     marks the held lanes' requests held, and its prompt says how to list them.
+{
+  const RED_LINE = 'check: fail: the test companion tools/wiz_prelude_tests.py failed.'
+  const SELF = { number: 1466, title: 'Give the wiz prelude its fixture path', blocking: 1491, queued: 0, filed: true }
+  const SELF_QUEUED = { number: 0, title: 'Name the held lane in the glossary', blocking: 1495, queued: 2, filed: false }
+  const NOTHING = { number: 1467, title: 'A request that blocks nothing', blocking: 0, queued: 0, filed: true }
+  const OTHER = { number: 1468, title: 'A request that blocks another ticket', blocking: 1492, queued: 0, filed: false }
+  const GREEN_SELF = { number: 1469, title: 'A request a green lane needs', blocking: 1494, queued: 0, filed: true }
+  const SILENT_SELF = { number: 1470, title: 'A request a lane with no verdict needs', blocking: 1497, queued: 0, filed: true }
+  const ASKED_SELF = { number: 1471, title: 'A request a lane with a question needs', blocking: 1498, queued: 0, filed: true }
+  const IMPL_OF = {
+    'issue-1498': { outcome: 'needs-human', complete: false, question: 'Which fixture path?', lastLine: RED_LINE, changeRequests: [ASKED_SELF] },
+    'issue-1491': { outcome: 'resolved', complete: false, lastLine: RED_LINE, changeRequests: [SELF] },
+    'issue-1495': { outcome: 'failed', complete: false, lastLine: RED_LINE, changeRequests: [SELF_QUEUED] },
+    'issue-1493': { outcome: 'resolved', complete: true, lastLine: RED_LINE, changeRequests: [NOTHING] },
+    'issue-1496': { outcome: 'resolved', complete: true, lastLine: RED_LINE, changeRequests: [OTHER] },
+    'issue-1494': { outcome: 'resolved', complete: false, lastLine: 'check: pass: companion.', changeRequests: [GREEN_SELF] },
+    'issue-1497': { outcome: 'resolved', complete: false, changeRequests: [SILENT_SELF] },
+  }
+  const HELD_IDS = ['issue-1491', 'issue-1495'], KEPT_IDS = ['issue-1493', 'issue-1496', 'issue-1494', 'issue-1497']
+  const labels = [], prompts = {}
+  globalThis.args = { ...fixture.args, skills: OTHER_SKILLS, only: null, skip: [], maxParallel: 6, maxFailures: 1 }
+  globalThis.log = () => {}
+  const set = [1491, 1492, 1493, 1494, 1495, 1496, 1497, 1498].map((n) => ({ ...synthetic(n, `issue-${n}`, 'ready-for-agent', n === 1492 ? ['issue-1491'] : [], 1), owner: 'integrator' }))
+  globalThis.agent = async (prompt, opts) => {
+    labels.push(opts.label)
+    ;(prompts[opts.label] = prompts[opts.label] || []).push(prompt)
+    const [kind, id] = opts.label.split(':')
+    if (kind === 'collect') return { outcome: 'ok', reason: 'companion', tickets: set.map((t) => ({ ...t })), landed: [], base: 'a'.repeat(40), shell: '3.2', shellCommand: '/bin/bash' }
+    if (kind === 'resume') return NOT_MERGED
+    if (kind === 'live') return LIVE_READY
+    if (kind === 'report') return { questions: 0, mainCheckoutClean: true, leftovers: '', issue: 0, url: '' }
+    if (kind === 'closing') return { ok: true, headSha: CLOSING_TIP, lastLine: 'check: pass: companion.', notes: '' }
+    if (kind === 'grill') return { questions: [], changeRequests: [], adrCandidates: [], draftDecision: '', decided: '', summary: 's' }
+    await sleep(2)
+    if (kind === 'implement') return { branch: `b-${id}`, forkSha: 'f', headSha: 'h', outstanding: '', summary: 's', question: '', delegatedDecisions: [], changedFiles: [`files/${id}.txt`], ...(IMPL_OF[id] || { outcome: 'resolved', complete: true, lastLine: 'check: pass: companion.', changeRequests: [] }) }
+    if (kind === 'review') return { outcome: 'committed', headSha: 'h', findingsFixed: [], findingsSkipped: [], summary: 's', question: '', changeRequests: [], changedFiles: [`files/${id}.txt`] }
+    if (kind === 'integrate') return { ok: true, mergeSha: `merge-${id}`, notes: '', conflictFiles: [], headSha: `verified-${id}`, old: '', redHead: '', reach: '', lastLine: 'check: pass: companion.' }
+    throw new Error(`unexpected agent label ${opts.label} in the held-lane run`)
+  }
+  const src = fs.readFileSync(scriptPath, 'utf8').replace(/^export const meta/m, 'const meta')
+  let res = null
+  try { res = await new Function('return (async () => {' + src + '\n})()')() } catch (e) { fail(`#1470: the held-lane run threw: ${e && e.message ? e.message : e}`) }
+  if (res) {
+    const reason = (id) => ((res.reasons || []).find((x) => x.id === id) || {})
+    for (const [id, names] of [['issue-1491', '#1466'], ['issue-1495', SELF_QUEUED.title]]) {
+      const after = labels.filter((l) => l.endsWith(`:${id}`) && /^(review|integrate|resolve|rerun|reset|gate):/.test(l))
+      if (after.length) fail(`#1470: ${id}, red at implement and blocked by its own change request, still launched ${after.join(', ')}`)
+      const r = reason(id)
+      if (r.outcome !== 'held' || r.stage !== 'implement' || !String(r.reason || '').includes(names)) fail(`#1470: ${id} is not held at implement naming ${names}: ${JSON.stringify(r)}`)
+      if (!(res.held || []).includes(id)) fail(`#1470: ${id} is missing from the return value's held list: ${JSON.stringify(res.held)}`)
+      if ((res.failed || []).includes(id) || (res.integrated || []).includes(id) || (res.partial || []).includes(id)) fail(`#1470: ${id}, held, is also listed as failed, integrated or partial`)
+    }
+    if (res.halted) fail(`#1470: two held lanes halted a run with maxFailures 1, so a hold counted as a failure: ${JSON.stringify(res.halted)}`)
+    const down = reason('issue-1492')
+    if (down.outcome !== 'skipped' || !String(down.reason || '').includes('issue-1491') || !String(down.reason || '').includes('#1466')) fail(`#1470: issue-1492, blocked by the held issue-1491, is not skipped naming it and its request: ${JSON.stringify(down)}`)
+    if (labels.some((l) => l === 'implement:issue-1492')) fail('#1470: issue-1492 was implemented although its blocker was held')
+    const asked = reason('issue-1498')
+    if (asked.outcome !== 'needs-human' || !labels.includes('grill:issue-1498') || (res.held || []).includes('issue-1498')) fail(`#1470: issue-1498, a needs-human answer on a red check with a self-blocking request, lost its own routing to the grill: ${JSON.stringify(asked)}, agents ${labels.filter((l) => l.endsWith(':issue-1498')).join(', ')}`)
+    for (const id of KEPT_IDS) {
+      if (!labels.includes(`review:${id}`) || !labels.includes(`integrate:${id}`)) fail(`#1470: ${id} lost today's routing: its agents were ${labels.filter((l) => l.endsWith(`:${id}`)).join(', ')}`)
+      if (![...(res.integrated || []), ...(res.partial || [])].includes(id)) fail(`#1470: ${id} did not integrate: ${JSON.stringify(reason(id))}`)
+    }
+    const ip = (prompts['implement:issue-1491'] || [])[0] || ''
+    if (!ip.includes('lastLine') || !ip.includes(`${LOG}/issue-1491-implement.txt`)) fail('#1470: the implement prompt does not ask for lastLine, the last line of its check log')
+    const rp = (prompts.report || [])[0] || ''
+    const summary = JSON.parse((/^Run results \(JSON\): (.*)$/m.exec(rp) || [, 'null'])[1])
+    if (!summary) fail('#1470: the held-lane run built no report prompt')
+    else {
+      const all = [...summary.changeRequests.filed, ...summary.changeRequests.edges, ...summary.changeRequests.queued]
+      const held = (c) => (all.find((x) => x.number === c.number && x.title === c.title) || {}).held
+      for (const c of [SELF, SELF_QUEUED]) if (held(c) !== true) fail(`#1470: the report's change requests do not mark "${c.title}" as holding its lane: ${JSON.stringify(all)}`)
+      for (const c of [NOTHING, OTHER, GREEN_SELF, SILENT_SELF, ASKED_SELF]) if (held(c) !== false) fail(`#1470: the report's change requests mark "${c.title}" held, or drop it: ${JSON.stringify(all)}`)
+      const listed = (summary.held || []).map((h) => h.id).sort()
+      if (JSON.stringify(listed) !== JSON.stringify([...HELD_IDS].sort())) fail(`#1470: the report's held list is ${JSON.stringify(summary.held)}, not ${HELD_IDS.join(', ')}`)
+    }
+    if (!rp.includes('"held" is true') || !rp.includes('failed (held on #')) fail('#1470: the report prompt does not say how a held lane is listed under its request and in the Tickets table')
+  }
+}
 
 // 41. The forecast run (#740): `--forecast <fixture> [script]` runs the script on a fixture preflight's --fixture
 //     wrote, with every agent mocked and none of the synthetic scenarios above, and makes the four scheduling checks

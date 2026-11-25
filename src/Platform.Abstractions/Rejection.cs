@@ -31,7 +31,8 @@ public static class Rejection
     /// <summary>
     /// The <c>code</c> column of contracts/request-gate.md -> Rule ids, as (rule, code): every id but
     /// <see cref="RuleIds.AuthCallback"/>, which ends on the static failure page rather than a
-    /// problem body. <see cref="RuleIds.AuthSession"/> carries the fetch's <c>unauthenticated</c>.
+    /// problem body, and <see cref="RuleIds.AuthChain"/>, which ends on a 302 to <c>/</c> with no
+    /// body (#961). <see cref="RuleIds.AuthSession"/> carries the fetch's <c>unauthenticated</c>.
     /// Order is not part of the interface: <see cref="RuleIds.All"/> fixes the order consumers see.
     /// </summary>
     public static readonly ImmutableArray<(string Rule, string Code)> Rows =
@@ -54,7 +55,8 @@ public static class Rejection
     /// Notes the rule on <see cref="IRequestTelemetryFeature"/>, null-conditionally, and writes no
     /// response. For a rejection whose response another writer ends: the shell gate's challenge, the
     /// <c>/bff/session</c> 401, the <c>/api</c> 401 and 503 <c>session_store_unavailable</c> Proxy's
-    /// access-token step writes, and the callback failure page (#142, Q11; #729). With no feature
+    /// access-token step writes, the callback failure page (#142, Q11; #729), and the redirect to
+    /// <c>/</c> that ends a refused <c>/bff/chain</c> step (#961). With no feature
     /// installed, as in a stage's own test project, it costs nothing.
     /// </summary>
     /// <exception cref="ArgumentException">The id is not in <see cref="RuleIds.All"/>.</exception>
@@ -74,8 +76,9 @@ public static class Rejection
     /// <exception cref="ArgumentException">The id is not in <see cref="RuleIds.All"/>.</exception>
     /// <exception cref="InvalidOperationException">
     /// The id is <see cref="RuleIds.GateMethod"/>, which ends only through
-    /// <see cref="EndMethodAsync"/>, or <see cref="RuleIds.AuthCallback"/>, whose page is the OpenID
-    /// Connect remote-failure event's. Both are deterministic per call site, so the stage's own tests
+    /// <see cref="EndMethodAsync"/>, <see cref="RuleIds.AuthCallback"/>, whose page is the OpenID
+    /// Connect remote-failure event's, or <see cref="RuleIds.AuthChain"/>, whose answer is the chain
+    /// step's redirect to <c>/</c>. All three are deterministic per call site, so the stage's own tests
     /// find the wrong call before a client does (#142, Q13).
     /// </exception>
     public static Task EndAsync(HttpContext context, string rule)
@@ -93,6 +96,12 @@ public static class Rejection
         {
             throw new InvalidOperationException(
                 $"'{RuleIds.AuthCallback}' ends on no problem body: the OpenID Connect remote-failure event writes the static failure page. Use {nameof(Rejection)}.{nameof(Note)} there.");
+        }
+
+        if (rule == RuleIds.AuthChain)
+        {
+            throw new InvalidOperationException(
+                $"'{RuleIds.AuthChain}' ends on no problem body: the chain step redirects to '/'. Use {nameof(Rejection)}.{nameof(Note)} there.");
         }
 
         return End(context, rule);
@@ -142,7 +151,7 @@ public static class Rejection
             }
         }
 
-        // Unreachable for a listed id other than auth.callback, which EndAsync refuses first; the
+        // Unreachable for a listed id other than auth.callback and auth.chain, which EndAsync refuses first; the
         // table test proves every other id has a row.
         throw new InvalidOperationException($"'{rule}' has no row in {nameof(Rejection)}.{nameof(Rows)}.");
     }

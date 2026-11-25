@@ -40,12 +40,26 @@ public abstract record AccessTokenResult
     /// changes no existing signature.
     /// </summary>
     public sealed record StoreUnavailable : AccessTokenResult;
+
+    /// <summary>
+    /// The request carries <see cref="IFragmentFeature"/> and the session holds no usable token set
+    /// for that fragment: none was acquired (the fragment was onboarded after this login, or its hop
+    /// never returned), its set ended on <c>invalid_grant</c>, or the set's recorded <c>clientId</c> is
+    /// no longer the fragment's. The session is kept, and the shell's set is never returned in its
+    /// place. The proxy answers 401 <c>fragment_login_required</c>, which is not a rejection and
+    /// carries no rule id, like the live-session 401. With no session at all the source returns
+    /// <see cref="Unauthenticated"/>. The fragments spec (#961) added it with G6's tag, as a new type
+    /// that changes no existing signature.
+    /// </summary>
+    public sealed record FragmentLoginRequired : AccessTokenResult;
 }
 
 /// <summary>
-/// The access token for this request's session, refreshed if it is close to expiry. Implemented over
-/// Duende.AccessTokenManagement (ADR-0005, task 3.8); only <c>Platform.Identity</c> may reference
-/// that package (check A-04). Freezes at G1b.
+/// The access token for this request's session, refreshed if it is close to expiry: the shell's token
+/// set, or, when the request carries <see cref="IFragmentFeature"/>, that fragment's set and never the
+/// shell's. Implemented over Duende.AccessTokenManagement (ADR-0005, task 3.8); only
+/// <c>Platform.Identity</c> may reference that package (check A-04). Freezes at G1b; the fragments
+/// spec (#961) keeps the signature and adds the fragment reading.
 /// </summary>
 public interface IAccessTokenSource
 {

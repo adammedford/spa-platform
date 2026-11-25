@@ -1,6 +1,6 @@
 # The fields of contracts/infra-outputs.schema.json this root can answer so far.
-# Task 1.7's seed.sh and deploy.sh assemble outputs.json from these; the ECS and
-# log-group fields arrive with task 1.4.
+# Task 1.7's tools/scripts/poc/seed.sh and tools/scripts/deploy.sh assemble
+# outputs.json from these; the ECS and log-group fields arrive with task 1.4.
 
 output "region" {
   description = "The contract's `region`."
@@ -28,8 +28,8 @@ output "ecr_gateway" {
 }
 
 output "ecr_mock_api" {
-  description = "The contract's `ecrMockApi`."
-  value       = module.cell.ecr_mock_api
+  description = "The contract's `ecrMockApi`: the module's repository at mock-api, the extra repository main.tf names."
+  value       = module.cell.ecr_repositories["mock-api"]
 }
 
 # Task 1.4a's four.

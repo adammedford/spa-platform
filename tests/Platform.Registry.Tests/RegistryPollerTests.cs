@@ -1,5 +1,6 @@
 using System.Text;
 using Amazon.S3;
+using Amazon.SimpleSystemsManagement;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -13,8 +14,8 @@ namespace Platform.Registry.Tests;
 /// <summary>
 /// The poll loop around <see cref="RegistrySource"/>: <c>Registry:PollSeconds</c> jittered by up to
 /// 20% (docs/plan/02-contracts.md, Platform configuration), started by <c>AddPlatformRegistry</c>, and
-/// never able to stop the host. CI's G1a smoke test starts the composed gateway with no platform
-/// configuration and no AWS region, so that case is proved here too.
+/// never able to stop the host. A configuration the schema refuses never reaches the poller: the
+/// registration throws first (ADR-0042, PlatformConfigurationTests).
 /// </summary>
 public sealed class RegistryPollerTests
 {
@@ -49,27 +50,32 @@ public sealed class RegistryPollerTests
     }
 
     [Fact]
-    public async Task With_no_registry_configuration_the_host_starts_and_nothing_goes_live()
+    public void With_no_registry_configuration_the_registration_refuses_and_registers_no_client()
     {
-        int clients = 0;
+        // Until ADR-0042 a gateway with no Registry:* started, kept /readyz at 503 and polled nothing.
+        // Now the registration refuses it, naming each key, before it registers any SDK client: the
+        // client's constructor throws with no region configured (seen on SDK 4.0.101.6). No client is
+        // registered, so none can be built; a refusal moved after the registrations leaves both here.
         CapturedLog logs = new();
-        HostApplicationBuilder builder = Builder(logs, configured: false);
-        // The SDK client's constructor throws with no region configured (seen on SDK 4.0.101.6), so the
-        // poller must not build one when there is nothing to poll.
-        builder.Services.AddSingleton<IAmazonS3>(_ =>
+        HostApplicationBuilder builder = Builder(logs, configured: true);
+        builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
         {
-            Interlocked.Increment(ref clients);
-            throw new InvalidOperationException("no region");
+            ["Registry:Bucket"] = null,
+            ["Registry:Key"] = null,
+            ["Registry:PollSeconds"] = null,
         });
-        builder.AddPlatformRegistry();
 
-        using IHost host = builder.Build();
-        await host.StartAsync(Ct);
-        await Eventually(() => logs.Lines.Any(line => line.Text.Contains("Registry:", StringComparison.Ordinal)));
-        await host.StopAsync(Ct);
+        InvalidOperationException refusal = Assert.Throws<InvalidOperationException>(() => builder.AddPlatformRegistry());
 
-        Assert.Equal(0, host.Services.GetRequiredService<IRegistry>().Current.Revision);
-        Assert.Equal(0, clients);
+        Assert.Contains("Registry:Bucket", refusal.Message, StringComparison.Ordinal);
+        Assert.Contains("Registry:PollSeconds", refusal.Message, StringComparison.Ordinal);
+        Assert.Equal(
+            ["required", "required", "required"],
+            logs.Lines
+                .Where(line => line.Category == PlatformRegistryExtensions.ConfigurationCategory)
+                .Select(line => line.State.Single(pair => pair.Key == "Keyword").Value?.ToString()));
+        Assert.DoesNotContain(builder.Services, service => service.ServiceType == typeof(IAmazonS3));
+        Assert.DoesNotContain(builder.Services, service => service.ServiceType == typeof(IAmazonSimpleSystemsManagement));
     }
 
     [Fact]

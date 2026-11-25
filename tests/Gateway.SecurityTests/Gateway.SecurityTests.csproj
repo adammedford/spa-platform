@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-  <!-- Negative suite, N-01 to N-27. Owner: workstream 6. -->
+  <!-- Negative suite, N-01 to N-27 and N-33 to N-35. Owner: workstream 6. -->
 
   <ItemGroup>
     <ProjectReference Include="../Gateway.TestHarness/Gateway.TestHarness.csproj" />

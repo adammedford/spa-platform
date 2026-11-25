@@ -241,7 +241,7 @@ run "the_module_builds_one_listener_and_one_target_group" {
   }
 
   assert {
-    condition     = toset(data.aws_acm_certificate.wildcard.key_types) == toset(split(",", regex("keyTypes=([A-Za-z0-9_,]+)", file("../../../../tools/scripts/certs.sh"))[0]))
+    condition     = toset(data.aws_acm_certificate.wildcard.key_types) == toset(split(",", regex("keyTypes=([A-Za-z0-9_,]+)", file("../../../../tools/scripts/poc/certs.sh"))[0]))
     error_message = "The certificate lookup must accept exactly the key types certs.sh searches."
   }
 
@@ -335,6 +335,39 @@ run "a_health_check_path_must_be_absolute" {
   }
 
   expect_failures = [var.health_check_path]
+}
+
+# #1380. The root passes gateway_writable_root to the module, and its default is the gateway's
+# read-only root. platform-tfvars.sh writes true beside the sample's pin, and deploy.sh and
+# rollback.sh apply the gateway with false; the module holds what each value gives the container.
+# Mutations that turn these two runs red: the root's argument to the module removed (the first); the
+# root's default true (the second).
+run "the_root_passes_gateway_writable_root_to_the_module" {
+  command = plan
+
+  variables {
+    gateway_writable_root = true
+  }
+
+  assert {
+    condition = try(
+      one([for c in jsondecode(module.cell.container_definitions) : c if c.name == "gateway"]).readonlyRootFilesystem == false,
+      false
+    )
+    error_message = "gateway_writable_root = true reaches the module: the sample image's gateway container has a writable root (#1380)."
+  }
+}
+
+run "the_root_s_default_gateway_root_is_read_only" {
+  command = plan
+
+  assert {
+    condition = try(
+      one([for c in jsondecode(module.cell.container_definitions) : c if c.name == "gateway"]).readonlyRootFilesystem == true,
+      false
+    )
+    error_message = "With gateway_writable_root unset the gateway's root is read-only (#787, #1380)."
+  }
 }
 
 run "a_certificate_domain_carries_no_wildcard" {
@@ -547,9 +580,9 @@ run "the_mock_api_s_allowlists_come_from_the_apps_root_s_state" {
 }
 
 # What main.tf's try() absorbs (Q4 on #98): an apps root state that exists and carries no clients
-# output, which is what a destroyed apps root leaves. Both client ids are then empty, which the
-# module accepts while mock_api_image is empty and refuses once it is set, as
-# a_mock_api_image_with_no_client_ids_is_refused in modules/cell/tests/module.tftest.hcl shows. A
+# output, which is what a destroyed apps root leaves. Both client ids are then empty, which this
+# root accepts while mock_api_image is empty and refuses once it is set, as
+# a_mock_api_image_with_no_client_ids_is_refused below shows. A
 # missing state is the other half and is not absorbed: the read itself fails the plan, before try()
 # runs, and a test that overrides the read cannot reach that failure.
 run "an_apps_root_state_with_no_clients_output_leaves_the_mock_api_s_allowlists_empty" {
@@ -800,9 +833,21 @@ run "the_platform_plan_holds_exactly_the_allowlisted_types_and_counts" {
     allowed_host_suffixes = [".spa-poc.test:8443"]
     allowed_upstreams     = ["http://127.0.0.1:5080", "http://127.0.0.1:5081"]
 
+    # The root's own extra repository (main.tf, #1342): the module creates gateway alone by default,
+    # so a run against the module counts the root's two only when it is given the root's set. The
+    # root's run on ecr_mock_api holds that main.tf passes this set.
+    extra_repositories = ["mock-api"]
+
     # modules/cell's source, read from the root's directory, which is where terraform test resolves
     # a relative path even in a run against a module.
     cell_source = join("\n", [for f in fileset("../../../modules/cell", "*.tf") : file("../../../modules/cell/${f}")])
+  }
+
+  # The two repositories are the root's two, by the keys their state addresses carry, so a key
+  # renamed in main.tf, which would destroy one repository and create another, fails here.
+  assert {
+    condition     = toset(keys(aws_ecr_repository.repository)) == toset(["gateway", "mock-api"])
+    error_message = "The platform plan's repositories are gateway and mock-api, the instance keys of module.cell.aws_ecr_repository.repository: a renamed key moves a repository's state address, and the apply destroys it."
   }
 
   # Only the four declarations whose instances the next assertion counts may carry count or
@@ -1022,6 +1067,7 @@ run "under_dynamodb_the_platform_plan_holds_one_session_table_and_every_other_co
   variables {
     allowed_host_suffixes            = [".spa-poc.test:8443"]
     allowed_upstreams                = ["http://127.0.0.1:5080", "http://127.0.0.1:5081"]
+    extra_repositories               = ["mock-api"]
     session_store                    = "dynamodb"
     data_protection_parameter_prefix = "/spa-platform/poc/data-protection/"
     cell_source                      = join("\n", [for f in fileset("../../../modules/cell", "*.tf") : file("../../../modules/cell/${f}")])
@@ -1105,6 +1151,7 @@ run "under_multi_task_the_platform_plan_holds_d6_s_egress_and_every_other_count_
   variables {
     allowed_host_suffixes            = [".spa-poc.test:8443"]
     allowed_upstreams                = ["http://127.0.0.1:5080", "http://127.0.0.1:5081"]
+    extra_repositories               = ["mock-api"]
     multi_task                       = true
     session_store                    = "dynamodb"
     data_protection_parameter_prefix = "/spa-platform/poc/data-protection/"
@@ -1198,6 +1245,7 @@ run "under_bastion_the_platform_plan_holds_the_bastion_service_and_every_other_c
   variables {
     allowed_host_suffixes = [".spa-poc.test:8443"]
     allowed_upstreams     = ["http://127.0.0.1:5080", "http://127.0.0.1:5081"]
+    extra_repositories    = ["mock-api"]
     bastion               = true
     bastion_image         = "public.ecr.aws/nginx/nginx-unprivileged@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
     cell_source           = join("\n", [for f in fileset("../../../modules/cell", "*.tf") : file("../../../modules/cell/${f}")])
@@ -1262,5 +1310,348 @@ run "under_bastion_the_platform_plan_holds_the_bastion_service_and_every_other_c
       aws_dynamodb_table                                 = 0
     }
     error_message = "Under bastion = true the platform plan holds two ECS services, two task definitions, three roles and three role policies, and every other type at its Phase 1 count (#1167)."
+  }
+}
+
+# --- #1342: the mock API, this root's extra container ---------------------------------------------
+#
+# The cell module holds no fixture knowledge: it takes extra containers and extra repositories, and
+# this root builds the mock API's container definition and passes it as the one extra container
+# (main.tf). So the mock API's cases are this suite's. Each reads what the module was given back out
+# of the task definition's container_definitions, through the module's container_definitions output,
+# since a root test cannot address the module's resources; the root's local alone would not show
+# that the definition reached the task. Expected values are read from the files the mock API answers
+# to: fixtures/MockApi/Dockerfile for its keys, and this suite's override of the apps root's state
+# for its client ids.
+
+run "the_mock_api_container_is_absent_until_its_image_is_supplied" {
+  command = plan
+
+  assert {
+    condition     = [for c in jsondecode(module.cell.container_definitions) : c.name] == ["gateway"]
+    error_message = "With no mock API image the task holds the gateway alone, so the service applies before that image exists."
+  }
+}
+
+# Mutations that turn this run red: the module call's extra_containers left empty; the issuer or a
+# client id taken from the wrong place; a fourth MockApi__ key, or one of the three dropped; the
+# mock API placed before the gateway.
+run "the_mock_api_container_joins_with_the_client_ids_it_is_given" {
+  command = plan
+
+  variables {
+    mock_api_image = "111122223333.dkr.ecr.us-east-1.amazonaws.com/spa-poc/mock-api@sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+  }
+
+  # After the gateway's, as the module appends an extra container.
+  assert {
+    condition     = [for c in jsondecode(module.cell.container_definitions) : c.name] == ["gateway", "mock-api"]
+    error_message = "Supplying the mock API image puts its container in the task after the gateway's."
+  }
+
+  # The keys are read out of the image's own Dockerfile, which declares the three the process refuses
+  # to start without (fixtures/MockApi/Program.cs -> Required).
+  assert {
+    condition = (
+      toset(keys({
+        for e in one([
+          for c in jsondecode(module.cell.container_definitions) : c if c.name == "mock-api"
+        ]).environment : e.name => e.value
+      }))
+      == toset([
+        for m in regexall("(?m)^ENV (MockApi__[A-Za-z0-9]+)=", file("../../../../fixtures/MockApi/Dockerfile")) : m[0]
+      ])
+    )
+    error_message = "The mock API container carries exactly the environment keys fixtures/MockApi/Dockerfile declares; the process refuses to start without them."
+  }
+
+  assert {
+    condition = alltrue([
+      for key, expected in {
+        "MockApi__App1Client" = "1example23456789"
+        "MockApi__App2Client" = "2example23456789"
+        "MockApi__Issuer"     = values(var.issuers)[0].authority
+        } : one([
+          for e in one([
+            for c in jsondecode(module.cell.container_definitions) : c if c.name == "mock-api"
+          ]).environment : e if e.name == key
+      ]).value == expected
+    ])
+    error_message = "Each listener's admitted client is app 1's or app 2's from the apps root's state, and the issuer is the one issuer: nothing about a client id is written into this root (contracts/upstream-contract.md -> One token per app)."
+  }
+
+  assert {
+    condition = (
+      one([
+        for c in jsondecode(module.cell.container_definitions) : c if c.name == "mock-api"
+      ]).image == var.mock_api_image
+    )
+    error_message = "The mock API's image is the variable it was given, so a routine apply never moves it."
+  }
+}
+
+# fixtures/MockApi/Program.cs throws on a missing client id, so the alternative to this validation is
+# a container that crash-loops after the apply reported success. The apps root's state here carries
+# no clients output, which is what a destroyed apps root leaves.
+run "a_mock_api_image_with_no_client_ids_is_refused" {
+  command = plan
+
+  override_data {
+    target = data.terraform_remote_state.apps
+    values = {
+      outputs = {}
+    }
+  }
+
+  variables {
+    mock_api_image = "111122223333.dkr.ecr.us-east-1.amazonaws.com/spa-poc/mock-api@sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+  }
+
+  expect_failures = [var.mock_api_image]
+}
+
+# The one-issuer check (assumption A4): the mock API validates against one issuer, so a second one
+# fails the plan rather than leaving the root to hand it the alphabetically first.
+run "a_mock_api_image_with_two_issuers_is_refused" {
+  command = plan
+
+  variables {
+    mock_api_image = "111122223333.dkr.ecr.us-east-1.amazonaws.com/spa-poc/mock-api@sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+    issuers = {
+      "cognito-poc" = {
+        authority      = "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_EXAMPLE"
+        profile        = "cognito"
+        browser_origin = "https://spa-poc.auth.us-east-1.amazoncognito.com"
+      }
+      "cognito-other" = {
+        authority      = "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_OTHER"
+        profile        = "cognito"
+        browser_origin = "https://spa-other.auth.us-east-1.amazoncognito.com"
+      }
+    }
+  }
+
+  expect_failures = [var.mock_api_image]
+}
+
+# And the check is the mock API's alone: two issuers with no mock API image plan, so the run before
+# this one fails on the image's rule and not on the issuers.
+run "two_issuers_with_no_mock_api_image_plan" {
+  command = plan
+
+  variables {
+    issuers = {
+      "cognito-poc" = {
+        authority      = "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_EXAMPLE"
+        profile        = "cognito"
+        browser_origin = "https://spa-poc.auth.us-east-1.amazoncognito.com"
+      }
+      "cognito-other" = {
+        authority      = "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_OTHER"
+        profile        = "cognito"
+        browser_origin = "https://spa-other.auth.us-east-1.amazoncognito.com"
+      }
+    }
+  }
+
+  assert {
+    condition     = [for c in jsondecode(module.cell.container_definitions) : c.name] == ["gateway"]
+    error_message = "Two issuers with no mock API image plan a task of the gateway alone: the one-issuer rule is the mock API's."
+  }
+}
+
+# #470: the image is <repository>@sha256:<64 lowercase hex> or the plan stops. The client ids are
+# given by the suite's state override, so the image's own rule is the only one that can stop these.
+run "a_mock_api_image_with_an_empty_digest_is_refused" {
+  command = plan
+
+  variables {
+    mock_api_image = "111122223333.dkr.ecr.us-east-1.amazonaws.com/spa-poc/mock-api@"
+  }
+
+  expect_failures = [var.mock_api_image]
+}
+
+run "a_mock_api_image_named_by_tag_is_refused" {
+  command = plan
+
+  variables {
+    mock_api_image = "111122223333.dkr.ecr.us-east-1.amazonaws.com/spa-poc/mock-api:latest"
+  }
+
+  expect_failures = [var.mock_api_image]
+}
+
+run "a_mock_api_image_with_a_short_digest_is_refused" {
+  command = plan
+
+  variables {
+    mock_api_image = "111122223333.dkr.ecr.us-east-1.amazonaws.com/spa-poc/mock-api@sha256:abcdef01"
+  }
+
+  expect_failures = [var.mock_api_image]
+}
+
+# And the full form passes for both, in the two registries the cell pulls from: ECR Public for the
+# sample image, the cell's own repositories afterwards.
+run "full_digest_references_pass_for_both_images" {
+  command = plan
+
+  variables {
+    gateway_image  = "public.ecr.aws/nginx/nginx-unprivileged@sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+    mock_api_image = "111122223333.dkr.ecr.us-east-1.amazonaws.com/spa-poc/mock-api@sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+  }
+
+  assert {
+    condition = (
+      toset([for c in jsondecode(module.cell.container_definitions) : c.image])
+      == toset([var.gateway_image, var.mock_api_image])
+    )
+    error_message = "A full digest reference for each image passes the plan, and each container runs the reference it was given."
+  }
+}
+
+# Read out of the declaration, because no assertion on a value can show the absence of a default.
+# The match is on the argument at the block's own indent, not on the word.
+run "the_mock_api_image_defaults_to_absent_never_to_a_tag" {
+  command = plan
+
+  assert {
+    condition = length(regexall(
+      "(?m)^  default\\s*= \"\"$",
+      one(regexall("(?ms)^variable \"mock_api_image\" \\{.*?^\\}", file("${path.module}/variables.tf")))
+    )) == 1
+    error_message = "mock_api_image defaults to absent, so the service applies before that image is built; a tag-naming default would move it instead."
+  }
+}
+
+# The mock API halves of the module's container runs (#786, #787, #1006, #347). The module adds
+# nothing to an extra container, so the mock API's hardening is this root's to write, and these hold
+# it. Its linuxParameters are held equal to the gateway's as the module planned them, so the two
+# cannot drift. try() so a missing key fails rather than errors.
+#
+# Mutations that turn this run red: readonlyRootFilesystem false or removed; a mount point on the
+# mock API; portMappings added; stopTimeout added; drop emptied or ["NET_RAW"]; an add list naming
+# SYS_PTRACE; initProcessEnabled false or removed; capabilities.add, systemControls or volumesFrom
+# removed, or given an entry.
+run "the_mock_api_container_is_read_only_drops_every_capability_and_spells_out_ecs_values" {
+  command = plan
+
+  variables {
+    mock_api_image = "111122223333.dkr.ecr.us-east-1.amazonaws.com/spa-poc/mock-api@sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+  }
+
+  # #787: read-only, explicitly, and with no writable path at all: #780's third answer names none
+  # for the mock API. ECS reads an absent key as writable.
+  assert {
+    condition = try(
+      one([for c in jsondecode(module.cell.container_definitions) : c if c.name == "mock-api"]).readonlyRootFilesystem == true
+      && one([for c in jsondecode(module.cell.container_definitions) : c if c.name == "mock-api"]).mountPoints == [],
+      false
+    )
+    error_message = "The mock API's root filesystem is read-only and it mounts nothing (#787; #780, answer 3): its read-only root is the whole of its filesystem."
+  }
+
+  # #786: every capability Docker grants dropped, none added, and an init process as PID 1, the
+  # gateway's own value.
+  assert {
+    condition = try(
+      one([for c in jsondecode(module.cell.container_definitions) : c if c.name == "mock-api"]).linuxParameters == {
+        capabilities       = { add = [], drop = ["ALL"] }
+        initProcessEnabled = true
+      }
+      && one([for c in jsondecode(module.cell.container_definitions) : c if c.name == "mock-api"]).linuxParameters
+      == one([for c in jsondecode(module.cell.container_definitions) : c if c.name == "gateway"]).linuxParameters,
+      false
+    )
+    error_message = "The mock API drops ALL capabilities, adds none and runs an init process (#786), the gateway's linuxParameters exactly: the process needs no capability, and the init forwards SIGTERM to dotnet."
+  }
+
+  # #1006: the values ECS fills in, spelled out, so a re-plan after an apply replaces nothing.
+  assert {
+    condition = try(
+      one([for c in jsondecode(module.cell.container_definitions) : c if c.name == "mock-api"]).systemControls == []
+      && one([for c in jsondecode(module.cell.container_definitions) : c if c.name == "mock-api"]).volumesFrom == [],
+      false
+    )
+    error_message = "The mock API spells out systemControls and volumesFrom as the empty lists ECS reads back (#1006)."
+  }
+
+  # No port: the listeners are on loopback inside the task. No stopTimeout: the mock API holds no
+  # session and no lease, so it keeps Fargate's default (#347 Q6), and only the gateway's is F1's.
+  assert {
+    condition = (
+      !can(one([for c in jsondecode(module.cell.container_definitions) : c if c.name == "mock-api"]).portMappings)
+      && !can(one([for c in jsondecode(module.cell.container_definitions) : c if c.name == "mock-api"]).stopTimeout)
+    )
+    error_message = "The mock API publishes no port and sets no stopTimeout (#347 Q6): its listeners are reached on loopback, and it keeps Fargate's default."
+  }
+}
+
+# The proof cell's plan is unchanged by #1342. With the inputs of terraform.tfvars.example (us-east-2,
+# cell poc, the sample image by digest) and a mock API image, the task definition's
+# container_definitions is held byte for byte to what this root planned before the mock API left the
+# module, by its SHA-256. The digest was read at the fork of #1342's branch,
+# 438d80e674eddd7d12532443f8b9a8636c77d901, by planning modules/cell's mock_api_image inputs with
+# the client ids and issuer below; the module's container definitions then were what this root
+# planned. Not at c3fa0e0, the ticket's reading point: #787 and #1168 changed the definition since
+# (a read-only root, the /tmp volume), and that plan's digest, c85aafb0..., is no longer this cell's.
+#
+# A change to either container's definition, in this root or in the module, fails here, which is the
+# point: the operator's next plan of this root would show it. Change the digest only with the change
+# that means to move the task, and say so in that change.
+run "with_the_example_inputs_and_a_mock_api_image_the_task_s_containers_are_the_ones_planned_before_1342" {
+  command = plan
+
+  override_data {
+    target          = data.aws_region.current
+    override_during = plan
+    values          = { region = "us-east-2" }
+  }
+
+  override_data {
+    target          = module.cell.data.aws_region.current
+    override_during = plan
+    values          = { region = "us-east-2" }
+  }
+
+  variables {
+    region                             = "us-east-2"
+    cell                               = "poc"
+    vpc_cidr                           = "10.20.0.0/16"
+    certificate_domain                 = "spa-poc.test"
+    health_check_path                  = "/"
+    additional_teardown_principal_arns = []
+    gateway_image                      = "public.ecr.aws/nginx/nginx-unprivileged@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    mock_api_image                     = "111122223333.dkr.ecr.us-east-2.amazonaws.com/spa-poc/mock-api@sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+  }
+
+  assert {
+    condition     = sha256(module.cell.container_definitions) == "43997e19d3768461462dac92128f270df55c88b799b279e159bee24b229f7c00"
+    error_message = "The task definition's container_definitions are not the bytes this root planned before #1342 with these inputs: the operator's next plan of the platform root would replace the task definition and roll the service. Its digest is ${sha256(module.cell.container_definitions)}."
+  }
+}
+
+# The root's ecr_mock_api output, which tools/scripts/cell_documents.py maps to the contract's
+# ecrMockApi and verify-release-immutability.sh reads, is the module's repository at mock-api, and
+# the module creates exactly the root's two. An apply on the mock provider, so the repository URLs
+# exist; the mock gives each repository its own generated URL, so a root that read another key, or
+# the gateway's output, differs from the one named.
+run "the_root_s_ecr_mock_api_is_the_module_s_repository_at_mock_api" {
+  command = apply
+
+  assert {
+    condition     = toset(keys(module.cell.ecr_repositories)) == toset(["gateway", "mock-api"])
+    error_message = "The module creates the root's two repositories, gateway and mock-api, keyed by name: main.tf passes mock-api as its one extra repository."
+  }
+
+  assert {
+    condition     = output.ecr_mock_api == module.cell.ecr_repositories["mock-api"] && output.ecr_mock_api != output.ecr_gateway
+    error_message = "ecr_mock_api, the contract's ecrMockApi, reads the module's ecr_repositories at mock-api, which is not the gateway's repository."
+  }
+
+  assert {
+    condition     = output.ecr_gateway == module.cell.ecr_repositories["gateway"]
+    error_message = "ecr_gateway, the contract's ecrGateway, stays the gateway repository."
   }
 }

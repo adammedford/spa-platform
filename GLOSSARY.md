@@ -3,8 +3,9 @@
 The vocabulary of the Enterprise SPA Platform. Use these terms in issue titles, test names, commit
 messages and code. Where a term has a tempting synonym, the entry says which word to avoid.
 
-Definitions are drawn from `docs/plan/` and the decisions in `docs/adr/`. The plan is the frozen
-export; a term that changes meaning should be changed here and in the ADR that moved it.
+Definitions are drawn from `docs/plan/`, the frozen export, and from the decisions made since, which
+`docs/adr/README.md` → "Where a decision lives" places. A term that changes meaning is changed here,
+by a merge that cites the decision that moved it.
 
 ## The unit of deployment and the unit of tenancy
 
@@ -20,11 +21,12 @@ unreadable under another. In Phase 1 each task has a ring of its own, the "key d
 closes. See ADR-0025.
 _Avoid_: "keys" alone, which also means client secrets and KMS keys.
 
-**Instance** — one running copy of the gateway with its own live snapshot: in a cell, one ECS task of
-the service; in the hermetic tier, one harness host. `/readyz` names the instance that answered, and
-a wait for a revision covers every instance a cell runs (change request P2-5).
-_Avoid_: "instance" for an EC2 instance or for a copy of a Terraform module; "process", which is
-not the unit when two hosts share one test process.
+**Instance** — one running copy of the gateway with its own live snapshot: in a cell, one ECS task
+of the service; in the hermetic tier, one harness host. `/readyz` names the instance that answered,
+and a wait for a revision covers every instance a cell runs (change request
+p2-5-readiness-reports-registry-revision).
+_Avoid_: "instance" for an EC2 instance or for a copy of a Terraform module; "process", which is not
+the unit when two hosts share one test process.
 
 **Platform project** — the AWS project the platform is built in: the one whose account
 `tools/preflight.sh` checks against the git-ignored pin. A profile name does not identify it; the
@@ -107,6 +109,12 @@ other app's session still answers and still refreshes (ADR-0017, evidence C-2.6,
 
 **fragmentId** — a fragment's identifier, 3 to 40 lowercase letters, digits or hyphens, unique within its shell. It names the fragment's scheme, S3 prefix, path namespace and log field.
 
+**Team** — a named set of apps in one cell whose releases one principal may publish. A team's
+publishing right is to write new release keys under its own apps and to read them; it never
+reaches the registry, a secret, another team's apps or the cell. Activating a release is a
+registry change and not a team's. Not a workstream, which builds the platform, and not a tenant:
+a team has no runtime resource and the gateway does not know it exists.
+
 ## The modes of using the repository
 
 **Development** — a contributor's work on a workstation with no AWS. Its loop is the tests, plus the hermetic cell run by hand, which is never evidence. _Avoid_: "local development": Local (L) is a test tier.
@@ -141,12 +149,13 @@ cached options.
 its secrets cannot be read. At a cold start there is none, so affected apps are left out and
 reported and the rest go live.
 
-**App definition** — a registry entry without `clientId`, `clientSecretRef` and `release`. Terraform
-reads it to create the OAuth client; `spactl app add` completes it from the infrastructure outputs.
-So each app is described once.
+**App definition** — a registry entry without `clientId`, `clientSecretRef` and `release`. Whatever
+registers the client reads it; `spactl app add` completes it from the infrastructure outputs. So each
+app is described once.
 
 **Platform configuration** — settings from the task environment (`Policy:*`, `Issuers:*`,
-`Registry:*`) that bound what any registry entry may say. A registry writer cannot widen them.
+`Registry:*`) that bound what any registry entry may say. A registry writer cannot widen them; an
+operator does, by widening the bounds.
 
 **Release** — an S3 prefix, `apps/{appId}/releases/{release}/`, or a fragment's `apps/{appId}/fragments/{fragmentId}/releases/{release}/`, in which each key is written once. A
 release can gain a key, but outside teardown it never changes or loses one. The registry names the
@@ -162,13 +171,25 @@ _Avoid_: "the bucket" where the state bucket could be meant; "assets bucket".
 
 **Fragment activation** — making a fragment release the live one, by one registry change; it applies to requests that follow it, not to documents already loaded. _Avoid_: "swap".
 
+**Onboarding** — the steps that make a new app, or a new fragment of a live shell, servable in a running cell: its client at the identity provider, its secret in the store, its `clients` entry in the infrastructure outputs, its first release and its registry entry. It ends when every instance reports the registry revision that adds it. It needs no restart and stays inside the platform configuration; an app that needs more first needs widening the bounds. Activating a new release of an existing fragment is fragment activation, not onboarding.
+_Avoid_: "provisioning"; "registration", which is the client's step at the provider.
+
+**Removal** — the inverse of onboarding. The registry entry, or the fragment, goes first, and the client, the secret and the `clients` entry go only once every instance reports the revision without it. It needs no restart and never narrows the bounds.
+_Avoid_: "offboarding", "deprovisioning".
+
+**Widening the bounds** — changing a cell's platform configuration so that a registry entry may name a new upstream or issuer, or a shell may hold more fragments. It is an operator's change, applied as a new task definition by a deployment, never a registry write. A new host suffix is a cell change, not a widening (ADR-0010).
+_Avoid_: "reconfigure", which also covers `Registry:*`.
+
+**Narrowing the bounds** — the inverse of widening the bounds, done only on purpose. It is never a step of removal.
+
 **Entry module** — a fragment's one ES module at the root of its release, at a name constant across releases, which the shell loads by its URL. _Avoid_: "remote entry", "bundle".
 
 ## The request path
 
 **Request gate** — the stage that accepts same-origin browser requests only on `/api` and `/bff`,
 judged by `Sec-Fetch-Site` and `Origin`, and refuses a cookie name that imitates a platform cookie.
-See ADR-0007.
+The one exception is `GET /bff/chain`, the sign-in chain step, which accepts any `Sec-Fetch-Site`
+and is protected by its continuation. See ADR-0007 and ADR-0040.
 
 **Shell gate** — the stage that requires a session before any asset is served: an unauthenticated
 navigation is challenged, an unauthenticated fetch gets 401. See ADR-0008. Distinct from the request
@@ -223,9 +244,8 @@ _Avoid_: "OIDC cookies", "auth cookies".
 
 **Stage** — one entry point in the middleware table of `contracts/pipeline.md`, in the position that
 table gives it. The number is the position and nothing more: it is normative only in that table, and
-it moved at G1b when ADR-0018 put telemetry first. Everywhere else a stage is named by its entry
-point, `UsePlatformRequestGate`, never "stage 6" (`CODING_STANDARDS.md` → A stage is named, not
-numbered).
+it moved at G1b when ADR-0018 put telemetry first. How a stage is named outside that table:
+`CODING_STANDARDS.md` → "A stage is named, not numbered".
 
 **Rejection** — a response a stage ends the request with **under a rule id**: a 400, 403, 404 or
 405, a 401 or a 503 that `contracts/request-gate.md` has an id for, or the shell gate's challenge
@@ -281,9 +301,20 @@ correlates a session's requests without being usable as a credential. Log this, 
 key.
 
 **Session gate** — the in-process, per-token-set serialisation of refreshes: one holder reads,
-decides, refreshes and writes, and the callers queued behind it take its outcome. In process only;
-two tasks share no gate. See ADR-0017 and ADR-0024.
+decides, refreshes and writes, and the callers queued behind it take its outcome. Every change or
+end the gateway itself makes to a live session runs under it, one holder at a time and never
+cancelled; the cookie handler's own read and removals, and the options invalidator's purge of an
+app's sessions on a registry swap, do not. In process only; two tasks share no gate. Not a stage
+like the request gate and the shell gate, and not a gate of the ladder. See ADR-0017, ADR-0024 and
+ADR-0043.
 _Avoid_: "lock", and "lease" for this.
+
+**AppSessions** — the one module through which the gateway opens, reads, changes and ends a
+session, above `ISessionStore`: each answers to the app-and-client ownership check, and each change
+or end runs under the session gate. The cookie handler's per-request read and its own removals
+reach it through the ticket store outside the session gate; the options invalidator's purge of an
+app's sessions on a registry swap does not reach it. See ADR-0043.
+_Avoid_: session manager, session service, session owner.
 
 **Refresh lease** — the cross-task claim on one token set's refresh, held by one task for a bounded
 time and given back when its refresh is written. The **holder** is the task that took it; a
@@ -337,8 +368,7 @@ lifecycle and decision form: `docs/agents/tracker-policy.md` → "Change request
 prose, "proposal", "change-request file" for a new one.
 
 **Ticket** — one unit of work with its acceptance criteria, held as an issue on this repository and
-cited as `#NNN`, and closed when its work lands. The tickets of one feature are sub-issues of its
-spec.
+cited as `#NNN`. The tickets of one feature are sub-issues of its spec.
 
 **Spec** — the statement of a feature's problem, solution and acceptance that its tickets are cut
 from, held the same way and closed when the feature lands. Not "the plan": `docs/plan/` is the
@@ -346,7 +376,9 @@ frozen export, and a spec is one feature's working statement.
 
 **Plan row** — one row of the plan's task tables, `docs/plan/03-workstreams-and-tasks.md` or the
 Phase 2 package table (I-4, 2.1, P2-1), and the unit the roadmap counts. Not a ticket: one row may be
-built by several. _Avoid_: bare "task" where a ticket could be meant.
+built by several. A ladder stage cut after the export has no plan row, so its `**Plan rows.**` line
+names the tickets that build it instead, and the roadmap counts each of them where it would count a
+row (#990). _Avoid_: bare "task" where a ticket could be meant.
 
 **Carrier** — the one ticket whose `Plan row` line names a row that several tickets build. How its
 merge and the part tickets' merges name the row is #332 D7's rule. _Avoid_: "the row's ticket",
@@ -356,26 +388,31 @@ when the row has parts.
 `Plan row` line as `none (part of <row>...)`. _Avoid_: "sibling", "sub-ticket" (a sub-issue is
 GitHub's relation to a spec, not to a row).
 
+**Claim** — the mark that a task is taken: an issue's assignee, or, for a plan row no issue carries, its `task/<id>-<slug>` branch. How each is set and released: `docs/agents/tracker-policy.md` and `docs/agents/landing-work.md`.
+_Avoid_: "lock" or "reservation"; "branch" for an issue's claim.
+
+**Answer comment** — the comment headed `## Answer` that closes out a ticket's work: where each part went, what was declined, and any `Outstanding:` line for what a part-landed ticket still owes. When it is written and what it holds: `docs/agents/tracker-policy.md`.
+_Avoid_: bare "Answer" for this, which is the gateway's response (see **Answer**); "resolution comment".
+
 **Standing answer** — a launch-time instruction that a night's lanes and grills take each
 recommendation as decided instead of stopping for the human. Given per run, and recorded in that
 run's `Overnight <date>` issue. Not "approval".
 
 **Workflow script** — a script the Workflow tool runs, under `.claude/workflows/` (the overnight run
-is one), which launches scripted sessions and tells each what to do. It is tracked and changes by a
-branch, a review and a landing like any other integrator change (ADR-0026). It is not a CI workflow
-under `.github/workflows/`. _Avoid_: bare "workflow" where CI's could be meant.
+is one), which launches scripted sessions and tells each what to do. It is tracked integrator code,
+and not a CI workflow under `.github/workflows/`. See ADR-0026. _Avoid_: bare "workflow" where CI's
+could be meant.
 
 **Reuse key** — the value a workflow script compares between launches to decide whether a phase's
 saved result still stands: equal keys reuse the result, a changed key runs the phase again. A phase
-here is the Workflow tool's unit of work, not a plan Phase such as Phase 1. A reuse key is only as
-fresh as the inputs it covers (`CODING_STANDARDS.md`). _Avoid_: "cache key" and "resume key" for
-this.
+here is the Workflow tool's unit of work, not a plan Phase such as Phase 1. What a key must cover:
+`CODING_STANDARDS.md` → "A reuse key covers every input the reused phase reads". _Avoid_: "cache
+key" and "resume key" for this.
 
 **Project skill** — a skill under `.claude/skills/` that a foreground session runs in this
-repository (`wiz`, which walks a sitting, is one). It is tracked and changes by a branch, a review
-and a landing like any other integrator change, and no sitting runs an edit to it that has not
-landed. Not a user-level skill under `~/.agents/skills` (such as `grilling` or
-`implement`), which is the human's own, shared across projects and outside this repository.
+repository (`wiz`, which walks a sitting, is one). It is tracked integrator code. Not a user-level
+skill under `~/.agents/skills` (such as `grilling` or `implement`), which is the human's own,
+shared across projects and outside this repository. See ADR-0027.
 _Avoid_: bare "skill" where the user-level kind could be meant; "wizard" for `wiz`.
 
 **Lane** — one owner's tickets in one overnight run, each worked in a worktree and on a branch of
@@ -395,16 +432,17 @@ work only the human can steer or approve as it happens. _Avoid_: "interactive se
 "foreground" for where a file lives.
 
 **Scripted session** — an agent session a workflow script launches: a lane's implementer, a
-reviewer, a griller, the report writer. It drafts and never commits an ADR or a frozen contract's
-sentence (ADR-0021 decision 4). _Avoid_: "background agent", "subagent", for this.
+reviewer, a griller, the report writer. See ADR-0021.
+_Avoid_: "background agent", "subagent", for this.
 
 **Pre-accepted answer** — an answer written under a standing answer: the recommendation, taken on
-the night. Provisional until confirmed: a lane's code may rest on it until the human lands, but no
-steering document, ticket body or new ticket does. Not "accepted".
+the night. Provisional until confirmed: a lane's code may rest on it until the human lands. Not
+"accepted". See ADR-0021.
 
 **Confirmed answer** — an answer the human wrote, or a pre-accepted answer the human confirmed on
-the run's `Overnight <date>` issue. The only answer a session applies to a steering document, a
-ticket body or a new ticket.
+the run's `Overnight <date>` issue. What a session may apply one to: `docs/agents/landing-work.md` →
+"A commit that changes a steering document", and `docs/agents/tracker-policy.md` for a ticket's
+body. See ADR-0021.
 
 **Decision comment** — the human's comment on a change request that decides it: accept, accept with
 changes or decline, and whether the decision gets an ADR. It is the confirmed answer that the edit
@@ -413,10 +451,9 @@ drafted. _Avoid_: "approval", "Status" for this, "decision" alone where an ADR's
 meant, and "decision" for a draft.
 
 **Decision given in a session** — Adam's answer to an open question that no grill numbered, given in
-a foreground session and posted by that session on the issue the question belongs to, ending with
-the line that says so. On a change request it is the decision comment; on any other issue it is a
-confirmed answer the ticket's work may rest on, and it authorises no steering change the ticket's
-acceptance criteria do not ask for. Its form and what it covers:
+a foreground session and posted by that session on the issue the question belongs to. On a change
+request it is the decision comment; on any other issue it is the comment headed
+`## Decided in a session: <what>`. Its form, and what it authorises and does not:
 `docs/agents/tracker-policy.md` → "A decision Adam gives in a session". _Avoid_: "decision comment"
 for one on a ticket, "verbal decision", and "in-session decision" where the gateway's session could
 be read.
@@ -447,26 +484,29 @@ _Avoid_: bare "draft" for this, "batch file".
 authority. Which documents are in the set, and what counts as authority:
 `docs/agents/landing-work.md` → "A commit that changes a steering document".
 
-**Main checkout** — the clone's own working tree: git's main worktree, whose git directory is the
-common directory. Concurrent sessions share it, so a session's branch work happens in a linked
-worktree of its own (`docs/agents/landing-work.md`, "Take a task"); the one change a session makes
-there is a fast-forward of a clean `main` to what has landed, `git merge --ff-only origin/main`
-(#200).
+**Home** — the one document that states a given rule. Which document is home to which kind of rule: `AGENTS.md` → "Where to look".
+_Avoid_: "source of truth" or "canonical doc" for this.
 
-**Review** — a two-axis `/code-review` (Standards and Spec) of one pull request head, by an agent
-session that wrote none of the commits it covers. Not a GitHub approval, which one account cannot
-give its own pull request. _Avoid_: approval, sign-off.
+**Pointer** — a line that names a rule's home and topic without restating the rule. A line that restates it is a paraphrase, even when the wording matches.
+_Avoid_: "summary" or "see also" for a line that restates a rule.
+
+**Main checkout** — the clone's own working tree: git's main worktree, whose git directory is the
+common directory. Concurrent sessions share it. What a session may do there:
+`docs/agents/landing-work.md` → "Take a task".
+
+**Review** — a two-axis `/code-review` (Standards and Spec) of one pull request head. Not a GitHub
+approval, which one account cannot give its own pull request. Who may review:
+`docs/agents/review.md` → "Landing or holding". _Avoid_: approval, sign-off.
 
 **Review record** — the line a review leaves on its pull request, naming the exact head it read and
 its verdict: `Reviewed <40-hex head> against <40-hex base>: merge`, or `: hold`, on a line of its
-own in a comment or a review submitted as a comment (`docs/agents/review.md` → "The review record").
-It covers that head and nothing pushed after it, and the latest record naming the current head
-decides. Written only by an agent session that wrote none of the commits it covers. _Avoid_:
-review-evidence line, review disposition, approval.
+own in a comment or a review submitted as a comment. What it covers, which record decides and who
+writes one: `docs/agents/review.md` → "The review record". _Avoid_: review-evidence line, review
+disposition, approval.
 
-**Open review** — the state of a pull request whose head no review record yet clears: a review
-running or holding, commits pushed after the last reviewed head, or a merge made without a review.
-It closes when a record names that head with a merge verdict and the findings it raised have landed.
+**Open review** — the state of a pull request whose review is not finished: no review record clears
+its current head, or a clearing record's findings are not yet resolved. What resolves a finding, and
+what waits on an open review: `docs/agents/landing-work.md` → "Gates".
 
 **Hand-over** — the morning's closing statement, on the `Overnight <date>` issue and the console:
 what the human runs next (the landing command, the issues to close, the worktrees to remove) and
@@ -499,13 +539,14 @@ to G5, and in the gate register for a gate defined after the export. _Avoid_: "a
 exit test, since a gate's criteria are a part of it.
 
 **Gate tag** — the annotated tag that closes a gate, its message naming the CI run that proved the
-exit test. It is permanent, so what its commit says stays said there. Other tags are not gates.
+exit test. Other tags are not gates. When one is made, and what it waits on:
+`docs/agents/landing-work.md` → "Gates".
 _Avoid_: release tag, and "the tag" where another tag could be meant.
 
-**Gate register** — the live list of gates defined after the frozen export, each with what it
-proves, its exit test, what it unblocks and the decision that recorded it. Kept by the integrator;
-a gate is added or changed by deciding a request. It names ids that the export or the test id
-register defines, and defines none. _Avoid_: gates table, which is the export's.
+**Gate register** — the live list of gates defined after the frozen export, `contracts/gates.md`:
+each with what it proves, its exit test, what it unblocks and the decision that recorded it. It
+names ids that the export or the test id register defines, and defines none. How a gate is added or
+changed: `contracts/gates.md` → "How a gate is added". _Avoid_: gates table, which is the export's.
 
 **Check** — a mechanical guard the pre-push hook, CI or `tools/land.sh` runs when applicable:
 ownership, steering, the roadmap, the build, Terraform's format and validate, the review record at
@@ -520,8 +561,8 @@ ends on a one-line verdict. _Avoid_: gate, and "the hook" for the checks themsel
 
 **Terraform floor** — the oldest Terraform the repository supports, named in `.terraform-version`.
 CI installs exactly it, every root's `required_version` asks for at least it, and the local check
-runs it when the machine has it, naming the version it ran either way. Raising it is a one-line
-change to that file plus each root's constraint. _Avoid_: the pinned version, the minimum, for this.
+runs it when the machine has it, naming the version it ran either way. How it is raised:
+`docs/dependencies.md` → "The Terraform floor". _Avoid_: the pinned version, the minimum, for this.
 
 **Test companion** — the tests that sit beside a check or a script, in a file named for it, and
 prove what it does by running the real thing on throwaway inputs built to trip each rule; never a
@@ -592,11 +633,10 @@ companion. _Avoid_: "harness", "bench harness"; "benchmark" alone where a Fargat
 run need telling apart.
 
 **Test ids** — `F-` functional, `N-` negative security, `P-` infrastructure and architecture
-properties, `A-` architecture reference rules, `B-` startup benchmark. A test id in a task names a
-behaviour: the owning workstream proves it in its own project, and workstream 6 proves it again in
-the composed suites, except `B-`, which the startup benchmark's verdict proves on its tier, never a
-test project. The ids in the frozen export are listed there; an id named after it continues its
-prefix's sequence and is listed in the test id register.
+properties, `A-` architecture reference rules, `B-` startup benchmark, which the benchmark's verdict
+proves on its tier and no test project does (ADR-0033). What a test id in a task asks of its
+owner: `AGENTS.md` → "Rules for every task". The ids in the frozen export are listed there; an id
+named after it continues its prefix's sequence and is listed in the test id register.
 
 **Plan policy** — the assertions on what a Terraform root's plan may contain: P-01 (the platform plan allowlist), P-02 (the apps plan allowlist), P-03 (the task role policy) and P-07 (the identity root's allowlist). Mock-provider `terraform test` runs that read the configuration (ADR-0016), so they prove the configuration and never the account; P-04 to P-06 are the deployed checks. _Avoid_: plan check, for a credentialed plan nothing runs.
 
@@ -620,11 +660,10 @@ harness (G0 items 4 and 5), `C-` the Cognito run (G0 items 2 and 3). `S-`, `R-` 
 
 **Gap register** — the live list of known gaps between what Phase 1 delivers and what an enterprise
 adoption would need, `docs/gaps.md`: one numbered entry (`GAP-n`) per gap, saying what is missing,
-where it was found and what closes it. Kept by workstream 6 from findings (plan row 6.8); a finding
-adds an entry, and an entry closes when the row or ticket it names lands. The plan's own table of
-enterprise gaps, `docs/plan/06-phase-2-and-risks.md` → "Enterprise gaps", is the frozen export's
-statement of such gaps at export time and does not change; the register is where they are kept
-current. _Avoid_: bare "register" where the test id register or the gate register could be meant;
+where it was found and what closes it. Who keeps it, and when an entry is added or closed:
+`docs/gaps.md`'s opening paragraph. The plan's own table of enterprise gaps,
+`docs/plan/06-phase-2-and-risks.md` → "Enterprise gaps", is the frozen export's statement of such
+gaps at export time and does not change; the register is where they are kept current. _Avoid_: bare "register" where the test id register or the gate register could be meant;
 "enterprise gaps table" for the register, which is the plan's.
 
 **Stand-in run** — the first feasibility run, using a stand-in for `OpenIdConnectHandler` because the

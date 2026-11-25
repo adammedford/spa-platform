@@ -100,6 +100,7 @@ PORT = "5299"
 # A double: records its name and arguments as one call in the shared sequence, then fails when the
 # case named this call, and otherwise prints a line (dotnet, terraform, smoke, image) or nothing
 # (python3). The image check takes no arguments, so a case names its call as `*`, which fails any.
+# A case names several calls by joining them with `|`, as two red companions need (#1472).
 # A Terraform double answers `version` as Terraform does, first line `Terraform v<version>`, with the
 # version the case gave it (#69).
 DOUBLE = """#!/bin/bash
@@ -117,9 +118,16 @@ if [ -n "$reports" ] && [ "$*" = version ]; then
 fi
 if [ "$fails_on" = "*" ]; then printf '%s double failed\\n' "$name" >&2; exit 1; fi
 if [ -n "$fails_on" ]; then
-  case " $* " in
-    *" $fails_on "*) printf '%s double failed: %s\\n' "$name" "$*" >&2; exit 1 ;;
-  esac
+  args="$*"
+  set -f
+  IFS='|'
+  for pattern in $fails_on; do
+    case " $args " in
+      *" $pattern "*) printf '%s double failed: %s\\n' "$name" "$args" >&2; exit 1 ;;
+    esac
+  done
+  unset IFS
+  set +f
 fi
 if [ -n "$loud" ]; then printf '%s double ran: %s\\n' "$name" "$*"; fi
 exit 0
@@ -146,10 +154,11 @@ TEST_DIRS = ["infra/modules/m", "infra/roots/b"]
 # The hook's lines, as the hook before #68 printed them. #69 changed one on purpose: the Terraform
 # half now names the version it ran, in a line of its own and in the last line. #205 added a check,
 # the file modes, and so a name to the list of what ran; #291 added the part-row merges, and #296
-# the full-landing merges; #606 added the analysis guard, and #760 the endpoint paths.
+# the full-landing merges; #606 added the analysis guard, #760 the endpoint paths, and #1344 the mode
+# split.
 HOOK_RAN = ("A-05, the steering documents, every ticket citation, the ticket numbers, the part-row merges, "
-            "the full-landing merges, the roadmap, the analysis guard, the endpoint paths, the artifacts, "
-            "the file modes")
+            "the full-landing merges, the roadmap, the analysis guard, the endpoint paths, the mode split, "
+            "the artifacts, the file modes")
 HOOK_BUILD_SKIPPED = "pre-push: build skipped: no .NET source changed."
 HOOK_TERRAFORM_SKIPPED = "pre-push: Terraform skipped: nothing under infra/ or the floor changed."
 HOOK_FIX = "pre-push: fix it, or push with --no-verify if you mean it."
@@ -169,6 +178,8 @@ PYTHON_CHECKS = [
     ["python3", "-I", "tools/analysis_guard.py"],
     # The endpoint paths (#760) read the tree too, after the analysis guard.
     ["python3", "-I", "tools/endpoint_paths.py"],
+    # The mode split (#1344) reads the tree as well, after the endpoint paths.
+    ["python3", "-I", "tools/mode_split.py"],
 ]
 # The full check fails a full-landing merge whose ticket it could not read, where the hook passes it
 # (#894), so it alone passes the flag.
@@ -363,16 +374,17 @@ class Case:
         subprocess.run(["git", *args], cwd=cwd, env=self.env(), check=True, capture_output=True)
 
     def run(self, *args: str, hook: bool = False, through_shebang: bool = False,
-            cwd: pathlib.Path | None = None, umask: int = 0o022, merged: bool = False) -> Result:
+            cwd: pathlib.Path | None = None, umask: int = 0o022, merged: bool = False,
+            env: dict[str, str] | None = None) -> Result:
         # The file-mode mask is the child's own, set between fork and exec, so the cases running
         # at the same time on other threads keep theirs; os.umask would change the whole process's.
         # 022 by default, what a checkout and CI have, whatever mask runs this companion.
         # merged sends standard error to standard output, as a lane's `> log 2>&1` does, so a case
-        # reads the two streams in the order a log holds them.
+        # reads the two streams in the order a log holds them. env adds to the case's own variables.
         target = HOOK if hook else SCRIPT
         command = [str(target), *args] if through_shebang else [BASH, str(target), *args]
-        completed = subprocess.run(command, cwd=cwd or self.work, env=self.env(), umask=umask,
-                                   stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+        completed = subprocess.run(command, cwd=cwd or self.work, env={**self.env(), **(env or {})},
+                                   umask=umask, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                    stderr=subprocess.STDOUT if merged else subprocess.PIPE, timeout=60)
         return Result(completed)
 
@@ -453,7 +465,7 @@ class HookTests(CheckTestCase):
         self.assertLines(["python3 double failed: -I tools/analysis_guard.py",
                           "pre-push: the analyzer configs or a suppression break ADR-0035's rules, or were not judged.",
                           HOOK_FIX], result.stderr)
-        self.assertEqual(PYTHON_CHECKS[:-1], case.calls())
+        self.assertEqual(PYTHON_CHECKS[:-2], case.calls())
 
     def test_an_endpoint_paths_check_that_fails(self):
         # #760: the endpoint paths run after the analysis guard and before the artifacts, and their
@@ -464,6 +476,18 @@ class HookTests(CheckTestCase):
         self.assertLines(["python3 double failed: -I tools/endpoint_paths.py",
                           "pre-push: a skill, a runbook or the test catalogue names a path contracts/http-contract.md "
                           "does not make known, or none was judged.",
+                          HOOK_FIX], result.stderr)
+        self.assertEqual(PYTHON_CHECKS[:-1], case.calls())
+
+    def test_a_mode_split_that_fails(self):
+        # #1344: the mode split runs after the endpoint paths and before the artifacts, and its
+        # failure stops the hook.
+        case = Case(self, change="docs/notes.md", fails_on={"python3": "tools/mode_split.py"})
+        result = case.run(hook=True)
+        self.assertEqual(1, result.status)
+        self.assertLines(["python3 double failed: -I tools/mode_split.py",
+                          "pre-push: a tracked path has no one value of README.md's path table, or breaks its "
+                          "clauses, or none was judged.",
                           HOOK_FIX], result.stderr)
         self.assertEqual(PYTHON_CHECKS, case.calls())
 
@@ -487,6 +511,7 @@ class HookTests(CheckTestCase):
             "pre-push: the roadmap not checked: python3 is not on PATH.",
             "pre-push: the analysis guard not checked: python3 is not on PATH.",
             "pre-push: the endpoint paths not checked: python3 is not on PATH.",
+            "pre-push: the mode split not checked: python3 is not on PATH.",
             "pre-push: Terraform not checked: terraform is not on PATH.",
         ], result.stderr)
         self.assertLines([HOOK_BUILD_SKIPPED, f"pre-push: {HOOK_RAN} pass."], result.stdout)
@@ -1376,8 +1401,29 @@ class CompanionTests(CheckTestCase):
         self.assertEqual(1, result.status, result.stdout)
         self.assertEqual("check: fail: the test companion tools/other_tests.py failed.",
                          result.last_line(result.stderr))
-        # Stopped at the first failure, in the companions' order.
-        self.assertEqual(FULL_PYTHON_CHECKS + [companion("tools/other_tests.py")], case.calls())
+        # Said where it failed, under its own lines, and the companion after it still runs (#1472).
+        self.assertEqual(["python3 double failed: -I tools/other_tests.py",
+                          "check: the test companion tools/other_tests.py failed."],
+                         result.stderr.splitlines()[:2])
+        self.assertEqual(FULL_PYTHON_CHECKS + [companion("tools/other_tests.py"),
+                                               companion("tools/thing_tests.py")], case.calls())
+        self.assertIn("check: the test companion tools/thing_tests.py:", result.stdout.splitlines())
+
+    def test_two_companions_that_fail_are_each_said_and_the_verdict_names_both(self):
+        # #1472: the #1349 reviewer ran by hand the two companions a red one had stopped.
+        case = Case(self, extra=SCRIPTS, change=("tools/thing.sh", "tools/other.py", ".github/gizmo.py"),
+                    fails_on={"python3": ".github/gizmo_tests.py|tools/thing_tests.py"})
+        result = self.full(case)
+        self.assertEqual(1, result.status, result.stdout)
+        self.assertEqual(FULL_PYTHON_CHECKS + [companion(".github/gizmo_tests.py"),
+                                               companion("tools/other_tests.py"),
+                                               companion("tools/thing_tests.py")], case.calls())
+        lines = result.stderr.splitlines()
+        self.assertIn("check: the test companion .github/gizmo_tests.py failed.", lines)
+        self.assertIn("check: the test companion tools/thing_tests.py failed.", lines)
+        self.assertNotIn("check: the test companion tools/other_tests.py failed.", lines)
+        self.assertEqual("check: fail: the test companions .github/gizmo_tests.py, tools/thing_tests.py failed.",
+                         result.last_line(result.stderr))
 
     def test_several_touched_scripts_run_each_companion_once(self):
         case = Case(self, extra=SCRIPTS,
@@ -1448,8 +1494,9 @@ class CompanionTests(CheckTestCase):
         real = [path for path in tracked if re.search(r"[_-]tests\.py$", path)]
         self.assertIn("tools/land_tests.py", real)
         folders = {path.rsplit("/", 1)[0] for path in real}
-        # The files Case links to the real ones, which a case must not change; .github/touches.sh is
-        # the only one with a companion, and its rule is tools/land.sh's.
+        # The files Case links to the real ones, which a case must not change. Two have a companion
+        # this case cannot reach, because it changes neither script: .github/touches.sh, whose rule
+        # is tools/land.sh's, and tools/smoke.sh, whose tools/smoke_tests.py came with #1401.
         linked = {".github/touches.sh", "tools/check.sh", "tools/terraform-floor.sh", "tools/smoke.sh"}
         beside = [path for path in tracked
                   if path.rsplit("/", 1)[0] in folders and path not in linked]
@@ -1470,7 +1517,8 @@ class CompanionTests(CheckTestCase):
             with self.subTest(scriptless=path):
                 self.assertNotEqual([], declared_inputs((ROOT / path).read_text(encoding="utf-8")),
                                     f"{path} has no script, so only a Checkout inputs line earns it")
-        expected = sorted(set(real) - {"tools/check_tests.py", ".github/touches_tests.py"} - scriptless)
+        expected = sorted(set(real) - {"tools/check_tests.py", ".github/touches_tests.py",
+                                       "tools/smoke_tests.py"} - scriptless)
         self.assertEqual([companion(path) for path in expected],
                          companions_run(case))
 
@@ -1761,7 +1809,7 @@ class InputTests(CheckTestCase):
         spec = importlib.util.spec_from_file_location("image_build_tests", ROOT / IMAGE_COMPANION)
         image = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(image)
-        reads = [image.DOCKERIGNORE.relative_to(ROOT).as_posix(), image.CELL_COMMON]
+        reads = [image.DOCKERIGNORE.relative_to(ROOT).as_posix(), image.CELL_COMMON, image.CELL_ENV]
         dockerfiles = (*image.DOCKERFILES, *image.OTHER_OWNERS)
         reads += dockerfiles
         # Its census of Dockerfiles finds a new one anywhere, at the top level too.
@@ -1859,10 +1907,59 @@ class WorkflowCompanionTests(CheckTestCase):
         result = self.full(case)
         self.assertEqual(1, result.status, result.stdout)
         self.assertEqual(["node double failed: .claude/workflows/alpha_tests.mjs",
+                          "check: the workflow test companion .claude/workflows/alpha_tests.mjs failed.",
                           "check: fail: the workflow test companion .claude/workflows/alpha_tests.mjs failed."],
-                         result.stderr.splitlines()[-2:])
-        # Stopped at the first failure.
-        self.assertEqual([["node", ".claude/workflows/alpha_tests.mjs"]], node_calls(case))
+                         result.stderr.splitlines()[-3:])
+        # The companion after it still runs (#1472).
+        self.assertEqual([["node", path] for path in WORKFLOW_COMPANIONS], node_calls(case))
+
+    def test_a_red_test_companion_runs_the_workflow_companions_and_the_verdict_names_each_red(self):
+        # #1472: a red companion in tools/ no longer stops the workflow companions after it.
+        case = Case(self, extra={**SCRIPTS, **WORKFLOW_SCRIPTS},
+                    change=("tools/thing.sh", ".claude/workflows/alpha.js"),
+                    fails_on={"python3": "tools/thing_tests.py",
+                              "node": ".claude/workflows/alpha_tests.mjs|.claude/workflows/two-words_tests.mjs"})
+        result = self.full(case)
+        self.assertEqual(1, result.status, result.stdout)
+        self.assertEqual([["node", path] for path in WORKFLOW_COMPANIONS], node_calls(case))
+        self.assertEqual("check: fail: the test companion tools/thing_tests.py and the workflow test companions "
+                         + ", ".join(WORKFLOW_COMPANIONS) + " failed.", result.last_line(result.stderr))
+
+    def test_a_check_that_fails_after_a_red_companion_keeps_its_reason_and_names_the_red_one(self):
+        scripts = {**SCRIPTS, **WORKFLOW_SCRIPTS}
+        scripts[".claude/workflows/lonely.js"] = "// a workflow script that lost its companion\n"
+        case = Case(self, extra=scripts, change=("tools/thing.sh", ".claude/workflows/alpha.js"),
+                    fails_on={"python3": "tools/thing_tests.py"})
+        result = self.full(case)
+        self.assertEqual(1, result.status, result.stdout)
+        self.assertEqual("check: fail: the workflow script .claude/workflows/lonely.js has no test companion; "
+                         "add .claude/workflows/lonely_tests.mjs beside it. Before it, the test companion "
+                         "tools/thing_tests.py failed.", result.last_line(result.stderr))
+
+    def test_no_node_after_a_red_companion_keeps_its_reason_and_names_the_red_one(self):
+        case = Case(self, extra={**SCRIPTS, **WORKFLOW_SCRIPTS}, missing=("node",),
+                    change=("tools/thing.sh", ".claude/workflows/alpha.js"),
+                    fails_on={"python3": "tools/thing_tests.py"})
+        result = self.full(case)
+        self.assertEqual(1, result.status, result.stdout)
+        self.assertEqual("check: fail: node is not on PATH. Before it, the test companion tools/thing_tests.py "
+                         "failed.", result.last_line(result.stderr))
+
+    def test_a_stop_under_set_e_after_a_red_companion_keeps_its_status_and_names_the_red_one(self):
+        # Every command after a red companion is guarded today, so the stop is made: BASH_ENV, which a
+        # non-interactive bash reads before the script, shadows echo with one that returns 7 on the
+        # red companion's elapsed line alone, and set -e stops there, outside any fail() (#1487).
+        case = Case(self, extra=SCRIPTS, change=("tools/thing.sh", "tools/other.py"),
+                    fails_on={"python3": "tools/thing_tests.py"})
+        shadow = case.dir / "shadow-echo.sh"
+        shadow.write_text('echo() {\n'
+                          '  case "$*" in "check: elapsed: the test companion tools/thing_tests.py: "*) return 7 ;; esac\n'
+                          '  builtin echo "$@"\n'
+                          '}\n')
+        result = case.run("--full", "--port", PORT, env={"BASH_ENV": str(shadow)})
+        self.assertEqual(1, result.status, result.stdout)
+        self.assertEqual("check: fail: stopped with status 7. Before it, the test companion tools/thing_tests.py "
+                         "failed.", result.last_line(result.stderr))
 
     def test_a_script_with_no_companion_fails_naming_the_script(self):
         scripts = dict(WORKFLOW_SCRIPTS)
@@ -1976,7 +2073,7 @@ class CiWorkflowCompanionTests(CheckTestCase):
 
 # The steps that every run with a base executes, in order, as the elapsed lines name them (#629).
 ELAPSED_STEPS = ["A-05", "the steering check", "the part-row merges", "the full-landing merges", "the roadmap",
-                 "the analysis guard", "the endpoint paths", "the artifacts", "the file modes"]
+                 "the analysis guard", "the endpoint paths", "the mode split", "the artifacts", "the file modes"]
 # Under --full, finding which test companions the change earns is a step of its own: on 2026-10-29
 # the companions were where the integrate step's span went (#629).
 REACH = "the test companions' reach"
@@ -2038,6 +2135,16 @@ class ElapsedTests(CheckTestCase):
         self.assertEqual(0, result.status, result.stderr)
         self.assertEqual(ELAPSED_STEPS + [REACH, "the test companion .github/gizmo_tests.py",
                                           "the test companion tools/thing_tests.py", "total"], self.steps(result))
+
+    def test_a_red_companion_is_timed_and_the_total_still_precedes_the_verdict(self):
+        # #1472: the check runs on past a red companion, so its time is its own, not the next one's.
+        case = Case(self, extra=SCRIPTS, change=("tools/thing.sh", ".github/gizmo.py"),
+                    fails_on={"python3": ".github/gizmo_tests.py"})
+        result = case.run("--full", "--port", PORT, merged=True)
+        self.assertEqual(1, result.status)
+        self.assertEqual(ELAPSED_STEPS + [REACH, "the test companion .github/gizmo_tests.py",
+                                          "the test companion tools/thing_tests.py", "total"], self.steps(result))
+        self.assertTotalBeforeVerdict(result, "check", "check: fail: the test companion .github/gizmo_tests.py failed.")
 
     def test_each_workflow_companion_is_timed_on_its_own(self):
         case = Case(self, extra=WORKFLOW_SCRIPTS, change=".claude/workflows/alpha.js")

@@ -2,13 +2,16 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Platform.Abstractions;
+using Yarp.ReverseProxy.Model;
 
 namespace Platform.Proxy;
 
 /// <summary>
 /// Task 4.2: the session's access token, acquired ahead of the forwarder. A call with no token is
 /// answered with a problem body, 401 or 503 by the outcome, and nothing is forwarded; a call with one
-/// carries it on as an <see cref="AcquiredToken"/> for <see cref="UpstreamHeaders"/> to attach.
+/// carries it on as an <see cref="AcquiredToken"/> for <see cref="UpstreamHeaders"/> to attach. Before
+/// it asks, the request's pins are cross-checked against the route's owner, so a fragment's route
+/// never carries the shell's token nor a shell's route a fragment's (#996).
 ///
 /// A step in YARP's proxy pipeline rather than a request transform: both meet the contract (G0 item 5,
 /// finding T-C21), and the step makes the 401 an ordinary response, which is the plan's reason for it
@@ -20,6 +23,15 @@ internal static class AccessTokenStep
     {
         proxy.Use(async (context, next) =>
         {
+            // Before any token is asked for, so a disagreement reaches no source and no upstream: a
+            // fragment's route forwards only that fragment's set, a shell's route only the shell's
+            // (contracts/pipeline.md -> Which token set a request uses; #996).
+            if (!PinMatchesRoute(context))
+            {
+                await Problems.WriteAsync(context, Problems.NotFound);
+                return;
+            }
+
             // Resolved per request, so a scoped registration is honoured rather than captured. A host
             // that registers no source fails closed: with nothing to ask, no call has a token, so each
             // is answered as a call with no session is rather than forwarded bare (plan row 4.2,
@@ -74,6 +86,13 @@ internal static class AccessTokenStep
                     await Problems.WriteAsync(context, Problems.SessionStoreUnavailable);
                     break;
 
+                // The session holds no usable set for this fragment, and is kept. An answer like
+                // SessionEnded's 401, not a rejection, so no rule id; the body names no fragment
+                // (contracts/http-contract.md -> Errors; #961, T5 decides when the source returns it).
+                case AccessTokenResult.FragmentLoginRequired:
+                    await Problems.WriteAsync(context, Problems.FragmentLoginRequired);
+                    break;
+
                 // An outcome the contract does not name. Never forwarded: with no token to attach the
                 // call would go on bare, and that is a decision, not a default. A 500.
                 default:
@@ -81,6 +100,29 @@ internal static class AccessTokenStep
                         $"IAccessTokenSource returned {result.GetType().Name}, which the proxy does not answer.");
             }
         });
+    }
+
+    /// <summary>
+    /// Whether the request's pins name the route's owner: the same app, and the same fragment or, on a
+    /// shell's route, none. The route's side is its metadata, which <see cref="RegistryProxyConfig"/>
+    /// writes from the snapshot; the request's is <see cref="IAppFeature"/> and
+    /// <see cref="IFragmentFeature"/>, which host resolution pins. A route with no metadata is no route
+    /// this proxy built, and fails too.
+    /// </summary>
+    private static bool PinMatchesRoute(HttpContext context)
+    {
+        IReadOnlyDictionary<string, string>? metadata = context.GetReverseProxyFeature().Route.Config.Metadata;
+        if (metadata is null || !metadata.TryGetValue(RegistryProxyConfig.AppIdKey, out string? routeApp))
+        {
+            return false;
+        }
+
+        metadata.TryGetValue(RegistryProxyConfig.FragmentIdKey, out string? routeFragment);
+        string? pinnedApp = context.Features.Get<IAppFeature>()?.App.AppId;
+        string? pinnedFragment = context.Features.Get<IFragmentFeature>()?.Fragment.FragmentId;
+
+        return string.Equals(pinnedApp, routeApp, StringComparison.Ordinal)
+            && string.Equals(pinnedFragment, routeFragment, StringComparison.Ordinal);
     }
 }
 

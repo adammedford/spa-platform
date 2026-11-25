@@ -24,8 +24,11 @@ public sealed class RegistryCommandTests : IDisposable
 
     private static string ExampleRelease => Harness.ExampleJson("registry.example.json")["apps"]![0]!["release"]!.GetValue<string>();
 
-    private Task PublishExampleRelease() =>
-        spactl.Store.SeedAsync($"apps/app1/releases/{ExampleRelease}/index.html", "<!doctype html>");
+    /// <summary>
+    /// Seeds what every registry write checks for the example: its shell's <c>index.html</c> and its
+    /// fragment's entry file, at the releases the example names.
+    /// </summary>
+    private Task PublishExampleRelease() => spactl.SeedExampleReleases();
 
     [Fact]
     public async Task Validate_offline_accepts_the_contract_example()

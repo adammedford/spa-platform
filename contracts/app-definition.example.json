@@ -10,5 +10,20 @@
     { "name": "orders", "upstream": "http://127.0.0.1:5080", "timeoutSeconds": 30 }
   ],
   "csp": { "img-src": ["data:"] },
-  "session": { "lifetimeMinutes": 480 }
+  "session": { "lifetimeMinutes": 480 },
+  "fragments": [
+    {
+      "fragmentId": "reports",
+      "oauth": {
+        "issuer": "cognito-poc",
+        "scopes": ["openid", "https://reports.spa-poc.test/read"],
+        "resource": "https://reports.spa-poc.test"
+      },
+      "apis": [
+        { "name": "reports", "upstream": "http://127.0.0.1:5081", "timeoutSeconds": 20 }
+      ],
+      "csp": { "img-src": ["https://images.spa-poc.test"] },
+      "entry": "entry.js"
+    }
+  ]
 }

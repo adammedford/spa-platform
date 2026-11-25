@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Test companion for tools/scripts/platform-tfvars.sh. Owner: workstream 1.
+"""Test companion for tools/scripts/poc/platform-tfvars.sh. Owner: workstream 1.
 
 #470, raised by #242: on the from-nothing run of 2026-10-27 the platform root's terraform.tfvars was
 rewritten by hand from the new identity root's outputs and the sample image's current digest, ECR
@@ -19,7 +19,7 @@ The file each case starts from is the root's own terraform.tfvars.example, read 
 what an operator has added to it after a first apply: an uncommented gateway_image and an issuers
 block from an earlier identity root, each with a comment of its own.
 
-Run: python3 -I tools/scripts/platform_tfvars_tests.py
+Run: python3 -I tools/scripts/poc/platform_tfvars_tests.py
 """
 
 from __future__ import annotations
@@ -29,13 +29,13 @@ import pathlib
 import re
 import sys
 
-_spec = importlib.util.spec_from_file_location("cell_doubles", pathlib.Path(__file__).resolve().parent / "cell_doubles.py")
+_spec = importlib.util.spec_from_file_location("cell_doubles", pathlib.Path(__file__).resolve().parent.parent / "cell_doubles.py")
 cell = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(cell)
 
 import unittest  # noqa: E402
 
-SCRIPT = "platform-tfvars.sh"
+SCRIPT = "poc/platform-tfvars.sh"
 # The script reads Terraform and Docker and makes no AWS call of its own, so every case takes the aws
 # double off PATH: a call would fail the case rather than be answered. cell_doubles_tests.py reads
 # this to expect no aws call in this companion's harvest.
@@ -146,7 +146,7 @@ class AFailedOrMalformedLookupLeavesTheFileAsItWas(Tfvars):
 
     # #1015: in sitting D the human had to find the digest the file already pinned to pass it back.
     def assertPinnedAdvice(self, result: cell.Result, digest: str):
-        self.assertIn(f"tools/scripts/platform-tfvars.sh --sample-digest {digest}", result.stderr)
+        self.assertIn(f"tools/scripts/poc/platform-tfvars.sh --sample-digest {digest}", result.stderr)
         self.assertNotIn("Try again later, or pass --sample-digest.", result.stderr)
 
     def assertPlainAdvice(self, result: cell.Result):
@@ -320,6 +320,184 @@ class AGoodRunChangesExactlyTheNamedKeys(Tfvars):
         (case.repo / TFVARS).chmod(0o640)
         self.assertEqual(0, case.run(SCRIPT).status)
         self.assertEqual(0o640, (case.repo / TFVARS).stat().st_mode & 0o777)
+
+
+# #1397, raised by #1395's triage: #1168 put the tunnel's hop behind bastion = true, off by default,
+# and deploy.sh and tunnel.sh refuse a cell without it, but nothing wrote it, so a from-nothing run
+# that followed this script reached deploy.sh with no hop and the image pinned by hand.
+OLD_BASTION_IMAGE = f"{SAMPLE}@sha256:" + "4" * 64
+
+# What an operator's file holds once the hop has been set by hand: bastion off again, and an older
+# bastion image, each under the example's commented line for it and with a comment of its own.
+BASTION_ADDITIONS = {
+    "# bastion       = true\n": "# bastion       = true\nbastion = false # off between sittings\n",
+    "# bastion_image = ": f'bastion_image = "{OLD_BASTION_IMAGE}" # pinned by hand\n# bastion_image = ',
+}
+
+
+def operator_file_with_bastion() -> str:
+    text = operator_file()
+    for old, new in BASTION_ADDITIONS.items():
+        assert text.count(old) == 1, f"the example no longer has one {old!r}"
+        text = text.replace(old, new)
+    return text
+
+
+class BastionWritesTheHopAndItsPin(Tfvars):
+
+    def test_the_bare_example_gains_both_keys_under_their_commented_lines(self):
+        start = EXAMPLE.read_text()
+        self.assertIsNone(re.search(r"(?m)^bastion(_image)?\s*=", start), "the example now sets a bastion key")
+        case = self.case(start)
+        result = case.run(SCRIPT, "--bastion")
+        self.assertEqual(0, result.status, result.output)
+        self.assertNoUnexpectedCall(case)
+        lines = self.tfvars(case).decode().splitlines()
+        hop = next(index for index, line in enumerate(lines) if line.startswith("# bastion "))
+        self.assertEqual("bastion = true", lines[hop + 1])
+        pin = next(index for index, line in enumerate(lines) if line.startswith("# bastion_image"))
+        # The same digest gateway_image is pinned by.
+        self.assertEqual(f'bastion_image = "{SAMPLE}@{CURRENT}"', lines[pin + 1])
+        self.assertIn(f'gateway_image = "{SAMPLE}@{CURRENT}"', lines)
+        self.assertIn("changed: gateway_image, issuers, bastion, bastion_image", result.stdout)
+        self.assertEqual(["terraform.tfvars"], self.neighbours(case))
+
+    def test_keys_the_file_sets_change_in_place_and_keep_their_comments(self):
+        start = operator_file_with_bastion()
+        case = self.case(start)
+        result = case.run(SCRIPT, "--bastion")
+        self.assertEqual(0, result.status, result.output)
+        expected = (start
+                    .replace(f'gateway_image = "{OLD_IMAGE}"', f'gateway_image = "{SAMPLE}@{CURRENT}"')
+                    .replace(f'authority      = "{OLD_AUTHORITY}"', f'authority      = "{self.issuer()}"')
+                    .replace(f'browser_origin = "{OLD_ORIGIN}"', f'browser_origin = "{self.origin()}"')
+                    .replace("bastion = false # off", "bastion = true # off")
+                    .replace(f'bastion_image = "{OLD_BASTION_IMAGE}"', f'bastion_image = "{SAMPLE}@{CURRENT}"'))
+        self.assertEqual(expected, self.tfvars(case).decode())
+        self.assertIn("bastion, bastion_image", result.stdout)
+        self.assertNotIn(OLD_BASTION_IMAGE, result.output)
+
+    def test_a_given_sample_digest_pins_the_bastion_too(self):
+        case = self.case(EXAMPLE.read_text())
+        case.remove("docker")
+        result = case.run(SCRIPT, "--bastion", "--sample-digest", GIVEN)
+        self.assertEqual(0, result.status, result.output)
+        self.assertEqual([], case.calls("docker"))
+        after = self.tfvars(case).decode()
+        self.assertIn(f'\nbastion_image = "{SAMPLE}@{GIVEN}"\n', after)
+        self.assertIn(f'\ngateway_image = "{SAMPLE}@{GIVEN}"\n', after)
+
+    def test_a_second_run_changes_nothing_and_says_so(self):
+        for name, start in (("the bare example", EXAMPLE.read_text()), ("the operator's file", operator_file_with_bastion())):
+            with self.subTest(file=name):
+                case = self.case(start)
+                self.assertEqual(0, case.run(SCRIPT, "--bastion").status)
+                once = self.tfvars(case)
+                result = case.run(SCRIPT, "--bastion")
+                self.assertEqual(0, result.status, result.output)
+                self.assertEqual(once, self.tfvars(case))
+                self.assertNotIn("changed:", result.stdout.replace("unchanged:", ""))
+                self.assertIn("bastion, bastion_image", result.stdout)
+
+    def test_a_failed_lookup_leaves_the_file_byte_identical(self):
+        for name, start in (("the bare example", EXAMPLE.read_text()), ("the operator's file", operator_file_with_bastion())):
+            for fault, digest in (("429", CURRENT), ("empty", ""), ("short", "sha256:517607ae")):
+                with self.subTest(file=name, fault=fault):
+                    case = self.case(start, digest=digest)
+                    if fault == "429":
+                        case.world["faults"]["imagetools"] = 429
+                        case.save()
+                    before = self.tfvars(case)
+                    result = case.run(SCRIPT, "--bastion")
+                    self.assertUnchanged(case, before, result, 1)
+                    self.assertIn(f"the digest lookup of {SAMPLE_REFERENCE}", result.stderr)
+                    self.assertNotIn(OLD_BASTION_IMAGE, result.output)
+
+    def test_a_bastion_key_in_a_shape_it_does_not_edit_is_left_alone(self):
+        start = operator_file_with_bastion()
+        files = {
+            # A string is no bool: Terraform would convert it, but this script writes only the bool.
+            "a quoted bastion": start.replace("bastion = false #", 'bastion = "false" #'),
+            "an expression": start.replace("bastion = false #", "bastion = !false #"),
+            "bastion set twice": start + "bastion = false\n",
+            "bastion_image set twice": start + f'bastion_image = "{OLD_BASTION_IMAGE}"\n',
+            "an interpolated bastion_image": start.replace(f'"{OLD_BASTION_IMAGE}"', '"${var.image}"'),
+        }
+        for name, content in files.items():
+            with self.subTest(file=name):
+                case = self.case(content)
+                before = self.tfvars(case)
+                result = case.run(SCRIPT, "--bastion")
+                self.assertUnchanged(case, before, result, 1)
+                self.assertIn("bastion", result.stderr)
+
+
+class WithoutBastionNeitherKeyIsWritten(Tfvars):
+
+    def test_the_bare_example_gains_no_bastion_key(self):
+        case = self.case(EXAMPLE.read_text())
+        result = case.run(SCRIPT)
+        self.assertEqual(0, result.status, result.output)
+        self.assertIsNone(re.search(r"(?m)^bastion(_image)?\s*=", self.tfvars(case).decode()))
+        self.assertNotIn("bastion", result.stdout)
+
+    def test_keys_the_file_sets_are_left_as_they_are(self):
+        start = operator_file_with_bastion()
+        case = self.case(start)
+        result = case.run(SCRIPT)
+        self.assertEqual(0, result.status, result.output)
+        after = self.tfvars(case).decode()
+        self.assertIn("\nbastion = false # off between sittings\n", after)
+        self.assertIn(f'\nbastion_image = "{OLD_BASTION_IMAGE}" # pinned by hand\n', after)
+        self.assertNotIn("bastion", result.stdout)
+
+    def test_a_bastion_key_it_does_not_edit_does_not_stop_the_run(self):
+        # Without the option the script reads no bastion key, so a shape it would refuse is no concern.
+        start = operator_file_with_bastion() + "bastion = false\n"
+        case = self.case(start)
+        result = case.run(SCRIPT)
+        self.assertEqual(0, result.status, result.output)
+        self.assertTrue(self.tfvars(case).decode().endswith("bastion = false\n"))
+
+
+# #1380: the sample image runs as uid 101 and writes under /tmp, which the gateway's read-only root
+# mounts root-owned 0755, so the sample's first apply needs gateway_writable_root = true
+# (infra/modules/cell/variables.tf). deploy.sh applies the gateway with false and records it in
+# images.auto.tfvars, which Terraform loads after this file, so this file's true never reaches it.
+class TheSampleGetsAWritableRoot(Tfvars):
+
+    def test_a_file_without_the_key_gains_it_as_true(self):
+        start = EXAMPLE.read_text().replace("gateway_writable_root = true\n", "")
+        self.assertIsNone(re.search(r"(?m)^gateway_writable_root\s*=", start), "the example sets it twice")
+        case = self.case(start)
+        result = case.run(SCRIPT)
+        self.assertEqual(0, result.status, result.output)
+        self.assertIn("\ngateway_writable_root = true\n", self.tfvars(case).decode())
+        self.assertRegex(result.stdout, r"changed: [^\n]*gateway_writable_root")
+
+    def test_a_false_left_by_hand_is_set_back_to_true_in_place(self):
+        start = operator_file().replace("gateway_writable_root = true\n", "gateway_writable_root = false # by hand\n")
+        self.assertIn("gateway_writable_root = false # by hand\n", start)
+        case = self.case(start)
+        result = case.run(SCRIPT)
+        self.assertEqual(0, result.status, result.output)
+        after = self.tfvars(case).decode()
+        self.assertIn("\ngateway_writable_root = true # by hand\n", after)
+        self.assertEqual(1, len(re.findall(r"(?m)^gateway_writable_root\s*=", after)))
+        self.assertRegex(result.stdout, r"changed: [^\n]*gateway_writable_root")
+
+    def test_the_example_already_says_true_so_it_is_named_unchanged(self):
+        case = self.case(operator_file())
+        result = case.run(SCRIPT)
+        self.assertEqual(0, result.status, result.output)
+        self.assertRegex(result.stdout, r"unchanged: [^\n]*gateway_writable_root")
+
+    def test_a_quoted_value_is_refused_and_the_file_left_as_it_was(self):
+        case = self.case(operator_file().replace("gateway_writable_root = true\n", 'gateway_writable_root = "true"\n'))
+        before = self.tfvars(case)
+        result = case.run(SCRIPT)
+        self.assertUnchanged(case, before, result, 1)
+        self.assertIn("gateway_writable_root", result.stderr)
 
 
 if __name__ == "__main__":

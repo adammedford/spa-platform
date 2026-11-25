@@ -10,7 +10,7 @@ not "service".
 
 | Direction | Rule |
 | --- | --- |
-| Sent upstream | Method, query and body unchanged. Path with `/api/{name}` removed. `Authorization: Bearer` with the session's access token. `X-Forwarded-For`, `X-Forwarded-Proto` and `X-Forwarded-Host` set by the gateway. `traceparent`. |
+| Sent upstream | Method, query and body unchanged. Path with `/api/{name}` removed, or `/fragments/{fragmentId}/api/{name}` on a fragment's route. `Authorization: Bearer` with the access token of the token set the route belongs to: the shell's on a shell route, the fragment's on that fragment's route. `X-Forwarded-For`, `X-Forwarded-Proto` and `X-Forwarded-Host` set by the gateway. `traceparent`. |
 | Never sent upstream | `Cookie`. Any `Authorization` the browser sent. `X-CSRF-TOKEN`. Forwarding headers the browser supplied: `Forwarded`, `Via`, `X-Real-IP`, and every `X-Forwarded-*` and `X-Original-*`. A list of names is never complete, so an API trusts only the three headers the gateway sets. |
 | Checked by the API | Signature against the issuer's keys. `iss`. `exp`. For Cognito, `token_use` is `access`. `client_id` is on the API's own allowlist. The scope the route needs. `aud` equals the API's identifier when resource binding is on. |
 | Returned to the browser | Status, headers and body from the upstream, minus `Set-Cookie` and `Access-Control-*`, whatever the upstream's status. The gateway's security headers replace the upstream's. Redirects are passed through, never followed. |
@@ -22,11 +22,31 @@ because it has not admitted that client.
 
 ## One token per app
 
-Phase 1 gives each app one access token, so one audience. An app with several upstreams sends the
-same token to each. That is safe only when those upstreams share a trust domain, and the validator
-warns when an entry lists more than one upstream origin. The warning is not expressible in
-`registry.schema.json`, which has no notion of a warning; task 2.1 raises it and keeps it apart from
-the errors.
+Phase 1 gives each app one access token, so one audience, and each fragment of a shell its own
+(Fragment routes, below). An app with several upstreams sends the same token to each. That is safe
+only when those upstreams share a trust domain, and the validator warns when one token set's APIs
+name more than one upstream origin: it counts the shell's `apis[]` and each fragment's apart, so an
+upstream the shell and a fragment both name counts once in each and does not by itself warn. The
+warning is not expressible in `registry.schema.json`, which has no notion of a warning; task 2.1
+raises it and keeps it apart from the errors.
+
+## Fragment routes
+
+A fragment's API is served under `/fragments/{fragmentId}/api/{name}/`, one route for each entry of
+the fragment's `apis[]`, and its `name` is in the fragment's own namespace: the shell's names and
+each fragment's are separate, so one name may appear in several. The proxy removes
+`/fragments/{fragmentId}/api/{name}` as it removes `/api/{name}` from a shell's route, so an upstream
+receives the same path under either. A route's id names whose it is: `{appId}/{name}` for a shell's
+API, `{appId}/fragments/{fragmentId}/{name}` for a fragment's.
+
+An upstream that the shell and a fragment both name is two routes, each with its own id and its own
+token: the shell's route carries the shell's client's token and the fragment's route the fragment's,
+and neither ever carries the other's. Both routes remove their prefix, so the upstream receives the
+same path from each and tells them apart only by the token: it sees two `client_id`s and admits each
+on its own allowlist, because the gateway's choice of token is not its check. Each token's `aud` is
+what its own `oauth` block's `resource` bound, so an upstream that binds its audience refuses a
+client whose `resource` does not name it. A call that reaches an API with a client it has not
+admitted is refused by the API, `403` `client_not_admitted`, as F-07's is.
 
 ## Timeouts and failures
 
@@ -34,7 +54,7 @@ the errors.
 | --- | --- |
 | The upstream could not be reached | 502 `upstream_unavailable` |
 | The upstream stayed silent past the entry's `timeoutSeconds` before sending its response headers | 504 `upstream_timeout` |
-| The app lists no upstream under that name | 404 `unknown_api`, and no upstream sees the request |
+| The app, or the fragment the path names, lists no upstream under that name | 404 `unknown_api`, and no upstream sees the request |
 
 `timeoutSeconds` is an idle limit. The proxy restarts it on the response headers and on every body
 read or write, so it bounds how long an upstream may stay silent, not how long a call may take;

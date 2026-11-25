@@ -61,19 +61,32 @@ public static partial class TerraformPlan
     /// <c>main.tf</c>, each of which must be keyed by app (<c>for_each = local.apps</c>), with the app's
     /// id as its key, in ordinal order. A block keyed any other way is refused, because onboarding
     /// would then plan something that is not the app's (P-02's rule, infra/envs/poc/apps/README.md -> Tests).
+    ///
+    /// <para>A block keyed by fragment (<c>for_each = local.fragments</c>) is the app's too: #961 has the
+    /// apps root create each fragment's client, style and secret from the shell's definition, so
+    /// onboarding one is one change to that definition (stories 15 and 28), and #999 keys them
+    /// <c>"&lt;appId&gt;.&lt;fragmentId&gt;"</c>. Such a block adds one address per id in
+    /// <paramref name="fragmentIds"/>, and none for an app with no fragments.</para>
     /// </summary>
-    public static string[] PerAppAddresses(string mainTf, string appId)
+    public static string[] PerAppAddresses(string mainTf, string appId, params string[] fragmentIds)
     {
         List<string> addresses = [];
         foreach (Match block in ResourceBlock().Matches(mainTf))
         {
             string address = $"{block.Groups["type"].Value}.{block.Groups["name"].Value}";
-            if (!PerApp().IsMatch(block.Groups["body"].Value))
+            string body = block.Groups["body"].Value;
+            if (PerApp().IsMatch(body))
             {
-                throw new InvalidOperationException($"the apps root's {address} is not keyed by app (for_each = local.apps), so onboarding an app would plan more than that app's resources.");
+                addresses.Add($"{address}[\"{appId}\"]");
             }
-
-            addresses.Add($"{address}[\"{appId}\"]");
+            else if (PerFragment().IsMatch(body))
+            {
+                addresses.AddRange(fragmentIds.Select(fragmentId => $"{address}[\"{appId}.{fragmentId}\"]"));
+            }
+            else
+            {
+                throw new InvalidOperationException($"the apps root's {address} is not keyed by app (for_each = local.apps) or by an app's fragment (for_each = local.fragments), so onboarding an app would plan more than that app's resources.");
+            }
         }
 
         return [.. addresses.Order(StringComparer.Ordinal)];
@@ -84,6 +97,9 @@ public static partial class TerraformPlan
 
     [GeneratedRegex(@"^\s*for_each\s*=\s*local\.apps\s*$", RegexOptions.Multiline, RegexTimeout.Milliseconds)]
     private static partial Regex PerApp();
+
+    [GeneratedRegex(@"^\s*for_each\s*=\s*local\.fragments\s*$", RegexOptions.Multiline, RegexTimeout.Milliseconds)]
+    private static partial Regex PerFragment();
 }
 
 /// <summary>One change a plan makes: the resource's address and its actions joined by commas (<c>create</c>, <c>delete,create</c>). No value.</summary>

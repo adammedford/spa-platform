@@ -62,7 +62,7 @@ internal sealed class Harness : IDisposable
     /// one, the config path (spactl refuses an option its command does not read).
     /// </summary>
     public Task<int> Run(params string[] args) =>
-        args is ["release", "publish", ..]
+        args is ["release", "publish", ..] or ["fragment", "publish", ..]
             ? RunRaw([.. args, "--outputs", OutputsPath])
             : RunRaw([.. args, "--config", ConfigPath, "--outputs", OutputsPath]);
 
@@ -101,6 +101,27 @@ internal sealed class Harness : IDisposable
         string path = Path.Combine(scratch, name);
         Directory.CreateDirectory(path);
         return path;
+    }
+
+    /// <summary>
+    /// Seeds, as an earlier publish would have, what every registry write checks for
+    /// contracts/registry.example.json: each shell's <c>index.html</c> and each fragment's entry file,
+    /// at the releases it names, read from the example.
+    /// </summary>
+    public async Task SeedExampleReleases()
+    {
+        foreach (JsonNode? app in ExampleJson("registry.example.json")["apps"]!.AsArray())
+        {
+            string appId = app!["appId"]!.GetValue<string>();
+            await Store.SeedAsync($"apps/{appId}/releases/{app["release"]!.GetValue<string>()}/index.html", "<!doctype html>");
+            foreach (JsonNode? fragment in app["fragments"]?.AsArray() ?? [])
+            {
+                await Store.SeedAsync(
+                    $"apps/{appId}/fragments/{fragment!["fragmentId"]!.GetValue<string>()}/releases/" +
+                    $"{fragment["release"]!.GetValue<string>()}/{fragment["entry"]?.GetValue<string>() ?? PlatformPaths.DefaultEntry}",
+                    "export {};");
+            }
+        }
     }
 
     public async Task<JsonObject> LiveRegistry() =>

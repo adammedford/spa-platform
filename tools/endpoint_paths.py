@@ -10,10 +10,10 @@ and `GET /bff/session` is the endpoint. It took three round trips with the human
 blamed the runbook, and nothing read the path a skill named against the contract.
 
 It reads the tracked files of the repository it runs in, from the top level: every `.md` file under
-`.claude/skills/` at any depth, every `.md` file directly in `docs/runbooks/`, and
-`docs/plan/04-tests.md`. In them it collects every path that begins `/bff/`, `/api/`, `/readyz` or
-`/healthz`, ending at the first character that cannot be part of a path, and with any query string
-and trailing full stop dropped. A path counts at the start of a line, after a character that cannot
+`.claude/skills/` at any depth, every `.md` file directly in `docs/runbooks/` or in the proof cell's
+`docs/runbooks/poc/` (#1337), and `docs/plan/04-tests.md`. In them it collects every path that
+begins `/bff/`, `/api/`, `/readyz` or `/healthz`, ending at the first character that cannot be part
+of a path, and with any query string and trailing full stop dropped. A path counts at the start of a line, after a character that cannot
 end a file-system path segment (so `tests/api/x` is not one), or after a URL's host
 (`https://app1.spa-poc.test/bff/user` is) or a host and port with no scheme (`localhost:5180/readyz`
 is, since `curl` takes an address with its scheme left out). A bare prefix, `/bff/` or `/api/` with nothing after it
@@ -26,9 +26,9 @@ guards"):
 - a path the first cell of a row of the Endpoints table names, such as `GET /bff/session`; a cell
   naming a path with a `{placeholder}`, `/api/{name}/{rest}`, makes known every path that begins
   with the text before its first placeholder, so an `/api/` path matches on its prefix;
-- a path the reserved-paths sentence after the table names ("An SPA cannot serve content under
-  ..."), except one ending `/`, which names a prefix and makes no path under it known: `/healthz`
-  and `/readyz` are known, `/bff/user` is not.
+- a path the reserved-paths sentence after the table names ("A path reserved outright is served
+  from no release ...", #982), except one ending `/`, which names a prefix and makes no path under
+  it known: `/healthz` and `/readyz` are known, `/bff/user` is not.
 
 It prints each unknown path as `endpoint-paths: <file>:<line>: <path> is not an endpoint
 contracts/http-contract.md makes known` on stderr, then one verdict line on stdout,
@@ -48,9 +48,9 @@ import sys
 
 ME = "endpoint-paths"
 CONTRACT = "contracts/http-contract.md"
-SENTENCE = "An SPA cannot serve content under"
+SENTENCE = "A path reserved outright is served from no release"
 # Where a path a session steers by is written: the skills, the runbooks and the test catalogue.
-READ = (re.compile(r"\.claude/skills/.+\.md"), re.compile(r"docs/runbooks/[^/]+\.md"),
+READ = (re.compile(r"\.claude/skills/.+\.md"), re.compile(r"docs/runbooks/(?:poc/)?[^/]+\.md"),
         re.compile(r"docs/plan/04-tests\.md"))
 PATH = re.compile(r"/(?:bff|api)/[A-Za-z0-9_.~{}*/-]*|/(?:readyz|healthz)[A-Za-z0-9_.~{}*/-]*")
 # A character that ends a file-system path segment before a `/`: `tests/api` is a directory.

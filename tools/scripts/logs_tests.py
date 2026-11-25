@@ -20,7 +20,7 @@ record's category and the health route are read from the gateway's source and th
 contract, so a change to either runs these cases.
 
 Run: python3 -I tools/scripts/logs_tests.py
-Checkout inputs: src/Platform.Telemetry/RequestTelemetry.cs contracts/telemetry.md
+Checkout inputs: src/Platform.Telemetry/RequestTelemetry.cs contracts/telemetry.md infra/envs/poc/cell.env infra/envs/poc/outputs-fields.json
 """
 
 from __future__ import annotations
@@ -284,7 +284,9 @@ class LogsRefuses(cell.CompanionTestCase):
                 self.assertEqual([], case.calls("aws"))
 
     def test_no_outputs_document(self):
-        case, _ = self.refused("seed.sh", outputs=False)
+        # How the document is written, and not the proof cell's own script (#1349).
+        case, result = self.refused("written from the cell's roots' outputs after an apply", outputs=False)
+        self.assertNotIn("seed.sh", result.stderr)
         self.assertEqual([], case.aws("logs tail"))
 
     def test_a_read_aws_refuses_names_its_code_and_no_message(self):
@@ -293,6 +295,58 @@ class LogsRefuses(cell.CompanionTestCase):
         # The message carries the caller's ARN, and so the account id: Case.run's universal fails
         # the case if the script printed it.
         self.refused("AccessDeniedException", status=1, world=world)
+
+
+class LogsElidesAFragmentsClientId(cell.CompanionTestCase):
+    """#999: the outputs document nests each fragment's client under its shell
+    (clients.{appId}.fragments.{fragmentId}), and the redaction elides a fragment's client id as it
+    does a shell's. Before #999, cell_documents.py clients listed only the top level, so a fragment's
+    id was printed as it stood."""
+
+    def test_a_fragment_client_id_comes_out_as_its_app_and_fragment(self):
+        world = logged_world()
+        world["roots"]["apps"]["clients"]["shell"] = {
+            "clientId": "1example23456789shellclient", "secretParameter": "/spa-platform/poc/apps/shell/client-secret",
+            "secretVersion": 1,
+            "fragments": {"orders": {"clientId": "7nestedfragmentordersclient",
+                                     "secretParameter": "/spa-platform/poc/apps/shell/fragments/orders/client-secret",
+                                     "secretVersion": 1}}}
+        world["log_events"] = [[f"{cell.GATEWAY}/{cell.GATEWAY}/t",
+                                "refresh for shell 1example23456789shellclient and fragment 7nestedfragmentordersclient"]]
+        case = cell.Case(self, outputs=True, world=world)
+        result = case.run(SCRIPT)
+        self.assertEqual(0, result.status, result.output)
+        self.assertNoUnexpectedCall(case)
+        self.assertNotIn("7nestedfragmentordersclient", result.output)
+        self.assertIn("refresh for shell <client-id:shell> and fragment <client-id:shell:orders>", result.stdout)
+
+
+class LogsTakesTheOutputsDocumentFromTheEntryValue(cell.CompanionTestCase):
+    """#1348: the outputs document is SPA_OUTPUTS_FILE, with no default, and the only entry value it
+    reads."""
+
+    def test_the_outputs_document_unset_exits_2_naming_it_before_any_call(self):
+        for value in (None, ""):
+            with self.subTest(value=value):
+                case = cell.Case(self, outputs=True, world=logged_world())
+                result = case.run(SCRIPT, env=case.env(SPA_OUTPUTS_FILE=value))
+                self.assertEqual(2, result.status, result.output)
+                self.assertIn("SPA_OUTPUTS_FILE is not set", result.stderr)
+                self.assertEqual([], case.calls())
+
+    def test_it_reads_no_other_entry_value(self):
+        case = cell.Case(self, outputs=True, world=logged_world())
+        others = {name: None for name in cell.ENTRY_NAMES if name != "SPA_OUTPUTS_FILE"}
+        result = case.run(SCRIPT, env=case.env(**others))
+        self.assertEqual(0, result.status, result.output)
+
+    def test_help_names_no_profile(self):
+        case = cell.Case(self)
+        result = case.run(SCRIPT, "--help", env=case.env(**{name: None for name in cell.ENTRY_NAMES}))
+        self.assertEqual(0, result.status, result.output)
+        self.assertNotIn("the spa-platform profile", result.stdout)
+        self.assertNotIn("tools/aws-project.env", result.stdout)
+        self.assertNotIn("infra/envs/", result.stdout)
 
 
 if __name__ == "__main__":

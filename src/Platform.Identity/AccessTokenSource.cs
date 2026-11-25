@@ -12,7 +12,9 @@ namespace Platform.Identity;
 
 /// <summary>
 /// The access token for this request's session, refreshed when it is within a minute of expiry
-/// (plan row 3.8, ADR-0005, ADR-0017).
+/// (plan row 3.8, ADR-0005, ADR-0017). On a fragment's route (<see cref="IFragmentFeature"/>) it is that
+/// fragment's token set's token and never the shell's; each token set has its own session gate, its own
+/// refresh lease key and its own scheme, and everything below holds per set (#995, <see cref="TokenSet"/>).
 ///
 /// The gateway owns the orchestration and the library owns the protocol. Under the session's gate this
 /// takes the session from the store, not from the ticket the request authenticated with, decides whether
@@ -96,12 +98,13 @@ internal sealed partial class AccessTokenSource(
     /// </summary>
     internal static readonly TimeSpan RefreshBeforeExpiry = TimeSpan.FromMinutes(1);
 
-    private const string AccessTokenName = "access_token";
-    private const string RefreshTokenName = "refresh_token";
-    private const string ExpiresAtName = "expires_at";
-    private const string IdTokenName = "id_token";
+    /// <summary>
+    /// How many versioned replaces a refresh's write makes at most, the first included (#995 -> "Writes
+    /// after a lost versioned replace").
+    /// </summary>
+    internal const int WriteAttempts = 3;
 
-    /// <param name="context">The request, pinned to its app by host resolution.</param>
+    /// <param name="context">The request, pinned to its app by host resolution, and to a fragment on a fragment route.</param>
     /// <param name="ct">Not used, deliberately: see the class summary (T-B16).</param>
     public async ValueTask<AccessTokenResult> GetAsync(HttpContext context, CancellationToken ct)
     {
@@ -120,9 +123,12 @@ internal sealed partial class AccessTokenSource(
             return new AccessTokenResult.Unauthenticated();
         }
 
+        // On a fragment route the answer is that fragment's set and never the shell's (#995): host
+        // resolution pins the fragment, from the same snapshot as the app (contracts/pipeline.md).
+        TokenSet set = context.Features.Get<IFragmentFeature>()?.Fragment is { } fragment ? TokenSet.Of(fragment) : TokenSet.Shell;
         try
         {
-            return await ForSessionAsync(context, app, key);
+            return await ForSetAsync(context, new Refresh(app, key, set));
         }
         catch (SessionStoreUnavailableException e)
         {
@@ -134,17 +140,19 @@ internal sealed partial class AccessTokenSource(
         }
     }
 
-    /// <summary>The answer for the session under <paramref name="key"/>, under its gate.</summary>
-    private async Task<AccessTokenResult> ForSessionAsync(HttpContext context, AppDefinition app, string key)
+    /// <summary>The answer for one token set of the session, under that set's gate.</summary>
+    private async Task<AccessTokenResult> ForSetAsync(HttpContext context, Refresh refresh)
     {
-        using AppSessions.Turn turn = await sessions.EnterAsync(app, key);
+        using AppSessions.Turn turn = refresh.Set.Fragment is { } fragment
+            ? await sessions.EnterAsync(context, refresh.App, refresh.Key, fragment)
+            : await sessions.EnterAsync(refresh.App, refresh.Key);
 
         switch (turn.WhileWaiting)
         {
             case RefreshOutcome.Unavailable:
                 return new AccessTokenResult.ProviderUnavailable();
             case RefreshOutcome.Ended:
-                return new AccessTokenResult.SessionEnded();
+                return refresh.EndedAnswer;
             case RefreshOutcome.AtStoreBound:
                 // A waiter answers as the turn it inherits did; the line is that turn's (#727).
                 Rejection.Note(context, RuleIds.AuthStore);
@@ -156,36 +164,44 @@ internal sealed partial class AccessTokenSource(
             return new AccessTokenResult.Unauthenticated();
         }
 
-        if (FreshAccess(record) is { } access)
+        if (FreshAccess(record, refresh.Set) is { } access)
         {
             return new AccessTokenResult.Token(access);
         }
 
-        if (leases is null)
+        if (Absent(record, refresh.Set))
         {
-            return (await RefreshAsync(context, app, key, turn, record)).Answer;
+            // No set to refresh: answered before any lease is asked for, so a fragment route with no set
+            // costs the lease table nothing.
+            return new AccessTokenResult.FragmentLoginRequired();
         }
 
-        return await UnderTheLeaseAsync(context, app, key, turn, leases);
+        if (leases is null)
+        {
+            // The no-lease path counts the write deadline from the gated read (#995).
+            return (await RefreshAsync(context, refresh, turn, record, clock.GetTimestamp())).Answer;
+        }
+
+        return await UnderTheLeaseAsync(context, refresh, turn, leases);
     }
 
     /// <summary>
-    /// The holder's and the loser's loop (change request P2-3, Decision item 4). Each pass asks for the
-    /// lease; holding it, reads the record and refreshes when the check allows; otherwise waits
-    /// <see cref="LoserPoll"/> and reads the record again. Every store call here runs with
-    /// <see cref="CancellationToken.None"/> (T-B15, T-B16).
+    /// The holder's and the loser's loop (change request P2-3, Decision item 4), on the set's own lease
+    /// key. Each pass asks for the lease; holding it, reads the record and refreshes when the check
+    /// allows; otherwise waits <see cref="LoserPoll"/> and reads the record again. Every store call here
+    /// runs with <see cref="CancellationToken.None"/> (T-B15, T-B16).
     /// </summary>
-    private async Task<AccessTokenResult> UnderTheLeaseAsync(
-        HttpContext context, AppDefinition app, string key, AppSessions.Turn turn, IRefreshLeases table)
+    private async Task<AccessTokenResult> UnderTheLeaseAsync(HttpContext context, Refresh refresh, AppSessions.Turn turn, IRefreshLeases table)
     {
+        string leaseKey = refresh.Set.LeaseKey(refresh.Key);
         long arrived = clock.GetTimestamp();
         while (true)
         {
             // The clock starts before the request is sent: what the check charges against the lease is
             // the acquire and the re-read under it together, timed from here (#332 D2; change request
-            // P2-3's second amendment).
+            // P2-3's second amendment). The refresh's write deadline counts from here too (#995).
             long asked = clock.GetTimestamp();
-            if (await table.TryAcquireAsync(key, timeToLive, CancellationToken.None) is { } lease)
+            if (await table.TryAcquireAsync(leaseKey, timeToLive, CancellationToken.None) is { } lease)
             {
                 // "store_failed" is the label for the one way out not written below: a store call that
                 // threw, the F3b and F17 path, whose exception reaches the caller after the release.
@@ -198,7 +214,7 @@ internal sealed partial class AccessTokenSource(
                         return new AccessTokenResult.Unauthenticated();
                     }
 
-                    if (FreshAccess(current) is { } written)
+                    if (FreshAccess(current, refresh.Set) is { } written)
                     {
                         // Another task refreshed between this turn's read and the lease: its token is good.
                         outcome = "unchanged";
@@ -208,17 +224,17 @@ internal sealed partial class AccessTokenSource(
 
                     if (options.MayCallProvider(clock.GetElapsedTime(asked)))
                     {
-                        (AccessTokenResult answer, RefreshOutcome ended) = await RefreshAsync(context, app, key, turn, current);
+                        (AccessTokenResult answer, RefreshOutcome ended) = await RefreshAsync(context, refresh, turn, current, asked);
                         outcome = OutcomeName(ended);
                         return answer;
                     }
 
                     outcome = "too_little_lease";
-                    TooLittleLease(logger, app.AppId, SessionRef.Of(key));
+                    LogTooLittleLease(refresh);
                 }
                 finally
                 {
-                    await ReleaseAsync(table, app, key, lease, outcome);
+                    await ReleaseAsync(table, refresh, leaseKey, lease, outcome);
                 }
             }
 
@@ -230,7 +246,7 @@ internal sealed partial class AccessTokenSource(
                 // "lease exhaustion", which answers under auth.store and not as a provider outage (#729's
                 // decision, part 4; #727). Its own Warning line keeps the cause apart from a failed call.
                 turn.Finish(new RefreshOutcome.AtStoreBound());
-                NoLease(logger, app.AppId, SessionRef.Of(key));
+                LogNoLease(refresh);
                 Rejection.Note(context, RuleIds.AuthStore);
                 return new AccessTokenResult.StoreUnavailable();
             }
@@ -241,7 +257,7 @@ internal sealed partial class AccessTokenSource(
                 return new AccessTokenResult.Unauthenticated();
             }
 
-            if (FreshAccess(reread) is { } holders)
+            if (FreshAccess(reread, refresh.Set) is { } holders)
             {
                 // The holder's refresh is written, and its token is the answer. Item 4 waits "until the
                 // version moves"; a token no longer due is the stricter test, since a version that moved
@@ -254,18 +270,26 @@ internal sealed partial class AccessTokenSource(
     }
 
     /// <summary>
-    /// The refresh itself, on the record this caller holds the gate (and the lease, when there is one)
-    /// for, which is due: the library's call, then the write, the refusal's re-read or the end. Returns
-    /// the answer and how the refresh ended, which the callers queued on the gate share (T-D6).
+    /// The refresh itself, on the record this caller holds the set's gate (and the lease, when there is
+    /// one) for, which is due: the library's call, then the write, the refusal's re-read or the end.
+    /// Returns the answer and how the refresh ended, which the callers queued on the gate share (T-D6).
     /// </summary>
+    /// <param name="writeFrom">The monotonic timestamp the write deadline counts from: the acquire's send, or the gated read.</param>
     private async Task<(AccessTokenResult Answer, RefreshOutcome Outcome)> RefreshAsync(
-        HttpContext context, AppDefinition app, string key, AppSessions.Turn turn, SessionRecord record)
+        HttpContext context, Refresh refresh, AppSessions.Turn turn, SessionRecord record, long writeFrom)
     {
         AuthenticationTicket ticket = Deserialize(record);
-        if (ticket.Properties.GetTokenValue(RefreshTokenName) is not { Length: > 0 } refreshToken)
+        if (refresh.Set.Token(ticket.Properties, TokenSet.RefreshTokenName) is not { } refreshToken)
         {
-            // Nothing to refresh with, so the session can never yield a token again.
-            await EndAsync(context, app, turn);
+            if (refresh.Set.Fragment is not null)
+            {
+                // A fragment's set with nothing to refresh with ends nothing: the record and every other set
+                // stay, and the call answers as for no usable set (#995 -> "Expiry").
+                return (new AccessTokenResult.FragmentLoginRequired(), new RefreshOutcome.Unavailable());
+            }
+
+            // Nothing to refresh the shell's set with, so the session can never yield a token again.
+            await EndAsync(context, refresh.App, turn);
             return Finished(turn, new AccessTokenResult.SessionEnded(), new RefreshOutcome.Ended());
         }
 
@@ -276,39 +300,87 @@ internal sealed partial class AccessTokenSource(
         // gate share the refusal (T-D6), and the lease path's finally gives the lease back.
         if (lifetime.ApplicationStopping.IsCancellationRequested)
         {
-            RefusedAtStop(logger, app.AppId, SessionRef.Of(key));
+            RefusedAtStop(logger, refresh.App.AppId, SessionRef.Of(refresh.Key));
             return Finished(turn, new AccessTokenResult.ProviderUnavailable(), new RefreshOutcome.Unavailable());
         }
 
-        (UserToken? token, string? error) = await CallProviderAsync(app, refreshToken);
+        (UserToken? token, string? error) = await CallProviderAsync(refresh, refreshToken);
 
         if (token is not null)
         {
             turn.Finish(new RefreshOutcome.Refreshed());
-            Refreshed(logger, app.AppId, SessionRef.Of(key));
-            return (await StoreAsync(app, key, turn, record, ticket, token), new RefreshOutcome.Refreshed());
+            LogRefreshed(refresh);
+            return (await WriteAsync(refresh, turn, record, refreshToken, token, writeFrom), new RefreshOutcome.Refreshed());
         }
 
         if (error != OidcConstants.TokenErrors.InvalidGrant)
         {
-            RefreshFailed(logger, app.AppId, SessionRef.Of(key), error!);
+            LogRefreshFailed(refresh, error!);
             return Finished(turn, new AccessTokenResult.ProviderUnavailable(), new RefreshOutcome.Unavailable());
         }
 
-        // Refused. Another writer may have refreshed the session in between, so it rotated the refresh
-        // token this call presented: then the record holds its successor, and its access token is good.
-        if (await sessions.ReadAsync(app, key, CancellationToken.None) is { } reread
+        // Refused. Another writer may have refreshed the set in between, so it rotated the refresh token
+        // this call presented: then the record holds its successor, and its access token is good.
+        SessionRecord? reread = await turn.RereadAsync();
+        if (reread is not null
             && Deserialize(reread).Properties is var current
-            && current.GetTokenValue(RefreshTokenName) is { Length: > 0 } newer
+            && refresh.Set.Token(current, TokenSet.RefreshTokenName) is { } newer
             && !string.Equals(newer, refreshToken, StringComparison.Ordinal)
-            && current.GetTokenValue(AccessTokenName) is { Length: > 0 } newerAccess)
+            && refresh.Set.Token(current, TokenSet.AccessTokenName) is { } newerAccess)
         {
             return Finished(turn, new AccessTokenResult.Token(newerAccess), new RefreshOutcome.Refreshed());
         }
 
-        await EndAsync(context, app, turn);
-        Ended(logger, app.AppId, SessionRef.Of(key));
+        if (refresh.Set.Fragment is { } fragment)
+        {
+            // A removal that found the record gone leaves its waiters nothing to inherit: each reads the
+            // record itself and answers unauthenticated, as this call does (the W3 "missing" row), rather
+            // than fragment_login_required for a session that no longer exists (#995 review).
+            AccessTokenResult endedSet = await EndFragmentSetAsync(refresh, fragment, turn, refreshToken);
+            return endedSet is AccessTokenResult.Unauthenticated
+                ? (endedSet, new RefreshOutcome.Ended())
+                : Finished(turn, endedSet, new RefreshOutcome.Ended());
+        }
+
+        // The shell's refusal ends the record, unconditionally (the W3 row).
+        await EndAsync(context, refresh.App, turn);
+        Ended(logger, refresh.App.AppId, SessionRef.Of(refresh.Key));
         return Finished(turn, new AccessTokenResult.SessionEnded(), new RefreshOutcome.Ended());
+    }
+
+    /// <summary>
+    /// A fragment's <c>invalid_grant</c> ends that set alone (#995 -> "Expiry"): a bounded versioned
+    /// replace that removes the set only while it still holds the refresh token the refresh presented,
+    /// so a set another writer has since replaced is left as it is. The record and every other set stay,
+    /// no cookie is touched, and the call answers 401 <c>fragment_login_required</c>, also when the
+    /// removal ran out of attempts. A record gone on the re-read, which the bounded write reads as missing, authenticates nobody.
+    /// </summary>
+    private async Task<AccessTokenResult> EndFragmentSetAsync(Refresh refresh, FragmentDefinition fragment, AppSessions.Turn turn, string presented)
+    {
+        MergeResult result;
+        try
+        {
+            result = await turn.MergeAsync(
+                current => Changed(current, p =>
+                {
+                    if (!string.Equals(refresh.Set.Token(p, TokenSet.RefreshTokenName), presented, StringComparison.Ordinal))
+                    {
+                        return false;
+                    }
+
+                    FragmentSets.Remove(p, fragment.FragmentId);
+                    return true;
+                }),
+                WriteAttempts, options.StoreDeadline, clock);
+        }
+        catch (MergeFailedException e)
+        {
+            FragmentEnded(logger, refresh.App.AppId, fragment.FragmentId, SessionRef.Of(refresh.Key), "unconfirmed", e.Attempts);
+            throw e.Failure;
+        }
+
+        FragmentEnded(logger, refresh.App.AppId, fragment.FragmentId, SessionRef.Of(refresh.Key), MergeOutcomeName(result.Outcome), result.Attempts);
+        return result.Outcome == MergeOutcome.Missing ? new AccessTokenResult.Unauthenticated() : new AccessTokenResult.FragmentLoginRequired();
     }
 
     private static (AccessTokenResult, RefreshOutcome) Finished(AppSessions.Turn turn, AccessTokenResult answer, RefreshOutcome outcome)
@@ -322,15 +394,15 @@ internal sealed partial class AccessTokenSource(
     /// key, and never reaches the caller: the lease lapses on its own (change request P2-3, Decision item 5).
     /// Only the exception's type is logged, since a store's message is text this code does not control.
     /// </summary>
-    private async Task ReleaseAsync(IRefreshLeases table, AppDefinition app, string key, RefreshLease lease, string outcome)
+    private async Task ReleaseAsync(IRefreshLeases table, Refresh refresh, string leaseKey, RefreshLease lease, string outcome)
     {
         try
         {
-            await table.ReleaseAsync(key, lease, CancellationToken.None);
+            await table.ReleaseAsync(leaseKey, lease, CancellationToken.None);
         }
         catch (Exception e)
         {
-            ReleaseFailed(logger, app.AppId, SessionRef.Of(key), outcome, e.GetType().Name);
+            LogReleaseFailed(refresh, outcome, e.GetType().Name);
         }
     }
 
@@ -343,32 +415,51 @@ internal sealed partial class AccessTokenSource(
         _ => "unknown",
     };
 
-    /// <summary>The record's access token when it is not due, else null (plan row 3.8's one-minute margin).</summary>
-    private string? FreshAccess(SessionRecord record)
+    private static string MergeOutcomeName(MergeOutcome outcome) => outcome switch
+    {
+        MergeOutcome.Written => "written",
+        MergeOutcome.Unchanged => "unchanged",
+        MergeOutcome.Missing => "missing",
+        MergeOutcome.Exhausted => "exhausted",
+        _ => throw new InvalidOperationException($"No event outcome for {outcome}."),
+    };
+
+    /// <summary>The set's access token when it is not due, else null (plan row 3.8's one-minute margin).</summary>
+    private string? FreshAccess(SessionRecord record, TokenSet set)
     {
         AuthenticationProperties properties = Deserialize(record).Properties;
-        return properties.GetTokenValue(AccessTokenName) is { Length: > 0 } access
-            && ExpiresAt(properties) > clock.GetUtcNow() + RefreshBeforeExpiry
+        return set.Token(properties, TokenSet.AccessTokenName) is { } access
+            && set.ExpiresAt(properties) > clock.GetUtcNow() + RefreshBeforeExpiry
                 ? access
                 : null;
     }
 
     /// <summary>
-    /// The library's refresh call, with the app's two schemes and the issuer's credential style, under
-    /// a deadline tied to no request. Returns the new tokens, or the failure as a fixed category.
+    /// Whether a fragment's set has no refresh token: a set never acquired, one ended, and one recorded to
+    /// a changed client all read so (#995). The shell's set is never absent here: a shell set with no
+    /// refresh token ends the session, as before.
     /// </summary>
-    private async Task<(UserToken? Token, string? Error)> CallProviderAsync(AppDefinition app, string refreshToken)
+    private static bool Absent(SessionRecord record, TokenSet set) =>
+        set.Fragment is not null && set.Token(Deserialize(record).Properties, TokenSet.RefreshTokenName) is null;
+
+    /// <summary>
+    /// The library's refresh call, with the set's scheme and the app's sign-in scheme and the issuer's
+    /// credential style, under a deadline tied to no request. A fragment's scheme carries the fragment's
+    /// client and the shell's issuer (OidcOptionsSetup), so its refresh authenticates as the fragment's
+    /// client. Returns the new tokens, or the failure as a fixed category.
+    /// </summary>
+    private async Task<(UserToken? Token, string? Error)> CallProviderAsync(Refresh refresh, string refreshToken)
     {
         UserTokenRequestParameters parameters = new()
         {
-            ChallengeScheme = Scheme.Parse(SchemeNames.Oidc(app.AppId)),
-            SignInScheme = Scheme.Parse(SchemeNames.Cookie(app.AppId)),
+            ChallengeScheme = Scheme.Parse(refresh.Set.ChallengeScheme(refresh.App)),
+            SignInScheme = Scheme.Parse(SchemeNames.Cookie(refresh.App.AppId)),
         };
 
         using CancellationTokenSource deadline = new(options.ProviderDeadline);
         try
         {
-            TokenResult<UserToken> result = await endpoints.For(styles.Of(app)).RefreshAccessTokenAsync(
+            TokenResult<UserToken> result = await endpoints.For(styles.Of(refresh.App)).RefreshAccessTokenAsync(
                 new UserRefreshToken(RefreshToken.Parse(refreshToken), null), parameters, deadline.Token);
 
             return result.Succeeded
@@ -387,58 +478,108 @@ internal sealed partial class AccessTokenSource(
     }
 
     /// <summary>
-    /// Writes the new tokens into the same record, one version on. The refresh token is replaced only
-    /// when the provider rotated it, and the ID token only when the answer carried one (T-B13).
+    /// Writes the refresh's answer into its own set of the record, one version on, under the W3 rules
+    /// (#995 -> "Writes after a lost versioned replace"):
+    /// <list type="bullet">
+    /// <item>A lost replace re-reads. A null re-read (removed, expired, rebound) stops the write, which
+    /// resurrects nothing, and answers <see cref="AccessTokenResult.Unauthenticated"/>.</item>
+    /// <item>The set is re-applied onto the winner only while the winner's set still holds the refresh
+    /// token this refresh presented. Otherwise the refresh is superseded and drops its tokens, answering
+    /// the winner's token when it is fresh, else <see cref="AccessTokenResult.FragmentLoginRequired"/>
+    /// for a fragment and <see cref="AccessTokenResult.ProviderUnavailable"/> for the shell.</item>
+    /// <item>At most <see cref="WriteAttempts"/> attempts, each started only if its store calls fit before
+    /// the write deadline, <see cref="AccessTokenSourceOptions.WriteDeadline"/> after
+    /// <paramref name="writeFrom"/>: one <c>StoreDeadline</c> for the first, the replace the lease budget
+    /// reserves, and two for each re-apply, its replace and the re-read before it. Out of attempts, the
+    /// call answers its own unpersisted access token, with a Warning.</item>
+    /// <item>A store failure is unknown: it leaves as the store's exception, which answers 503
+    /// <c>session_store_unavailable</c>.</item>
+    /// </list>
+    /// One event line carries the write's <c>store_attempts</c> and outcome on every path, the exhausted
+    /// and the failed ones included: G9's O2 evidence (Q35).
     /// </summary>
-    private async Task<AccessTokenResult> StoreAsync(
-        AppDefinition app, string key, AppSessions.Turn turn, SessionRecord record, AuthenticationTicket ticket, UserToken token)
+    private async Task<AccessTokenResult> WriteAsync(
+        Refresh refresh, AppSessions.Turn turn, SessionRecord record, string presented, UserToken token, long writeFrom)
     {
         string access = token.AccessToken.ToString();
-        Dictionary<string, string> tokens = ticket.Properties.GetTokens()
-            .ToDictionary(t => t.Name, t => t.Value, StringComparer.Ordinal);
-        tokens[AccessTokenName] = access;
-        tokens[ExpiresAtName] = token.Expiration.ToString("o", CultureInfo.InvariantCulture);
-        if (token.RefreshToken is { } rotated)
+        SessionRecord current = record;
+        int attempts = 0;
+        try
         {
-            tokens[RefreshTokenName] = rotated.ToString();
+            while (true)
+            {
+                TimeSpan needed = attempts == 0 ? options.StoreDeadline : options.StoreDeadline * 2;
+                if (attempts >= WriteAttempts || clock.GetElapsedTime(writeFrom) + needed > options.WriteDeadline)
+                {
+                    LogWrite(refresh, "exhausted", attempts);
+                    LogWriteExhausted(refresh, attempts);
+                    return new AccessTokenResult.Token(access);
+                }
+
+                AuthenticationTicket ticket = Deserialize(current);
+                refresh.Set.Apply(ticket.Properties, token);
+                attempts++;
+                if (await turn.ReplaceAsync(current with { Version = current.Version + 1, Ticket = TicketSerializer.Default.Serialize(ticket) }))
+                {
+                    LogWrite(refresh, "written", attempts);
+                    return new AccessTokenResult.Token(access);
+                }
+
+                if (await turn.RereadAsync() is not { } winner)
+                {
+                    LogWrite(refresh, "missing", attempts);
+                    return new AccessTokenResult.Unauthenticated();
+                }
+
+                if (!string.Equals(refresh.Set.Token(Deserialize(winner).Properties, TokenSet.RefreshTokenName), presented, StringComparison.Ordinal))
+                {
+                    // Another writer replaced the set since this refresh read it: this refresh's tokens are
+                    // dropped, and the winner's set is the answer.
+                    LogWrite(refresh, "superseded", attempts);
+                    return Superseded(refresh, winner);
+                }
+
+                current = winner;
+            }
+        }
+        catch (SessionStoreUnavailableException)
+        {
+            LogWrite(refresh, "unconfirmed", attempts);
+            throw;
+        }
+    }
+
+    /// <summary>The answer of a superseded refresh: the winner's set's token when it is fresh.</summary>
+    private AccessTokenResult Superseded(Refresh refresh, SessionRecord winner)
+    {
+        if (FreshAccess(winner, refresh.Set) is { } fresh)
+        {
+            return new AccessTokenResult.Token(fresh);
         }
 
-        if (token.IdentityToken is { } identity)
+        if (refresh.Set.Fragment is not null)
         {
-            tokens[IdTokenName] = identity.ToString();
-        }
-
-        ticket.Properties.StoreTokens(tokens.Select(t => new AuthenticationToken { Name = t.Key, Value = t.Value }));
-
-        SessionRecord next = record with { Version = record.Version + 1, Ticket = TicketSerializer.Default.Serialize(ticket) };
-        if (await turn.ReplaceAsync(next))
-        {
-            return new AccessTokenResult.Token(access);
-        }
-
-        // A concurrent writer won the versioned replace (T-D2). Return its persisted token rather
-        // than this response's unpersisted token; a removed or rebound session authenticates nobody.
-        if (await sessions.ReadAsync(app, key, CancellationToken.None) is not { } winner)
-        {
-            return new AccessTokenResult.Unauthenticated();
-        }
-
-        if (Deserialize(winner).Properties.GetTokenValue(AccessTokenName) is { Length: > 0 } current)
-        {
-            return new AccessTokenResult.Token(current);
+            return new AccessTokenResult.FragmentLoginRequired();
         }
 
         // The winner is a live session with no token to hand back. ProviderUnavailable is the one outcome
-        // that keeps a session without a token (change request 4.2), and the next call, finding no access
-        // token, tries a refresh with the winner's refresh token.
-        LostToRecordWithoutToken(logger, app.AppId, SessionRef.Of(key));
+        // that keeps a session without a token (change request 4.2), and the next call, finding no fresh
+        // access token, tries a refresh with the winner's refresh token.
+        LostToRecordWithoutToken(logger, refresh.App.AppId, SessionRef.Of(refresh.Key));
         return new AccessTokenResult.ProviderUnavailable();
+    }
+
+    /// <summary>The record with its ticket's properties changed by <paramref name="change"/>, or null when it changed nothing.</summary>
+    private static SessionRecord? Changed(SessionRecord record, Func<AuthenticationProperties, bool> change)
+    {
+        AuthenticationTicket ticket = Deserialize(record);
+        return change(ticket.Properties) ? record with { Ticket = TicketSerializer.Default.Serialize(ticket) } : null;
     }
 
     /// <summary>
     /// Removes the session, then clears the cookie. The record goes under the gate and with no
     /// cancellation, so a waiter can trust what it reads; the sign-out then expires the browser's cookie,
-    /// unless the browser has already gone.
+    /// unless the browser has already gone. The shell's set alone ends a session this way.
     /// </summary>
     private static async Task EndAsync(HttpContext context, AppDefinition app, AppSessions.Turn turn)
     {
@@ -473,16 +614,143 @@ internal sealed partial class AccessTokenSource(
         TicketSerializer.Default.Deserialize(record.Ticket.ToArray())
         ?? throw new InvalidOperationException("A session record holds a serialized ticket.");
 
-    /// <summary>
-    /// When the access token expires. A token saved with no expiry is treated as not known to expire,
-    /// as the library treats it.
-    /// </summary>
-    private static DateTimeOffset ExpiresAt(AuthenticationProperties properties) =>
-        DateTimeOffset.TryParse(properties.GetTokenValue(ExpiresAtName), CultureInfo.InvariantCulture,
-            DateTimeStyles.RoundtripKind, out DateTimeOffset at)
-            ? at
-            : DateTimeOffset.MaxValue;
+    // Each line names the app, the session's reference and, for a fragment's set, the fragment: never
+    // the session key, the lease key that carries it, or a token (contracts/telemetry.md, N-16).
+    private void LogRefreshed(Refresh r)
+    {
+        if (r.Set.Fragment is { } f)
+        {
+            FragmentRefreshed(logger, r.App.AppId, f.FragmentId, SessionRef.Of(r.Key));
+        }
+        else
+        {
+            Refreshed(logger, r.App.AppId, SessionRef.Of(r.Key));
+        }
+    }
 
+    private void LogRefreshFailed(Refresh r, string error)
+    {
+        if (r.Set.Fragment is { } f)
+        {
+            FragmentRefreshFailed(logger, r.App.AppId, f.FragmentId, SessionRef.Of(r.Key), error);
+        }
+        else
+        {
+            RefreshFailed(logger, r.App.AppId, SessionRef.Of(r.Key), error);
+        }
+    }
+
+    private void LogWrite(Refresh r, string outcome, int attempts)
+    {
+        if (r.Set.Fragment is { } f)
+        {
+            FragmentRefreshWrite(logger, r.App.AppId, f.FragmentId, SessionRef.Of(r.Key), outcome, attempts);
+        }
+        else
+        {
+            RefreshWrite(logger, r.App.AppId, SessionRef.Of(r.Key), outcome, attempts);
+        }
+    }
+
+    private void LogWriteExhausted(Refresh r, int attempts)
+    {
+        if (r.Set.Fragment is { } f)
+        {
+            FragmentWriteExhausted(logger, r.App.AppId, f.FragmentId, SessionRef.Of(r.Key), attempts);
+        }
+        else
+        {
+            WriteExhausted(logger, r.App.AppId, SessionRef.Of(r.Key), attempts);
+        }
+    }
+
+    private void LogTooLittleLease(Refresh r)
+    {
+        if (r.Set.Fragment is { } f)
+        {
+            FragmentTooLittleLease(logger, r.App.AppId, f.FragmentId, SessionRef.Of(r.Key));
+        }
+        else
+        {
+            TooLittleLease(logger, r.App.AppId, SessionRef.Of(r.Key));
+        }
+    }
+
+    private void LogReleaseFailed(Refresh r, string outcome, string errorType)
+    {
+        if (r.Set.Fragment is { } f)
+        {
+            FragmentReleaseFailed(logger, r.App.AppId, f.FragmentId, SessionRef.Of(r.Key), outcome, errorType);
+        }
+        else
+        {
+            ReleaseFailed(logger, r.App.AppId, SessionRef.Of(r.Key), outcome, errorType);
+        }
+    }
+
+    private void LogNoLease(Refresh r)
+    {
+        if (r.Set.Fragment is { } f)
+        {
+            FragmentNoLease(logger, r.App.AppId, f.FragmentId, SessionRef.Of(r.Key));
+        }
+        else
+        {
+            NoLease(logger, r.App.AppId, SessionRef.Of(r.Key));
+        }
+    }
+
+    /// <summary>One call's refresh: the app, the session's key and the token set it is for.</summary>
+    private sealed record Refresh(AppDefinition App, string Key, TokenSet Set)
+    {
+        /// <summary>A waiter's answer after the refresh it queued behind ended its set (T-D6).</summary>
+        public AccessTokenResult EndedAnswer => Set.Fragment is null
+            ? new AccessTokenResult.SessionEnded()
+            : new AccessTokenResult.FragmentLoginRequired();
+
+        // The key never reaches a string a log or an exception could carry.
+        public override string ToString() => nameof(Refresh);
+    }
+
+    [LoggerMessage(Level = LogLevel.Information,
+        Message = "Refreshed the access token for app {AppId}, fragment {FragmentId}, session {SessionRef}.")]
+    private static partial void FragmentRefreshed(ILogger logger, string appId, string fragmentId, string sessionRef);
+
+    [LoggerMessage(Level = LogLevel.Warning,
+        Message = "The identity provider did not refresh the access token for app {AppId}, fragment {FragmentId}, session {SessionRef} ({Error}). The session is kept.")]
+    private static partial void FragmentRefreshFailed(ILogger logger, string appId, string fragmentId, string sessionRef, string error);
+
+    [LoggerMessage(Level = LogLevel.Information,
+        Message = "Refresh write for app {AppId}, session {SessionRef}: ended {Outcome} after {StoreAttempts} versioned replaces.")]
+    private static partial void RefreshWrite(ILogger logger, string appId, string sessionRef, string outcome, int storeAttempts);
+
+    [LoggerMessage(Level = LogLevel.Information,
+        Message = "Refresh write for app {AppId}, fragment {FragmentId}, session {SessionRef}: ended {Outcome} after {StoreAttempts} versioned replaces.")]
+    private static partial void FragmentRefreshWrite(ILogger logger, string appId, string fragmentId, string sessionRef, string outcome, int storeAttempts);
+
+    [LoggerMessage(Level = LogLevel.Warning,
+        Message = "The refresh for app {AppId}, session {SessionRef} could not write its tokens within its write deadline after {StoreAttempts} versioned replaces: the call answers its own token, unpersisted, and the record keeps the one it held.")]
+    private static partial void WriteExhausted(ILogger logger, string appId, string sessionRef, int storeAttempts);
+
+    [LoggerMessage(Level = LogLevel.Warning,
+        Message = "The refresh for app {AppId}, fragment {FragmentId}, session {SessionRef} could not write its tokens within its write deadline after {StoreAttempts} versioned replaces: the call answers its own token, unpersisted, and the record keeps the one it held.")]
+    private static partial void FragmentWriteExhausted(ILogger logger, string appId, string fragmentId, string sessionRef, int storeAttempts);
+
+    [LoggerMessage(Level = LogLevel.Information,
+        Message = "The identity provider refused the refresh token for app {AppId}, fragment {FragmentId}, session {SessionRef}, so that fragment's token set has ended; the removal ended {Outcome} after {StoreAttempts} versioned replaces. The session is kept.")]
+    private static partial void FragmentEnded(ILogger logger, string appId, string fragmentId, string sessionRef, string outcome, int storeAttempts);
+
+    [LoggerMessage(Level = LogLevel.Information,
+        Message = "Too little of the refresh lease for app {AppId}, fragment {FragmentId}, session {SessionRef} remained to call the identity provider. It was given back, and the call waits for another holder's refresh.")]
+    private static partial void FragmentTooLittleLease(ILogger logger, string appId, string fragmentId, string sessionRef);
+
+    [LoggerMessage(Level = LogLevel.Warning,
+        Message = "The refresh lease for app {AppId}, fragment {FragmentId}, session {SessionRef} was not given back after the refresh ended ({Outcome}): {ErrorType}. It lapses on its own.")]
+    private static partial void FragmentReleaseFailed(ILogger logger, string appId, string fragmentId, string sessionRef, string outcome, string errorType);
+
+    [LoggerMessage(Level = LogLevel.Warning,
+        Message = "No refresh lease for app {AppId}, fragment {FragmentId}, session {SessionRef} could be held long enough to refresh, within two times to live. The session is kept.")]
+    private static partial void FragmentNoLease(ILogger logger, string appId, string fragmentId, string sessionRef);
     [LoggerMessage(Level = LogLevel.Information, Message = "Refreshed the access token for app {AppId}, session {SessionRef}.")]
     private static partial void Refreshed(ILogger logger, string appId, string sessionRef);
 
@@ -567,6 +835,21 @@ internal sealed class AccessTokenSourceOptions
     /// locking, and is not this figure. The property keeps the name the amendment's table gives it.
     /// </summary>
     public TimeSpan ReservedBudget => ProviderDeadline + StoreDeadline + Allowance;
+
+    /// <summary>
+    /// A refresh's write deadline, measured from its acquire's send (or, with no lease table, from its
+    /// gated read): <c>LeaseTimeToLive - 1 s</c>, 20 s today (#995). No write attempt starts unless its
+    /// store calls fit before it, so a holder whose lease has lapsed never writes over its successor
+    /// (Trace 5).
+    /// </summary>
+    public TimeSpan WriteDeadline => LeaseTimeToLive - Allowance;
+
+    /// <summary>
+    /// How long logout waits, in all, to enter the session's gates: the refresh write deadline, the longest
+    /// a holder keeps a gate (#995 -> "Logout"). A gate not entered within it is skipped as
+    /// <c>gate_timeout</c>.
+    /// </summary>
+    public TimeSpan LogoutGateBudget => WriteDeadline;
 
     /// <summary>
     /// D2's check: whether a holder whose lease was asked for <paramref name="sinceAsked"/> ago, on the

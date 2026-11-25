@@ -6,7 +6,7 @@
 # names both apps' client ids, and an ARN in a gateway line names the account, and the sitting of
 # #58 put both on the terminal and into its log that way (#208). Here every line passes through the
 # redaction the cell scripts share (cell-common.sh), which elides the account id and each client id
-# in infra/envs/poc/outputs.json.
+# in the outputs document.
 #
 #   tools/scripts/logs.sh                          # the last ten minutes, both containers
 #   tools/scripts/logs.sh --since 2h               # the last two hours
@@ -21,19 +21,22 @@
 # of #348 wrote that summary by hand over 259 lines, twice (#1014). The summary passes through the
 # same redaction as every other line.
 #
-# The group is the outputs document's logGroup, which seed.sh, deploy.sh and rollback.sh write after
-# every apply (contracts/infra-outputs.schema.json), and never Terraform state. One group holds both
-# containers' streams, each named <container>/<container>/<task id> (infra/modules/cell/ecs.tf), so
-# --container reads the streams with that prefix.
+# The group is the logGroup of the outputs document, $SPA_OUTPUTS_FILE (an entry value with no
+# default: cell-common.sh's header), written from the cell's roots' outputs after every apply,
+# deploy.sh's and rollback.sh's among them (contracts/infra-outputs.schema.json), and never
+# Terraform state. One group holds both containers' streams, each named
+# <container>/<container>/<task id> (infra/modules/cell/ecs.tf), so --container reads the streams
+# with that prefix.
 #
-# Run it as the operator's own session: the spa-platform profile, with tools/aws-project.env
-# sourced. It needs the AWS CLI and python3. It never prints the account id or a client id.
+# Run it as the operator's own session, with credentials for the account the cell is in and
+# AWS_REGION set to the cell's Region. It needs the AWS CLI and python3. It never prints the account
+# id or a client id.
 #
 # Exit status: 0 when the read finished; 130 when Control-C ended it, as it ends --follow; 1 when
 # AWS refused the read, named by its error code; 2 when it did not start (no outputs document among
-# the reasons).
+# the reasons, and SPA_OUTPUTS_FILE unset).
 #
-# Written for the bash 3.2 that ships with macOS, like tools/scripts/certs.sh.
+# Written for the bash 3.2 that ships with macOS.
 # Owner: workstream 1, AWS and IaC.
 
 set -euo pipefail
@@ -42,6 +45,11 @@ umask 077
 PROGRAM="logs"
 # shellcheck source=tools/scripts/cell-common.sh
 . "$(dirname -- "$0")/cell-common.sh"
+
+# The mock API's container in the proof cell's task (the proof cell's platform root). Its own copy
+# until --container takes any container in the task (#1335): cell-common.sh names no container but
+# the gateway and the bastion.
+MOCK_API_CONTAINER="mock-api"
 
 # The CLI's own default window: "By default, logs will be displayed starting from ten minutes in the
 # past." https://awscli.amazonaws.com/v2/documentation/api/latest/reference/logs/tail.html
@@ -109,6 +117,8 @@ if [ -n "$REQUESTS" ]; then
     refuse "--requests reads the ${GATEWAY_CONTAINER} container's requests: drop --container ${MOCK_API_CONTAINER}"
   STREAM_PREFIX="${GATEWAY_CONTAINER}/"
 fi
+
+need_entry SPA_OUTPUTS_FILE
 
 trap cell_cleanup EXIT
 trap 'exit 130' INT TERM

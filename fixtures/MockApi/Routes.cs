@@ -34,7 +34,7 @@ internal static class Routes
         // Who the caller is, as this API sees them. F-08 reads the client, the scopes and the bound
         // audience from here, which is the only way to tell app 1's token from app 2's at a listener.
         app.MapGet("/whoami", (HttpContext context, ApiListenerOptions api, ClientAdmission admission) =>
-            Guard(context, api, admission, api.ReadScope) ?? Results.Json(new
+            Guard(context, api, admission, "/whoami", api.ReadScope) ?? Results.Json(new
             {
                 api = api.Name,
                 clientId = ClientOf(context),
@@ -47,7 +47,7 @@ internal static class Routes
         // negative tests read this to check the gateway stripped what it was supposed to.
         app.Map("/echo", async (HttpContext context, ApiListenerOptions api, ClientAdmission admission) =>
         {
-            if (Guard(context, api, admission, api.ReadScope) is { } refusal)
+            if (Guard(context, api, admission, "/echo", api.ReadScope) is { } refusal)
             {
                 return refusal;
             }
@@ -71,14 +71,15 @@ internal static class Routes
         // The route no test app may reach. Its scope exists on the resource server and no app asks
         // for it, so F-08's 403 is a scope decision rather than a missing route.
         app.MapGet("/admin", (HttpContext context, ApiListenerOptions api, ClientAdmission admission) =>
-            Guard(context, api, admission, api.AdminScope) ?? Results.Json(new { api = api.Name, admin = true }));
+            Guard(context, api, admission, "/admin", api.AdminScope) ?? Results.Json(new { api = api.Name, admin = true }));
     }
 
     /// <summary>
     /// The two checks that are this API's own, in the order their answers differ: an unauthenticated
-    /// or unadmitted caller learns nothing about scopes.
+    /// or unadmitted caller learns nothing about scopes. Admission is judged on the route called, so
+    /// one listener can admit a shell's client on one route and a fragment's on another (#998).
     /// </summary>
-    private static IResult? Guard(HttpContext context, ApiListenerOptions api, ClientAdmission admission, string scope)
+    private static IResult? Guard(HttpContext context, ApiListenerOptions api, ClientAdmission admission, string route, string scope)
     {
         if (context.User.Identity?.IsAuthenticated != true)
         {
@@ -87,7 +88,7 @@ internal static class Routes
 
         // Admission is the API owner's decision, not the gateway's. The gateway will have issued a
         // perfectly good token for a client this API has never agreed to serve (F-07, N-17).
-        if (!admission.IsAdmitted(ClientOf(context)))
+        if (!admission.IsAdmitted(ClientOf(context), route))
         {
             return Refused(StatusCodes.Status403Forbidden, "client_not_admitted", api);
         }

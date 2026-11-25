@@ -55,6 +55,45 @@ full: each of its areas has an entry, or names the entry that carries it, in GAP
 - **Closes with.** An adopter's run of the composed suites against its own licensed PingFederate,
   or Ping's written consent to publish conformance results. Accepted, no plan.
 
+### GAP-29. The connection bound does not bound an upstream that negotiates HTTP/2
+
+- **Missing.** `ProxyLimits.MaxHttp11ConnectionsPerApi` in `Platform.Proxy` bounds the HTTP/1.1
+  connections one app's API holds open in one task, and N-35 proves it over a cleartext upstream.
+  Under an upstream that negotiates HTTP/2 the constant bounds neither connections nor concurrent
+  requests: YARP 2.3.0 enables multiple HTTP/2 connections by default
+  (`EnableMultipleHttp2Connections`, set in `ForwarderHttpClientFactory.ConfigureHandler`), and
+  .NET 10's HTTP/2 connection injection consults no `MaxConnectionsPerServer`; only HTTP/1.1's does
+  (`HttpConnectionPool.Http1.cs` against `HttpConnectionPool.Http2.cs`). The sources are cited in
+  the constant's own comment.
+- **Risk.** One app's API on an https upstream that speaks h2 can open as many connections, and
+  carry as many concurrent calls, as its traffic asks for, so the bound gives no protection to the
+  task or to the upstream in that case.
+- **Found.** #715 Q5, which kept YARP's HTTP/2 default and sent this gap here; #738 Q1 named the
+  constant for what it bounds; #741 added this entry. Related: GAP-6 (MR-4), the roadmap's row for
+  the upstream timeout and the per-app bound, which this entry leaves as it is.
+- **Closes with.** P2-10's measurement (`docs/plan/06-phase-2-and-risks.md`), and then either a
+  demonstrated mitigation with its exit evidence or a written acceptance of the measured residual
+  risk, as P2-10's "Findings closed or accepted in writing" asks; a measurement alone sets no limit
+  (#799, Confirm Q22). Open. P2-10 has not landed.
+
+### GAP-30. An entry whose secret cannot be read holds back every later registry change
+
+- **Missing.** No check, at the write or before it, that the task role can read the secret a new
+  or changed entry names. `spactl app add` builds the secret reference from the outputs document
+  and makes no Parameter Store call (`tools/spactl/AppEntry.cs`); #1481 item 5 declined a metadata
+  check there, because it would prove the operator's access and not the task role's. Once a
+  snapshot is live, `src/Platform.Registry/RegistrySource.cs` rejects a whole registry document
+  that names an unreadable secret (`RefreshOutcome.SecretsUnreadable`), keeps the live snapshot and
+  reads the document again on the next poll. At a cold start only the affected apps are left out,
+  unless no app's secret can be read: then the document is not applied and the task stays not ready.
+- **Risk.** On a live cell, one such entry holds back every later registry change, an unrelated
+  release activation or another app's onboarding among them, until the parameter is fixed or the
+  entry removed. `spactl wait` times out, and the gateway logs the rejection.
+- **Found.** #1481, item 9.
+- **Closes with.** Accepted, no plan, reopened by an adopter's report. The recovery is either to fix
+  the parameter so the task role can read it, or to run `spactl app remove` for the entry, then
+  `spactl wait` either way.
+
 ## What a mature release still needs (GAP-3 to GAP-12)
 
 Each is argued in `docs/roadmap.md` → "What a mature release still needs, and nothing has written

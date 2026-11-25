@@ -241,10 +241,18 @@ public sealed class RefreshAcrossHostsTests
     private static TimeSpan ReadCellGrace()
     {
         string main = File.ReadAllText(Path.Combine(FixtureFiles.RepositoryRoot, "infra", "envs", "poc", "apps", "main.tf"));
-        System.Text.RegularExpressions.Match setting = Assert.Single(
-            System.Text.RegularExpressions.Regex.Matches(main, @"^\s*retry_grace_period_seconds\s*=\s*(\d+)\s*$",
-                System.Text.RegularExpressions.RegexOptions.Multiline, RegexTimeout.Span));
-        return TimeSpan.FromSeconds(int.Parse(setting.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture));
+        // Each client the root makes carries the setting, the shell's and, since #999, each fragment's,
+        // which takes the shell client's settings. One cell has one grace, so every occurrence must
+        // agree. Mutation: give the fragment client 30; the distinct values are then two.
+        string[] values =
+        [
+            .. System.Text.RegularExpressions.Regex.Matches(main, @"^\s*retry_grace_period_seconds\s*=\s*(\d+)\s*$",
+                    System.Text.RegularExpressions.RegexOptions.Multiline, RegexTimeout.Span)
+                .Select(setting => setting.Groups[1].Value)
+                .Distinct(StringComparer.Ordinal),
+        ];
+        string value = Assert.Single(values);
+        return TimeSpan.FromSeconds(int.Parse(value, System.Globalization.CultureInfo.InvariantCulture));
     }
 
     /// <summary>Whether a request that reached the echo upstream carried exactly this bearer token. Compared, never printed (N-16).</summary>

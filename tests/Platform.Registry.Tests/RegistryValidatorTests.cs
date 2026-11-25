@@ -89,7 +89,19 @@ public sealed class RegistryValidatorTests
     [Fact]
     public void The_schema_is_checked()
     {
-        RejectsFor(RegistryRules.Schema, "/schemaVersion", Examples.Registry(d => d["schemaVersion"] = 2), "schemaVersion 2");
+        // schemaVersion is enum [1, 2], and a document whose entries carry any fragments declares 2 (the
+        // schema's root if/then, #980). The example's app1 carries one fragment; the fragments-free
+        // documents remove it, so the 3 case fails the enum alone and not the if/then as well.
+        // Red if schemaVersion goes back to const: 1 (the first case), or the root if/then is removed (the
+        // third case).
+        Accepts(Examples.Registry(d => Examples.Entry(d, 0).Remove("fragments")), "schemaVersion 2 with no fragments");
+        RejectsFor(RegistryRules.Schema, "/schemaVersion", Examples.Registry(d =>
+        {
+            Examples.Entry(d, 0).Remove("fragments");
+            d["schemaVersion"] = 3;
+        }), "schemaVersion 3");
+        RejectsFor(RegistryRules.Schema, "/schemaVersion", Examples.Registry(d => d["schemaVersion"] = 1),
+            "a document whose entry carries fragments at schemaVersion 1");
         RejectsFor(RegistryRules.Schema, "/apps/0/hosts", Examples.RegistryEntry(e => e["hosts"] = "typo"), "an unknown property");
         RejectsFor(RegistryRules.Schema, "/apps/0/session/lifetimeMinutes",
             Examples.RegistryEntry(e => e["session"]!["lifetimeMinutes"] = 721), "a session longer than 720 minutes");
@@ -207,7 +219,8 @@ public sealed class RegistryValidatorTests
     [Fact]
     public void A_default_port_matches_the_same_origin_without_it()
     {
-        PlatformPolicy policy = Examples.Policy(p => p with { AllowedUpstreams = ["https://orders.internal"] });
+        // The example's fragment keeps its own upstream, which the policy still allows.
+        PlatformPolicy policy = Examples.Policy(p => p with { AllowedUpstreams = ["https://orders.internal", "http://127.0.0.1:5081"] });
 
         Accepts(Examples.RegistryEntry(e => e["apis"]![0]!["upstream"] = "https://orders.internal:443"), "the default https port spelled out", policy);
         RejectsFor(RegistryRules.UpstreamNotAllowed, "/apps/0/apis/0/upstream",
@@ -222,13 +235,56 @@ public sealed class RegistryValidatorTests
             Examples.RegistryEntry(e => e["oauth"]!["issuer"] = "primary"), "an issuer configuration does not name");
     }
 
+    // ---- The bounds refusals (#1512). Each keeps the fact as its first sentence, then says the entry
+    // is outside the cell's bounds and names the operator's change by its glossary term. The same text
+    // comes back through ValidateAppDefinition, which spactl app add prints, and through a whole
+    // document, which the gateway logs.
+
+    [Theory]
+    [InlineData(RegistryRules.HostSuffixNotAllowed, "/host",
+        "Host 'app1.example.test:8443' does not end with a suffix Policy:AllowedHostSuffixes allows. " +
+        "The entry is outside the cell's bounds: a new host suffix is a cell change, made by an operator, not a registry write.")]
+    [InlineData(RegistryRules.UnknownIssuer, "/oauth/issuer",
+        "Issuer 'primary' is not configured under Issuers:{name}. " +
+        "The entry is outside the cell's bounds: adding an issuer is widening the bounds, an operator's change, not a registry write.")]
+    [InlineData(RegistryRules.UpstreamNotAllowed, "/apis/0/upstream",
+        "Upstream 'http://127.0.0.1:5082' is not an origin Policy:AllowedUpstreams allows. " +
+        "The entry is outside the cell's bounds: adding an upstream is widening the bounds, an operator's change, not a registry write.")]
+    [InlineData(RegistryRules.FragmentsPerShellExceeded, "/fragments",
+        "The entry lists 1 fragments; Policy:FragmentsPerShell allows 0. " +
+        "The entry is outside the cell's bounds: raising the cap is widening the bounds, an operator's change, not a registry write.")]
+    public void A_bounds_refusal_names_the_operators_change_the_same_in_a_document_and_a_definition(string rule, string path, string message)
+    {
+        (Action<JsonObject> change, PlatformPolicy policy) = BoundsCase(rule);
+
+        RegistryIssue logged = Assert.Single(Rejects(Examples.RegistryEntry(change), $"an entry outside the cell's bounds under {rule}", policy).Errors, error => error.Rule == rule);
+        Assert.Equal(("/apps/0" + path, message), (logged.Path, logged.Message));
+
+        JsonObject definition = Examples.Json("app-definition.example.json");
+        change(definition);
+        AppDefinitionValidation printed = RegistryValidator.ValidateAppDefinition(definition.ToJsonString(), policy);
+        RegistryIssue refusal = Assert.Single(printed.Errors, error => error.Rule == rule);
+        Assert.Equal((path, message), (refusal.Path, refusal.Message));
+    }
+
+    /// <summary>One entry change and policy that put the example outside the cell's bounds under <paramref name="rule"/>.</summary>
+    private static (Action<JsonObject> Change, PlatformPolicy Policy) BoundsCase(string rule) => rule switch
+    {
+        RegistryRules.HostSuffixNotAllowed => (e => e["host"] = "app1.example.test:8443", Examples.Policy()),
+        RegistryRules.UnknownIssuer => (e => e["oauth"]!["issuer"] = "primary", Examples.Policy()),
+        RegistryRules.UpstreamNotAllowed => (e => e["apis"]![0]!["upstream"] = "http://127.0.0.1:5082", Examples.Policy()),
+        // The example and the definition each carry one fragment, so a cap of 0 refuses both.
+        RegistryRules.FragmentsPerShellExceeded => (_ => { }, Examples.Policy(p => p with { FragmentsPerShell = 0 })),
+        _ => throw new ArgumentOutOfRangeException(nameof(rule), rule, "not a bounds refusal"),
+    };
+
     [Fact]
     public void A_port_above_65535_is_rejected()
     {
         PlatformPolicy policy = Examples.Policy(p => p with
         {
             AllowedHostSuffixes = [".spa-poc.test:65535", ".spa-poc.test:65536"],
-            AllowedUpstreams = ["http://127.0.0.1:5080", "http://127.0.0.1:65535", "http://127.0.0.1:65536"],
+            AllowedUpstreams = ["http://127.0.0.1:5080", "http://127.0.0.1:5081", "http://127.0.0.1:65535", "http://127.0.0.1:65536"],
         });
 
         Accepts(Examples.RegistryEntry(e => e["host"] = "app1.spa-poc.test:65535"), "host port 65535", policy);
@@ -401,9 +457,14 @@ public sealed class RegistryValidatorTests
             e["apis"]![0]!["upstream"] = "http://127.0.0.1:5082";
         }), "three broken rules in one entry", liveRevision: 50);
 
-        // A set: completeness is the contract, the order the rules run in is not.
+        // A set: completeness is the contract, the order the rules run in is not. The second entry's
+        // fragment keeps cognito-poc, which is no longer its shell's issuer.
         Assert.Equal(
-            new[] { RegistryRules.RevisionNotGreater, RegistryRules.DuplicateHost, RegistryRules.UnknownIssuer, RegistryRules.UpstreamNotAllowed }
+            new[]
+            {
+                RegistryRules.RevisionNotGreater, RegistryRules.DuplicateHost, RegistryRules.UnknownIssuer,
+                RegistryRules.UpstreamNotAllowed, RegistryRules.FragmentIssuerMismatch,
+            }
                 .Order(StringComparer.Ordinal),
             result.Errors.Select(error => error.Rule).Order(StringComparer.Ordinal));
     }

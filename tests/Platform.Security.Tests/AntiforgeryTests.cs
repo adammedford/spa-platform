@@ -103,6 +103,38 @@ public sealed class AntiforgeryTests
         await AssertRefusedAsync(host, response);
     }
 
+    // ---- A fragment's API (#996): the app's one token covers it ----
+
+    [Theory]
+    [InlineData("POST", "/fragments/frag1/api/orders/items")]
+    [InlineData("DELETE", "/fragments/frag1/api/orders/items/7")]
+    [InlineData("POST", "/FRAGMENTS/frag1/API/orders")]
+    [InlineData("PUT", "/fragments/not-a-fragment/api")]
+    public async Task An_unsafe_fragment_api_call_with_no_header_token_gets_403_under_csrf_token(string method, string path)
+    {
+        // By path shape and in any letter case, as the request gate classifies it.
+        await using AntiforgeryHost host = await AntiforgeryHost.StartAsync(Ct);
+        AntiforgeryHost.Issued issued = await host.IssueAsync(App1, "alice", Ct);
+
+        using HttpResponseMessage response = await host.SendAsync(method, path, App1, "alice", Ct,
+            cookie: issued.Cookie, content: AntiforgeryHost.Json("{}"));
+
+        await AssertRefusedAsync(host, response, issued.RequestToken, issued.Cookie!);
+    }
+
+    [Fact]
+    public async Task The_apps_one_token_admits_an_unsafe_method_on_a_fragment_route()
+    {
+        // One antiforgery token per app: the pair /bff/session issued for the shell is the fragment's.
+        await using AntiforgeryHost host = await AntiforgeryHost.StartAsync(Ct);
+        AntiforgeryHost.Issued issued = await host.IssueAsync(App1, "alice", Ct);
+
+        using HttpResponseMessage response = await host.SendAsync("POST", "/fragments/frag1/api/orders/items", App1, "alice", Ct,
+            cookie: issued.Cookie, csrfHeader: issued.RequestToken, content: AntiforgeryHost.Json("{\"order\":7}"));
+
+        await AssertPassedAsync(host, response, "{\"order\":7}");
+    }
+
     // ---- R-E1: issued by the session endpoint, accepted from the header ----
 
     [Theory]

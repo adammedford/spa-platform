@@ -37,7 +37,9 @@ public sealed class PlatformPolicyFixtureTests
 
         foreach (string path in Definitions)
         {
-            foreach (JsonNode? api in FixtureFiles.Read(path)["apis"]?.AsArray() ?? [])
+            // A fragment's apis too: Policy:AllowedUpstreams is checked on fragments[].apis[] (#961).
+            // Mutation: one fragment's upstream at port 5099 turns this red.
+            foreach (JsonNode api in FixtureFiles.Apis(FixtureFiles.Read(path)))
             {
                 Assert.Contains(api!["upstream"]!.GetValue<string>(), allowed);
             }
@@ -51,7 +53,10 @@ public sealed class PlatformPolicyFixtureTests
 
         foreach (string path in Definitions)
         {
-            Assert.Contains(FixtureFiles.Read(path)["oauth"]!["issuer"]!.GetValue<string>(), issuers);
+            foreach (JsonNode oauth in FixtureFiles.OAuthBlocks(FixtureFiles.Read(path)))
+            {
+                Assert.Contains(oauth["issuer"]!.GetValue<string>(), issuers);
+            }
         }
     }
 

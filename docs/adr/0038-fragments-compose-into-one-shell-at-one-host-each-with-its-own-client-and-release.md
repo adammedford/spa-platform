@@ -1,6 +1,6 @@
 # ADR-0038: Fragments compose into one shell at one host, each with its own client and release
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-11-17
 - **Deciders:** Adam, on the fragments map (#765) and its tickets #766 to #776; the spec #961,
   accepted in https://github.com/adammedford/spa-platform/issues/961#issuecomment-6645455906

@@ -6,17 +6,28 @@ docs/dependencies.md nor tools/preflight.sh; python3 is in both. So each documen
 or read is built or read here, and nothing else is: the scripts pass files in and read one line or
 one file back.
 
-    cell_documents.py outputs <region> <idp.json> <apps.json> <platform.json> <out>
-        infra/envs/poc/outputs.json, contracts/infra-outputs.schema.json's document, from the three
-        roots' `terraform output -json`. Written whole or not at all. The one optional field,
-        ecsBastionService, is copied when the platform root publishes it and left out when not.
+    cell_documents.py outputs <region> <fields.json> <out> <root> <root.json> [<root> <root.json> ...]
+        The outputs document, contracts/infra-outputs.schema.json's, from each root's `terraform
+        output -json`, named as the field map names it: the fields the map lists and nothing else,
+        each from the root and output it names, an optional one copied only when its root publishes
+        it. Every root that outputs region or cell agrees with every other that does, and the
+        document's region is <region>. Written whole or not at all.
     cell_documents.py field <outputs.json> <field> <region>
         One field of that document, for a script that reads it: the contract's own description says
         the scripts read it and none of them reads Terraform state, teardown.sh excepted (change
         request 1.5a, decision 2; Q49 on #129). Refused when the document is for another Region.
     cell_documents.py clients <outputs.json> <region>
-        Each app's client id from that document, one `<appId><tab><clientId>` line per app, for the
-        redaction in cell-common.sh, which elides them. Refused as field is.
+        Each app's client id from that document, one `<appId><tab><clientId>` line per app, and each
+        fragment's nested under it, one `<appId>:<fragmentId><tab><clientId>` line per fragment
+        (#999), for the redaction in cell-common.sh, which elides them. Refused as field is.
+    cell_documents.py fragments <definition.json>
+        Each fragment of an app definition, in its order, one `<appId><tab><fragmentId><tab><entry>`
+        line per fragment, the entry entry.js when the fragment names none; nothing for a definition
+        without fragments. For seed.sh's fragment step (#999). Each id and entry is checked against
+        contracts/registry.schema.json, since the seed makes paths of them.
+    cell_documents.py fragment-release <directory> <entry>
+        A release name for a fixture fragment directory, derived from its content as release's is;
+        refused when the directory has no <entry> at its root.
     cell_documents.py config <environment.tsv> <platform-config.schema.json>
         The platform configuration the gateway container runs with, in the JSON form of
         contracts/platform-config.schema.json, from its task definition's environment.
@@ -31,6 +42,9 @@ one file back.
         manifest never among them (#783).
     cell_documents.py release <directory>
         A release name for a fixture directory, derived from its content.
+    cell_documents.py repositories <outputs.json> <account> <region>
+        The name of each repository a root outputs, one a line: every output of its `terraform
+        output -json` whose value is a repository URL in the account's registry in the Region.
     cell_documents.py requests
         A filter for logs.sh --requests: of the `aws logs tail --format detailed` lines on standard
         input, each gateway request record becomes one line on standard output, and every other
@@ -49,6 +63,7 @@ import hashlib
 import json
 import os
 import pathlib
+import re
 import sys
 import tempfile
 
@@ -59,73 +74,77 @@ class Refused(Exception):
 
 # --- outputs ---------------------------------------------------------------------------------------
 
-# contracts/infra-outputs.schema.json's fields, each from the root and output that answers it. The
-# roots' outputs.tf name each output for its field; the contract is additionalProperties: false, so
-# this is the whole document and nothing else is copied.
-FIELDS = (
-    ("region", "platform", "region"),
-    ("cell", "platform", "cell"),
-    ("bucket", "platform", "bucket"),
-    ("albDnsName", "platform", "alb_dns_name"),
-    ("ecsCluster", "platform", "ecs_cluster"),
-    ("ecsService", "platform", "ecs_service"),
-    ("ecrGateway", "platform", "ecr_gateway"),
-    ("ecrMockApi", "platform", "ecr_mock_api"),
-    ("gatewayImage", "platform", "gateway_image"),
-    ("issuer", "idp", "issuer"),
-    ("cognitoDomain", "idp", "cognito_domain"),
-    ("clients", "apps", "clients"),
-    ("testUsers", "idp", "test_users"),
-    ("logGroup", "platform", "log_group"),
-)
-
-# The contract's optional fields, which the document carries only when the root publishes them
-# (#1167). The platform root's ecs_bastion_service is null with its bastion input false, and
-# Terraform leaves a null output out of `terraform output -json`, so its absence, or a null, means
-# the cell declares no bastion and the document has no such key: tunnel.sh reads that before it
-# asks AWS anything.
-OPTIONAL_FIELDS = (
-    ("ecsBastionService", "platform", "ecs_bastion_service"),
-)
-
-
-def read_root(path: str, root: str) -> dict:
+# The field map, the cell's own data (SPA_FIELD_MAP, cell-common.sh): {"fields": [...]}, each entry
+# {"field", "root", "output"} and an optional boolean "optional". It names every field the document
+# carries, so this holds no field, root or output name of any cell, and copies nothing the map does
+# not list: the contract is additionalProperties: false.
+def read_map(path: str) -> list[tuple[str, str, str, bool]]:
     try:
         document = json.loads(pathlib.Path(path).read_text())
     except (OSError, ValueError):
-        raise Refused(f"the {root} root's terraform output is not JSON")
-    if not isinstance(document, dict):
-        raise Refused(f"the {root} root's terraform output is not an object of outputs")
-    return document
+        raise Refused("the field map is not JSON")
+    entries = document.get("fields") if isinstance(document, dict) else None
+    if not isinstance(entries, list) or not entries:
+        raise Refused("the field map has no fields array")
+    fields = []
+    for entry in entries:
+        names = [entry.get(key) if isinstance(entry, dict) else None for key in ("field", "root", "output")]
+        optional = entry.get("optional", False) if isinstance(entry, dict) else None
+        if not all(isinstance(name, str) and name for name in names) or not isinstance(optional, bool):
+            raise Refused("an entry of the field map is not a field, a root and an output, with optional true or false")
+        if names[0] in [known for known, _, _, _ in fields]:
+            raise Refused(f"the field map lists the field {names[0]} twice")
+        fields.append((names[0], names[1], names[2], optional))
+    return fields
 
 
-def outputs(region: str, idp: str, apps: str, platform: str, out: str) -> int:
-    roots = {"idp": read_root(idp, "idp"), "apps": read_root(apps, "apps"),
-             "platform": read_root(platform, "platform")}
+# The two outputs every root may carry and all of them must agree on: a root applied for another
+# cell, or in another Region, would put names in the document that the others do not share.
+AGREED = ("region", "cell")
+
+
+def outputs(region: str, field_map: str, out: str, *pairs: str) -> int:
+    if not pairs or len(pairs) % 2:
+        raise Refused("the roots are not given as name and terraform output file pairs")
+    roots: dict[str, dict] = {}
+    for name, path in zip(pairs[::2], pairs[1::2]):
+        if name in roots:
+            raise Refused(f"two roots are named {name}: a root is named by its directory's last segment")
+        roots[name] = read_root(path, name)
+    fields = read_map(field_map)
+    unknown = sorted({root for _, root, _, _ in fields if root not in roots})
+    if unknown:
+        raise Refused("the field map names roots that are not on the roots list: " + ", ".join(unknown))
     document = {}
     missing = []
-    for field, root, name in FIELDS:
+    for field, root, name, optional in fields:
         entry = roots[root].get(name)
+        if optional:
+            # Terraform leaves a null output out of `terraform output -json`, so its absence, or a
+            # null, means the root publishes nothing for it, and the document has no such key.
+            if isinstance(entry, dict) and entry.get("value") is not None:
+                document[field] = entry["value"]
+            continue
         if not isinstance(entry, dict) or "value" not in entry:
             missing.append(f"{root}.{name}")
             continue
         document[field] = entry["value"]
     if missing:
         raise Refused("these outputs are missing, so a root is not applied or not initialised: " + ", ".join(missing))
-    for field, root, name in OPTIONAL_FIELDS:
-        entry = roots[root].get(name)
-        if isinstance(entry, dict) and entry.get("value") is not None:
-            document[field] = entry["value"]
-    # The idp root's Region and cell against the platform root's, which the document carries; the
-    # apps root has no region or cell output, so there is nothing of it to compare. And then the
-    # platform root's Region against the one every AWS call of the scripts names: a root applied
-    # elsewhere would put a bucket in the document the calls cannot reach.
-    for name in ("region", "cell"):
-        other = roots["idp"].get(name, {}).get("value")
-        if other is not None and other != document[name]:
-            raise Refused(f"the idp root's {name} differs from the platform root's")
+    # Every root that outputs a region or a cell agrees with every other that does, whichever roots
+    # they are. Then the document's Region against the one every AWS call of the scripts names: a
+    # cell applied elsewhere would put a bucket in the document the calls cannot reach.
+    for name in AGREED:
+        answers = [(root, entry.get("value")) for root, entry in
+                   ((root, outputs_of.get(name)) for root, outputs_of in roots.items())
+                   if isinstance(entry, dict) and entry.get("value") is not None]
+        for root, value in answers[1:]:
+            if value != answers[0][1]:
+                raise Refused(f"the {answers[0][0]} root's {name} differs from the {root} root's")
+    if "region" not in document:
+        raise Refused("the field map names no region field, so the document could not be checked against AWS_REGION")
     if document["region"] != region:
-        raise Refused("the platform root's region is not AWS_REGION: source tools/aws-project.env, or check the root's terraform.tfvars")
+        raise Refused("the document's region is not AWS_REGION: set AWS_REGION to the cell's Region, or check the roots' variables")
     target = pathlib.Path(out)
     target.parent.mkdir(parents=True, exist_ok=True)
     # Whole or not at all: spactl and the deployed tests read this file, and half of one is worse
@@ -143,6 +162,38 @@ def outputs(region: str, idp: str, apps: str, platform: str, out: str) -> int:
     return 0
 
 
+def read_root(path: str, root: str) -> dict:
+    try:
+        document = json.loads(pathlib.Path(path).read_text())
+    except (OSError, ValueError):
+        raise Refused(f"the {root} root's terraform output is not JSON")
+    if not isinstance(document, dict):
+        raise Refused(f"the {root} root's terraform output is not an object of outputs")
+    return document
+
+
+# --- repositories ----------------------------------------------------------------------------------
+
+# A repository name as ECR's CreateRepository takes it: lowercase segments joined by ., _ or -, and
+# namespaces separated by /. https://docs.aws.amazon.com/AmazonECR/latest/APIReference/API_CreateRepository.html
+REPOSITORY_NAME = r"(?:[a-z0-9]+(?:[._-][a-z0-9]+)*/)*[a-z0-9]+(?:[._-][a-z0-9]+)*"
+
+
+def repositories(path: str, account: str, region: str) -> int:
+    """Each output whose value is a repository URL in the account's registry in the Region,
+    <account>.dkr.ecr.<region>.amazonaws.com/<name>, matched whole, so an image by digest or tag
+    (<url>@sha256:..., <url>:tag) is not one. https://docs.aws.amazon.com/AmazonECR/latest/userguide/Repositories.html"""
+    document = read_root(path, "given")
+    url = re.compile(re.escape(f"{account}.dkr.ecr.{region}.amazonaws.com/") + f"({REPOSITORY_NAME})")
+    for name in sorted(document):
+        entry = document[name]
+        value = entry.get("value") if isinstance(entry, dict) else None
+        match = url.fullmatch(value) if isinstance(value, str) else None
+        if match:
+            print(match[1])
+    return 0
+
+
 def read_outputs(path: str, region: str) -> dict:
     try:
         document = json.loads(pathlib.Path(path).read_text())
@@ -153,7 +204,7 @@ def read_outputs(path: str, region: str) -> dict:
     # The document is rewritten after every apply, so a stale one names this checkout's last cell;
     # one for another Region would aim every call of the script where they cannot reach.
     if document.get("region") != region:
-        raise Refused("the outputs document is not for AWS_REGION: source tools/aws-project.env, or run seed.sh again")
+        raise Refused("the outputs document is not for AWS_REGION: set AWS_REGION to the cell's Region, or rewrite the document after the cell's last apply")
     return document
 
 
@@ -170,13 +221,25 @@ def clients(path: str, region: str) -> int:
     if not isinstance(entries, dict):
         raise Refused("the outputs document has no clients")
     lines = []
-    for app, entry in entries.items():
+
+    def listed(label: str, entry) -> None:
         client = entry.get("clientId") if isinstance(entry, dict) else None
         # contracts/registry.schema.json: printable ASCII with no spaces, so no tab or newline can
         # break the line the redaction reads.
-        if not isinstance(client, str) or not client or any(not "!" <= c <= "~" for c in client + app):
+        if not isinstance(client, str) or not client or any(not "!" <= c <= "~" for c in client + label):
             raise Refused("an entry of the outputs document's clients has no printable clientId")
-        lines.append((app, client))
+        lines.append((label, client))
+
+    for app, entry in entries.items():
+        listed(app, entry)
+        # contracts/infra-outputs.schema.json: clients.{appId}.fragments.{fragmentId}, absent for an
+        # app with none. A fragment's client id is as secret-free and as elided as a shell's, so it
+        # is listed under <appId>:<fragmentId>, the two ids as the fragment's scheme name joins them.
+        fragments = entry.get("fragments", {}) if isinstance(entry, dict) else {}
+        if not isinstance(fragments, dict):
+            raise Refused("an entry of the outputs document's clients has fragments that are not an object")
+        for fragment, nested in fragments.items():
+            listed(f"{app}:{fragment}", nested)
     # The longest first: the redaction replaces them in this order, and one id inside another
     # would otherwise leave the longer one's remainder in the line.
     for app, client in sorted(lines, key=lambda line: (-len(line[1]), line[0])):
@@ -331,14 +394,15 @@ def digests(path: str, digest: str, platform: str) -> int:
 
 # --- release ---------------------------------------------------------------------------------------
 
-def release(directory: str) -> int:
+def release(directory: str, complete: str = "index.html") -> int:
     """fixture-<12 hex>: the SHA-256 of every file's relative path and bytes, in path order. A
     release prefix is written once (ADR-0009), and spactl's publish leaves identical bytes alone, so
     a name that follows the content makes a second seed of the same fixtures a no-op and a changed
-    fixture a new release, never a refused overwrite."""
+    fixture a new release, never a refused overwrite. `complete` is the file that makes the release
+    one: index.html for an app's, the entry module for a fragment's."""
     root = pathlib.Path(directory)
-    if not (root / "index.html").is_file():
-        raise Refused(f"{directory} has no index.html")
+    if not (root / complete).is_file():
+        raise Refused(f"{directory} has no {complete}")
     digest = hashlib.sha256()
     for file in sorted(p for p in root.rglob("*") if p.is_file()):
         relative = file.relative_to(root).as_posix().encode()
@@ -346,6 +410,46 @@ def release(directory: str) -> int:
         content = file.read_bytes()
         digest.update(len(content).to_bytes(8, "big") + content)
     print("fixture-" + digest.hexdigest()[:12])
+    return 0
+
+
+def fragment_release(directory: str, entry: str) -> int:
+    return release(directory, entry)
+
+
+# --- fragments -------------------------------------------------------------------------------------
+
+# The registry contract, beside this script in the tree, for the id and entry rules and the entry's
+# default: read, never copied, so a changed rule there is the rule here.
+REGISTRY_SCHEMA = pathlib.Path(__file__).resolve().parent.parent.parent / "contracts" / "registry.schema.json"
+
+
+def fragments(path: str) -> int:
+    try:
+        definition = json.loads(pathlib.Path(path).read_text())
+    except (OSError, ValueError):
+        raise Refused("the app definition is not JSON")
+    if not isinstance(definition, dict):
+        raise Refused("the app definition is not an object")
+    rules = json.loads(REGISTRY_SCHEMA.read_text())["$defs"]
+
+    def checked(value, rule: str, what: str) -> str:
+        schema = rules[rule]
+        if (not isinstance(value, str) or not re.fullmatch(schema["pattern"], value)
+                or not schema.get("minLength", 0) <= len(value) <= schema.get("maxLength", len(value))):
+            raise Refused(f"the app definition has {what} that contracts/registry.schema.json's {rule} refuses")
+        return value
+
+    app = checked(definition.get("appId"), "appId", "an appId")
+    listed = definition.get("fragments", [])
+    if not isinstance(listed, list):
+        raise Refused("the app definition's fragments is not an array")
+    for fragment in listed:
+        if not isinstance(fragment, dict):
+            raise Refused("a fragment of the app definition is not an object")
+        fragment_id = checked(fragment.get("fragmentId"), "fragmentId", "a fragmentId")
+        entry = checked(fragment.get("entry", rules["entry"]["default"]), "entry", "an entry")
+        print(f"{app}\t{fragment_id}\t{entry}")
     return 0
 
 
@@ -397,11 +501,15 @@ def requests() -> int:
     return 0
 
 
-COMMANDS = {"outputs": (outputs, 5), "field": (field, 3), "clients": (clients, 2), "config": (config, 2), "apps": (apps, 1), "revision": (revision, 1), "digests": (digests, 3), "release": (release, 1), "requests": (requests, 0)}
+COMMANDS = {"outputs": (outputs, -3), "repositories": (repositories, 3), "field": (field, 3), "clients": (clients, 2), "config": (config, 2), "apps": (apps, 1), "revision": (revision, 1), "digests": (digests, 3), "release": (release, 1), "requests": (requests, 0),
+            "fragments": (fragments, 1), "fragment-release": (fragment_release, 2)}
 
 
 def main(argv: list[str]) -> int:
-    if not argv or argv[0] not in COMMANDS or len(argv) - 1 != COMMANDS[argv[0]][1]:
+    # A negative count is a least: outputs takes its three arguments and then the roots.
+    count = COMMANDS[argv[0]][1] if argv and argv[0] in COMMANDS else 0
+    if (not argv or argv[0] not in COMMANDS
+            or (len(argv) - 1 != count if count >= 0 else len(argv) - 1 < -count)):
         print(__doc__.split("\n\n")[1], file=sys.stderr)
         return 2
     command, _ = COMMANDS[argv[0]]

@@ -101,3 +101,98 @@ mapping shows, so a reader signing them off does not have to work it out:
 Not defined yet. Each takes a section here, in the shape above, when the decision on its exit test
 lands: G7's owed ids are in the test id register's "Owed" table. Until then the gate-evidence route
 refuses each as having no exit test (#364 Q3).
+
+## G9 Fragments
+
+The gate of roadmap stage S8a, closed by the tag `g9-fragments` after its own deployed sitting
+(#961's T11), which runs after G6's (#348) because it needs durable sessions and two tasks. G7 does
+not wait on it: S8a before S9 is ladder order only, and whichever of G7 and G9 closes second carries
+the per-client key question (#776). Its ids are the functional core and obligations O3, O5 to O8 and
+O10 to O13 of the fragments spec (#961), numbered by #989 and #1158.
+
+| Gate | Proves | Exit test | Unblocks | Recorded by |
+| --- | --- | --- | --- | --- |
+| G9 | Composition: one host serves one shell and its fragments with N + 1 OAuth clients at one issuer, one sign-in and one sign-out, each fragment's API seeing only its own client's token, and each fragment's release activated by its owner with no restart and the shell's release untouched (S8a) | F-24 to F-30, F-32 to F-36, F-38, F-43, N-36, N-37 and N-39 to N-45, hermetic. F-31, F-37, F-39 to F-42, N-38 and N-46, deployed. The three acceptance sentences of #961 signed off against the ids mapped to them. O1, O2, O4 and O9 in the sitting record, O1's count replacing the fragments-per-shell placeholder and O2's figures setting `MergeBudget`. | Nothing waits on it: S9 follows on the ladder, and fragments under PingFederate is decided at S9 | #776; #961, accepted in https://github.com/adammedford/spa-platform/issues/961#issuecomment-6645455906; the ids numbered by #989 and #1158 |
+
+| Id | Tiers required |
+| --- | --- |
+| F-24 | H |
+| F-25 | H |
+| F-26 | H |
+| F-27 | H |
+| F-28 | H |
+| F-29 | H |
+| F-30 | H |
+| F-32 | H |
+| F-33 | H |
+| F-34 | H |
+| F-35 | H |
+| F-36 | H |
+| F-38 | H |
+| F-43 | H |
+| N-36 | H |
+| N-37 | H |
+| N-39 | H |
+| N-40 | H |
+| N-41 | H |
+| N-42 | H |
+| N-43 | H |
+| N-44 | H |
+| N-45 | H |
+| F-31 | D |
+| F-37 | D |
+| F-39 | D |
+| F-40 | D |
+| F-41 | D |
+| F-42 | D |
+| N-38 | D |
+| N-46 | D |
+
+| Criterion | Ids |
+| --- | --- |
+| (1) One login gives the shell and every fragment a token set with no second interactive sign-in inside the provider session. | F-24, F-33, F-34, F-40, F-42 |
+| (2) Each fragment's API sees only its own client's token. | F-38, N-37 |
+| (3) A fragment's release activates with no restart and leaves the shell's release alone. | F-29 |
+
+Each criterion is one of the three acceptance sentences of #961 → "The stage and gate", quoted
+whole. What the mapping shows, so a reader signing them off does not have to work it out:
+
+- **Criterion (1)'s hermetic ids prove the chain, not the silence.** TestIdp has no provider
+  session and ignores `prompt` unless workstream 5's fidelity switch (#997, #961's T7) is on, and
+  it is off by default, so F-24 and F-33 prove one interactive sign-in and a completed chain; F-40
+  and F-42 prove the silence on Cognito.
+- **Criterion (3) is F-06's shape for a fragment.** F-29 asserts A → B → A and also carries O6's
+  two document-level cases, the first import after activation and the missing lazy chunk.
+- **Twenty-three ids prove a G9 behaviour no sentence states:** an unavailable fragment (F-25), a
+  `login_required` or transient hop (F-43), logout (F-26, N-38), `GET /bff/fragments` (F-27), the
+  policy (F-28, N-36, F-39), `schemaVersion` (F-30, F-31), the refresh regression (F-32), the
+  concurrency traces (F-35), the asset invariant (F-36, F-37), the entry import (F-41), the reserved
+  paths and publish (N-39 to N-41), the import-map write check (N-42), and the chain step's refusals
+  (N-43 to N-46).
+
+**The obligations, and how each is proved.** O1 to O13 are #961's Testing Decisions; the four with
+no id are sitting records, cited by the tag message as #348's comments are for G6 rows 1 and 2.
+
+- **O1, Cognito redirects and the cap:** a sitting record of redirects from `/bff/login` to
+  `returnUrl` at N = 0 to 6 and per hop. G9 does not close until its count replaces the
+  fragments-per-shell placeholder of 5.
+- **O2, refresh latency and write conflicts:** a sitting record of the p95 refresh at 1 + 5 due sets
+  and the conflicts and attempts per write, on one task and two, with run ids. G9 does not close
+  until it confirms or changes the per-set gates and sets `MergeBudget`, a defect at its placeholder
+  of 3 until then.
+- **O3, successor revocation across tasks:** N-38. A counterexample blocks G9 until a fix, or
+  until Adam's decision comment on #961 accepts the residual and `docs/gaps.md` gains its entry.
+- **O4, record size and write cost:** a sitting record of the serialised bytes and write units at
+  1 + 5 sets.
+- **O5, import-map browser conformance:** F-39.
+- **O6, activation behaviour:** F-29.
+- **O7, concurrency traces:** F-35.
+- **O8, the prompt-less fallback on one host:** F-40.
+- **O9, header limits:** a sitting record of the ALB, Kestrel and browser limits against the merged
+  policy at the cap, and the merged size.
+- **O10, the cache invariant:** F-36, and F-37 on the cell's bucket.
+- **O11, cross-client selection and refusal:** F-38 and N-37.
+- **O12, the entry import:** F-41.
+- **O13, chain navigation on a real provider:** F-42 and N-46.
+
+The tag message quotes the exit test and cites the sitting records for O1, O2, O4 and O9.

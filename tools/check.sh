@@ -33,7 +33,13 @@
 # when the other changes. Last, when a file under .claude/workflows/ changed, it runs every workflow
 # script's test companion with node, and fails on a script that has none (#276); those CI runs on
 # the same answer from .github/touches.sh, in one step. Neither mode runs tools/check_tests.py,
-# which runs this file and so stays CI's. Its lines say "check:", and it ends on one line, `check: pass: ...` or `check: fail: ...`,
+# which runs this file and so stays CI's. A red test companion, of either kind, does not stop the
+# check: every companion the change earns runs, each red one is said on a line of its own under its
+# output, `check: the test companion <path> failed.` or `check: the workflow test companion <path>
+# failed.`, and the verdict names every one (#1472), so a reviewer reads one red check rather than
+# re-running the companions after the first by hand. A check that fails after a red companion,
+# through fail() or a stop under set -e, keeps its own reason and adds the companions to it.
+# Its lines say "check:", and it ends on one line, `check: pass: ...` or `check: fail: ...`,
 # exiting non-zero on failure, so a log's last line is the verdict. Its first two lines name the
 # bash running it and the file-mode mask, so a log can be compared with another machine's (#230).
 # In both modes each step it executes, and each test companion, writes its elapsed seconds on a line
@@ -177,11 +183,14 @@ fi
 # The verdict, in full mode, for every way out: fail() below writes its own and exits, and anything
 # else that stops the script under set -e reaches this line instead of ending the log mid-step.
 verdict=""
+# The red test companions so far, comma-separated, of each kind (#1472).
+red_tests=""
+red_workflows=""
 on_exit() {
   status=$?
   if $full && [ "$status" -ne 0 ] && [ -z "$verdict" ]; then
     elapsed_total
-    echo "check: fail: stopped with status $status." >&2
+    echo "check: fail: stopped with status $status.$(after_reds)" >&2
     exit 1
   fi
 }
@@ -203,13 +212,45 @@ elapsed_total() {
   echo "$me: elapsed: total: ${SECONDS}s"
 }
 
+# The red test companions, as the verdict names them: empty when none is red.
+reds() {
+  local phrase=""
+  case "$red_tests" in
+    *", "*) phrase="the test companions $red_tests" ;;
+    ?*) phrase="the test companion $red_tests" ;;
+  esac
+  case "$red_workflows" in
+    *", "*) phrase="${phrase:+$phrase and }the workflow test companions $red_workflows" ;;
+    ?*) phrase="${phrase:+$phrase and }the workflow test companion $red_workflows" ;;
+  esac
+  printf '%s' "$phrase"
+}
+
+# What a failure's reason adds after a red companion, so the last line still names every one.
+after_reds() {
+  local red
+  red="$(reds)"
+  [ -z "$red" ] || printf ' Before it, %s failed.' "$red"
+}
+
+# A failure: its reason, then the red companions before it.
 fail() {
+  fail_as "$1$(after_reds)"
+}
+
+# The verdict that fails on the red companions alone, once every one has run.
+fail_on_reds() {
+  fail_as "$(reds) failed."
+}
+
+fail_as() {
+  local message="$1"
   verdict="fail"
   elapsed_total
   if $full; then
-    echo "check: fail: $1" >&2
+    echo "check: fail: $message" >&2
   else
-    echo "pre-push: $1" >&2
+    echo "pre-push: $message" >&2
     echo "pre-push: fix it, or push with --no-verify if you mean it." >&2
   fi
   exit 1
@@ -485,6 +526,22 @@ else
   missing python3 "the endpoint paths"
 fi
 
+# --- the mode split ---------------------------------------------------------------------------
+#
+# What an adopter may take is answered by one table, README.md's path table, with the list in
+# contracts/README.md for the files under contracts/ (#1335). A path added with no value, or with
+# two, would leave that answer wrong without anything noticing. tools/mode_split.py gives every
+# tracked path its one value from the table and the list, and says what it reads and why (#1344). It
+# reads the tree, not the diff, so it is never skipped; its exit 2, a table or a list it could not
+# read, fails here as a finding does.
+if command -v python3 > /dev/null; then
+  python3 -I tools/mode_split.py \
+    || fail "a tracked path has no one value of README.md's path table, or breaks its clauses, or none was judged."
+  elapsed "the mode split"
+else
+  missing python3 "the mode split"
+fi
+
 # --- duplicated build artifacts ---------------------------------------------------------------
 #
 # iCloud Drive leaves files like "Platform.Abstractions 2.dll" and "project.assets 2.json" in bin/
@@ -566,7 +623,7 @@ elapsed "the file modes"
 # has none yet, and G1a's exit test, which nothing else proves. CI builds Release; this builds the
 # default Debug, as the hook always has, and smokes what it built. Last, the gateway's image, built
 # and started as the header says; it publishes in the image, so it does not use this build.
-ran="A-05, the steering documents, every ticket citation, the ticket numbers, the part-row merges, the full-landing merges, the roadmap, the analysis guard, the endpoint paths, the artifacts, the file modes"
+ran="A-05, the steering documents, every ticket citation, the ticket numbers, the part-row merges, the full-landing merges, the roadmap, the analysis guard, the endpoint paths, the mode split, the artifacts, the file modes"
 
 if touches build; then
   command -v dotnet > /dev/null || fail "dotnet is not on PATH."
@@ -905,7 +962,10 @@ if $full; then
     count=0
     for found in $companions; do
       echo "check: the test companion $found:"
-      python3 -I "$found" || fail "the test companion $found failed."
+      if ! python3 -I "$found"; then
+        echo "check: the test companion $found failed." >&2
+        red_tests="${red_tests:+$red_tests, }$found"
+      fi
       elapsed "the test companion $found"
       listed="${listed:+$listed, }$found"
       count=$((count + 1))
@@ -929,8 +989,9 @@ fi
 # and runs the same companions. A workflow script without its companion fails the check, naming
 # the script, before any companion runs, so a script cannot lose its companion and stay green. The
 # companions' own output is shown, so a red one's last lines sit above the verdict, and the check
-# stops at the first. Only a tracked file directly in the folder is a script or a companion: what
-# sits under fixtures/ is data. Without node the check fails, as the header says of any tool.
+# runs the rest after a red one, as it does the test companions above (#1472). Only a tracked file
+# directly in the folder is a script or a companion: what sits under fixtures/ is data. Without
+# node the check fails, as the header says of any tool.
 if $full; then
   if touches workflows; then
     workflow_scripts=""
@@ -960,7 +1021,10 @@ if $full; then
       count=0
       for found in $workflow_companions; do
         echo "check: the workflow test companion $found:"
-        node "$found" || fail "the workflow test companion $found failed."
+        if ! node "$found"; then
+          echo "check: the workflow test companion $found failed." >&2
+          red_workflows="${red_workflows:+$red_workflows, }$found"
+        fi
         elapsed "the workflow test companion $found"
         listed="${listed:+$listed, }$found"
         count=$((count + 1))
@@ -975,6 +1039,8 @@ if $full; then
     echo "check: workflow test companions skipped: nothing under .claude/workflows/ changed."
   fi
 fi
+
+[ -z "$(reds)" ] || fail_on_reds
 
 verdict="pass"
 elapsed_total

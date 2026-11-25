@@ -67,8 +67,11 @@ public sealed class ArchitectureTests
         // when someone adds a project and forgets the solution. .scratch/ is left out of the scan,
         // with bin/, obj/ and spikes/: overnight runs write probes under .scratch/<slug>/log/, which
         // git ignores, and a project file there failed this in the main checkout (#1274).
+        // .claude/worktrees/ is left out too: an agent's worktree there, also ignored, holds a copy
+        // of every project, so each name was counted twice in the main checkout (#1374).
         Assert.Equal(
             ProjectGraph.ProjectsATreeHolds(
+                RepositoryRoot,
                 Directory.EnumerateFiles(RepositoryRoot, "*.csproj", SearchOption.AllDirectories)),
             ProjectGraph.Solution.Projects.Select(project => project.Name).Order(StringComparer.Ordinal));
     }
@@ -82,30 +85,71 @@ public sealed class ArchitectureTests
         Assert.Equal(
             ["Gateway"],
             ProjectGraph.ProjectsATreeHolds(
-            [
-                "/repo/src/Gateway/Gateway.csproj",
-                "/repo/.scratch/overnight/log/probe/probe.csproj",
-                "/repo/.scratch/overnight/log/issue-976-probe/tools/bench/floor/Bench.Floor.csproj",
-                "/repo/src/Gateway/obj/Gateway.csproj",
-                "/repo/src/Gateway/bin/Debug/Gateway.csproj",
-                "/repo/spikes/g0/cognito/Cognito.csproj",
-            ]));
+                "/repo",
+                [
+                    "/repo/src/Gateway/Gateway.csproj",
+                    "/repo/.scratch/overnight/log/probe/probe.csproj",
+                    "/repo/.scratch/overnight/log/issue-976-probe/tools/bench/floor/Bench.Floor.csproj",
+                    "/repo/src/Gateway/obj/Gateway.csproj",
+                    "/repo/src/Gateway/bin/Debug/Gateway.csproj",
+                    "/repo/spikes/g0/cognito/Cognito.csproj",
+                ]));
+    }
+
+    [Fact]
+    public void A_project_file_in_an_agent_worktree_is_no_project_the_solution_must_list()
+    {
+        // The filter again: a copy of the gateway in an agent's worktree under .claude/worktrees/
+        // is not counted beside the main checkout's own (#1374).
+        // Mutation (#1374): remove "/.claude/worktrees/" from OutsideTheSolution and this reads
+        // ["Gateway", "Gateway"].
+        Assert.Equal(
+            ["Gateway"],
+            ProjectGraph.ProjectsATreeHolds(
+                "/repo",
+                [
+                    "/repo/src/Gateway/Gateway.csproj",
+                    "/repo/.claude/worktrees/lane/src/Gateway/Gateway.csproj",
+                ]));
+    }
+
+    [Fact]
+    public void A_checkout_inside_an_agent_worktree_counts_its_own_projects()
+    {
+        // The suite also runs from inside such a worktree, where every absolute path holds
+        // /.claude/worktrees/. The filter reads only the part of a path below the root, so the
+        // worktree's own projects are counted.
+        // Mutation (#1374): match the absolute path instead of the root-relative one and this reads
+        // an empty list.
+        Assert.Equal(
+            ["Gateway", "Platform.Proxy"],
+            ProjectGraph.ProjectsATreeHolds(
+                "/repo/.claude/worktrees/lane",
+                [
+                    "/repo/.claude/worktrees/lane/src/Gateway/Gateway.csproj",
+                    "/repo/.claude/worktrees/lane/src/Platform.Proxy/Platform.Proxy.csproj",
+                ]));
     }
 
     [Fact]
     public void A_project_file_anywhere_else_is_one_the_solution_must_list()
     {
         // What the assertion is for: a project added beside the others and left out of the solution
-        // is named, whatever directory it is in, a dot-directory that is not .scratch/ included.
+        // is named, whatever directory it is in, a dot-directory that is not .scratch/ included, and
+        // a directory under .claude/ that is not worktrees/.
+        // Mutation (#1374): widen "/.claude/worktrees/" in OutsideTheSolution to "/.claude/" and this
+        // fails 1 of 27, without Agent.
         Assert.Equal(
-            ["Forgotten", "Gateway", "Hidden", "Scratch"],
+            ["Agent", "Forgotten", "Gateway", "Hidden", "Scratch"],
             ProjectGraph.ProjectsATreeHolds(
-            [
-                "/repo/src/Gateway/Gateway.csproj",
-                "/repo/tools/forgotten/Forgotten.csproj",
-                "/repo/.github/hidden/Hidden.csproj",
-                "/repo/tools/scratch/Scratch.csproj",
-            ]));
+                "/repo",
+                [
+                    "/repo/src/Gateway/Gateway.csproj",
+                    "/repo/tools/forgotten/Forgotten.csproj",
+                    "/repo/.github/hidden/Hidden.csproj",
+                    "/repo/tools/scratch/Scratch.csproj",
+                    "/repo/.claude/workflows/agent/Agent.csproj",
+                ]));
     }
 
     [Fact]
@@ -122,25 +166,30 @@ public sealed class ArchitectureTests
     {
         // The live assertion above passes over a tree with no literal whether or not the scan read a
         // file, the hazard A04_is_read_from_package_references_that_were_actually_parsed answers. So the
-        // same rule runs here over the one project that must hold the literals: the thirteen declarations
-        // in RuleIds (auth.store since #343's item 2), the fourteen code declarations in Problems (#158;
+        // same rule runs here over the one project that must hold the literals: the fourteen declarations
+        // in RuleIds (auth.store since #343's item 2, auth.chain since the fragments spec, #961, typed
+        // by #988 with the Rule ids row of #983), the fifteen code declarations in Problems (#158;
         // shell_unavailable since #427, session_store_unavailable since #343's item 2, the thirteenth,
-        // and store_unavailable since #543, the fourteenth by landing, declared after idp_unavailable),
-        // and the one quoted id in IRequestTelemetryFeature's doc comment, which proves the scan reads
-        // comments too. No doc comment in Platform.Abstractions quotes a code: Problems names each in
-        // its declaration only. The count moves with its subject: a quoted id or code added to or
-        // removed from Platform.Abstractions moves it.
-        // Mutation (#739): remove only the StoreUnavailable entry from Problems.Rows, keeping the
-        // constant, and store_unavailable leaves the ids the scan looks for: the count reads 27 and
-        // Problems.cs 13.
+        // store_unavailable since #543, the fourteenth by landing, declared after idp_unavailable, and
+        // fragment_login_required since #961, typed by #988 with the Errors row of #982, the fifteenth
+        // by landing, declared after session_ended), and the one quoted id in
+        // IRequestTelemetryFeature's doc comment, which proves the scan reads comments too. No doc
+        // comment in Platform.Abstractions quotes a code: Problems names each in its declaration only.
+        // The count moves with its subject: a quoted id or code added to or removed from
+        // Platform.Abstractions moves it.
+        // Mutation (#1002): remove only the AuthChain entry from RuleIds.All and the
+        // FragmentLoginRequired entry from Problems.Rows, keeping the constants, and auth.chain and
+        // fragment_login_required leave the ids the scan looks for: the count reads 28, RuleIds.cs 13
+        // and Problems.cs 14. Rejection names RuleIds.AuthChain, so dropping the constant does not
+        // compile.
         string[] hits = [.. RuleIdLiterals.Violations([DirectoryOf(ReferenceRules.Abstractions)], RuleIdLiterals.Ids)];
 
-        Assert.Equal(28, hits.Length);
+        Assert.Equal(30, hits.Length);
         Assert.Equal(
             [
                 ("Platform.Abstractions/IRequestTelemetryFeature.cs", 1),
-                ("Platform.Abstractions/Problems.cs", 14),
-                ("Platform.Abstractions/RuleIds.cs", 13),
+                ("Platform.Abstractions/Problems.cs", 15),
+                ("Platform.Abstractions/RuleIds.cs", 14),
             ],
             hits
                 .GroupBy(hit => hit[..hit.IndexOf(':', StringComparison.Ordinal)], StringComparer.Ordinal)

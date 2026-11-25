@@ -129,6 +129,7 @@ function run(scriptArgs, served, behave = {}) {
   const ids = new Map()
   const byId = new Map()
   const servedAt = new Map()   // id -> the one endpoint that serves it, as ghEndpoint below reads a prompt
+  const bodyReads = new Map()  // a body's URL -> how many body agents read it (#1423)
   const projected = (trim, at) => (e) => {
     if (!ids.has(e)) { ids.set(e, ids.size + 1); byId.set(ids.get(e), e) }
     servedAt.set(ids.get(e), `${at}/${ids.get(e)}`)
@@ -196,10 +197,14 @@ function run(scriptArgs, served, behave = {}) {
       // it, or what behave.bodies says of its URL: 'null' for an agent that dies returning nothing,
       // { throws } for one that dies throwing that value, whose message the harness wrote and so need
       // not name the URL (#1076), a function of the body for the body it returns instead, or { error }
-      // for a gh it cannot reach, with the whole body beside it when whole is true.
+      // for a gh it cannot reach, with the whole body beside it when whole is true. An array says one
+      // of those per read of that body, in the order the agents ran, its last entry for every read
+      // past its end (#1423); bodyReads counts the reads of each URL.
       const e = byId.get(Number(opts.label.split(':')[3]))
       if (!e) throw new Error(`a body agent for an id the inventory never gave: ${opts.label}`)
-      const b = (behave.bodies || {})[e.html_url]
+      bodyReads.set(e.html_url, (bodyReads.get(e.html_url) || 0) + 1)
+      const said = (behave.bodies || {})[e.html_url]
+      const b = Array.isArray(said) ? said[Math.min(bodyReads.get(e.html_url), said.length) - 1] : said
       if (b && b.throws !== undefined) throw b.throws
       if (b === 'null') return null
       // gh answers from the endpoint the prompt names (#1073), whatever the label says. An id of the
@@ -289,7 +294,7 @@ function run(scriptArgs, served, behave = {}) {
     }
     throw new Error(`unexpected agent label ${opts.label}`)
   }
-  return { repo, wt: args.wt, calls, posted, mutations, prompts, git, flight, events, batches }
+  return { repo, wt: args.wt, calls, posted, mutations, prompts, git, flight, events, batches, bodyReads }
 }
 
 // A stubbed gh shared across runs. failPost: GitHub cannot be reached at posting time. headNow: the
@@ -671,6 +676,37 @@ try {
       if (m.countsMatched !== null) fail(`PR ${n} with the ${kind} ${test} red only on another test: countsMatched ${m.countsMatched}, expected null on a did-not-fail row`)
       const prompt = (env.mutations.find((x) => x.test === test) || {}).prompt || ''
       if (!/stayed green, the result is did-not-fail: failingNames names the tests that went red/.test(prompt) || /reproduced all the same/.test(prompt)) fail(`the ${kind} mutation prompt does not say a break caught only by another test is did-not-fail`)
+    }
+    // A stated cell that names a unittest class is that class's methods (#1416): unittest prints a
+    // failing name as a method of its class, so on #1406 the cell FencedBoxTests, red on all five of
+    // its methods, matched none and read did-not-fail. Red only on that class's methods, in either
+    // printed form or under a dotted module, it reproduces and merges; a cell naming the class with
+    // its module does too. Red only on another class's methods, or on a class whose name merely ends
+    // in the cell's, it is still did-not-fail and holds. A name xUnit printed, 'Ns.Class.Method(args)',
+    // is read the same way (#1452): on #1451 the cell PolicyConfigurationTests, red on seven of its
+    // methods, read did-not-fail. Red only on another class's methods, or on a class whose name ends
+    // in the cell's but not at a dot, it is still did-not-fail and holds.
+    {
+      const CLS = 'FencedBoxTests'
+      const PY = 'tools/landing_subjects_tests.py'
+      for (const [cell, names, want, verdict] of [
+        [CLS, ['test_a (__main__.FencedBoxTests)', 'test_b (__main__.FencedBoxTests)'], 'reproduced', 'merge'],
+        [CLS, ['test_a (__main__.FencedBoxTests.test_a)'], 'reproduced', 'merge'],
+        [CLS, ['test_a (tools.landing_subjects_tests.FencedBoxTests) (k=\'v\')'], 'reproduced', 'merge'],
+        [`__main__.${CLS}`, ['test_a (__main__.FencedBoxTests)'], 'reproduced', 'merge'],
+        [CLS, ['test_a (__main__.OtherTests)', 'test_b (__main__.OtherTests.test_b)'], 'did-not-fail', 'hold'],
+        [CLS, ['test_a (__main__.XFencedBoxTests)'], 'did-not-fail', 'hold'],
+        ['PolicyConfigurationTests', ['Platform.Registry.Tests.PolicyConfigurationTests.Nom', 'Platform.Registry.Tests.PolicyConfigurationTests.Other(value: "a.b")'], 'reproduced', 'merge'],
+        ['PolicyConfigurationTests', ['Platform.Registry.Tests.OtherTests.Nom', 'Platform.Registry.Tests.OtherTests.Other'], 'did-not-fail', 'hold'],
+        ['ConfigurationTests', ['Platform.Registry.Tests.PolicyConfigurationTests.Nom'], 'did-not-fail', 'hold'],
+      ]) {
+        const SERVED = { 206: pr(206, [PY], { statedMutations: [stated(cell, names.length, 104, PY)] }) }
+        env = run({ prs: [206] }, SERVED, { mutate: { [cell]: { ...row('reproduced', names.length, 104), failingNames: names } } })
+        result = await execute(env)
+        const c = resultOf(206, result)
+        const m = (c.mutations || []).find((x) => x.test === cell) || {}
+        if (m.result !== want || c.verdict !== verdict) fail(`PR 206 with the stated row ${cell} red on ${JSON.stringify(names)}: row ${m.result}, verdict ${c.verdict}, expected ${want} and ${verdict}`)
+      }
     }
     // A nomination whose test carries a qualifier after its name is mutated under the bare name, and
     // red on that test it reads reproduced and merges (#763): on #762 the qualifier turned it did-not-fail.
@@ -1184,6 +1220,61 @@ try {
       const c = resultOf(212, result)
       const m = (c.mutations || []).find((x) => x.test === 'overnight_tests.mjs check 39') || {}
       if (m.result !== 'did-not-fail' || c.verdict !== 'hold') fail(`PR 212 with the stated row "overnight_tests.mjs check 39" red on another check's message too, not accepted: row ${m.result}, verdict ${c.verdict}, expected did-not-fail and hold`)
+    }
+  }
+
+  // A caughtAccepted entry may carry its row's kind (#1403): the verdict prompt lists a row as
+  // "- <test> (<kind>): ...", and on #1396 a verdict returned the name with " (stated)" after it, which
+  // the script read as a catch the verdict did not accept, and held. The name followed by the row's own
+  // kind accepts the row as the bare name does. Nothing looser does: another row's kind after the name,
+  // or a name no row has, accepts nothing, and a name that itself ends in parentheses is matched as it
+  // stands. The prompt says once that the string is the name without its kind.
+  checks++
+  {
+    const MJS = '.claude/workflows/review-queue_tests.mjs'
+    const MSGS = ['#1327 cause 3: the Broken cell does not record the image the break needs']
+    const T = 'review-queue_tests.mjs `#1327 cause 3` checks'
+    const OTHER = 'review-queue_tests.mjs check 12 (#905)'
+    const PAREN = 'review-queue_tests.mjs (stated mutation cells and could-not-run environment cases)'
+    const red = { ...row('reproduced', 1, 1), failingNames: MSGS }
+    const SENTENCE = "The string that goes in caughtAccepted, here and below, is the row's test name without its kind: the mutation list above prints each row as its test name and then its kind in parentheses, and the kind is not part of the name."
+    // The stated row T beside the candidate row OTHER, each red only on its own checks' messages.
+    const SHAPE = { 215: pr(215, [MJS, '.claude/workflows/review-queue.js'], { statedMutations: [stated(T, 1, -1, MJS)], candidates: [{ test: OTHER, project: MJS, file: MJS, guards: 'the fail() messages', breaks: '.claude/workflows/review-queue.js' }] }) }
+    for (const [label, entry, want, verdict] of [
+      ['its bare name', T, 'reproduced', 'merge'],
+      ['its name and its own kind', `${T} (stated)`, 'reproduced', 'merge'],
+      ["its name and the other row's kind", `${T} (candidate)`, 'did-not-fail', 'hold'],
+      ['its name and a kind no row has', `${T} (held)`, 'did-not-fail', 'hold'],
+      ['a name no row has, with its kind', 'review-queue_tests.mjs `#1327 cause 4` checks (stated)', 'did-not-fail', 'hold'],
+    ]) {
+      // OTHER is accepted by its bare name throughout, so a hold can only be T's.
+      env = run({ prs: [215] }, SHAPE, { mutate: { [T]: red, [OTHER]: red }, caught: { 215: [OTHER, entry] } })
+      result = await execute(env)
+      const c = resultOf(215, result)
+      const m = (c.mutations || []).find((x) => x.test === T && x.kind === 'stated') || {}
+      const o = (c.mutations || []).find((x) => x.test === OTHER && x.kind === 'candidate') || {}
+      if (o.result !== 'reproduced') fail(`PR 215: the candidate row ${JSON.stringify(OTHER)}, accepted by its bare name beside the entry ${JSON.stringify(entry)}, reads ${o.result}, expected reproduced`)
+      if (m.result !== want || c.verdict !== verdict) fail(`PR 215 with the stated caught row ${JSON.stringify(T)} and caughtAccepted holding ${label}, ${JSON.stringify(entry)}: row ${JSON.stringify({ result: m.result })}, verdict ${c.verdict}, expected ${want} and ${verdict}`)
+      if (want === 'did-not-fail' && !String(m.why || '').includes('a catch the verdict did not accept')) fail(`PR 215 with caughtAccepted holding ${label}, ${JSON.stringify(entry)}: the row's why does not say "a catch the verdict did not accept": ${JSON.stringify(m.why)}`)
+    }
+    {
+      const n = (env.prompts['verdict:215'] || '').split(SENTENCE).length - 1
+      if (n !== 1) fail(`PR 215: the verdict prompt names the string for caughtAccepted as the row's test name without its kind ${n} times, expected once: ${JSON.stringify(SENTENCE)}`)
+    }
+    // A name that ends in parentheses of its own, as one held row's does (#1403): its exact name
+    // accepts it, as does that name with its kind after it, and the name cut at its own parentheses
+    // accepts nothing.
+    const WITHPAREN = { 215: pr(215, [MJS, '.claude/workflows/review-queue.js'], { statedMutations: [stated(PAREN, 1, -1, MJS)] }) }
+    for (const [label, entry, want, verdict] of [
+      ['its exact name', PAREN, 'reproduced', 'merge'],
+      ['its exact name and its own kind', `${PAREN} (stated)`, 'reproduced', 'merge'],
+      ['its name cut at its own parentheses', 'review-queue_tests.mjs', 'did-not-fail', 'hold'],
+    ]) {
+      env = run({ prs: [215] }, WITHPAREN, { mutate: { [PAREN]: red }, caught: { 215: [entry] } })
+      result = await execute(env)
+      const c = resultOf(215, result)
+      const m = (c.mutations || []).find((x) => x.test === PAREN && x.kind === 'stated') || {}
+      if (m.result !== want || c.verdict !== verdict) fail(`PR 215 with the stated caught row ${JSON.stringify(PAREN)}, a name ending in parentheses, and caughtAccepted holding ${label}, ${JSON.stringify(entry)}: row ${JSON.stringify({ result: m.result })}, verdict ${c.verdict}, expected ${want} and ${verdict}`)
     }
   }
 
@@ -2559,6 +2650,51 @@ try {
     }
   }
 
+  // A copy short or long is read again by a fresh agent (#1423). On #1421 a 13,718-character record
+  // came back as 10,587 characters in one run and as 13,724 in the next, and neither run got past the
+  // inventory. A first read short, or long, and a second read whole is taken: the review is recorded,
+  // every record, follow-up row and held row read as from a first read whole, and the body read
+  // exactly twice, the second time under a label and an OUTPUT FILE of its own, the other five bodies
+  // once each. A body that never comes back whole fails at the inventory naming its URL, after
+  // exactly three reads, the bound the script sets, and never after one.
+  checks++
+  {
+    const target = RECORDS796[3].html_url
+    const short = (b) => Array.from(b).slice(0, Math.floor(Array.from(b).length * 10587 / 13718)).join('')
+    const long = (b) => `${b}xxxxxx`
+    const cases = { 'short, then whole': [short, (b) => b], 'long, then whole': [long, (b) => b] }
+    for (const [what, reads] of Object.entries(cases)) {
+      env = run({ prs: [796], maxMutationsPerPr: 20 }, SERVED796, { followUps: { 796: CARRIED796 }, bodies: { [target]: reads } })
+      result = await execute(env)
+      const r = resultOf(796, result)
+      if (r.outcome !== 'recorded') fail(`#1423 a body read ${what}: outcome ${r.outcome} at ${JSON.stringify(r.stage)}, expected recorded`)
+      if (env.bodyReads.get(target) !== 2) fail(`#1423 a body read ${what}: read ${env.bodyReads.get(target)} time(s), expected 2`)
+      const others = RECORDS796.filter((x) => x.html_url !== target).map((x) => env.bodyReads.get(x.html_url))
+      if (others.some((k) => k !== 1)) fail(`#1423 a body read ${what}: the other bodies were read ${JSON.stringify(others)} times, expected once each`)
+      if ((r.earlierRecords || []).length !== RECORDS796.length) fail(`#1423 a body read ${what}: ${(r.earlierRecords || []).length} earlier record(s) read, expected ${RECORDS796.length}`)
+      const want = CARRIED796.map((f, k) => ({ axis: f.axis, title: f.title, where: f.where, firstCarried: RECORDS796[Math.floor(k / 2)].html_url, failsOn: f.failsOn }))
+      if (JSON.stringify(r.followUps) !== JSON.stringify(want)) fail(`#1423 a body read ${what}: followUpsOf gave ${(r.followUps || []).length} row(s), expected the twelve each record carries`)
+      const mutated = env.mutations.filter((m) => m.n === 796).map((m) => m.test)
+      const missing = HELD796.filter((t) => !mutated.includes(t))
+      if (missing.length) fail(`#1423 a body read ${what}: mutationTableOf lost the held row(s) ${missing.join(', ')}`)
+      const again = env.calls.filter((c) => /^inventory:796:body:\d+:read-2$/.test(c))
+      if (again.length !== 1) fail(`#1423 a body read ${what}: second-read agents ${JSON.stringify(again)}, expected one`)
+      const id = (again[0] || '').split(':')[3]
+      const p = env.prompts[again[0]] || ''
+      if (!p.includes(`OUTPUT FILE: ${env.repo}/.scratch/review-queue/log/2026-10-21/pr-796/body-${id}-read-2.json`) || !p.includes('This is read 2')) fail(`#1423 a body read ${what}: the second read's prompt names no file of its own or does not say it is read 2`)
+    }
+    const never = { 'short every time': short, 'long every time': long, 'short, long, short': [short, long, short] }
+    for (const [what, b] of Object.entries(never)) {
+      env = run({ prs: [796], maxMutationsPerPr: 20 }, SERVED796, { followUps: { 796: CARRIED796 }, bodies: { [target]: b } })
+      result = await execute(env)
+      const r = resultOf(796, result)
+      if (r.outcome !== 'failed' || !String(r.stage).startsWith('inventory: ') || !String(r.stage).includes(target)) fail(`#1423 a body ${what}: outcome ${r.outcome} at ${JSON.stringify(r.stage)}, expected failed at the inventory naming ${target}`)
+      if (env.bodyReads.get(target) !== 3) fail(`#1423 a body ${what}: read ${env.bodyReads.get(target)} time(s) before failing, expected the bound, 3`)
+      const after = env.calls.filter((c) => !c.startsWith('inventory:') && c !== 'launch')
+      if (after.length || env.posted.length) fail(`#1423 a body ${what}: ${after.join(', ') || 'nothing'} ran after the inventory and ${env.posted.length} comment(s) were posted, expected none`)
+    }
+  }
+
   // The script's trim, and the jq on each of the inventory's two lists, strip one class of characters
   // (#1072): spaces, tabs, carriage returns and newlines, in any run, and nothing else. The tails below
   // are that class written down here, and each reaches the script as a body ending in it, so the class
@@ -2987,6 +3123,257 @@ try {
         const { ret } = await seeded({ kill: { 'post:101': how } })
         if (!/verdict\.json may be an earlier review's/.test(resultOf(101, ret).stage || '')) fail(`#1092: a post agent killed (${how}) leaves a stage that does not say verdict.json may be an earlier review's: ${resultOf(101, ret).stage}`)
       }
+    }
+  }
+
+  // #1316's records, the three causes #1327 names. The Ctrl-C cases of tools/scripts/tunnel_tests.py
+  // go red only in ubuntu:26.04, each printed by unittest under its own class.
+  {
+    const PYF = 'tools/scripts/tunnel_tests.py'
+    const FILTER = 'test_ctrl_c_leaves_the_filter_to_pass_the_session_s_last_line'
+    const NONE = 'test_ctrl_c_leaves_none_running'
+    const RED_FILTER = `__main__.TunnelForwardsThroughTheTaskToTheAlb.${FILTER}`
+    const RED_NONE = `__main__.TunnelKeepsAnIdleSessionOpen.${NONE}`
+    const BREAK = "tools/scripts/tunnel.sh replaced by df4cf96's copy, which lacks the `trap - INT` reset before `trap '' INT` in session_errors"
+    const IMAGE = 'ubuntu:26.04'
+    const DESC = `At df4cf96's \`tunnel.sh\`: \`TunnelForwardsThroughTheTaskToTheAlb.${FILTER}\` fails in \`${IMAGE}\` (bash 5.3.9). At df4cf96's \`tunnel.sh\`: \`${NONE}\` fails in \`${IMAGE}\` and passes in \`ubuntu:24.04\`.`
+    const said = (test, extra = {}) => ({ test, project: PYF, mutation: BREAK, failed: 2, total: 65, quote: 'fails in ubuntu:26.04 (0 != 120)', environment: IMAGE, ...extra })
+    const served = (stated, extra = {}) => ({ 1316: pr(1316, [PYF, 'tools/scripts/tunnel.sh'], { statedMutations: stated, description: DESC, ...extra }) })
+    const ran = (failingNames, extra = {}) => ({ ...row('reproduced', failingNames.length, 65), failingNames, broken: BREAK, environment: IMAGE, ...extra })
+
+    // Cause 1 (#1327): a stated cell whose bracket lists two or more tests is one mutation over those
+    // names: one agent, one slot of the cap, one row per name from that run, each judged by its own
+    // name under the stated rule.
+    checks++
+    {
+      const CELL = `${PYF} (both Ctrl-C cases: ${FILTER}, ${NONE})`
+      env = run({ prs: [1316] }, served([said(CELL)], { candidates: [cand('A'), cand('B'), cand('C')] }), { mutate: { [CELL]: ran([RED_FILTER, RED_NONE]) } })
+      result = await execute(env)
+      const r = resultOf(1316, result)
+      const listed = env.mutations.map((m) => m.test)
+      if (JSON.stringify(listed) !== JSON.stringify([CELL, 'A', 'B'])) fail(`#1327 cause 1: mutated ${JSON.stringify(listed)}, expected the bracketed cell once, counted once against the cap, then A and B`)
+      const rows = (r.mutations || []).filter((m) => m.kind === 'stated')
+      if (JSON.stringify(rows.map((m) => [m.test, m.result, m.logFile.split('/').pop()])) !== JSON.stringify([[FILTER, 'reproduced', 'mutation-1.txt'], [NONE, 'reproduced', 'mutation-1.txt']])) fail(`#1327 cause 1: the bracketed cell red on both names gives rows ${JSON.stringify(rows.map((m) => [m.test, m.result, m.logFile]))}, expected one reproduced row per name from the one run`)
+      if (!rows.every((m) => m.countsMatched === true)) fail(`#1327 cause 1: the rows of one run share its counts, and 2 of 65 is as stated: ${JSON.stringify(rows.map((m) => m.countsMatched))}`)
+      if (r.verdict !== 'merge') fail(`#1327 cause 1: both names red, verdict ${r.verdict}, expected merge`)
+      if ((r.notMutated || []).join() !== 'C') fail(`#1327 cause 1: the cap cut ${JSON.stringify(r.notMutated)}, expected C alone`)
+      const prompt = (env.mutations[0] || {}).prompt || ''
+      if (!prompt.includes(FILTER) || !prompt.includes(NONE)) fail('#1327 cause 1: the mutation prompt does not name both of the tests the cell lists')
+
+      env = run({ prs: [1316] }, served([said(CELL)]), { mutate: { [CELL]: ran([RED_FILTER]) } })
+      result = await execute(env)
+      const one = resultOf(1316, result)
+      const byName = Object.fromEntries((one.mutations || []).map((m) => [m.test, m.result]))
+      if (byName[FILTER] !== 'reproduced' || byName[NONE] !== 'did-not-fail' || one.verdict !== 'hold') fail(`#1327 cause 1: only ${FILTER} red gives ${JSON.stringify(byName)}, verdict ${one.verdict}, expected ${NONE} did-not-fail and hold`)
+
+      env = run({ prs: [1316] }, served([said(CELL)]), { mutate: { [CELL]: ran([RED_FILTER], { absent: [NONE] }) } })
+      result = await execute(env)
+      const gone = resultOf(1316, result)
+      const absent = (gone.mutations || []).find((m) => m.test === NONE) || {}
+      if (absent.result !== 'could-not-run' || gone.verdict !== 'hold') fail(`#1327 cause 1: ${NONE} absent from the run gives ${absent.result}, verdict ${gone.verdict}, expected could-not-run and hold`)
+      // Named absent as unittest prints it, under its class, it is absent all the same.
+      env = run({ prs: [1316] }, served([said(CELL)]), { mutate: { [CELL]: ran([RED_FILTER], { absent: [RED_NONE] }) } })
+      result = await execute(env)
+      const goneQ = ((resultOf(1316, result).mutations || []).find((m) => m.test === NONE) || {}).result
+      if (goneQ !== 'could-not-run') fail(`#1327 cause 1: ${NONE} reported absent as ${RED_NONE} gives ${goneQ}, expected could-not-run`)
+
+      env = run({ prs: [1316] }, served([said(CELL)]), { mutate: { [CELL]: ran([]) } })
+      result = await execute(env)
+      const blind = (resultOf(1316, result).mutations || []).map((m) => m.result)
+      if (JSON.stringify(blind) !== JSON.stringify(['could-not-run', 'could-not-run'])) fail(`#1327 cause 1: a run reported reproduced naming no failing test gives ${JSON.stringify(blind)}; which name went red is unknown, so no row reproduces`)
+
+      // A bracket of one token keeps today's reading: one row, the cell its test.
+      for (const cell of [`${PYF} (companion)`, `${PYF} (check: ${NONE})`, 'Nom (Assert.Null)', 'test_x (pkg.Class)']) {
+        env = run({ prs: [1316] }, served([said(cell, { environment: '' })]), { mutate: { [cell]: row('reproduced', 2, 65) } })
+        result = await execute(env)
+        const tests = (resultOf(1316, result).mutations || []).map((m) => m.test)
+        if (JSON.stringify(tests) !== JSON.stringify([cell])) fail(`#1327 cause 1: the one-token bracket ${JSON.stringify(cell)} gives rows ${JSON.stringify(tests)}, expected it unsplit`)
+      }
+    }
+
+    // A listed cell as the inventory hands it over (#1423). On #1421 it returned four backticked
+    // names in one cell as 'test_a, test_b, test_c, test_d', and the cell
+    // 'tools/roadmap_tests.py (TicketStageTests: test_a, ...)' with its wrapper dropped; each read as
+    // one name, and runs red on exactly the stated tests, as unittest prints them, read did-not-fail.
+    // Each is one mutation over its names, one row per name judged by its own name: all red is four
+    // reproduced rows and merge, and a name that stayed green is did-not-fail and holds. A cell of
+    // one name or of a file keeps its reading: one row, unsplit. A cell of prose, and of one name under
+    // a label, which statedProse reads as prose, is one row too, read as the test the mutation agent
+    // names (#1436, below); with no reading it keeps the cell as its test.
+    checks++
+    {
+      const RPY = 'tools/roadmap_tests.py'
+      const NAMES = ['test_a_lettered_row_and_heading_read_as_one_stage_in_order', 'test_a_plan_rows_line_of_tickets_yields_them_in_lower_case', 'test_a_ticket_in_one_stage_is_no_coverage_problem_and_in_two_stages_is', 'test_a_tickets_merges_count_in_its_stages_block_and_the_summary']
+      const printed = (t) => `${t} (__main__.TicketStageTests)`
+      const said1421 = (test) => ({ test, project: RPY, mutation: '`STAGE` reverted to `S\\d+\\|SX`', environment: '', failed: 4, total: 33, quote: 'red: 4 TicketStageTests cases' })
+      const served1421 = (test) => ({ 1421: pr(1421, [RPY, 'tools/roadmap.py'], { statedMutations: [said1421(test)] }) })
+      for (const cell of [NAMES.join(', '), `TicketStageTests: ${NAMES.join(', ')}`]) {
+        env = run({ prs: [1421] }, served1421(cell), { mutate: { [cell]: { ...row('reproduced', 4, 33), failingNames: NAMES.map(printed) } } })
+        result = await execute(env)
+        const r = resultOf(1421, result)
+        const rows = (r.mutations || []).map((m) => [m.test, m.result, (m.logFile || '').split('/').pop()])
+        if (JSON.stringify(rows) !== JSON.stringify(NAMES.map((t) => [t, 'reproduced', 'mutation-1.txt']))) fail(`#1423 the listed cell ${JSON.stringify(cell)} red on its four names gives rows ${JSON.stringify(rows)}, expected one reproduced row per name from the one run`)
+        if (r.verdict !== 'merge') fail(`#1423 the listed cell ${JSON.stringify(cell)} red on its four names gives verdict ${r.verdict}, expected merge`)
+        if (env.mutations.length !== 1) fail(`#1423 the listed cell ${JSON.stringify(cell)} ran ${env.mutations.length} mutation agents, expected one`)
+
+        env = run({ prs: [1421] }, served1421(cell), { mutate: { [cell]: { ...row('reproduced', 3, 33), failingNames: NAMES.filter((t) => t !== NAMES[1]).map(printed) } } })
+        result = await execute(env)
+        const three = resultOf(1421, result)
+        const byName = Object.fromEntries((three.mutations || []).map((m) => [m.test, m.result]))
+        const want = Object.fromEntries(NAMES.map((t) => [t, t === NAMES[1] ? 'did-not-fail' : 'reproduced']))
+        if (JSON.stringify(byName) !== JSON.stringify(want) || three.verdict !== 'hold') fail(`#1423 the listed cell ${JSON.stringify(cell)} with ${NAMES[1]} green gives ${JSON.stringify(byName)}, verdict ${three.verdict}, expected ${NAMES[1]} did-not-fail, the rest reproduced, and hold`)
+      }
+      for (const cell of [`4 TicketStageTests cases, including ${NAMES[0]}`, NAMES[0], `TicketStageTests: ${NAMES[0]}`, RPY]) {
+        env = run({ prs: [1421] }, served1421(cell), { mutate: { [cell]: { ...row('reproduced', 4, 33), failingNames: NAMES.map(printed) } } })
+        result = await execute(env)
+        const tests = (resultOf(1421, result).mutations || []).map((m) => m.test)
+        if (JSON.stringify(tests) !== JSON.stringify([cell])) fail(`#1423 the stated cell ${JSON.stringify(cell)} gives rows ${JSON.stringify(tests)}, expected it unsplit`)
+      }
+    }
+
+    // Cause 2 (#1327): a stated test's dotted qualifier that the description never writes is the
+    // inventory's guess; the row reads the bare name, and its why says what was stated.
+    checks++
+    {
+      const GUESS = `TunnelForwardsThroughANamedTask.${NONE}`
+      env = run({ prs: [1316] }, served([said(GUESS)]), { mutate: { [NONE]: ran([RED_NONE]) } })
+      result = await execute(env)
+      const r = resultOf(1316, result)
+      const m = (r.mutations || [])[0] || {}
+      if (m.test !== NONE || m.result !== 'reproduced' || r.verdict !== 'merge') fail(`#1327 cause 2: the stated ${GUESS}, against a description writing only ${NONE}, gives ${JSON.stringify({ test: m.test, result: m.result })}, verdict ${r.verdict}, expected ${NONE} reproduced on ${RED_NONE} and merge`)
+      if (!(m.why || '').includes(`(stated as ${GUESS}; the description names no TunnelForwardsThroughANamedTask)`)) fail(`#1327 cause 2: the row's why ${JSON.stringify(m.why)} does not say what was stated and which qualifier the description does not name`)
+      // A qualifier the description writes is kept, and so is a file the description does not write.
+      for (const kept of [`TunnelForwardsThroughTheTaskToTheAlb.${FILTER}`, 'other_tests.py']) {
+        env = run({ prs: [1316] }, served([said(kept, { environment: '' })]), { mutate: { [kept]: row('reproduced', 2, 65) } })
+        result = await execute(env)
+        const k = (resultOf(1316, result).mutations || [])[0] || {}
+        if (k.test !== kept) fail(`#1327 cause 2: the stated ${kept} reads as ${k.test}, expected it kept`)
+      }
+    }
+
+    // A stated test the body names in prose (#1436). On #1435 the body's 'the refusal case' was the
+    // row's test, no runner name could end in it, and a run red on the test it meant read did-not-fail.
+    // The mutation agent reads the phrase as one test at the head (readAs), and the row is judged by
+    // that name, its why saying what was stated; a phrase no single test answers is could-not-run.
+    checks++
+    {
+      const SPY = 'tools/scripts/seed_tests.py'
+      const PHRASE = 'the refusal case'
+      const REFUSES = 'test_the_checker_refuses_what_the_schema_refuses'
+      const CLS = '__main__.SeedWritesTheBastionServiceOnlyWhenTheRootPublishesIt'
+      // As mutation-1.txt of #1435's 2026-11-19 runs printed it, its subtest after it.
+      const RED_REFUSES = `${REFUSES} (${CLS}) (keys=['bucket'], value='bastion')`
+      const RED_OTHER = `test_the_checker_accepts_what_the_schema_accepts (${CLS})`
+      const said1435 = (test) => ({ test, project: SPY, mutation: 'the checker accepts a document missing a required field', environment: '', failed: -1, total: -1, quote: 'The mutation that makes the checker accept a document missing a required field fails the refusal case under both schemas' })
+      const served1435 = (test, extra = {}) => ({ 1435: pr(1435, [SPY, 'tools/scripts/seed.py'], { statedMutations: [said1435(test)], ...extra }) })
+      const ran1435 = (failingNames, extra = {}) => ({ ...row('reproduced', failingNames.length, 38), failingNames, ...extra })
+
+      // Read as the test whose comment names it the refusal case, which went red.
+      env = run({ prs: [1435] }, served1435(PHRASE), { mutate: { [PHRASE]: ran1435([RED_REFUSES], { readAs: REFUSES }) } })
+      result = await execute(env)
+      const r = resultOf(1435, result)
+      const m = (r.mutations || [])[0] || {}
+      if (m.test !== REFUSES || m.result !== 'reproduced' || r.verdict !== 'merge') fail(`#1436 the stated ${JSON.stringify(PHRASE)} read as ${REFUSES}, red on it, gives ${JSON.stringify({ test: m.test, result: m.result })}, verdict ${r.verdict}, expected ${REFUSES} reproduced and merge`)
+      if (!(m.why || '').includes(`(stated as ${PHRASE}; read as ${REFUSES})`)) fail(`#1436 the row's why ${JSON.stringify(m.why)} does not say what was stated and the test it was read as`)
+
+      // The mutation agent is asked to read the phrase as a test; the inventory is not, and
+      // still hands the cell over in the body's own words.
+      const prompt = (env.mutations[0] || {}).prompt || ''
+      if (!prompt.includes(`names the test in prose: ${JSON.stringify(PHRASE)}`) || !prompt.includes('READ AS: ') || !/readAs: /.test(prompt)) fail('#1436 the mutation prompt does not ask for the stated phrase to be read as one test before the break')
+      const invPrompt = env.prompts['inventory:1435'] || ''
+      if (!prompt.includes('reproduced when the test you read the phrase as went red') || !prompt.includes('but the test you read the phrase as stayed green, the result is did-not-fail')) fail('#1436 the mutation prompt does not judge the run by the test the phrase was read as')
+      if (!invPrompt.includes('the test exactly as the body writes it') || /READ AS|readAs|in prose/.test(invPrompt)) fail('#1436 the inventory prompt no longer takes the stated test in the body\'s own words, or asks for a reading')
+
+      // Read as one test, only another went red: did-not-fail, which holds.
+      env = run({ prs: [1435] }, served1435(PHRASE), { mutate: { [PHRASE]: ran1435([RED_OTHER], { readAs: REFUSES }) } })
+      result = await execute(env)
+      const other = resultOf(1435, result)
+      const o = (other.mutations || [])[0] || {}
+      if (o.test !== REFUSES || o.result !== 'did-not-fail' || other.verdict !== 'hold') fail(`#1436 the stated ${JSON.stringify(PHRASE)} read as ${REFUSES}, red only on another test, gives ${JSON.stringify({ test: o.test, result: o.result })}, verdict ${other.verdict}, expected did-not-fail and hold`)
+
+      // No single test answers the phrase, whatever the agent reported: could-not-run, why
+      // naming the phrase, never did-not-fail. A reading that is no one name answers nothing either.
+      for (const [readAs, got] of [['', ran1435([RED_REFUSES])], ['', ran1435([], { result: 'did-not-fail', failed: 0 })], ['', ran1435([], { result: 'could-not-run', why: 'no test is the refusal case' })], [PHRASE, ran1435([RED_REFUSES])], [`${REFUSES}, test_x`, ran1435([RED_REFUSES])], [undefined, ran1435([RED_REFUSES])]]) {
+        env = run({ prs: [1435] }, served1435(PHRASE), { mutate: { [PHRASE]: { ...got, ...(readAs === undefined ? {} : { readAs }) } } })
+        result = await execute(env)
+        const u = resultOf(1435, result)
+        const x = (u.mutations || [])[0] || {}
+        if (x.result !== 'could-not-run' || u.verdict !== 'hold' || !(x.why || '').includes(JSON.stringify(PHRASE))) fail(`#1436 the stated ${JSON.stringify(PHRASE)} read as ${JSON.stringify(readAs)} after ${got.result} gives ${JSON.stringify({ result: x.result, why: x.why })}, verdict ${u.verdict}, expected could-not-run naming the phrase, and hold`)
+      }
+
+      // A name, a dotted name, a file and a list keep their reading; a readAs is ignored, and
+      // the prompt asks for none.
+      const DOTTED = `SeedWritesTheBastionServiceOnlyWhenTheRootPublishesIt.${REFUSES}`
+      for (const [cell, want] of [[REFUSES, [REFUSES]], [DOTTED, [DOTTED]], [SPY, [SPY]], [`${REFUSES}, test_x`, [REFUSES, 'test_x']]]) {
+        const red = cell === SPY ? [RED_REFUSES] : [RED_REFUSES, `test_x (${CLS})`]
+        env = run({ prs: [1435] }, served1435(cell, { description: `\`${DOTTED}\`` }), { mutate: { [cell]: ran1435(red, { readAs: 'test_something_else' }) } })
+        result = await execute(env)
+        const k = resultOf(1435, result)
+        const rows = (k.mutations || []).map((x) => [x.test, x.result])
+        if (JSON.stringify(rows) !== JSON.stringify(want.map((t) => [t, 'reproduced'])) || (k.mutations || []).some((x) => /read as/.test(x.why || ''))) fail(`#1436 the stated ${JSON.stringify(cell)} with a readAs gives rows ${JSON.stringify(rows)}, expected ${JSON.stringify(want)} reproduced, as before`)
+        if (((env.mutations[0] || {}).prompt || '').includes('READ AS: ')) fail(`#1436 the mutation prompt for the stated ${JSON.stringify(cell)} asks for a reading`)
+      }
+      // A backtick leaves the cell before it is judged prose, as in nominated(): a cell led by a
+      // backticked file keeps its reading, and the prompt asks for none.
+      for (const cell of ['`seed_tests.py` the refusal case']) {
+        env = run({ prs: [1435] }, served1435(cell), { mutate: { [cell]: ran1435([RED_REFUSES], { readAs: 'test_something_else' }) } })
+        result = await execute(env)
+        if (((env.mutations[0] || {}).prompt || '').includes('READ AS: ')) fail(`#1436 the stated ${JSON.stringify(cell)}, led by a backticked file, is read as prose`)
+      }
+      // A phrase on a Node companion is not read: the companion prints no test names, only its
+      // checks' fail() messages, so its row stays the caught row the verdict answers by them (#905).
+      const CMJS = '.claude/workflows/morning_tests.mjs'
+      env = run({ prs: [1435] }, { 1435: pr(1435, [CMJS], { statedMutations: [{ ...said1435(PHRASE), project: CMJS }] }) }, { mutate: { [PHRASE]: ran1435(['the comments index counts 0'], { readAs: 'test_something_else' }) }, caught: { 1435: [PHRASE] } })
+      result = await execute(env)
+      const nm = (resultOf(1435, result).mutations || [])[0] || {}
+      if (nm.test !== PHRASE || nm.result !== 'reproduced' || !(nm.caughtBy || []).length || ((env.mutations[0] || {}).prompt || '').includes('READ AS: ')) fail(`#1436 the stated ${JSON.stringify(PHRASE)} on ${CMJS} gives ${JSON.stringify({ test: nm.test, result: nm.result, caughtBy: nm.caughtBy })}, expected the phrase kept as a caught row the verdict accepted, with no reading asked for`)
+    }
+
+    // Cause 3 (#1327): the environment a break needs. A stated mutation's image reaches its prompt, the
+    // Broken cell records where it ran, that cell reads back into a held mutation's prompt, and a run
+    // anywhere else is could-not-run.
+    checks++
+    {
+      env = run({ prs: [1316] }, served([said(NONE)]), { mutate: { [NONE]: ran([], { result: 'did-not-fail', failed: 0 }) } })
+      result = await execute(env)
+      const prompt = (env.mutations[0] || {}).prompt || ''
+      if (!prompt.includes(`a container of the image ${IMAGE}`)) fail(`#1327 cause 3: the stated mutation's prompt does not say to run it in a container of ${IMAGE}`)
+      const body = commentOf(env, 1316)
+      const cellLine = body.split('\n').find((l) => l.startsWith(`| \`${NONE}\`:`)) || ''
+      if (!cellLine.includes(`${BREAK.replace(/\|/g, '\\|')} (run in ${IMAGE}) |`)) fail(`#1327 cause 3: the Broken cell ${JSON.stringify(cellLine)} does not end (run in ${IMAGE})`)
+
+      // The posted record, held, served to the next review of a later head.
+      const H1 = sha('1'); const H2 = sha('2')
+      const held = { author_association: 'OWNER', created_at: '2026-11-17T08:00:00Z', html_url: 'https://github.com/o/r/pull/1316#issuecomment-1', body: body.replace(/Reviewed [0-9a-f]{40}/, `Reviewed ${H1}`) }
+      const range = { 1316: { from: H1, ancestor: true, commits: [H2], merges: [], changedFiles: ['tools/scripts/tunnel.sh'], error: '' } }
+      const later = served([], { head: H2, commits: [H2], comments: [held] })
+      const earlier = { 1316: [{ finding: 'the stated mutation did not reproduce', held: true, answered: true, how: 'it reproduces now' }] }
+      for (const [where, want] of [[IMAGE, 'reproduced'], ['', 'could-not-run'], ['ubuntu:24.04', 'could-not-run']]) {
+        env = run({ prs: [1316] }, later, { range, earlier, mutate: { [NONE]: ran([RED_NONE], { environment: where }) } })
+        result = await execute(env)
+        const m = (env.mutations.find((x) => x.test === NONE) || { prompt: '' })
+        if (!m.prompt.includes(`a container of the image ${IMAGE}`)) fail(`#1327 cause 3: the held mutation's prompt does not carry ${IMAGE} from the record's Broken cell`)
+        if (m.prompt.includes('(run in')) fail('#1327 cause 3: the held break still carries the (run in ...) suffix')
+        const r = resultOf(1316, result)
+        const h = (r.mutations || []).find((x) => x.kind === 'held') || {}
+        if (h.result !== want) fail(`#1327 cause 3: the held break run in ${where || 'the host'} gives ${h.result}, expected ${want}`)
+        if (want === 'could-not-run' && !(h.why || '').startsWith(`the break needs ${IMAGE} and ran in ${where || 'the host'}`)) fail(`#1327 cause 3: the row's why ${JSON.stringify(h.why)} does not say the break needs ${IMAGE}`)
+        if (want === 'could-not-run' && r.verdict !== 'hold') fail(`#1327 cause 3: a held break run in ${where || 'the host'} gives verdict ${r.verdict}, expected hold`)
+        // The cell records the image the break needs, never where a mismatched run happened (#1396).
+        const heldCell = commentOf(env, 1316).split('\n').find((l) => l.includes(`${BREAK.replace(/\|/g, '\\|')} (run in`)) || ''
+        if (!heldCell.includes(`${BREAK.replace(/\|/g, '\\|')} (run in ${IMAGE}) |`)) fail(`#1327 cause 3: the Broken cell ${JSON.stringify(heldCell)} of a held break run in ${where || 'the host'} does not end (run in ${IMAGE})`)
+      }
+      // An environment that is no image name could not be read back from the cell: could-not-run.
+      env = run({ prs: [1316] }, served([said(NONE, { environment: '' })]), { mutate: { [NONE]: ran([RED_NONE], { environment: 'docker ubuntu:26.04' }) } })
+      result = await execute(env)
+      const odd = (resultOf(1316, result).mutations || [])[0] || {}
+      if (odd.result !== 'could-not-run' || !/no image name/.test(odd.why || '')) fail(`#1327 cause 3: an environment reported as "docker ubuntu:26.04" gives ${odd.result} (${odd.why}), expected could-not-run naming no image name`)
+      // A cell with no suffix reads as the host, as before: no container in the prompt.
+      const plain = { ...held, body: held.body.replace(` (run in ${IMAGE})`, '') }
+      env = run({ prs: [1316] }, served([], { head: H2, commits: [H2], comments: [plain] }), { range, earlier, mutate: { [NONE]: ran([RED_NONE], { environment: '' }) } })
+      result = await execute(env)
+      const h = (resultOf(1316, result).mutations || []).find((x) => x.kind === 'held') || {}
+      if (h.result !== 'reproduced' || ((env.mutations[0] || {}).prompt || '').includes('a container of the image')) fail(`#1327 cause 3: a Broken cell with no (run in ...) suffix gives ${h.result} or names a container, expected a host run reproduced`)
     }
   }
 

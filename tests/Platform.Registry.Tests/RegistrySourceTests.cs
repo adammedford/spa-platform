@@ -479,6 +479,9 @@ public sealed class RegistrySourceTests
             entry["host"] = $"app{i}.spa-poc.test:8443";
             entry["oauth"]!["clientId"] = $"{i}example23456789";
             entry["oauth"]!["clientSecretRef"] = $"ssm:/spa-platform/poc/apps/app{i}/client-secret:1";
+
+            // A fragment's client id is unique across every shell and every fragment, too.
+            entry["fragments"]![0]!["oauth"]!["clientId"] = $"{i}example-reports";
             apps.Add(entry);
         }
 

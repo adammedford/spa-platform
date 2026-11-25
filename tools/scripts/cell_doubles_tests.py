@@ -19,6 +19,9 @@ here once, through tools/companion_runner.py as it runs on its own, with its bin
 recorder: this file in `--record` mode, which runs the real double with the same arguments,
 environment and standard input, passes its standard error and exit status through unchanged, and
 gives the script its standard output byte for byte, after copying it to the companion's harvest.
+The double runs in the recorder's own process, as `cell_doubles.py --double aws` runs, rather than
+in a second one, and the companions' suites run three at a time (#1474). With cell_doubles.py's
+shared wrappers and kept bytecode, those took this run from 216 s to about 50 s under load.
 
 **What is credential-shaped is read from the call, not guessed from the value.** A canary has no
 shape of its own ("teardownsecret/abc+def"), so a value counts by the AWS operation that answered
@@ -41,31 +44,67 @@ from __future__ import annotations
 import json
 import os
 import pathlib
-import subprocess
 import sys
+import threading
 
 HERE = pathlib.Path(__file__).resolve().parent
 
 
-def record(double: str, harvest: str, args: list[str]) -> int:
-    """The recorder that stands in a case's bin/aws: the real double, its standard output copied."""
-    completed = subprocess.run([double, *args], stdout=subprocess.PIPE)
-    sys.stdout.buffer.write(completed.stdout)
-    sys.stdout.buffer.flush()
-    with open(harvest, "a") as handle:
-        handle.write(json.dumps({"argv": args, "stdout": completed.stdout.decode(errors="replace")}) + "\n")
-    return completed.returncode
+def record(launch: str, doubles: str, case: str, harvest: str, args: list[str]) -> int:
+    """The recorder that stands in a case's bin/aws: the real double, its standard output copied.
+
+    The double is cell_doubles.py's `--double aws <case>` with the call's arguments, run in this
+    process by `launch`, cell_doubles.LAUNCH, as a case's own bin/aws runs it: the same code,
+    reading the same environment and standard input and writing the same standard error, without a
+    second interpreter for each call. Its standard output is file descriptor 1 itself, a pipe for
+    the call, so what a child of the double writes there is held too: `ssm start-session` starts
+    session-manager-plugin, which inherits it. The pipe is read until every writer has closed it,
+    the double and any child it left, as a recorder that ran the double as a child read its pipe;
+    then the whole is given to the script and copied to the harvest, raised or not."""
+    sys.stdout.flush()
+    saved = os.dup(1)
+    reader, writer = os.pipe()
+    os.dup2(writer, 1)
+    os.close(writer)
+    chunks: list[bytes] = []
+
+    def drain():
+        while chunk := os.read(reader, 65536):
+            chunks.append(chunk)
+
+    # Read while the double runs, so that a full pipe never stops a writer.
+    draining = threading.Thread(target=drain)
+    draining.start()
+    status = 0
+    try:
+        # LAUNCH takes the file to run after its own argument, as `python3 -c` would leave it.
+        sys.argv = ["-c", doubles, "--double", "aws", case, *args]
+        exec(launch, {"__builtins__": __builtins__})
+    except SystemExit as stop:
+        # The double ends by sys.exit with its status, as a process's would be read.
+        status = 0 if stop.code is None else stop.code
+    finally:
+        sys.stdout.flush()
+        os.dup2(saved, 1)
+        os.close(saved)
+        draining.join()
+        os.close(reader)
+        stdout = b"".join(chunks)
+        sys.stdout.buffer.write(stdout)
+        sys.stdout.buffer.flush()
+        with open(harvest, "a") as handle:
+            handle.write(json.dumps({"argv": args, "stdout": stdout.decode(errors="replace")}) + "\n")
+    return status
 
 
 if __name__ == "__main__" and sys.argv[1:2] == ["--record"]:
-    sys.exit(record(sys.argv[2], sys.argv[3], sys.argv[4:]))
+    sys.exit(record(*sys.argv[2:6], sys.argv[6:]))
 
-import importlib.util  # noqa: E402 -- below the recorder, which starts once per call
+import concurrent.futures  # noqa: E402 -- below the recorder, which starts once per call
+import importlib.util  # noqa: E402
 import io  # noqa: E402
 import re  # noqa: E402
-import shlex  # noqa: E402
 import tempfile  # noqa: E402
-import threading  # noqa: E402
 import unittest  # noqa: E402
 
 ROOT = HERE.parent.parent
@@ -148,8 +187,9 @@ def credentials_in(stdout: str) -> list[str]:
 
 
 def companions() -> list[pathlib.Path]:
-    """The companions that load cell_doubles.py, from their own text."""
-    return sorted(path for path in HERE.glob("*_tests.py")
+    """The companions that load cell_doubles.py, from their own text: beside it, and under poc/,
+    where the proof cell's scripts and theirs sit (#1349)."""
+    return sorted(path for path in HERE.rglob("*_tests.py")
                   if path.resolve() != pathlib.Path(__file__).resolve() and '"cell_doubles.py"' in path.read_text())
 
 
@@ -167,19 +207,22 @@ class Harvest:
         spec.loader.exec_module(self.module)
         cell = self.module.cell
         self.secrets = tuple(cell.SECRETS)
-        harvest = self.file
+        # One recorder for the companion's cases, which each case's bin/aws links to: a wrapper as
+        # cell_doubles.py makes the doubles' own, which takes the case from the path it was run
+        # by, and for their reason, cell_doubles.ToolWrappers' (#1474).
+        recorder = directory / f"{path.stem}-aws"
+        recorder.write_text(cell.case_wrapper(
+            pathlib.Path(__file__).resolve(),
+            ["--record", cell.LAUNCH, pathlib.Path(cell.__file__).resolve()], [self.file]))
+        recorder.chmod(0o555)
         constructed = cell.Case.__init__
         self.installed = 0
 
         def recorded(case, *args, **kwargs):
             constructed(case, *args, **kwargs)
             self.installed += 1
-            double = case.dir / "aws-double"
-            (case.bin / "aws").rename(double)
-            case.write_executable("aws", (
-                f"#!/bin/sh\nexec {shlex.quote(os.path.realpath(sys.executable))} -I -S "
-                f"{shlex.quote(str(pathlib.Path(__file__).resolve()))} --record {shlex.quote(str(double))} "
-                f"{shlex.quote(str(harvest))} \"$@\"\n"))
+            (case.bin / "aws").unlink()
+            (case.bin / "aws").symlink_to(recorder)
 
         cell.Case.__init__ = recorded
         runner = load_runner()
@@ -207,27 +250,52 @@ def load_runner():
     return runner
 
 
-_HARVESTS: dict[str, Harvest] = {}
+_HARVESTS: dict[str, concurrent.futures.Future] = {}
 _LOCK = threading.Lock()
 _SCRATCH = tempfile.TemporaryDirectory(prefix="cell-doubles-harvest-")
+# How many companions' suites run at once (#1474). Each runs its own cases on
+# tools/companion_runner.py's threads, up to one per CPU and at most 8, and its cases spend their
+# time in child processes, so the suites one at a time left most of the machine idle: 216 s of
+# them under load on 2026-11-22. On the 12-core Mac it was measured on, two, three, four and eight
+# at once all passed and took 53 to 64 s under a load average of 20 to 60, CPU-bound alike; three
+# keeps the cases running together near two per CPU, so deploy_tests.py's wall-clock bounds (its
+# five-second wait for a closed port) keep their margin.
+AT_ONCE = 3
+_POOL = concurrent.futures.ThreadPoolExecutor(max_workers=AT_ONCE)
 
 
 def harvest(path: pathlib.Path) -> Harvest:
+    """The companion's harvest, once it has run. The first call starts every companion's, the
+    longest suites first, by their text's length, so the shorter ones fill in beside them; a harvest
+    that raised raises here, in the subTest of whichever case asks for it. `path` is one of
+    companions(), as every caller's is."""
     with _LOCK:
-        if path.name not in _HARVESTS:
-            _HARVESTS[path.name] = Harvest(path, pathlib.Path(_SCRATCH.name))
-        return _HARVESTS[path.name]
+        if not _HARVESTS:
+            directory = pathlib.Path(_SCRATCH.name)
+            for found in sorted(companions(), key=lambda held: -held.stat().st_size):
+                _HARVESTS[found.name] = _POOL.submit(Harvest, found, directory)
+        future = _HARVESTS[path.name]
+    return future.result()
 
 
 def scripts_calling(name: str) -> list[str]:
     """The cell scripts whose code, outside comments, makes the call `name`."""
     pattern = re.compile(rf"(?<![\w-]){re.escape(name)}(?![\w-])")
     found = []
-    for script in sorted(HERE.glob("*.sh")):
+    for script in sorted(HERE.rglob("*.sh")):
         code = "\n".join(line.split("#", 1)[0] for line in script.read_text().splitlines())
         if pattern.search(code):
             found.append(script.name)
     return found
+
+
+class TheProofCellsCompanionsAreFound(unittest.TestCase):
+    def test_the_companions_under_poc_are_among_those_searched(self):
+        # #1349 moved the proof cell's scripts and their companions to poc/; a search of this
+        # directory alone would drop them from the case above without a word.
+        names = {path.relative_to(HERE).as_posix() for path in companions()}
+        for name in ("poc/seed_tests.py", "poc/platform_tfvars_tests.py", "poc/mock_api_tests.py", "deploy_tests.py"):
+            self.assertIn(name, names)
 
 
 class EveryCredentialTheDoublesHandOutIsSearchedFor(unittest.TestCase):

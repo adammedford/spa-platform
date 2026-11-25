@@ -9,8 +9,8 @@
   "required": ["schemaVersion", "revision", "apps"],
   "properties": {
     "schemaVersion": {
-      "const": 1,
-      "description": "The version of this contract. Only 1 exists. A later shape gets a later number, never a changed meaning."
+      "enum": [1, 2],
+      "description": "The version of this contract. 1 is a document whose entries carry no fragments, and keeps the meaning it had before fragments existed; 2 is a document whose entries may carry them, and one whose entries carry any must declare 2 (the if/then below). A build accepts exactly the values its copy of this schema names (ADR-0019 decision 1), so a build that predates fragments refuses a version-2 document by its version. spactl writes 2 on a document's first fragment and never lowers it. A later shape gets a later number, never a changed meaning."
     },
     "revision": {
       "type": "integer",
@@ -21,8 +21,18 @@
       "type": "array",
       "uniqueItems": true,
       "items": { "$ref": "#/$defs/appEntry" },
-      "description": "Every app in the cell. uniqueItems rejects two byte-identical entries. appId, host and oauth.clientId uniqueness is cross-entry, so the validator of task 2.1 checks it. An empty array is a valid document; deployment refuses to start a gateway against one (task 1.7)."
+      "description": "Every app in the cell. uniqueItems rejects two byte-identical entries. appId, host and oauth.clientId uniqueness is cross-entry, and a fragment's oauth.clientId is unique across every entry and every fragment, so the validator of task 2.1 checks them. An empty array is a valid document; deployment refuses to start a gateway against one (task 1.7)."
     }
+  },
+  "if": {
+    "$comment": "ADR-0019 decision 2: a document whose entries carry any fragments is a later shape, so it declares schemaVersion 2. A document with none may declare 1 or 2.",
+    "required": ["apps"],
+    "properties": {
+      "apps": { "contains": { "type": "object", "required": ["fragments"] } }
+    }
+  },
+  "then": {
+    "properties": { "schemaVersion": { "const": 2 } }
   },
   "$defs": {
     "appEntry": {
@@ -30,7 +40,7 @@
       "type": "object",
       "additionalProperties": false,
       "required": ["appId", "host", "release", "oauth", "session"],
-      "description": "One app. 'apis' and 'csp' may be absent: an app with no upstream and an app that adds nothing to the baseline content security policy. 'session' is required because the plan fixes no default lifetime.",
+      "description": "One app. 'apis', 'csp' and 'fragments' may be absent: an app with no upstream, an app that adds nothing to the baseline content security policy, and an app that composes no fragments, which means what an entry meant before fragments existed. 'session' is required because the plan fixes no default lifetime.",
       "properties": {
         "appId": { "$ref": "#/$defs/appId" },
         "host": { "$ref": "#/$defs/host" },
@@ -38,7 +48,8 @@
         "oauth": { "$ref": "#/$defs/oauth" },
         "apis": { "$ref": "#/$defs/apis" },
         "csp": { "$ref": "#/$defs/csp" },
-        "session": { "$ref": "#/$defs/session" }
+        "session": { "$ref": "#/$defs/session" },
+        "fragments": { "$ref": "#/$defs/fragments" }
       }
     },
 
@@ -66,7 +77,7 @@
       "minLength": 1,
       "maxLength": 64,
       "pattern": "^[A-Za-z0-9._-]+$",
-      "description": "1 to 64 letters, digits, dots, hyphens or underscores. It names the live S3 prefix, apps/{appId}/releases/{release}/. spactl checks that the prefix exists; the gateway does not."
+      "description": "1 to 64 letters, digits, dots, hyphens or underscores. It names the live S3 prefix: apps/{appId}/releases/{release}/ for an app, apps/{appId}/fragments/{fragmentId}/releases/{release}/ for a fragment. spactl checks that the prefix exists, and for a fragment that its entry file does; the gateway does not."
     },
 
     "oauth": {
@@ -135,7 +146,7 @@
       "type": "array",
       "uniqueItems": true,
       "items": { "$ref": "#/$defs/api" },
-      "description": "The upstreams the app reaches under /api/{name}/. More than one upstream origin on an entry is a warning, not an error: Phase 1 sends one access token to each, which is safe only inside one trust domain. A warning is not expressible here; the validator raises it."
+      "description": "The upstreams the app reaches under /api/{name}/, or a fragment reaches under /fragments/{fragmentId}/api/{name}/. More than one upstream origin on one token set (the shell's apis, or one fragment's) is a warning, not an error: Phase 1 sends one access token to each, which is safe only inside one trust domain. A warning is not expressible here; the validator raises it."
     },
 
     "api": {
@@ -149,7 +160,7 @@
           "minLength": 1,
           "maxLength": 32,
           "pattern": "^[a-z0-9-]+$",
-          "description": "The {name} segment in /api/{name}/. 1 to 32 lowercase letters, digits or hyphens, unique within the app. Uniqueness within the app is the validator's."
+          "description": "The {name} segment in /api/{name}/, or in /fragments/{fragmentId}/api/{name}/. 1 to 32 lowercase letters, digits or hyphens, unique within the app or the fragment that lists it: the shell's names and each fragment's are separate namespaces. Uniqueness is the validator's."
         },
         "upstream": {
           "type": "string",
@@ -227,6 +238,94 @@
         {
           "not": { "pattern": "^[Dd][Aa][Tt][Aa]:" },
           "$comment": "data: is rejected in script-src. It stays allowed elsewhere; the example entry uses it in img-src."
+        }
+      ]
+    },
+
+    "fragments": {
+      "title": "fragments",
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/fragment" },
+      "description": "The fragments this entry's app composes as a shell, in the order the gateway lists their schemes and merges their content security policy additions. Absent means none; an empty array is rejected, so no document has to declare schemaVersion 2 to say nothing. fragmentId is unique within the entry (DuplicateFragmentId), and how many fragments a shell may have is a Policy: value; both are the validator's. The schema sets no maxItems: a provider's limit on clients is a profile fact, not this contract's."
+    },
+
+    "fragment": {
+      "title": "Fragment",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fragmentId", "oauth", "release"],
+      "description": "One owner's unit, mounted into this entry's shell, with its own OAuth client, release, APIs and content security policy additions. It has no host and no session: the shell's host serves it, and the shell's session.lifetimeMinutes governs the one session. 'apis', 'csp' and 'entry' may be absent.",
+      "properties": {
+        "fragmentId": { "$ref": "#/$defs/fragmentId" },
+        "oauth": {
+          "$ref": "#/$defs/oauth",
+          "description": "The whole oauth section, by reference and never forked: issuer is required, and resource is the fragment's own. The validator refuses an issuer other than the shell's (FragmentIssuerMismatch) and a clientId any other entry or fragment uses (DuplicateClientId)."
+        },
+        "release": { "$ref": "#/$defs/release" },
+        "apis": { "$ref": "#/$defs/apis" },
+        "csp": { "$ref": "#/$defs/fragmentCsp" },
+        "entry": { "$ref": "#/$defs/entry" }
+      }
+    },
+
+    "fragmentId": {
+      "title": "fragmentId",
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 40,
+      "pattern": "^[a-z0-9-]+$",
+      "description": "3 to 40 lowercase letters, digits or hyphens: the appId rule, so neither id can contain ':' and a fragment's scheme name oidc:{appId}:{fragmentId} parses one way. Unique within its shell's entry; uniqueness is the validator's. It names the fragment's scheme, its S3 prefix, its path namespace /fragments/{fragmentId}/ and its log field."
+    },
+
+    "entry": {
+      "title": "entry",
+      "type": "string",
+      "maxLength": 64,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*(\\.[A-Za-z0-9_-]+)*\\.js$",
+      "default": "entry.js",
+      "description": "The fragment's entry module: one .js file name at the root of its release, constant across releases and not hashed, which the shell loads with import() from /fragments/{fragmentId}/{entry}. The pattern admits no '/', so the file is never under assets/ or api/; a build whose entry is nested or hashed adds a one-line re-export at the root. Absent means entry.js. A release is complete when this file exists, which spactl checks on every registry write."
+    },
+
+    "fragmentCsp": {
+      "title": "Fragment csp",
+      "type": "object",
+      "description": "Sources a fragment adds to its shell's content security policy, per directive. Narrower than csp: only these five directives, so a fragment cannot widen default-src, frame-ancestors, base-uri, form-action or object-src for the host, and its script-src names no 'strict-dynamic', nonce or hash. Every addition still applies to the whole document: the gateway sends one policy per host, the baseline, then the shell's csp, then each fragment's in registry order. A directive listed with no sources adds nothing, so an empty array is rejected.",
+      "propertyNames": {
+        "enum": ["script-src", "style-src", "img-src", "font-src", "connect-src"]
+      },
+      "properties": {
+        "script-src": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/fragmentScriptSrcSource" }
+        }
+      },
+      "additionalProperties": {
+        "type": "array",
+        "minItems": 1,
+        "uniqueItems": true,
+        "items": { "$ref": "#/$defs/cspSource" }
+      }
+    },
+
+    "fragmentScriptSrcSource": {
+      "title": "Fragment script-src source",
+      "allOf": [
+        { "$ref": "#/$defs/scriptSrcSource" },
+        {
+          "not": { "pattern": "^'[Ss][Tt][Rr][Ii][Cc][Tt]-[Dd][Yy][Nn][Aa][Mm][Ii][Cc]'$" },
+          "$comment": "'strict-dynamic' is rejected in a fragment's script-src."
+        },
+        {
+          "not": { "pattern": "^'[Nn][Oo][Nn][Cc][Ee]-" },
+          "$comment": "A nonce source is rejected in a fragment's script-src."
+        },
+        {
+          "not": { "pattern": "^'[Ss][Hh][Aa](256|384|512)-" },
+          "$comment": "A hash source is rejected in a fragment's script-src. The one import map's hash is the shell's, in the shell entry's csp."
         }
       ]
     },

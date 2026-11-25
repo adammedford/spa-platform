@@ -9,7 +9,8 @@ namespace Platform.Abstractions;
 ///
 /// Four workstreams need the same strings and no two of them may disagree: workstream 2 refuses a
 /// host and a path, workstream 4 the gate, antiforgery and an unknown upstream, workstream 3 a
-/// login callback and a session after G1b and a failed session store after G3, and workstream 6
+/// login callback and a session after G1b, a failed session store after G3 and a refused chain
+/// step for fragments (#961), and workstream 6
 /// counts them in <c>UsePlatformTelemetry</c> and asserts on them in the negative suite. A-03 stops
 /// a workstream project from reading another's constants, so before this type each owner kept a
 /// copy and the contract was agreed by hand. The matching test
@@ -55,6 +56,14 @@ public static class RuleIds
     /// <summary>Any refused login callback.</summary>
     public const string AuthCallback = "auth.callback";
 
+    /// <summary>
+    /// A refused <c>GET /bff/chain</c> step: its continuation is missing, unreadable, past
+    /// <c>ChainLifetime</c>, or minted for another session or another app. The step ends with a 302
+    /// to <c>/</c>, no problem body and no state change, as <see cref="AuthCallback"/> ends on its
+    /// page; the shell's session stands. The fragments spec, #961 → "<c>/bff/chain</c>".
+    /// </summary>
+    public const string AuthChain = "auth.chain";
+
     /// <summary>A cookie that resolves to no session for this app.</summary>
     public const string AuthSession = "auth.session";
 
@@ -90,5 +99,6 @@ public static class RuleIds
         AuthSession,
         ApiUnknown,
         AuthStore,
+        AuthChain,
     ];
 }

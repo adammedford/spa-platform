@@ -247,7 +247,7 @@ data "aws_iam_policy_document" "ci_plan" {
   }
 
   # 7. The imported wildcard certificate, which the ALB listener finds by domain
-  #    name. certs.sh imports it; Terraform only reads it.
+  #    name. tools/scripts/poc/certs.sh imports it; Terraform only reads it.
   statement {
     sid    = "DescribeCertificates"
     effect = "Allow"

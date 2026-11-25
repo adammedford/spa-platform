@@ -10,7 +10,7 @@ hand from the contract's Endpoints table and its reserved-paths sentence, not de
 script derives them, and the last cases run the script on this checkout, which must pass as it
 stands, and on a contract whose table or sentence is gone, which must not.
 
-Checkout inputs: contracts/http-contract.md .claude/skills/*.md docs/runbooks/*.md docs/plan/04-tests.md
+Checkout inputs: contracts/http-contract.md .claude/skills/*.md docs/runbooks/*.md docs/runbooks/poc/*.md docs/plan/04-tests.md
 """
 from __future__ import annotations
 
@@ -80,6 +80,13 @@ class UnknownPaths(Tree):
                          "endpoint-paths: docs/plan/04-tests.md:1: /readyz/extra is not an endpoint "
                          "contracts/http-contract.md makes known")
 
+    def test_a_path_in_the_proof_cells_note_is_read(self) -> None:
+        # #1337: the proof cell's note is written in docs/runbooks/poc/, one level below the references.
+        self.write("docs/runbooks/poc/proof-cell.md", "`curl https://app1.spa-poc.test/bff/user`\n")
+        self.assertFails(self.run_check(),
+                         "endpoint-paths: docs/runbooks/poc/proof-cell.md:1: /bff/user is not an endpoint "
+                         "contracts/http-contract.md makes known")
+
     def test_a_path_after_a_host_and_port_with_no_scheme_is_read(self) -> None:
         # Review of #760: `localhost:5180/bff/user` was taken for a file-system path and skipped.
         self.write(".claude/skills/x/SKILL.md", "`curl localhost:5180/bff/user`\n`127.0.0.1:5530/readyz/extra`\n")
@@ -147,7 +154,7 @@ class TheContract(Tree):
         self.assertIn("Endpoints table", done.stderr)
 
     def test_a_contract_with_no_reserved_paths_sentence_exits_2(self) -> None:
-        text = (ROOT / CONTRACT).read_text().replace("An SPA cannot serve content under", "An SPA serves")
+        text = (ROOT / CONTRACT).read_text().replace("A path reserved outright is served from no release", "A path is served")
         self.write(CONTRACT, text)
         done = self.run_check()
         self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
@@ -161,8 +168,9 @@ class TheContract(Tree):
         self.assertFails(self.run_check())
 
     def test_healthz_left_out_of_the_sentence_is_unknown(self) -> None:
-        text = (ROOT / CONTRACT).read_text().replace("`/signout-oidc`, `/healthz` or `/readyz`",
-                                                     "`/signout-oidc` or `/readyz`")
+        contract = (ROOT / CONTRACT).read_text()
+        text = contract.replace("`/signout-oidc`, `/healthz` and `/readyz`", "`/signout-oidc` and `/readyz`")
+        self.assertNotEqual(text, contract, "the reserved-paths sentence no longer reads as this test expects")
         self.write(CONTRACT, text)
         self.write(".claude/skills/x/SKILL.md", "`/healthz`\n")
         self.assertFails(self.run_check())

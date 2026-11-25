@@ -1,33 +1,35 @@
 #!/usr/bin/env bash
 #
-# deploy.sh -- build the gateway and mock API images, push them, apply the platform root with their
-# digests, wait for a steady service, and assert that the running gateway is the one pushed.
+# deploy.sh -- build the gateway image, push it, apply the platform root with its digest, wait for a
+# steady service, and assert that the running gateway is the one pushed.
 #
 # Task 1.7 (#58); step 5 of docs/plan/05-infrastructure-and-cost.md, First deployment, and the
 # Gateway lever of its Deployment and rollback table: "deploy.sh builds, pushes, applies the new
 # digest and checks that the running task has it".
 #
 #   tools/scripts/deploy.sh
-#   tools/scripts/deploy.sh --url https://app1.spa-poc.test:9443    # wait through this origin instead
+#   tools/scripts/deploy.sh --url https://app1.$SPA_CERT_DOMAIN:9443    # wait through this origin instead
 #
 # In order, and it stops at the first that fails:
 #   1. It reads the live registry from the bucket the gateway reads, and refuses when there is none
 #      or it holds no app: a gateway started against an empty registry never becomes ready, so the
-#      deployment would fail its health checks and roll back (contracts/README.md). Run seed.sh
-#      first. Nothing is built before this. It keeps the registry's revision for step 5.
-#   2. It builds both images for ARM64 and pushes each under a tag of this run's own, since the
-#      repositories' tags are immutable, then takes each digest from ECR. The base images are the
-#      Dockerfiles' to choose, not this script's: both FROM lines of each Dockerfile name their base
-#      by @sha256: digest beside its tag, mcr.microsoft.com/dotnet/aspnet:10.0-noble-chiseled-extra
-#      for the runtime stage (src/Gateway/Dockerfile, #781; fixtures/MockApi/Dockerfile, #782), so a
-#      deployment builds on the pinned image whatever the workstation's cache holds, and moving to a
-#      new .NET patch is a commit that changes the digest. Each build still pulls (--pull, Docker's
-#      "Always attempt to pull all referenced images":
+#      deployment would fail its health checks and roll back (contracts/README.md). Publish an app
+#      with spactl first: spactl release publish, then spactl app add. Nothing is built before this.
+#      It keeps the registry's revision for step 5.
+#   2. It builds the gateway's image for ARM64 and pushes it under a tag of this run's own, since the
+#      repositories' tags are immutable, then takes its digest from ECR. It builds nothing else: an
+#      image a cell runs beside the gateway is that cell's to build, and this apply leaves it at what
+#      the root's tfvars hold (#1349). The base images are the Dockerfile's to choose, not this
+#      script's: both FROM lines of src/Gateway/Dockerfile name their base by @sha256: digest beside
+#      its tag, mcr.microsoft.com/dotnet/aspnet:10.0-noble-chiseled-extra for the runtime stage
+#      (#781), so a deployment builds on the pinned image whatever the workstation's cache holds, and
+#      moving to a new .NET patch is a commit that changes the digest. The build still pulls
+#      (--pull, Docker's "Always attempt to pull all referenced images":
 #      https://docs.docker.com/reference/cli/docker/buildx/build/), which for a pinned reference
 #      fetches only that digest, and keeps #288's guard for a FROM line that names a tag alone: such
 #      a build resolves the tag afresh rather than build on an older cached image, which could ship
 #      a .NET runtime that predates the security fixes the tag's current image carries (#273).
-#      Each build attests, so that every image the cell runs carries a record of what it contains and
+#      The build attests, so that every image the cell runs carries a record of what it contains and
 #      how it was built, kept in ECR beside it (#779, answer 3,
 #      https://github.com/adammedford/spa-platform/issues/779#issuecomment-6767167834). --sbom=true
 #      attaches BuildKit's SBOM attestation, an SPDX document of the image's packages
@@ -39,10 +41,12 @@
 #      it (https://docs.docker.com/build/metadata/attestations/attestation-storage/), so the digest
 #      ECR gives for the tag is the index's. Nothing signs a digest: #779's answer 4 defers signing
 #      until a verifier other than the signer exists.
-#   3. It plans and applies infra/envs/poc/platform with both images by digest and the health
-#      check on /readyz, and records them in images.auto.tfvars there, so every later apply of the
-#      root passes the same digests back and never moves the image.
-#   4. It writes infra/envs/poc/outputs.json from the three roots' outputs.
+#   3. It plans and applies the platform root, $SPA_PLATFORM_ROOT, with the gateway's image by
+#      digest and the health check on /readyz, and records the two in images.auto.tfvars there, so
+#      every later apply of the root passes the same digest back and never moves the image. It
+#      passes no other container's image (cell-common.sh's apply_images).
+#   4. It writes the outputs document, $SPA_OUTPUTS_FILE, from the outputs of the roots on
+#      $SPA_ROOTS, in order, through the field map $SPA_FIELD_MAP.
 #   5. It waits for the service to be stable, then asserts the primary deployment completed on the
 #      applied task definition, every running task's gateway container runs the image pushed (the
 #      index's digest, or the index's linux/arm64 image's: which of them ECS reports is what #788
@@ -70,11 +74,14 @@
 # false after the document was last written, the wait fails, exit 1, with the same line, before it
 # opens a tunnel (#1168).
 #
-# The cell's names come from infra/envs/poc/outputs.json, which seed.sh wrote, and never from
-# Terraform state (contracts/infra-outputs.schema.json).
+# The cell's names come from the outputs document, written from the cell's roots' outputs after
+# their last apply, and never from Terraform state (contracts/infra-outputs.schema.json).
 #
-# Run it as the operator's own session: the spa-platform profile, with tools/aws-project.env
-# sourced, after `terraform init -backend-config=backend.hcl` in each root. It needs the AWS CLI,
+# Run it as the operator's own session, with credentials for the account the cell is in and
+# AWS_REGION set to the cell's Region, after `terraform init -backend-config=backend.hcl` in each
+# root. It reads the entry values SPA_PLATFORM_ROOT, SPA_ROOTS, SPA_FIELD_MAP, SPA_OUTPUTS_FILE and,
+# without --url, SPA_CERT_DOMAIN, which have no default (cell-common.sh's header), and refuses, exit
+# 2, when one is unset, before anything is built. It needs the AWS CLI,
 # Terraform, python3, Docker with buildx (decision D-2 in docs/dependencies.md), the .NET SDK for
 # spactl, or SPACTL naming a spactl to run instead (cell-common.sh), and the Session Manager plugin
 # for the wait's tunnel unless --url is given. Docker's own builder, the docker driver, builds the
@@ -84,16 +91,18 @@
 # It redacts two kinds of value, and Docker's and Terraform's output pass through the filter that
 # does it (cell-common.sh's redact_stream):
 #   - the account id, which the repositories, the bucket and every ARN carry, becomes <account>;
-#   - each app's client id that infra/envs/poc/outputs.json lists becomes <client-id:appId>. The
-#     plan shows the mock API's environment, MockApi__App1Client and MockApi__App2Client among it
-#     (#251). The list is the outputs document's as this run starts: a client id the apps root
-#     changed after seed.sh last wrote that document is not on it. Run seed.sh after any apply of the
-#     apps root.
+#   - each app's client id that the outputs document lists becomes <client-id:appId>. A plan shows
+#     every container's environment, and a container beside the gateway can carry the clients', as
+#     the proof cell's mock API does with MockApi__App1Client and MockApi__App2Client (#251). The
+#     list is the outputs document's as this run starts: a client id an apply changed after that
+#     document was last written is not on it. Rewrite it after any apply of the root that holds the
+#     clients.
 #
 # Exit status: 0 when the applied gateway runs steady and healthy; 1 when a step failed; 2 when it
-# did not start (a usage error, a missing tool, no Region, no credentials, no outputs document).
+# did not start (a usage error, an entry value unset, a missing tool, no Region, no credentials, no
+# outputs document).
 #
-# Written for the bash 3.2 that ships with macOS, like tools/scripts/certs.sh.
+# Written for the bash 3.2 that ships with macOS.
 # Owner: workstream 1, AWS and IaC.
 
 set -euo pipefail
@@ -114,6 +123,12 @@ Options
                  own, on a free local port, at https://app1.\$SPA_CERT_DOMAIN:<that port>.
   -h, --help     This text.
 EOF
+}
+
+# What the refusal of an absent or empty registry says to do: an adopter's way to its first app is
+# these two commands, as the proof cell's seed script runs them (#1349).
+publish_first() {
+  printf '%s' "Before a deploy, publish an app with spactl: spactl release publish, then spactl app add."
 }
 
 value_of() {
@@ -142,6 +157,12 @@ case "$ORIGIN" in
   '' | https://?* | http://?*) ;;
   *) refuse "--url must be an http or https origin: got '${ORIGIN}'" ;;
 esac
+need_entry SPA_PLATFORM_ROOT SPA_ROOTS SPA_FIELD_MAP SPA_OUTPUTS_FILE
+# The wait's own tunnel reads through an app's host under the certificate's domain; --url names the
+# origin instead.
+if [ -z "$ORIGIN" ]; then
+  need_entry SPA_CERT_DOMAIN
+fi
 
 need_terraform
 need_spactl
@@ -154,19 +175,18 @@ fi
 docker buildx version > /dev/null 2>&1 || refuse "docker buildx does not answer. Start Docker Desktop."
 cell_start
 
-# From the outputs document seed.sh wrote, never from state (contracts/infra-outputs.schema.json).
+# From the outputs document, never from state (contracts/infra-outputs.schema.json).
 ECR_GATEWAY="$(outputs_field ecrGateway)"
-ECR_MOCK_API="$(outputs_field ecrMockApi)"
 CLUSTER="$(outputs_field ecsCluster)"
 SERVICE="$(outputs_field ecsService)"
 # Before anything is built: without --url the wait's tunnel needs the bastion, and a document that
 # names none is a cell with no hop (#1167). Read from the document, which names the last apply's
 # cell; this deployment's apply passes the images and leaves the bastion input as it is.
 if [ -z "$ORIGIN" ] && [ -z "$(outputs_bastion)" ]; then
-  refuse "${NO_BASTION} Or pass --url with an origin this workstation already reaches, and the wait opens no tunnel."
+  refuse "$(no_bastion) Or pass --url with an origin this workstation already reaches, and the wait opens no tunnel."
 fi
 # After the reads above, so that a missing or foreign outputs document is refused by them, naming
-# the field. Before anything prints: Terraform's plan names both apps' client ids (#251).
+# the field. Before anything prints: Terraform's plan can name the apps' client ids (#251).
 redact_clients
 
 # --- 1. the registry -------------------------------------------------------------------------------
@@ -181,70 +201,31 @@ read_platform_config
 aws_call s3api get-object --bucket "$REGISTRY_BUCKET" --key "$REGISTRY_KEY" "${WORK}/registry.json"
 case "$OUTCOME" in
   success) ;;
-  NoSuchKey) fail "there is no live registry at ${REGISTRY_KEY}: a gateway started against it never becomes ready. Run tools/scripts/seed.sh first." ;;
+  NoSuchKey) fail "there is no live registry at ${REGISTRY_KEY}: a gateway started against it never becomes ready. $(publish_first)" ;;
   *) fail "could not read the live registry at ${REGISTRY_KEY}: ${OUTCOME}" ;;
 esac
 APPS="$(documents apps "${WORK}/registry.json")" || fail "the live registry at ${REGISTRY_KEY} is not a registry document."
 # contracts/README.md: "An empty apps array is a valid document. Deployment refuses to start a
 # gateway against an empty registry (task 1.7); that is a deployment rule, not a document rule."
 [ "$APPS" -gt 0 ] ||
-  fail "the live registry at ${REGISTRY_KEY} holds no app, and a gateway started against an empty registry never becomes ready. Run tools/scripts/seed.sh first."
+  fail "the live registry at ${REGISTRY_KEY} holds no app, and a gateway started against an empty registry never becomes ready. $(publish_first)"
 note "the live registry holds ${APPS} apps"
 REVISION="$(documents revision "${WORK}/registry.json")" || fail "the live registry at ${REGISTRY_KEY} has no revision."
 note "the live registry is at revision ${REVISION}"
 
 # --- 2. build and push -----------------------------------------------------------------------------
 #
-# One tag per run, because the repositories' tags are immutable (infra/modules/cell/storage.tf): a
-# second push of a tag is refused, and a tag can never name two images.
+# cell-common.sh's build_and_push, under one tag of this run's own (push_tag). The Dockerfile says to
+# build from the repository root.
 
-TAG="$(date -u +%Y%m%dT%H%M%SZ)-$$"
-
-# The password goes from the AWS CLI to Docker on a pipe and never into an argument, a file or the
-# output. https://docs.aws.amazon.com/AmazonECR/latest/userguide/registry_auth.html
-REGISTRY_HOST="${ECR_GATEWAY%%/*}"
-aws --region "$REGION" ecr get-login-password 2> "$ERR" |
-  docker login --username AWS --password-stdin "$REGISTRY_HOST" 2>&1 | redact_stream ||
-  fail "could not log Docker in to the cell's registry."
-
-# $1 the Dockerfile, $2 the repository URI. Prints the image by digest, repository@sha256:<hex>.
-build_and_push() {
-  local dockerfile="$1" repository="$2" name="${2#*/}"
-  note "building ${dockerfile} for linux/arm64 as $(redact "${repository}:${TAG}")" >&2
-  # ARM64, the task's platform (ecs.tf's runtime_platform), with the SBOM and provenance
-  # attestations (step 2 of the header, #779). The digest ECR names for the tag is the image index's,
-  # and that is the one applied; step 5 reads the index back to know its linux/arm64 image.
-  # https://docs.docker.com/build/metadata/attestations/#creating-attestations
-  docker_build "$dockerfile" "${repository}:${TAG}" >&2 ||
-    fail "building ${dockerfile} failed."
-  aws_read "the digest of ${name}:${TAG}" ecr describe-images --repository-name "$name" \
-    --image-ids "imageTag=${TAG}" --query 'imageDetails[0].imageDigest'
-  local digest
-  digest="$(printed)"
-  case "$digest" in
-    sha256:[0-9a-f]*) ;;
-    *) fail "ECR named no digest for ${name}:${TAG}." ;;
-  esac
-  printf '%s@%s' "$repository" "$digest"
-}
-
-# Docker's own output, through the redaction: it names the repository, which carries the account.
-docker_build() {
-  local status=0
-  docker buildx build --pull --platform linux/arm64 --sbom=true --provenance=mode=max \
-    --file "${REPO_ROOT}/$1" --tag "$2" --push "$REPO_ROOT" 2>&1 | redact_stream || status=$?
-  return "$status"
-}
-
-# The Dockerfiles say to build from the repository root (src/Gateway/Dockerfile,
-# fixtures/MockApi/Dockerfile).
-GATEWAY_IMAGE="$(build_and_push src/Gateway/Dockerfile "$ECR_GATEWAY")" || exit 1
-MOCK_API_IMAGE="$(build_and_push fixtures/MockApi/Dockerfile "$ECR_MOCK_API")" || exit 1
-note "pushed the gateway as ${GATEWAY_IMAGE##*@} and the mock API as ${MOCK_API_IMAGE##*@}"
+TAG="$(push_tag)"
+ecr_login "$ECR_GATEWAY"
+GATEWAY_IMAGE="$(build_and_push src/Gateway/Dockerfile "$ECR_GATEWAY" "$TAG")" || exit 1
+note "pushed the gateway as ${GATEWAY_IMAGE##*@}"
 
 # --- 3, 4 and 5 ------------------------------------------------------------------------------------
 
-apply_images "$GATEWAY_IMAGE" "$MOCK_API_IMAGE"
+apply_images "$GATEWAY_IMAGE"
 wait_and_assert "$GATEWAY_IMAGE"
 wait_for_revision "$REVISION" "$ORIGIN"
 note "pass: the gateway ${GATEWAY_IMAGE##*@} runs steady in ${CLUSTER}, and every running task reports revision ${REVISION} or later on ${READY_PATH}"

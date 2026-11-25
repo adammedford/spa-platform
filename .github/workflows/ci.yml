@@ -4,11 +4,12 @@
 # session steers by, the roadmap, the checks' own tests, the test companions of tools/land.sh, of
 # the review record reader it runs, of the local check, tools/check.sh, of tools/preflight.sh, of
 # the branch cleanup land.sh runs and of the main-checkout guard, the test companions of the cell
-# scripts under tools/scripts/ (tunnel.sh and verify-tunnel.sh, seed.sh, deploy.sh, rollback.sh,
-# teardown.sh, verify-release-immutability.sh and certs.sh), whether every tracked shell script
-# parses, the workflow scripts' test companions when a file under .claude/workflows/ changed, and --
-# first, so the two expensive jobs and that step can read the answer -- which halves of the
-# repository the change touches. Those two run when their inputs changed: the solution builds and every test project runs
+# scripts under tools/scripts/ (tunnel.sh and verify-tunnel.sh, deploy.sh, rollback.sh, teardown.sh,
+# verify-teardown.sh and verify-release-immutability.sh) and tools/scripts/poc/ (seed.sh, mock-api.sh
+# and certs.sh), whether every tracked shell script parses, the workflow scripts' test companions
+# when a file under .claude/workflows/ changed, and -- first, so the two expensive jobs and that step
+# can read the answer -- which halves of the repository the change touches. Those two run when
+# their inputs changed: the solution builds and every test project runs
 # for build inputs, and the Terraform roots validate, at the floor .terraform-version names, for
 # infra/ and the floor's own file and helper. The hook shares these path patterns
 # through .github/touches.sh. CI's decision step also runs both jobs, and the workflow companions,
@@ -281,6 +282,14 @@ jobs:
           python3 -I tools/endpoint_paths_tests.py
           python3 -I tools/endpoint_paths.py
 
+      - name: Every tracked path has one value of the README's path table
+        # What an adopter may take is answered by one table, which this keeps true of the tree
+        # (#1335, #1344). tools/check.sh runs the guard before every push; here it runs on what
+        # reaches main, after its companion.
+        run: |
+          python3 -I tools/mode_split_tests.py
+          python3 -I tools/mode_split.py
+
       - name: A-05's two rules hold
         # The ownership check is the one guard with no CI job of its own: it runs in the pre-push
         # hook, where a failure costs an amended commit instead of a red pull request. Its rules
@@ -524,10 +533,10 @@ jobs:
         run: python3 -I tools/image_build_tests.py
 
       - name: tunnel.sh and verify-tunnel.sh reach the ALB through the gateway task, and refuse TLS the workstation does not trust
-        # The cell scripts under tools/scripts/ are workstream 1's, and seven of their companions run
-        # here because neither half in .github/touches.sh covers that directory, so this job is the
-        # one that sees a change to them (change requests 1.6b, 1.7 and issue-122, decided on #226,
-        # and issue-241, taken up on #313). logs_tests.py and cell_doubles_tests.py run under
+        # The cell scripts under tools/scripts/ and tools/scripts/poc/ are workstream 1's, and nine of
+        # their companions run here because neither half in .github/touches.sh covers that directory,
+        # so this job is the one that sees a change to them (change requests 1.6b, 1.7 and issue-122,
+        # decided on #226, and issue-241, taken up on #313). logs_tests.py and cell_doubles_tests.py run under
         # tools/check.sh --full and in no job here. This companion runs
         # the real scripts with doubles for aws, session-manager-plugin and curl, and the real curl
         # against two loopback listeners, one with nothing on it and one whose certificate no trust
@@ -539,12 +548,17 @@ jobs:
         # the doubles in tools/scripts/cell_doubles.py: aws, terraform, docker and dotnet, so no case
         # reaches AWS, Docker or NuGet, and every run's output is searched for the doubles' canaries.
         # Under bash 5 here; the job below runs it under 3.2.
-        run: python3 -I tools/scripts/seed_tests.py
+        run: python3 -I tools/scripts/poc/seed_tests.py
 
       - name: deploy.sh builds and pushes the images, applies their digests and checks the running gateway is the one pushed
         # Change request 1.7. The shared doubles as above. Under bash 5 here; the job below runs it
         # under 3.2.
         run: python3 -I tools/scripts/deploy_tests.py
+
+      - name: mock-api.sh builds and pushes the proof cell's mock API and records its digest for the next apply
+        # #1349 split the mock API's build out of deploy.sh, and #1337 runs its companion beside
+        # deploy.sh's. The shared doubles as above. Under bash 5 here; the job below runs it under 3.2.
+        run: python3 -I tools/scripts/poc/mock_api_tests.py
 
       - name: rollback.sh puts the previous gateway back and checks it is the one running
         # Change request 1.7. The shared doubles as above. Under bash 5 here; the job below runs it
@@ -573,7 +587,7 @@ jobs:
       - name: certs.sh asks for a Region the way preflight.sh does, and refuses without one
         # Change request issue-241, taken up on #313. An aws double and the real openssl, so no case
         # reaches AWS. Under bash 5 here; the job below runs it under 3.2.
-        run: python3 -I tools/scripts/certs_tests.py
+        run: python3 -I tools/scripts/poc/certs_tests.py
 
   scripts-bash-3-2:
     name: Scripts under bash 3.2
@@ -636,13 +650,19 @@ jobs:
         # The deployment scripts run from this Mac, under 3.2 (change request 1.7).
         env:
           SCRIPT_TESTS_REQUIRE_BASH: "3.2"
-        run: python3 -I tools/scripts/seed_tests.py
+        run: python3 -I tools/scripts/poc/seed_tests.py
 
       - name: deploy.sh, under the bash 3.2 macOS ships
         # Change request 1.7, as the step above.
         env:
           SCRIPT_TESTS_REQUIRE_BASH: "3.2"
         run: python3 -I tools/scripts/deploy_tests.py
+
+      - name: mock-api.sh, under the bash 3.2 macOS ships
+        # #1337, as the deploy.sh step above.
+        env:
+          SCRIPT_TESTS_REQUIRE_BASH: "3.2"
+        run: python3 -I tools/scripts/poc/mock_api_tests.py
 
       - name: rollback.sh, under the bash 3.2 macOS ships
         # Change request 1.7, as the step above.
@@ -674,7 +694,7 @@ jobs:
         # The certificate script runs from this Mac, under 3.2 (change request issue-241).
         env:
           SCRIPT_TESTS_REQUIRE_BASH: "3.2"
-        run: python3 -I tools/scripts/certs_tests.py
+        run: python3 -I tools/scripts/poc/certs_tests.py
 
       - name: Every tracked shell script parses under bash 3.2
         # The parse check reads with /bin/bash, which here is 3.2, so syntax only bash 5 accepts fails
@@ -718,6 +738,15 @@ jobs:
       - name: Build
         # Warnings are errors, set in Directory.Build.props. Package advisories warn (NU1901-NU1904).
         run: dotnet build --configuration Release
+
+      - name: A build without .editorconfig or .globalconfig stops on the error naming the missing file
+        # Directory.Build.props's _SpaRequireAnalyzerConfigs target, which #1369 added so that a
+        # build without the analyzer configs fails by a check rather than by today's source tripping
+        # a rule. The companion builds one project in a throwaway tree with both configs, then with
+        # each removed in turn. It runs here, after the build, because it needs the SDK and the
+        # analyzer packages in the cache, which the Documents job has neither of. The companion is a
+        # build input in .github/touches.sh, so a change to it alone still runs this job.
+        run: python3 -I tools/analyzer_configs_build_tests.py
 
       - name: Tests
         # Every test project in the solution: the component tests, the hermetic gateway suites and

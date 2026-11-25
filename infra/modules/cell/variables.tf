@@ -65,9 +65,8 @@ variable "bucket_name" {
     The bucket is always created in S3's account regional namespace, so an override
     keeps the -{account id}-{region}-an suffix and changes only what comes before it;
     the plan fails on any other name. Every consumer reads the platform root's `bucket`
-    output rather than deriving the name (contracts/s3-layout.md), except
-    infra/bootstrap, which applies first: set its platform_bucket_name to the same
-    value. This is the platform's one private bucket; the Terraform state bucket is a
+    output rather than deriving the name, except infra/bootstrap, which applies first:
+    set its platform_bucket_name to the same value (README.md -> The bucket's name). This is the platform's one private bucket; the Terraform state bucket is a
     different one, created by infra/bootstrap.
   EOT
   type        = string
@@ -83,7 +82,8 @@ variable "teardown_principal_arns" {
     It cannot be empty. A bucket nobody may empty is a bucket teardown.sh cannot
     destroy, and P-05 would then fail forever. The platform root passes the
     teardown role infra/bootstrap creates, looked up by its derived name, then any
-    additional principals (change request 1.5, ADR-0014).
+    additional principals (change request 1.5, ADR-0014; README.md -> The bucket's
+    name, for the role's name and the role-ARN rule).
   EOT
   type        = list(string)
 
@@ -96,7 +96,7 @@ variable "teardown_principal_arns" {
 variable "certificate_domain" {
   description = <<-EOT
     The domain the cell's wildcard certificate covers, without the wildcard: the
-    load balancer's listener presents *.{certificate_domain}. tools/scripts/certs.sh
+    load balancer's listener presents *.{certificate_domain}. tools/scripts/poc/certs.sh
     imports that certificate into ACM, tagged with this cell, and the module finds it
     there; Terraform never creates it.
 
@@ -129,14 +129,35 @@ variable "health_check_path" {
   }
 }
 
-# --- Task 1.4a: the images -------------------------------------------------------------------
+variable "gateway_writable_root" {
+  description = <<-EOT
+    true only while the gateway's container runs the public sample image, on a fresh cell's
+    first apply: it gives that container a writable root and no /tmp volume, the shape it had
+    before #787. The sample image, nginx-unprivileged, runs as uid 101 and writes its temp files
+    under /tmp, which a read-only root's task volume, owned by root at 0755, refuses (#1380).
+    tools/scripts/poc/platform-tfvars.sh writes true beside the sample's pin; deploy.sh and
+    rollback.sh apply the gateway with false. The default is the gateway's read-only shape.
+  EOT
+  type        = bool
+  default     = false
+
+  # The sample answers its health check on / (health_check_path), the gateway on /readyz. A root
+  # whose terraform.tfvars still says true from the sample's first apply is refused once an apply
+  # names the gateway's health check, rather than shipping the gateway on a writable root.
+  validation {
+    condition     = !var.gateway_writable_root || var.health_check_path == "/"
+    error_message = "gateway_writable_root is the sample image's, whose health check is /: a writable root with any other health_check_path, such as the gateway's /readyz, is refused. deploy.sh and rollback.sh pass gateway_writable_root = false."
+  }
+}
+
+# --- The gateway's image ---------------------------------------------------------------------
 
 variable "gateway_image" {
   description = <<-EOT
     The gateway container's image. No default, and in particular no default that names a tag:
     deploy.sh builds and pushes by digest and then asserts the running digest, and every other
     apply passes the digest already in state, which is what keeps a routine apply from moving a
-    running image (docs/plan/05-infrastructure-and-cost.md -> What stays out of Terraform).
+    running image: which image runs is a deployment's decision, never Terraform's.
 
     The first apply of this root passes the public sample image, because the service is applied
     before the gateway image exists; the health check follows the image (health_check_path).
@@ -161,64 +182,66 @@ variable "gateway_image" {
   }
 }
 
-variable "mock_api_image" {
+# --- Extra containers and repositories: what a root adds to the gateway's task ------------------
+
+variable "extra_containers" {
   description = <<-EOT
-    The mock API container's image, or empty for a task with the gateway alone. Empty is the
-    default so the service applies cleanly before that image is built: the mock API is task 5.3's
-    and the first deployment reaches it after this root (docs/plan/05-infrastructure-and-cost.md ->
-    First deployment).
+    ECS container definitions appended to the gateway's task after the gateway's own, each exactly
+    as written, in the form the task definition's container_definitions takes
+    (https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task_definition_parameters.html#container_definitions).
+    Empty, the default, is a task of the gateway alone.
 
-    Like gateway_image, no default that names a tag.
+    An extra container holds the task's role. The task role is the task's, not a container's, so a
+    sidecar can do whatever the gateway's role allows: read this cell's bucket prefixes and its
+    client-secret parameters, and under the durable store its session table and key ring (iam.tf).
+    Add only a container trusted with that.
+
+    An extra container shares the task's network namespace, so the gateway reaches a listener in it
+    on loopback, which is how an upstream in allowed_upstreams can name 127.0.0.1. It shares the
+    task's 0.25 vCPU and 1 GB too. The module adds nothing to an extra container: its image, its
+    hardening, its log configuration and the values ECS fills in are the caller's to write, and the
+    gateway's own container (ecs.tf) shows each. Its image is pulled with the execution role, which
+    may pull from this module's repositories (extra_repositories) and from no other private one.
   EOT
-  type        = string
-  default     = ""
+  type        = any
+  default     = []
 
-  # gateway_image's rule, when there is an image at all (#470).
+  # Each is named, and no name repeats or takes the gateway's, which the service registers in the
+  # target group by name: ECS refuses a task definition with two containers of one name at apply,
+  # after the roles and the bucket were created. try() is what refuses a container with no name, and
+  # a value that is not a list of objects: reading its name fails.
   validation {
-    condition = var.mock_api_image == "" || (
-      can(regex(jsondecode(file("${path.module}/../../../contracts/infra-outputs.schema.json")).properties.gatewayImage.pattern, var.mock_api_image))
-      && can(regex("@sha256:[0-9a-f]{64}$", var.mock_api_image))
+    condition = try(
+      length(distinct(concat(["gateway"], [for c in var.extra_containers : tostring(c.name)]))) == length(var.extra_containers) + 1,
+      false,
     )
-    error_message = "mock_api_image is empty, or a digest reference, <repository>@sha256:<64 lowercase hex>. A tag, an empty digest or a short one is refused."
+    error_message = "extra_containers is a list of container definitions, each with a name, no two with one name and none named gateway, the gateway's own container."
   }
 }
 
-variable "mock_api_app1_client_id" {
+variable "extra_repositories" {
   description = <<-EOT
-    The client the mock API's orders listener admits, which is app 1's
-    (fixtures/MockApi/MockApiOptions.cs -> Default, port 5080). An input, because the apps root
-    decides client ids and nothing about one is written into this module; that is also what keeps
-    onboarding a third app out of the platform root's plan (F-07).
-
-    Admission is the API owner's decision and not the gateway's (contracts/upstream-contract.md).
+    The names of image repositories the module creates beside the gateway's, each as
+    spa-{cell}/{name} with the gateway repository's settings: immutable tags, scan on push, the same
+    lifecycle policy and force_delete. Empty, the default, creates the gateway repository alone. The
+    execution role may pull from every repository the module creates (iam.tf), and the
+    ecr_repositories output names each by its URL.
   EOT
-  type        = string
-  default     = ""
+  type        = set(string)
+  default     = []
 
+  # ECR's repository-name rule for the segment after spa-{cell}/, with no further slash, and never
+  # gateway, which the module creates already.
+  # https://docs.aws.amazon.com/AmazonECR/latest/APIReference/API_CreateRepository.html
   validation {
-    # fixtures/MockApi/Program.cs throws on a missing client id, so the alternative to failing the
-    # plan here is a container that crash-loops after the apply reported success.
-    condition     = var.mock_api_image == "" || length(var.mock_api_app1_client_id) > 0
-    error_message = "A mock API image needs mock_api_app1_client_id: fixtures/MockApi/Program.cs refuses to start without it."
+    condition = alltrue([
+      for name in var.extra_repositories : can(regex("^[a-z0-9]+(?:[._-][a-z0-9]+)*$", name)) && name != "gateway"
+    ])
+    error_message = "Each extra repository name is lowercase letters and digits, separated by single dots, hyphens or underscores, and is not gateway."
   }
 }
 
-variable "mock_api_app2_client_id" {
-  description = <<-EOT
-    The client the mock API's reports listener admits, which is app 2's
-    (fixtures/MockApi/MockApiOptions.cs -> Default, port 5081). An input, for the same reason as
-    mock_api_app1_client_id.
-  EOT
-  type        = string
-  default     = ""
-
-  validation {
-    condition     = var.mock_api_image == "" || length(var.mock_api_app2_client_id) > 0
-    error_message = "A mock API image needs mock_api_app2_client_id: fixtures/MockApi/Program.cs refuses to start without it."
-  }
-}
-
-# --- Task 1.4a: platform configuration the task environment carries ---------------------------
+# --- Platform configuration the task environment carries ---------------------------------------
 #
 # contracts/platform-config.schema.json is the shape. Everything here is a bound a registry entry
 # cannot widen, which is why these are the root's inputs and not an entry's fields.
@@ -226,12 +249,9 @@ variable "mock_api_app2_client_id" {
 variable "issuers" {
   description = <<-EOT
     The issuers a registry entry may name, keyed by the name an entry uses in oauth.issuer. The
-    values come from the identity root's `issuer` and `cognito_domain` outputs, which is why this is
-    an input rather than a lookup: the platform root and the identity root are separate states
-    (docs/plan/05-infrastructure-and-cost.md -> Terraform boundaries).
-
-    Assumption A4 is one issuer per environment. A task carrying the mock API requires exactly one,
-    because that process validates against one issuer (fixtures/MockApi/Program.cs).
+    values come from the identity provider's own configuration, its issuer and its browser-facing
+    origin, which is why this is an input rather than a lookup: the cell and the identity provider
+    are separate states.
   EOT
   type = map(object({
     authority      = string
@@ -270,8 +290,8 @@ variable "issuers" {
 variable "allowed_host_suffixes" {
   description = <<-EOT
     The suffixes a registry host may end with, lowercase and including the port when hosts carry
-    one. In the proof of concept a host is reached through the tunnel, so it carries the local
-    port: app1.spa-poc.test:8443 (docs/plan/05-infrastructure-and-cost.md -> Workstation access).
+    one. A host reached through a local tunnel carries the local port, such as
+    app1.spa-poc.test:8443 (contracts/platform-config.example.json -> Policy.AllowedHostSuffixes).
   EOT
   type        = list(string)
 
@@ -283,8 +303,9 @@ variable "allowed_host_suffixes" {
 
 variable "allowed_upstreams" {
   description = <<-EOT
-    The upstream origins a registry entry may name. The two the mock API listens on in the proof of
-    concept are loopback ports inside the task (fixtures/apps/*.json -> apis[].upstream).
+    The upstream origins a registry entry may name. An upstream in an extra container of the task is
+    a loopback port inside it, such as http://127.0.0.1:5080
+    (contracts/platform-config.example.json -> Policy.AllowedUpstreams).
   EOT
   type        = list(string)
 
@@ -315,8 +336,8 @@ variable "registry_key" {
 variable "registry_poll_seconds" {
   description = <<-EOT
     The registry's conditional-GET interval, jittered by up to 20% in the gateway. It is also how
-    long an activation or a rollback takes to go live (docs/plan/05-infrastructure-and-cost.md ->
-    Deployment and rollback).
+    long an activation or a rollback takes to go live, since the gateway serves the registry it last
+    read (contracts/platform-config.schema.json -> Registry.PollSeconds).
   EOT
   type        = number
   default     = 15
@@ -410,11 +431,46 @@ variable "session_max_sessions" {
   }
 }
 
+# --- Fragments (#961): the two policy values a registry entry's fragments answer to ---------------
+#
+# Both are optional in the contract, with the gateway's placeholder standing in for an absent one, so
+# both default to null here and null sets no key (ecs.tf). Each is refused below 1 when set: the
+# schema lets FragmentsPerShell be 0, but a cell that sets the cap to 0 refuses every entry that
+# lists a fragment, which is what leaving fragments out of the registry already does.
+
+variable "fragments_per_shell" {
+  description = <<-EOT
+    The most fragments one registry entry may list, or null to leave the key out and take the
+    gateway's placeholder (contracts/platform-config.schema.json -> Policy.FragmentsPerShell).
+  EOT
+  type        = number
+  default     = null
+
+  validation {
+    condition     = var.fragments_per_shell == null ? true : (var.fragments_per_shell >= 1 && floor(var.fragments_per_shell) == var.fragments_per_shell)
+    error_message = "fragments_per_shell is null, or a whole number of fragments, at least 1 (contracts/platform-config.schema.json -> Policy.FragmentsPerShell)."
+  }
+}
+
+variable "merge_budget" {
+  description = <<-EOT
+    How many attempts a fragment callback's versioned replace makes, or null to leave the key out
+    and take the gateway's placeholder (contracts/platform-config.schema.json -> Policy.MergeBudget).
+  EOT
+  type        = number
+  default     = null
+
+  validation {
+    condition     = var.merge_budget == null ? true : (var.merge_budget >= 1 && floor(var.merge_budget) == var.merge_budget)
+    error_message = "merge_budget is null, or a whole number of attempts, at least 1 (contracts/platform-config.schema.json -> Policy.MergeBudget)."
+  }
+}
+
 variable "log_retention_days" {
   description = <<-EOT
     How long the task's log group keeps a log. Explicit, because the alternative is not a default
-    but "never expires", and plan row 1.4 asks for a decision either way. The deployed tests read a
-    run's gateway log from this group, so it has to outlive a gate run comfortably.
+    but "never expires", and a retention is a decision either way. The deployed tests read a run's
+    gateway log from this group, so it has to outlive a gate run comfortably.
   EOT
   type        = number
   default     = 14
@@ -478,7 +534,7 @@ variable "bastion" {
 variable "bastion_image" {
   description = <<-EOT
     The bastion container's image: the sample image, public.ecr.aws/nginx/nginx-unprivileged, by
-    digest (#1167, sub-question 3.1), which tools/scripts/platform-tfvars.sh already resolves for
+    digest (#1167, sub-question 3.1), which tools/scripts/poc/platform-tfvars.sh already resolves for
     gateway_image. Held to gateway_image's rule, a digest reference and never a tag, so an apply
     never moves the running bastion. Empty, the default, is allowed only while bastion is false.
   EOT

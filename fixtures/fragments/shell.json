@@ -1,0 +1,142 @@
+{
+  "appId": "shell",
+  "host": "shell.spa-poc.test:8443",
+  "oauth": {
+    "issuer": "cognito-poc",
+    "scopes": [
+      "openid",
+      "profile",
+      "https://orders.spa-poc.test/read"
+    ],
+    "resource": "https://orders.spa-poc.test"
+  },
+  "apis": [
+    {
+      "name": "orders",
+      "upstream": "http://127.0.0.1:5080",
+      "timeoutSeconds": 30
+    }
+  ],
+  "csp": {
+    "script-src": [
+      "'sha256-sQ92vDRNjCMPx8t5f/pkfFgrSEw5bmQXF4fOCmWL9wg='"
+    ]
+  },
+  "session": {
+    "lifetimeMinutes": 480
+  },
+  "fragments": [
+    {
+      "fragmentId": "orders",
+      "oauth": {
+        "issuer": "cognito-poc",
+        "scopes": [
+          "openid",
+          "profile",
+          "https://orders.spa-poc.test/read"
+        ],
+        "resource": "https://orders.spa-poc.test"
+      },
+      "apis": [
+        {
+          "name": "orders",
+          "upstream": "http://127.0.0.1:5080",
+          "timeoutSeconds": 30
+        }
+      ]
+    },
+    {
+      "fragmentId": "reports",
+      "oauth": {
+        "issuer": "cognito-poc",
+        "scopes": [
+          "openid",
+          "profile",
+          "https://reports.spa-poc.test/read"
+        ]
+      },
+      "apis": [
+        {
+          "name": "reports",
+          "upstream": "http://127.0.0.1:5081",
+          "timeoutSeconds": 30
+        }
+      ],
+      "entry": "main.js"
+    },
+    {
+      "fragmentId": "order-history",
+      "oauth": {
+        "issuer": "cognito-poc",
+        "scopes": [
+          "openid",
+          "profile",
+          "https://orders.spa-poc.test/read"
+        ],
+        "resource": "https://orders.spa-poc.test"
+      },
+      "apis": [
+        {
+          "name": "orders",
+          "upstream": "http://127.0.0.1:5080",
+          "timeoutSeconds": 30
+        }
+      ]
+    },
+    {
+      "fragmentId": "report-archive",
+      "oauth": {
+        "issuer": "cognito-poc",
+        "scopes": [
+          "openid",
+          "profile",
+          "https://reports.spa-poc.test/read"
+        ]
+      },
+      "apis": [
+        {
+          "name": "reports",
+          "upstream": "http://127.0.0.1:5081",
+          "timeoutSeconds": 30
+        }
+      ]
+    },
+    {
+      "fragmentId": "alerts",
+      "oauth": {
+        "issuer": "cognito-poc",
+        "scopes": [
+          "openid",
+          "profile",
+          "https://orders.spa-poc.test/read"
+        ],
+        "resource": "https://orders.spa-poc.test"
+      },
+      "apis": [
+        {
+          "name": "orders",
+          "upstream": "http://127.0.0.1:5080",
+          "timeoutSeconds": 30
+        }
+      ]
+    },
+    {
+      "fragmentId": "profile",
+      "oauth": {
+        "issuer": "cognito-poc",
+        "scopes": [
+          "openid",
+          "profile",
+          "https://reports.spa-poc.test/read"
+        ]
+      },
+      "apis": [
+        {
+          "name": "reports",
+          "upstream": "http://127.0.0.1:5081",
+          "timeoutSeconds": 30
+        }
+      ]
+    }
+  ]
+}

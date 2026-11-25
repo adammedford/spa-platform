@@ -1,0 +1,28 @@
+<!doctype html>
+<!-- Fixture shell (#998, part of #961): an app that composes six fixture fragments at its own host.
+     No build step and no inline script or style, except the one static import map, which the
+     HTML standard makes inline-only; its SHA-256 is in the shell definition's csp.script-src
+     (fixtures/fragments/shell.json), so the registry write check and the browser both admit it. -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Fixture shell</title>
+  <script type="importmap">
+{ "imports": { "fixture-ui": "/assets/ui.748e4831.js" } }
+  </script>
+  <script src="/bff-client.js"></script>
+  <script type="module" src="/assets/shell.b5f435cf.js"></script>
+</head>
+<body>
+  <main id="app" data-app="shell">
+    <h1 id="marker">Fixture shell</h1>
+    <p id="session-state">loading</p>
+    <div id="fragments"></div>
+
+    <form method="post" action="/bff/logout">
+      <button type="submit">Log out</button>
+    </form>
+  </main>
+</body>
+</html>
