@@ -2018,7 +2018,8 @@ const forkOf = (prompt) => (/Otherwise fork from [^:]+: forkSha = (\S+?)\. Take 
   for (const c of impls) {
     const lines = c.prompt.split('\n')
     const at = lines.findIndex((l) => l.startsWith('- Otherwise fork from '))
-    const next = at < 0 ? '' : lines[at + 1] || ''
+    if (at < 0) { fail(`#1386: the ${c.label} prompt's STEP 0 has no "- Otherwise fork from" line for the body-named base line to follow`); continue }
+    const next = lines[at + 1] || ''
     if (!next.startsWith('- If the ticket\'s body names another base to build on')) { fail(`#1386: the ${c.label} prompt's STEP 0 does not follow the fork with what to do when the ticket's body names another base`); continue }
     const from = c.prompt.indexOf('STEP 2 — outcomes')
     const route = from < 0 ? undefined : (/^- ([^(\n]+?) \(or it needs AWS/m.exec(c.prompt.slice(from)) || [])[1]
