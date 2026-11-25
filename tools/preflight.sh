@@ -195,7 +195,9 @@ if [ -d "$tf_cache" ]; then
     '' | *[!0-9]*) tf_cache_size="of a size du could not read" ;;
     *)
       if [ "$tf_cache_kb" -ge 1048576 ]; then
-        tf_cache_tenths=$((tf_cache_kb * 10 / 1048576))
+        # Tenths of a gigabyte, rounded to the nearest: half a tenth, 524288 KB over ten, is added
+        # before the division, so #1502's 1570304 KB, 1.4976 GB, reads 1.5 GB and not 1.4.
+        tf_cache_tenths=$(((tf_cache_kb * 10 + 524288) / 1048576))
         tf_cache_size="$((tf_cache_tenths / 10)).$((tf_cache_tenths % 10)) GB"
       elif [ "$tf_cache_kb" -ge 1024 ]; then
         tf_cache_size="$((tf_cache_kb / 1024)) MB"

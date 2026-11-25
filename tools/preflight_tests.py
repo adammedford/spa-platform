@@ -512,7 +512,9 @@ class ProviderCacheRowTests(PreflightTestCase):
     def test_a_cache_of_a_gigabyte_or_more_is_counted_in_tenths_of_a_gigabyte(self):
         # A real cache is 1.5 GB (#1502), too much to write for a case, and du does not count a
         # sparse file's holes, so du is a double here that answers for the cache with a given figure.
-        for kilobytes, size in ((1048576, "1.0 GB"), (1570304, "1.4 GB")):
+        # The tenths are rounded to the nearest: #1502's own 1570304 KB is 1.4976 GB, which reads
+        # 1.5 GB, and 2096128 KB, 1.999 GB, carries into the units as 2.0 GB.
+        for kilobytes, size in ((1048576, "1.0 GB"), (1570304, "1.5 GB"), (2096128, "2.0 GB")):
             with self.subTest(kilobytes=kilobytes):
                 case = Case(self)
                 self.default(case).mkdir(parents=True)
