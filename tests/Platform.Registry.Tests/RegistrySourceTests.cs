@@ -72,7 +72,7 @@ public sealed class RegistrySourceTests
     }
 
     [Fact]
-    public async Task Secrets_are_preloaded_before_the_swap_each_fragments_beside_its_shells()
+    public async Task Secrets_are_preloaded_before_the_swap_with_each_fragment_beside_its_shell()
     {
         // A fragment's code exchange on /signin-oidc/{fragmentId} reads its secret with Get, which does
         // no I/O (#1538). Mutation: preload only app.OAuth.ClientSecretRef in TryPreloadAsync, as before
@@ -87,6 +87,8 @@ public sealed class RegistrySourceTests
         Assert.Equal([App1Ref, App1ReportsRef, App2Ref, App2ReportsRef], secrets.Preloaded.Order(StringComparer.Ordinal));
         Assert.Equal(App1ReportsSecret, secrets.Get(Assert.Single(registry.Current.ByAppId["app1"].Fragments).OAuth.ClientSecretRef));
         Assert.Equal(App2ReportsSecret, secrets.Get(Assert.Single(registry.Current.ByAppId["app2"].Fragments).OAuth.ClientSecretRef));
+        Assert.DoesNotContain(logs.Lines, line =>
+            line.Text.Contains(App1ReportsSecret, StringComparison.Ordinal) || line.Text.Contains(App2ReportsSecret, StringComparison.Ordinal));
     }
 
     [Fact]
@@ -299,7 +301,8 @@ public sealed class RegistrySourceTests
         // on a retry once it reads. Mutation: in Partition, read only app.OAuth.ClientSecretRef, and
         // app2 goes live at the first poll with a fragment that cannot sign in. Mutation: preload
         // only the shells' references on the retry (RetryLeftOutAsync), and the retry's preload
-        // assertion fails.
+        // assertion fails (the swap and the retry share TryPreloadAsync, so make it at the retry's
+        // call: pass cold.LeftOut.Select(app => app with { Fragments = [] })).
         await Publish(Examples.RegistryWithSecondEntry());
         secrets[App2Ref] = App2Secret;
 

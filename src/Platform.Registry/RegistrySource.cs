@@ -16,10 +16,11 @@ namespace Platform.Registry;
 /// document is accepted or rejected whole (ADR-0002), and so is a snapshot whose secrets cannot all be
 /// read (contracts/README.md, <c>clientSecretRef</c>; decision D3).
 ///
-/// <b>At a cold start</b> there is nothing to keep, so an app with a secret that cannot be read, its shell's or a fragment's, is left out
-/// and reported, and the rest go live (docs/plan/02-contracts.md, Registry document). The source keeps
-/// the document it came from and reads the left-out secrets again on each poll while the object is
-/// unchanged; an app joins the live snapshot, under the same revision, once its secret reads.
+/// <b>At a cold start</b> there is nothing to keep, so an app with a secret that cannot be read, its
+/// shell's or a fragment's, is left out and reported, and the rest go live (docs/plan/02-contracts.md,
+/// Registry document). The source keeps the document it came from and reads the left-out secrets
+/// again on each poll while the object is unchanged; an app joins the live snapshot, under the same
+/// revision, once its secrets read.
 ///
 /// <b>Nothing is ready until the first valid snapshot</b>: until then <see cref="IRegistry.Current"/>
 /// is <see cref="LiveRegistry.NoSnapshot"/>, revision 0.
