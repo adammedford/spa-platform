@@ -2006,6 +2006,33 @@ const forkOf = (prompt) => (/Otherwise fork from [^:]+: forkSha = (\S+?)\. Take 
   if (!beforeGreen) fail('#665: no implement started before any gate passed, so the run-base fallback check read nothing')
 }
 
+// 52. A ticket body that names another base does not move the fork (#1386). On 2026-11-18 #1005, #1329 and #1330 each
+//     re-decided where to fork as a gap decision because their bodies named landing B's branch, and #1002 ended red for
+//     the reason its body expected. STEP 0's line after the fork says the fork at forkSha still wins, the change is
+//     proven on a throwaway tree of that base, and a change red on forkSha by design takes the "Cannot get green" route
+//     with a Status note opening "Red alone by design". The route's name is read from STEP 2 of the same prompt, the
+//     bullet a red change takes ("(or it needs AWS ..."), so a route renamed there alone fails here.
+{
+  const impls = allPrompts.filter((x) => x.label.startsWith('implement:'))
+  if (!impls.length) fail('#1386: no implement prompt was rendered, so the body-named base check read nothing')
+  for (const c of impls) {
+    const lines = c.prompt.split('\n')
+    const at = lines.findIndex((l) => l.startsWith('- Otherwise fork from '))
+    if (at < 0) { fail(`#1386: the ${c.label} prompt's STEP 0 has no "- Otherwise fork from" line for the body-named base line to follow`); continue }
+    const next = lines[at + 1] || ''
+    if (!next.startsWith('- If the ticket\'s body names another base to build on')) { fail(`#1386: the ${c.label} prompt's STEP 0 does not follow the fork with what to do when the ticket's body names another base`); continue }
+    const from = c.prompt.indexOf('STEP 2 — outcomes')
+    const route = from < 0 ? undefined : (/^- ([^(\n]+?) \(or it needs AWS/m.exec(c.prompt.slice(from)) || [])[1]
+    if (!route) { fail(`#1386: the ${c.label} prompt's STEP 2 has no "Cannot get green" route for the body-named base line to send a red change to`); continue }
+    for (const [said, why] of [
+      ['the fork above still wins', 'that the fork at forkSha wins over the body\'s base'],
+      ['a throwaway worktree of that base merged with <forkSha>', 'where the change is proven'],
+      [`take the "${route}" route in STEP 2`, 'which route a change red by design takes'],
+      ['open its Status note with "Red alone by design: lands with <that base>"', 'how that Status note opens'],
+    ]) if (!next.includes(said)) fail(`#1386: the ${c.label} prompt's body-named base line does not say ${why} ("${said}")`)
+  }
+}
+
 // 43. Path waits (#665; #659 Q1, Q4 to Q10): a run of its own, on tickets whose Touches paths overlap. A ticket waits
 //     to start its implement until every earlier ticket by n, in any lane, whose paths are equal to or a directory
 //     holding its own has settled with any outcome; a textual prefix alone is no overlap; a ticket with no readable
