@@ -214,6 +214,13 @@ public sealed class PlaywrightEngines(DeployedStack stack, HarnessApp shell) : I
                 if (response.Request.IsNavigationRequest && response.Frame == page.MainFrame)
                 {
                     Uri at = new(response.Url);
+                    // Request.Headers "does not return security-related headers, including cookie-related ones"
+                    // (https://playwright.dev/dotnet/docs/api/class-request#request-headers); the complete set is
+                    // AllHeadersAsync's (#request-all-headers), which this synchronous event handler does not await (an
+                    // async one would be async void). Whether an engine counts Sec-Fetch-* among them is not documented;
+                    // #1411's session found that Chromium and WebKit "report redirect responses and Sec-Fetch-*" here
+                    // (comment 7149835958). The choice fails closed: an omitted header is null, and
+                    // FragmentsObserver.Chain reports a step with no Fetch Metadata recorded as not proved.
                     IReadOnlyDictionary<string, string> headers = response.Request.Headers;
                     lock (hops)
                     {

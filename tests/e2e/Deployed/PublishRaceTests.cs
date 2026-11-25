@@ -226,6 +226,27 @@ public sealed class PublishRaceTests
     [Fact]
     public async Task A_run_whose_rival_never_reaches_the_barrier_stops_and_is_recorded_as_not_completed()
     {
+        // Mutation: recording a run's Completed as `exit is null or 0` in PublishRaceDrive.PublishAsync records the stopped
+        // run as completed and fails the first assertion.
+        const string rival = "race-20261124120000-different-b";
+        (PublishRaceSetup setup, _, _) = World(TimeSpan.Zero,
+            args => args is ["fragment", "publish", _, _, _, string release, ..] && release == rival ? 1 : null);
+        setup = setup with { Spactl = PublishRaceSetup.Stopping(setup.Spactl), Barrier = TimeSpan.FromMilliseconds(100) };
+
+        PublishRaceRecord record = await new PublishRaceDrive(setup).RunAsync(AppId, Orders, "20261124120000", Ct);
+
+        PublishRace different = record.Variants.Single(each => each.Variant == "different");
+        Assert.Null(different.Runs[0].Completed);
+        Assert.False(different.Runs[1].Completed);
+        Assert.Null(different.StoredSha256);
+        RowResult result = FragmentsObserver.PublishRaces(record);
+        Assert.Equal(Verdict.NotProved, result.Verdict);
+        Assert.Contains("a publish run's outcome was not recorded", result.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_claim_whose_rival_never_arrives_stops_inside_the_barriers_bound_and_other_writes_pass()
+    {
         // Mutation: widening ClaimHold's bound (WaitAsync(wait * 1000, ct)) leaves the put waiting
         // past ten seconds and fails the first assertion.
         InMemoryObjectStore store = new();

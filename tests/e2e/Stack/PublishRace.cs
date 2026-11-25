@@ -82,7 +82,7 @@ public sealed class PublishRaceDrive(PublishRaceSetup setup)
         string root = Directory.CreateTempSubdirectory("spa-e2e-race-").FullName;
         try
         {
-            ClaimHold hold = new(setup.Store, Namespace(appId, fragment.FragmentId) + "claims/" + file, 2, Barrier);
+            ClaimHold hold = new(setup.Store, Namespace(appId, fragment.FragmentId) + "claims/" + file, 2, setup.Barrier);
             string[] directories = [.. bytes.Select((body, i) => Release(root, releases[i], fragment.Entry, file, body))];
             int?[] exits = await Task.WhenAll(Enumerable.Range(0, 2).Select(i => setup.Statuses.WithinAsync(releases[i], () => setup.Spactl(
                 ["fragment", "publish", appId, fragment.FragmentId, directories[i], releases[i], "--entry", fragment.Entry, "--outputs", setup.OutputsPath], hold, ct))));
@@ -186,16 +186,38 @@ public sealed record PublishRaceSetup(
 {
     public Func<TimeSpan, CancellationToken, Task> Delay { get; init; } = Task.Delay;
 
+    /// <summary>How long a run waits at the claim for its rival: <see cref="PublishRaceDrive.Barrier"/>, shorter in a test.</summary>
+    public TimeSpan Barrier { get; init; } = PublishRaceDrive.Barrier;
+
     /// <summary>The live path: spactl's own environment with its store replaced, over an S3 client whose responses <paramref name="statuses"/> sees.</summary>
     public static (SpactlRun Spactl, IObjectStore Store) Live(Cell cell, S3Statuses statuses)
     {
         AmazonS3Client client = new(Config(cell.Region, statuses));
-        return (InProcess, new S3ObjectStore(client, cell.Bucket));
+        return (Stopping(InProcess), new S3ObjectStore(client, cell.Bucket));
     }
 
     /// <summary>The S3 client's configuration: the cell's Region, and its HTTP clients from <paramref name="statuses"/>, which is how a refusal's status is seen.</summary>
     public static AmazonS3Config Config(string region, S3Statuses statuses) =>
         new() { RegionEndpoint = RegionEndpoint.GetBySystemName(region), HttpClientFactory = statuses };
+
+    /// <summary>
+    /// <paramref name="run"/>, answering null when it throws past spactl's own handlers, as a run stopped at the
+    /// barrier (<see cref="ClaimHold"/>'s <see cref="TimeoutException"/>) does: the drive records such a run's
+    /// outcome as unknown, never as completed.
+    /// </summary>
+    public static SpactlRun Stopping(SpactlRun run) => async (arguments, store, ct) =>
+    {
+        try
+        {
+            return await run(arguments, store, ct);
+        }
+        catch (Exception stopped) when (stopped is not OperationCanceledException || !ct.IsCancellationRequested)
+        {
+            // The type alone: an SDK or barrier message may name a key, never a secret, but a row's output is its verdict.
+            Console.WriteLine($"spactl {string.Join(' ', arguments.Take(2))} stopped with {stopped.GetType().Name}");
+            return null;
+        }
+    };
 
     /// <summary>
     /// <see cref="SpactlApp.RunAsync"/> over the given store, with spactl's own history and HTTP handler, and its
@@ -204,23 +226,14 @@ public sealed record PublishRaceSetup(
     private static async Task<int?> InProcess(IReadOnlyList<string> arguments, IObjectStore store, CancellationToken ct)
     {
         SpactlEnvironment live = SpactlEnvironment.Live();
-        try
+        return await SpactlApp.RunAsync(arguments, new SpactlEnvironment
         {
-            return await SpactlApp.RunAsync(arguments, new SpactlEnvironment
-            {
-                Store = _ => store,
-                History = live.History,
-                Http = live.Http,
-                Out = TextWriter.Null,
-                Error = TextWriter.Null,
-            }, ct);
-        }
-        catch (Exception stopped) when (stopped is not OperationCanceledException || !ct.IsCancellationRequested)
-        {
-            // The type alone: an SDK or barrier message may name a key, never a secret, but a row's output is its verdict.
-            Console.WriteLine($"spactl {string.Join(' ', arguments.Take(2))} stopped with {stopped.GetType().Name}");
-            return null;
-        }
+            Store = _ => store,
+            History = live.History,
+            Http = live.Http,
+            Out = TextWriter.Null,
+            Error = TextWriter.Null,
+        }, ct);
     }
 }
 

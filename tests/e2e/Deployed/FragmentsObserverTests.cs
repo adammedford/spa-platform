@@ -19,7 +19,7 @@ public sealed class FragmentsObserverTests
     internal const string TaskA = "1a2b3c4d5e6f40718293a4b5c6d7e8f9";
     internal const string TaskB = "9f8e7d6c5b4a43210fedcba987654321";
 
-    internal static readonly IReadOnlyList<string> Agents = ["chromium 131", "firefox 133"];
+    internal static readonly IReadOnlyList<string> Agents = ["chromium 131", "firefox 133", "webkit 26.0"];
 
     private static void AssertNotPassed(RowResult result, string reason)
     {
@@ -455,20 +455,21 @@ public sealed class FragmentsObserverTests
     public void O13_a_chain_step_with_no_fetch_metadata_recorded_is_not_proved()
     {
         // Mutation: dropping the Mode test from the Fetch Metadata check in FragmentsObserver.Chain passes this row.
-        ChainRecord broken = new([GoodChain().Runs[0], GoodChain().Runs[1] with { Steps = [new ChainStep("cross-site", null, "document"), GoodChain().Runs[1].Steps[1]] }]);
+        ChainRecord broken = new([GoodChain().Runs[0], GoodChain().Runs[1] with { Steps = [new ChainStep("cross-site", null, "document"), GoodChain().Runs[1].Steps[1]] }, GoodChain().Runs[2]]);
 
         RowResult result = FragmentsObserver.Chain(broken, AtTwo);
         Assert.Equal(Verdict.NotProved, result.Verdict);
         AssertNotPassed(result, "has no Fetch Metadata recorded");
-        Assert.Equal(Verdict.Failed, FragmentsObserver.Chain(new([GoodChain().Runs[0] with { Completed = false }, GoodChain().Runs[1]]), AtTwo).Verdict);
+        Assert.Equal(Verdict.Failed, FragmentsObserver.Chain(new([GoodChain().Runs[0] with { Completed = false }, GoodChain().Runs[1], GoodChain().Runs[2]]), AtTwo).Verdict);
     }
 
     [Fact]
     public void O13_an_agent_with_no_chain_or_a_short_one_is_not_proved()
     {
         // Mutation: removing the `run.Steps.Count != context.N` return from FragmentsObserver.Chain passes the short chain.
-        AssertNotPassed(FragmentsObserver.Chain(new([GoodChain().Runs[0]]), AtTwo), "no chain was observed in firefox 133");
-        AssertNotPassed(FragmentsObserver.Chain(new([GoodChain().Runs[0], GoodChain().Runs[1] with { Steps = [GoodChain().Runs[1].Steps[0]] }]), AtTwo), "recorded 1 /bff/chain steps of 2");
+        AssertNotPassed(FragmentsObserver.Chain(new([GoodChain().Runs[0], GoodChain().Runs[2]]), AtTwo), "firefox has no run");
+        AssertNotPassed(FragmentsObserver.Chain(GoodChain(), AtTwo with { UserAgents = [.. Agents, "firefox 134"] }), "no chain was observed in firefox 134");
+        AssertNotPassed(FragmentsObserver.Chain(new([GoodChain().Runs[0], GoodChain().Runs[1] with { Steps = [GoodChain().Runs[1].Steps[0]] }, GoodChain().Runs[2]]), AtTwo), "recorded 1 /bff/chain steps of 2");
     }
 
     internal static ChainRefusalRecord GoodRefusals() =>

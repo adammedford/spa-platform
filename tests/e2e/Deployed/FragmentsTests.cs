@@ -27,8 +27,8 @@ namespace Gateway.E2ETests.Deployed;
 /// <para>The drives pull the cell's levers they need and put them back (#1411's decision of 2026-11-24):
 /// O1 writes the shell's entry at each N with spactl, so <c>Policy:FragmentsPerShell</c> is raised to 6 for its
 /// run (#1011 row 1); O2 scales the gateway service to one task and two; F-T5 activates the winning fragment
-/// release. O1, O2 and F-T5 read <c>SPA_E2E_PLATFORM_CONFIG</c> and the outputs document
-/// <c>SPA_E2E_OUTPUTS</c> names (the repository's when unset). The browser rows launch Chromium, Firefox and
+/// release. O1 and F-T5 read <c>SPA_E2E_PLATFORM_CONFIG</c> and the outputs document
+/// <c>SPA_E2E_OUTPUTS</c> names (the repository's when unset); O2 reads neither. The browser rows launch Chromium, Firefox and
 /// WebKit through a loopback proxy to the tunnel; an engine that does not launch is named on standard output
 /// and missing from the record.</para>
 /// </summary>

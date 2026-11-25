@@ -235,7 +235,7 @@ public sealed class FragmentsDriver : IAsyncDisposable
     /// <summary>The browser rows over Chromium, Firefox and WebKit on the cell, launched on a row's first use.</summary>
     public FragmentsBrowserRows Browsers => new(engines ??= new PlaywrightEngines(stack, stack.App(Shell)), new HarnessAppUrl(stack.App(Shell).Origin));
 
-    /// <summary>O13's chain (F-42) in each engine that launches; an engine that does not is named on standard output at its launch and is not one of the row's user agents.</summary>
+    /// <summary>O13's chain (F-42) in each engine that launches; an engine that does not is named on standard output at its launch, has no run in the record, and makes the row not proved (<see cref="FragmentsObserver.Chain"/>).</summary>
     public async Task<Driven<ChainRecord>> ChainAsync(CancellationToken ct)
     {
         (ChainRecord record, IReadOnlyList<string> agents, _) = await Browsers.ChainAsync(ct);

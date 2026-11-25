@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using Gateway.E2ETests.Stack;
@@ -68,10 +69,10 @@ public sealed partial class FragmentsWorkloadsTests
         }
     }
 
-    /// <summary>The ECS and CloudWatch reads a drive sends, answered from the recording; the service starts at two tasks.</summary>
+    /// <summary>The ECS and CloudWatch reads a drive sends, answered from the recording; the service starts at three tasks, a count no topology the drive scales to.</summary>
     private static RecordedRunner Aws(List<CapacityPeriod>? periods = null) => new(arguments => arguments switch
     {
-        ["ecs", "describe-services", ..] => """{ "services": [ { "desiredCount": 2 } ] }""",
+        ["ecs", "describe-services", ..] => """{ "services": [ { "desiredCount": 3 } ] }""",
         ["ecs", "update-service", ..] => "{}",
         ["ecs", "wait", "services-stable", ..] => "",
         ["cloudwatch", "get-metric-statistics", ..] => new JsonObject
@@ -124,14 +125,15 @@ public sealed partial class FragmentsWorkloadsTests
     public async Task O2_scales_to_one_task_then_two_samples_each_and_puts_the_service_back()
     {
         // Mutation: dropping the restore from FragmentsWorkloads.ContentionAsync (ScaleAsync(desired, restore)) leaves the
-        // service at the drive's last count and fails the last assertion.
+        // service at the drive's last count, and restoring to a fixed 2 (ScaleAsync(2, restore)) in place of the count
+        // read puts it at the wrong one; each fails the second assertion.
         (RefreshContention record, IReadOnlyList<Step> steps, Sessions sessions, RecordedRunner aws) = await ContentionAsync();
 
         string[][] commands = [.. aws.Calls.Select(call => call.Arguments)];
         Assert.Equal(["ecs", "describe-services", "--cluster", FragmentsObserverTests.Cell.Cluster, "--services", FragmentsObserverTests.Cell.Service, "--output", "json", "--region", FragmentsObserverTests.Cell.Region], commands[0]);
-        Assert.Equal(["1", "2", "2"], commands.Select(Scaled).Where(count => count.Length > 0));
+        Assert.Equal(["1", "2", "3"], commands.Select(Scaled).Where(count => count.Length > 0));
         Assert.Equal(3, commands.Count(command => command is ["ecs", "wait", "services-stable", ..]));
-        Assert.Equal("2", Scaled(commands[^2]));
+        Assert.Equal("3", Scaled(commands[^2]));
     }
 
     [Fact]
@@ -197,8 +199,8 @@ public sealed partial class FragmentsWorkloadsTests
         await Assert.ThrowsAsync<TimeoutException>(() => workloads.ContentionAsync(Fragments, Ct));
 
         string[][] commands = [.. aws.Calls.Select(call => call.Arguments)];
-        Assert.Equal(["1", "2"], commands.Select(Scaled).Where(count => count.Length > 0));
-        Assert.Equal("2", Scaled(commands[^2]));
+        Assert.Equal(["1", "3"], commands.Select(Scaled).Where(count => count.Length > 0));
+        Assert.Equal("3", Scaled(commands[^2]));
     }
 
     private static async Task<(CapacitySample Sample, IReadOnlyList<Step> Steps, DateTimeOffset Until, RecordedRunner Aws)> CapacityAsync(DateTimeOffset start)
@@ -266,16 +268,44 @@ public sealed partial class FragmentsWorkloadsTests
     [Fact]
     public void The_write_lines_are_read_in_the_wording_the_identity_project_writes()
     {
-        // Mutation: changing FragmentsLines' pattern to "after {N} replaces" fails the parse below; a change to either
-        // LoggerMessage's wording fails the source checks.
+        // Mutation: changing FragmentsLines' patterns to "after {N} replaces" fails the parses below; a change to any of
+        // the three LoggerMessages' wording fails the source checks.
         string source = Joined(File.ReadAllText(Path.Combine(FixtureFiles.RepositoryRoot, "src", "Platform.Identity", "AccessTokenSource.cs")));
         string events = Joined(File.ReadAllText(Path.Combine(FixtureFiles.RepositoryRoot, "src", "Platform.Identity", "FragmentEvents.cs")));
-        Assert.Contains("\"" + FragmentsLines.RefreshWritePrefix + "{AppId}, fragment {FragmentId}, session {SessionRef}: ended {Outcome} after {StoreAttempts} versioned replaces.\"", source, StringComparison.Ordinal);
-        Assert.Contains("\"" + FragmentsLines.RefreshWritePrefix + "{AppId}, session {SessionRef}: ended {Outcome} after {StoreAttempts} versioned replaces.\"", source, StringComparison.Ordinal);
-        Assert.Contains("\"" + FragmentsLines.FragmentWritePrefix + "{AppId}, fragment {FragmentId}, session {SessionRef}: the {Writer} write ended {Outcome} after {StoreAttempts} versioned replaces.\"", events, StringComparison.Ordinal);
+        string fragmentRefresh = FragmentsLines.RefreshWritePrefix + "{AppId}, fragment {FragmentId}, session {SessionRef}: ended {Outcome} after {StoreAttempts} versioned replaces.";
+        string refresh = FragmentsLines.RefreshWritePrefix + "{AppId}, session {SessionRef}: ended {Outcome} after {StoreAttempts} versioned replaces.";
+        string fragmentWrite = FragmentsLines.FragmentWritePrefix + "{AppId}, fragment {FragmentId}, session {SessionRef}: the {Writer} write ended {Outcome} after {StoreAttempts} versioned replaces.";
+        Assert.Contains("\"" + fragmentRefresh + "\"", source, StringComparison.Ordinal);
+        Assert.Contains("\"" + refresh + "\"", source, StringComparison.Ordinal);
+        Assert.Contains("\"" + fragmentWrite + "\"", events, StringComparison.Ordinal);
         Assert.Contains($"LogWrite(refresh, \"{FragmentsLines.Exhausted}\", attempts)", source, StringComparison.Ordinal);
         Assert.Contains($"LogWrite(refresh, \"{FragmentsLines.Written}\", attempts)", source, StringComparison.Ordinal);
+
+        // Each template rendered as the gateway writes it, then read back by FragmentsLines.
+        Assert.Equal(new WriteCount(3, 3, true), FragmentsLines.RefreshWrite(Rendered(fragmentRefresh, FragmentsLines.Exhausted)));
+        Assert.Equal(new WriteCount(2, 1, false), FragmentsLines.RefreshWrite(Rendered(refresh, FragmentsLines.Written, attempts: 2)));
+        Assert.Equal(("fallback", 2), FragmentsLines.FragmentWrite(Rendered(fragmentWrite, FragmentsLines.Written, attempts: 2)));
     }
+
+    /// <summary>A gateway line whose <c>msg</c> is <paramref name="template"/> with its placeholders filled, as the logger fills them.</summary>
+    private static GatewayEvent Rendered(string template, string outcome, int attempts = 3)
+    {
+        Dictionary<string, string> values = new(StringComparer.Ordinal)
+        {
+            ["AppId"] = "shell",
+            ["FragmentId"] = "orders",
+            ["SessionRef"] = "s01",
+            ["Writer"] = "fallback",
+            ["Outcome"] = outcome,
+            ["StoreAttempts"] = attempts.ToString(CultureInfo.InvariantCulture),
+        };
+        string msg = Placeholder().Replace(template, match => values[match.Groups["name"].Value]);
+        using JsonDocument line = JsonDocument.Parse(new JsonObject { ["msg"] = msg, ["session_ref"] = "s01" }.ToJsonString());
+        return new GatewayEvent("gateway/gateway/" + FragmentsObserverTests.TaskA, FragmentsObserverTests.TaskA, Start, Start, line.RootElement.Clone());
+    }
+
+    [GeneratedRegex(@"\{(?<name>[A-Za-z]+)\}", RegexOptions.None, RegexTimeout.Milliseconds)]
+    private static partial Regex Placeholder();
 
     /// <summary>The drive's delay as the clock's move: nothing waits, and the clock says the wait passed.</summary>
     private static Func<TimeSpan, CancellationToken, Task> Moves(ManualClock clock) => (by, _) =>

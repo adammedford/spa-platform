@@ -133,10 +133,10 @@ public sealed class FragmentsBrowserRowsTests
     }
 
     [Fact]
-    public async Task O13s_chain_runs_in_each_engine_that_launched_and_names_the_one_that_did_not()
+    public async Task O13s_chain_runs_in_each_engine_and_is_not_proved_naming_the_one_that_did_not_launch()
     {
-        // Mutation: recording Completed as true whatever the navigation landed on (FragmentsBrowserRows.ChainAsync) passes
-        // the stopped run below and fails the last assertion.
+        // Mutation: dropping the engines check from FragmentsObserver.Chain passes the record with Firefox refused below
+        // and fails the first verdict assertion.
         Scripted chromium = new("chromium", () => 2, 19);
         Scripted webkit = new("webkit", () => 2, 20);
         FragmentsBrowserRows rows = new(new Engines([chromium, webkit], ["firefox: Failed to launch the browser process."]), Shell);
@@ -146,12 +146,20 @@ public sealed class FragmentsBrowserRowsTests
         Assert.Equal(["chromium 153.0", "webkit 26.6"], agents);
         Assert.Equal(["firefox: Failed to launch the browser process."], refused);
         RowResult result = FragmentsObserver.Chain(record, new FragmentsContext(2, agents, []));
-        Assert.True(result.Verdict == Verdict.Passed, result.Message);
+        Assert.True(result.Verdict == Verdict.NotProved, result.Message);
+        Assert.Contains("firefox has no run", result.Message, StringComparison.Ordinal);
         Assert.Equal([(Shell.Url("/bff/login?returnUrl=%2F"), true)], chromium.Navigations);
 
+        // Mutation: recording Completed as true whatever the navigation landed on (FragmentsBrowserRows.ChainAsync) passes
+        // the stopped run below and fails the last assertion.
+        Scripted firefox = new("firefox", () => 2, 20);
+        (ChainRecord all, IReadOnlyList<string> every, _) = await new FragmentsBrowserRows(new Engines([chromium, firefox, webkit], []), Shell).ChainAsync(Ct);
+        RowResult passed = FragmentsObserver.Chain(all, new FragmentsContext(2, every, []));
+        Assert.True(passed.Verdict == Verdict.Passed, passed.Message);
+
         Scripted stopped = new("chromium", () => 2, 19) { Answer = (_, _) => SignIn(2, prompt: true) with { Landed = null } };
-        (ChainRecord failed, _, _) = await new FragmentsBrowserRows(new Engines([stopped], []), Shell).ChainAsync(Ct);
-        Assert.Equal(Verdict.Failed, FragmentsObserver.Chain(failed, new FragmentsContext(2, ["chromium 153.0"], [])).Verdict);
+        (ChainRecord failed, IReadOnlyList<string> stoppedAgents, _) = await new FragmentsBrowserRows(new Engines([stopped, firefox, webkit], []), Shell).ChainAsync(Ct);
+        Assert.Equal(Verdict.Failed, FragmentsObserver.Chain(failed, new FragmentsContext(2, stoppedAgents, [])).Verdict);
     }
 
     [Fact]
@@ -246,7 +254,7 @@ public sealed class FragmentsBrowserRowsTests
     public async Task O1_writes_each_N_runs_every_engine_at_it_probes_each_and_puts_the_shell_back()
     {
         // Mutation: dropping the restore from FragmentsBrowserRows.RedirectsAsync leaves the shell at N = 6 here, where it
-        // started at 2, and fails the second assertion.
+        // started at 2, and fails the first assertion.
         Spactl spactl = new();
         O1Lever lever = new(spactl.RunAsync, new InMemoryObjectStore(), Definition(), Releases, 2, "platform.json", "outputs.json", TimeSpan.Zero);
         Scripted[] engines = [new("chromium", () => spactl.Live, 19), new("firefox", () => spactl.Live, 20), new("webkit", () => spactl.Live, 20)];
