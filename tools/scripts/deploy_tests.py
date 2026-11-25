@@ -1010,7 +1010,9 @@ class DeployWaitsThroughTheLiveRegistrysHost(cell.CompanionTestCase):
 
     def test_a_registry_whose_first_app_names_no_host_fails_before_anything_is_built(self):
         for app in ({"appId": "shell", "release": "r1"}, {"appId": "shell", "host": "", "release": "r1"},
-                    {"appId": "shell", "host": "https://shell.cells.example.test", "release": "r1"}):
+                    {"appId": "shell", "host": "https://shell.cells.example.test", "release": "r1"},
+                    # The schema's pattern holds a 256-character name; its maxLength of 255 does not.
+                    {"appId": "shell", "host": "a" * 256, "release": "r1"}):
             with self.subTest(app=app):
                 case, result, urls = self.wait_url([app])
                 self.assertEqual(1, result.status, result.output)

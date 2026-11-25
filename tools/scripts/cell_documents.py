@@ -341,14 +341,16 @@ def apps(path: str) -> int:
     return 0
 
 
-# contracts/registry.schema.json's host, a lowercase authority with an optional port, read as a
-# name and the port after it.
-HOST = re.compile(r"([a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*)(:[1-9][0-9]{0,4})?")
+# The registry contract, beside this script in the tree, for the host, id and entry rules and the
+# entry's default: read, never copied, so a changed rule there is the rule here.
+REGISTRY_SCHEMA = pathlib.Path(__file__).resolve().parent.parent.parent / "contracts" / "registry.schema.json"
 
 
 def host(path: str) -> int:
     """The first app's host in the live registry, without the port the registry carries: the name
-    deploy.sh's readiness wait reads through, on its tunnel's own port (#1351)."""
+    deploy.sh's readiness wait reads through, on its tunnel's own port (#1351). The host is held to
+    contracts/registry.schema.json's host rule, read from REGISTRY_SCHEMA, its pattern and its
+    lengths; that rule's one colon is the port's."""
     try:
         document = json.loads(pathlib.Path(path).read_text())
     except (OSError, ValueError):
@@ -356,10 +358,11 @@ def host(path: str) -> int:
     entries = document.get("apps") if isinstance(document, dict) else None
     first = entries[0] if isinstance(entries, list) and entries and isinstance(entries[0], dict) else {}
     value = first.get("host")
-    match = HOST.fullmatch(value) if isinstance(value, str) else None
-    if match is None:
+    rule = json.loads(REGISTRY_SCHEMA.read_text())["$defs"]["host"]
+    if (not isinstance(value, str) or not re.fullmatch(rule["pattern"], value)
+            or not rule.get("minLength", 0) <= len(value) <= rule.get("maxLength", len(value))):
         raise Refused("the live registry's first app names no host")
-    print(match[1])
+    print(value.partition(":")[0])
     return 0
 
 
@@ -444,9 +447,6 @@ def fragment_release(directory: str, entry: str) -> int:
 
 # --- fragments -------------------------------------------------------------------------------------
 
-# The registry contract, beside this script in the tree, for the id and entry rules and the entry's
-# default: read, never copied, so a changed rule there is the rule here.
-REGISTRY_SCHEMA = pathlib.Path(__file__).resolve().parent.parent.parent / "contracts" / "registry.schema.json"
 
 
 def fragments(path: str) -> int:

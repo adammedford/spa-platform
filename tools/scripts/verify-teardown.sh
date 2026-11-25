@@ -28,9 +28,9 @@
 #      (DELETE_IN_PROGRESS) or one ECS no longer knows; an EC2 id is dropped when EC2's describe does
 #      not know it, a NAT gateway or a VPC endpoint also when EC2 says it is deleted (#347), and the
 #      cell's session table when DynamoDB's does not know it (#338). An ARN of any other type goes
-#      to the cell's teardown judge, when the entry value SPA_TEARDOWN_JUDGE names one (below).
-#      Anything else listed stands: the key ring's parameters among them, which teardown.sh deletes
-#      first.
+#      to the cell's teardown judge, when the entry value SPA_TEARDOWN_JUDGE names one (below), and
+#      stands when it names none. The key ring's parameters, which teardown.sh deletes first, are of
+#      such a type: they stand when no judge is named or the cell's judge answers stands.
 #
 # The teardown judge (#1351) is the cell's answer for a type this script does not know: a resource
 # a root of the cell's own creates beside the cell module's, which the index can go on listing after
