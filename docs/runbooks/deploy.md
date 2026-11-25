@@ -5,9 +5,18 @@ it, applies its digest and checks that the running task has it. It builds, pushe
 gateway image only. An image the cell runs beside the gateway is that cell's to build, and the apply
 leaves it at what the platform root's tfvars hold.
 
-**It signs every user of every app out** (Phase 1 sessions live in the task's memory). If the change
-is a SPA release, a registry entry, a client or a secret, use that lever instead: none of them needs
-a deployment.
+**Whom it signs out depends on the cell's shape**, which the cell module's `multi_task` and
+`session_store` inputs choose (`infra/modules/cell/variables.tf`):
+
+- **One task with sessions in memory** (`multi_task = false`, `session_store = "memory"`, the
+  defaults): it signs every user of every app out. Sessions and data-protection keys live in the one
+  task's memory, and the deployment replaces that task.
+- **Two tasks with the durable session store** (`multi_task = true`, `session_store = "dynamodb"`):
+  a rolling deployment signs no one out. Sessions live in DynamoDB under the shared key ring, so a
+  task of either build reads them (`g6-continuity`).
+
+If the change is a SPA release, a registry entry, a client or a secret, use that lever instead: none
+of them needs a deployment.
 
 Start with the operator session in [README.md](README.md). Docker Desktop must be running, with
 buildx, and unless `--url` is given the readiness wait's tunnel needs the Session Manager plugin
@@ -83,7 +92,8 @@ the deployment is still up, use it; if it has ended, start `tools/scripts/tunnel
 tools/scripts/verify-tunnel.sh /healthz
 ```
 
-Every user signs in again on their next request.
+On one task with sessions in memory, every user signs in again on their next request. On two tasks
+with the durable session store, every user stays signed in.
 
 ## If it fails
 
