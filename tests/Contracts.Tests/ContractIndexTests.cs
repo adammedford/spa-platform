@@ -65,8 +65,12 @@ public sealed class ContractIndexTests
         "pipeline.md", "http-contract.md", "request-gate.md", "upstream-contract.md", "s3-layout.md",
         "telemetry.md", "resource-tags.md");
 
+    // The project's own prose contracts that came from the plan. The unit's (http-contract.md,
+    // upstream-contract.md, s3-layout.md, telemetry.md) name no docs/plan/ path: an adopter reads
+    // them without this repository's plan (#1346; contracts/README.md -> "The unit of adoption and
+    // the project's own").
     public static TheoryData<string> EveryProseContractExportedFromThePlan() => new(
-        "pipeline.md", "http-contract.md", "request-gate.md", "upstream-contract.md", "s3-layout.md", "telemetry.md");
+        "pipeline.md", "request-gate.md");
 
     [Theory]
     [MemberData(nameof(EverySchema))]
