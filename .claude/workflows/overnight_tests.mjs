@@ -3076,8 +3076,7 @@ const forkOf = (prompt) => (/Otherwise fork from [^:]+: forkSha = (\S+?)\. Take 
     const reset = s.indexOf('signal.signal(signal.SIGINT, signal.SIG_DFL)'), check = s.indexOf('tools/check.sh')
     if (reset < 0 || check < 0 || reset > check) fail(`#1532: the ${label} prompt's start command does not set SIGINT to its default before tools/check.sh: ${s}`)
   }
-  const closing = (allPrompts.find((c) => c.label === 'closing') || {}).prompt || ''
-  const start = (/^ {2}2\. (.*nohup.*)$/m.exec(closing) || [])[1]
+  const start = (starts.find(([label]) => label === 'closing') || [])[1]
   if (!start) fail('#1532: the closing-check prompt gives no start command')
   else {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'overnight-sigint-'))
