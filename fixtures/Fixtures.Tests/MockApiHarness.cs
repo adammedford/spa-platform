@@ -56,7 +56,13 @@ internal sealed class MockApiHarness : IAsyncDisposable
             Listeners: listeners),
             TestContext.Current.CancellationToken);
 
-        return new MockApiHarness(idp, api, new HttpClient());
+        // /pad answers up to 1 MiB of response header (#1545), above HttpClient's default
+        // MaxResponseHeadersLength of 64 KiB, which would refuse the response before a test could
+        // read it. The limit is in KiB, which CA2262 asks a value above 128 to confirm; 2 MiB
+        // leaves room for the header names.
+#pragma warning disable CA2262 // 2,048 KiB is meant: #1545's /pad answers up to 1 MiB of header values.
+        return new MockApiHarness(idp, api, new HttpClient(new SocketsHttpHandler { MaxResponseHeadersLength = 2048 }));
+#pragma warning restore CA2262
     }
 
     /// <summary>A call to one listener, carrying a bearer token.</summary>

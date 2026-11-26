@@ -95,7 +95,7 @@ public sealed record ApiListenerOptions(
 
     /// <summary>
     /// The clients admitted on one of this API's own routes (<c>/whoami</c>, <c>/echo</c>,
-    /// <c>/admin</c>), in place of <see cref="AdmittedClients"/> on that route; a route not listed
+    /// <c>/admin</c>, <c>/pad</c>), in place of <see cref="AdmittedClients"/> on that route; a route not listed
     /// admits <see cref="AdmittedClients"/>. The gateway removes its prefix from a shell's route and a
     /// fragment's alike, so the upstream sees the same path from both and tells them apart only by
     /// <c>client_id</c> (contracts/upstream-contract.md -> "Fragment routes"): one listener can then
@@ -104,7 +104,7 @@ public sealed record ApiListenerOptions(
     public ImmutableDictionary<string, ImmutableArray<string>> RouteAdmissions { get; init; } =
         ImmutableDictionary<string, ImmutableArray<string>>.Empty;
 
-    /// <summary>The scope <c>/whoami</c> and <c>/echo</c> need.</summary>
+    /// <summary>The scope <c>/whoami</c>, <c>/echo</c> and <c>/pad</c> need.</summary>
     public string ReadScope => ScopeIdentifier + "/read";
 
     /// <summary>
