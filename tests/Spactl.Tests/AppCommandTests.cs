@@ -270,6 +270,10 @@ public sealed class AppCommandTests : IDisposable
 
     // ---- app validate (#1509) -------------------------------------------------------------------
 
+    private string offlineOut = "";
+
+    private string offlineError = "";
+
     /// <summary>
     /// Runs spactl in a world where every store, history and HTTP call throws, so a command that reaches
     /// any of them fails the test. No outputs path is passed: the harness's is never named.
@@ -292,10 +296,6 @@ public sealed class AppCommandTests : IDisposable
         return exit;
     }
 
-    private string offlineOut = "";
-
-    private string offlineError = "";
-
     private string Definition(Action<JsonObject> change)
     {
         JsonObject definition = Harness.ExampleJson("apps", "app1.json");
@@ -317,24 +317,18 @@ public sealed class AppCommandTests : IDisposable
         Assert.NotEqual("", offlineError);
         Assert.All(offlineError.Split('\n', StringSplitOptions.RemoveEmptyEntries), warning => Assert.StartsWith("warning: ", warning, StringComparison.Ordinal));
         await Publish("app1", "r1");
-        await spactl.Run("app", "add", App1Definition, "--release", "r1");
+        Assert.Equal(0, await spactl.Run("app", "add", App1Definition, "--release", "r1"));
         // app add's definition check writes the same lines first; its registry check may warn again.
         Assert.StartsWith(offlineError, spactl.Error.ToString(), StringComparison.Ordinal);
     }
 
     [Fact]
-    public async Task Validate_reads_no_outputs_document_and_builds_no_store()
+    public async Task Validate_runs_without_outputs_with_a_store_factory_that_throws()
     {
-        // RunOffline's store, history and HTTP factories throw, and it passes no --outputs: a
-        // definition that app add would accept still passes with nothing but the definition and config.
-        string directory = spactl.ScratchDirectory("no-outputs");
-        string definition = Path.Combine(directory, "app1.json");
-        File.Copy(App1Definition, definition);
-        string config = Path.Combine(directory, "platform-config.json");
-        File.Copy(spactl.ConfigPath, config);
-
-        Assert.Equal(0, await RunOffline("app", "validate", definition, "--config", config));
-        Assert.Equal(["app1.json", "platform-config.json"], Directory.GetFiles(directory).Select(Path.GetFileName).Order(StringComparer.Ordinal));
+        // RunOffline passes no --outputs, and since #1355 there is no default path, so any read of the
+        // outputs document would exit 2; its store, history and HTTP factories throw, so building a store
+        // or making a call would fail the test. The definition and the config are all it reads.
+        Assert.Equal(0, await RunOffline("app", "validate", App1Definition, "--config", spactl.ConfigPath));
     }
 
     [Fact]
