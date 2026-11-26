@@ -175,8 +175,8 @@ public sealed class OrphanedSuccessorTests
     {
         // #1544: whatever the revocation's outcome, the call answers unauthenticated and the line says how it
         // ended, with no token in any line (N-16). The deadline is the revocation's own ProviderDeadline,
-        // shortened only once the refresh has its answer. Mutation: answer the revocation's failure as a
-        // provider outage; the call answers 503, and this fails (3 tests red).
+        // shortened only once the refresh has its answer. Mutation: write the line only for a revocation
+        // that succeeded; no line is found, and this fails (3 tests red).
         CapturedLog logs = new();
         ScriptedSessionStore store = new(new InMemorySessionStore());
         await using IdentityGateway gateway = await IdentityGateway.StartAsync(
