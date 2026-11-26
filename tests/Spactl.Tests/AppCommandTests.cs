@@ -107,8 +107,105 @@ public sealed class AppCommandTests : IDisposable
 
         Assert.Equal(1, await spactl.Run("app", "add", Harness.Example("apps", "app2.json"), "--release", "r1"));
 
-        Assert.Contains("no client for 'app2'", spactl.Error.ToString(), StringComparison.Ordinal);
+        string error = spactl.Error.ToString();
+        Assert.Contains("no client for 'app2'", error, StringComparison.Ordinal);
+        Assert.Contains("write the outputs document again", error, StringComparison.Ordinal);
+        // The refusal serves any cell, so it names no Terraform root and no script (#1355).
+        Assert.DoesNotContain("root", error, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("terraform", error, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(".sh", error, StringComparison.Ordinal);
         Assert.Null(await spactl.Store.TextAsync(Harness.RegistryKey));
+    }
+
+    [Fact]
+    public async Task Add_completes_the_entry_from_an_outputs_document_of_only_region_bucket_and_clients()
+    {
+        // contracts/infra-outputs.schema.json requires only the three fields spactl reads, so a cell
+        // with its own identity provider and no reference scripts writes just these.
+        JsonObject example = Harness.ExampleJson("infra-outputs.example.json");
+        JsonObject outputs = new()
+        {
+            ["region"] = example["region"]!.DeepClone(),
+            ["bucket"] = example["bucket"]!.DeepClone(),
+            ["clients"] = new JsonObject { ["app1"] = App1Client.DeepClone() },
+        };
+        spactl.OutputsPath = spactl.WriteFile("three-field-outputs.json", outputs.ToJsonString());
+        await Publish("app1", "r1");
+
+        Assert.Equal(0, await spactl.Run("app", "add", App1Definition, "--release", "r1"));
+
+        JsonObject entry = Assert.Single((await spactl.LiveRegistry())["apps"]!.AsArray())!.AsObject();
+        Assert.Equal("app1", entry["appId"]!.GetValue<string>());
+        Assert.Equal("r1", entry["release"]!.GetValue<string>());
+        Assert.Equal(App1Client["clientId"]!.GetValue<string>(), entry["oauth"]!["clientId"]!.GetValue<string>());
+        Assert.Equal(
+            $"ssm:{App1Client["secretParameter"]!.GetValue<string>()}:{App1Client["secretVersion"]!.GetValue<int>()}",
+            entry["oauth"]!["clientSecretRef"]!.GetValue<string>());
+        Assert.Equal(example["bucket"]!.GetValue<string>(), spactl.Buckets[^1]);
+    }
+
+    [Fact]
+    public async Task Add_without_outputs_is_refused_by_name_and_writes_nothing()
+    {
+        // No default path: a missing --outputs is never read from any cell's file (#1355). app add needs
+        // the document for the client even when --bucket names the bucket.
+        await Publish("app1", "r1");
+        int written = spactl.Store.Written.Count;
+        int stores = spactl.Buckets.Count;
+
+        Assert.Equal(2, await spactl.RunRaw(
+            "app", "add", App1Definition, "--release", "r1", "--config", spactl.ConfigPath,
+            "--bucket", "named-bucket", "--region", "us-east-1"));
+
+        Assert.Contains("--outputs", spactl.Error.ToString(), StringComparison.Ordinal);
+        Assert.Equal(written, spactl.Store.Written.Count);
+        Assert.Equal(stores, spactl.Buckets.Count);
+        Assert.Null(await spactl.Store.TextAsync(Harness.RegistryKey));
+    }
+
+    /// <summary>Each store command, with every operand it needs and neither --outputs nor --bucket.</summary>
+    public static TheoryData<string[]> StoreCommandsWithoutOutputs => new()
+    {
+        { ["registry", "apply", Harness.Example("registry.example.json"), "--config", Harness.Example("platform-config.example.json")] },
+        { ["registry", "rollback", "--config", Harness.Example("platform-config.example.json")] },
+        { ["registry", "validate", Harness.Example("registry.example.json"), "--config", Harness.Example("platform-config.example.json")] },
+        { ["release", "publish", "app1", Harness.Example("spa", "app1"), "r2"] },
+        { ["release", "activate", "app1", "r1", "--config", Harness.Example("platform-config.example.json")] },
+        { ["app", "remove", "app1", "--config", Harness.Example("platform-config.example.json")] },
+    };
+
+    [Theory]
+    [MemberData(nameof(StoreCommandsWithoutOutputs))]
+    public async Task A_store_command_without_outputs_or_bucket_is_refused_by_name_and_writes_nothing(string[] args)
+    {
+        await Publish("app1", "r1");
+        await spactl.Run("app", "add", App1Definition, "--release", "r1");
+        int written = spactl.Store.Written.Count;
+        int stores = spactl.Buckets.Count;
+
+        Assert.Equal(2, await spactl.RunRaw(args));
+
+        string error = spactl.Error.ToString();
+        Assert.Contains("--outputs", error, StringComparison.Ordinal);
+        Assert.Contains("--bucket with --region", error, StringComparison.Ordinal);
+        Assert.Equal(written, spactl.Store.Written.Count);
+        Assert.Equal(stores, spactl.Buckets.Count);
+        Assert.Equal(1, spactl.Store.VersionCount(Harness.RegistryKey));
+    }
+
+    [Fact]
+    public async Task Release_activate_with_bucket_and_region_and_no_outputs_runs_against_that_bucket()
+    {
+        await Publish("app1", "r1");
+        await spactl.Run("app", "add", App1Definition, "--release", "r1");
+        await Publish("app1", "r2");
+
+        Assert.Equal(0, await spactl.RunRaw(
+            "release", "activate", "app1", "r2", "--config", spactl.ConfigPath,
+            "--bucket", "named-bucket", "--region", "us-east-1"));
+
+        Assert.Equal("named-bucket", spactl.Buckets[^1]);
+        Assert.Equal("r2", (await spactl.LiveRegistry())["apps"]![0]!["release"]!.GetValue<string>());
     }
 
     [Fact]

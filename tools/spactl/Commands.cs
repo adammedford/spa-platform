@@ -22,9 +22,6 @@ internal sealed class Commands(Arguments arguments, SpactlEnvironment environmen
     /// <summary>contracts/s3-layout.md: the one registry object.</summary>
     public const string RegistryKey = "registry/registry.json";
 
-    /// <summary>infra-outputs.schema.json's own description: "infra/envs/poc/outputs.json, written by workstream 1".</summary>
-    public const string DefaultOutputs = "infra/envs/poc/outputs.json";
-
     /// <summary>The page the readiness check reads (contracts/pipeline.md, Health endpoints).</summary>
     private const string ReadyzPath = "/readyz";
 
@@ -398,16 +395,16 @@ internal sealed class Commands(Arguments arguments, SpactlEnvironment environmen
 
         JsonObject definition = JsonNode.Parse(text)!.AsObject();
         string appId = definition["appId"]!.GetValue<string>();
-        JsonObject client = Outputs()["clients"]?[appId]?.AsObject()
+        JsonObject client = Outputs(ClientsNeedOutputs)["clients"]?[appId]?.AsObject()
             ?? throw new RefusedException(
-                $"The infrastructure outputs name no client for '{appId}'. Apply the apps root, which creates it, then run app add again.");
+                $"The infrastructure outputs name no client for '{appId}'. Create the app's client, write the outputs document again, then run app add again.");
 
         IReadOnlyList<string> fragmentIds = AppEntry.FragmentIds(definition);
         if (fragmentIds.FirstOrDefault(id => client["fragments"]?[id] is not JsonObject) is { } unknown)
         {
             throw new RefusedException(
                 $"The infrastructure outputs name no client for fragment '{unknown}' of '{appId}' " +
-                $"(clients.{appId}.fragments.{unknown}). Apply the apps root, which creates it, then run app add again.");
+                $"(clients.{appId}.fragments.{unknown}). Create the fragment's client, write the outputs document again, then run app add again.");
         }
 
         if (named.Keys.FirstOrDefault(id => !fragmentIds.Contains(id, StringComparer.Ordinal)) is { } stray)
@@ -882,15 +879,20 @@ internal sealed class Commands(Arguments arguments, SpactlEnvironment environmen
         return PlatformPolicyConfiguration.Read(configuration);
     }
 
-    /// <summary>The infrastructure outputs, checked against contracts/infra-outputs.schema.json.</summary>
-    private JsonObject Outputs()
+    /// <summary>
+    /// The infrastructure outputs named by <c>--outputs</c>, checked against
+    /// contracts/infra-outputs.schema.json. There is no default path: a command that needs the document
+    /// and is not given one is refused, before any store is built. <paramref name="missing"/> is the
+    /// refusal, which names what the command could have been given instead.
+    /// </summary>
+    private JsonObject Outputs(string missing)
     {
         if (outputs is not null)
         {
             return outputs;
         }
 
-        string path = arguments.Option("--outputs") ?? DefaultOutputs;
+        string path = arguments.Option("--outputs") ?? throw new UsageException(missing);
         string text = ReadFile(path);
         ImmutableArray<RegistryIssue> issues = ContractDocuments.ValidateInfraOutputs(text);
         if (!issues.IsEmpty)
@@ -901,11 +903,21 @@ internal sealed class Commands(Arguments arguments, SpactlEnvironment environmen
         return outputs = JsonNode.Parse(text)!.AsObject();
     }
 
+    /// <summary>The refusal of <c>app add</c> with no <c>--outputs</c>: the client comes only from its <c>clients</c>.</summary>
+    private const string ClientsNeedOutputs =
+        "--outputs <outputs.json> is required: app add reads the app's client id and secret reference from its clients.";
+
+    /// <summary>The refusal of a store command with neither <c>--outputs</c> nor <c>--bucket</c>.</summary>
+    private const string StoreNeedsOutputs =
+        "--outputs <outputs.json> is required to find the bucket and Region, or --bucket with --region names them.";
+
     /// <summary>The bucket: <c>--bucket</c> when given, else the infrastructure outputs' <c>bucket</c>.</summary>
     private StoreLocation Location() =>
         arguments.Option("--bucket") is { } bucket
             ? new StoreLocation(bucket, arguments.Option("--region"))
-            : new StoreLocation(Outputs()["bucket"]!.GetValue<string>(), Outputs()["region"]!.GetValue<string>());
+            : new StoreLocation(
+                Outputs(StoreNeedsOutputs)["bucket"]!.GetValue<string>(),
+                Outputs(StoreNeedsOutputs)["region"]!.GetValue<string>());
 
     private IObjectStore Store() => store ??= environment.Store(Location());
 

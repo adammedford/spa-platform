@@ -19,7 +19,7 @@ public static class ContractDocuments
     /// <summary>Duplicate member names are refused, for the reason <see cref="RegistryValidator"/> gives.</summary>
     private static readonly JsonDocumentOptions Strict = new() { AllowDuplicateProperties = false };
 
-    /// <summary><c>infra/envs/poc/outputs.json</c> against <c>contracts/infra-outputs.schema.json</c>.</summary>
+    /// <summary>A cell's infrastructure outputs document against <c>contracts/infra-outputs.schema.json</c>.</summary>
     public static ImmutableArray<RegistryIssue> ValidateInfraOutputs(string document) =>
         Evaluate(RegistrySchemas.InfraOutputs, document);
 
