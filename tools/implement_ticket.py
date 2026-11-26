@@ -462,9 +462,9 @@ def locked(path: pathlib.Path):
 
 
 def running_pid(pid_file: pathlib.Path) -> int | None:
-    """The live pid the issue's pid file names, or None, removing a stale file: one naming a pid
-    that is gone, one that is no pid, or one left empty past EMPTY_CLAIM. A file still empty
-    within it is a claim being written, CLAIMING."""
+    """The pid the issue's pid file names, CLAIMING for a file still empty within EMPTY_CLAIM, or
+    None when there is none, removing a file that is no pid or was left empty past EMPTY_CLAIM.
+    Whether the pid still runs is live()'s to say, or the Popen's for this call's own check."""
     try:
         text = pid_file.read_text().strip()
         age = time.time() - pid_file.stat().st_mtime
@@ -473,10 +473,15 @@ def running_pid(pid_file: pathlib.Path) -> int | None:
     if not text and age < EMPTY_CLAIM:
         return CLAIMING
     pid = int(text) if text.isdigit() else 0
-    if pid > 0 and alive(pid):
+    if pid > 0:
         return pid
     drop_claim(pid_file, text)
     return None
+
+
+def live(pid: int) -> bool:
+    """Whether a check another call started still runs: a claim being written, or a pid alive."""
+    return pid == CLAIMING or alive(pid)
 
 
 def drop_claim(pid_file: pathlib.Path, text: str) -> None:
@@ -534,7 +539,8 @@ def do_check(number: int, args) -> tuple[int, dict, str]:
               "log": str(log), "started": False}
 
     changes = dirty(wt)
-    if changes and running_pid(pid_file) is None:
+    claimed = running_pid(pid_file)
+    if changes and (claimed is None or not live(claimed)):
         record.update(state="fail", clean=False, uncommitted=changes)
         return 1, record, (f"the worktree has {len(changes)} uncommitted change(s), so no check "
                            "is started: commit them first")
@@ -565,7 +571,7 @@ def do_check(number: int, args) -> tuple[int, dict, str]:
                 continue
             record["pid"] = pid
             ours = process is not None and process.pid == pid
-            if not (process.poll() is None if ours else (pid == CLAIMING or alive(pid))):
+            if not (process.poll() is None if ours else live(pid)):
                 drop_claim(pid_file, str(pid))   # it ended; the next pass reads its log
                 continue
         if time.monotonic() - started_at >= limit:
