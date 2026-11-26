@@ -147,7 +147,9 @@ public sealed class OrphanedSuccessorTests
     public async Task A_write_that_ends_exhausted_revokes_nothing()
     {
         // #1544's precaution: every replace loses to a writer that keeps the presented refresh token, so the
-        // record still holds the set's grant; the call answers its own token and revokes nothing.
+        // record still holds the set's grant; the call answers its own token and revokes nothing. Mutation:
+        // set the successor for revocation on the exhausted end too; a revocation is recorded, and this
+        // fails (1 test red).
         CapturedLog logs = new();
         ScriptedSessionStore store = new(new InMemorySessionStore());
         await using IdentityGateway gateway = await IdentityGateway.StartAsync(
@@ -231,8 +233,8 @@ public sealed class OrphanedSuccessorTests
     {
         // Adam's decision on #1544: a provider that does not rotate answers no refresh token (T-A13), so
         // the grant the refresh presented is the one no record holds, and it is revoked. The library's
-        // token carries the presented refresh token then, so no fallback of the gateway's is needed: a
-        // gateway fallback to the presented token was removed when it survived its own mutation.
+        // token then carries the refresh token presented, which is why the gateway needs no fallback of
+        // its own; this test fails if a library update stops carrying it, and the path revokes nothing.
         CapturedLog logs = new();
         ScriptedSessionStore store = new(new InMemorySessionStore());
         await using IdentityGateway gateway = await IdentityGateway.StartAsync(

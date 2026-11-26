@@ -142,7 +142,7 @@ internal sealed partial class AccessTokenSource(
             return new AccessTokenResult.StoreUnavailable();
         }
 
-        if (refresh.Orphan is { } successor)
+        if (refresh.OrphanedRefreshToken is { } successor)
         {
             // ForSetAsync has returned, so the set's gate and any lease are given up: the revocation runs
             // outside them, and the gate's hold stays within the refresh write deadline (#1544).
@@ -568,10 +568,12 @@ internal sealed partial class AccessTokenSource(
                 if (await turn.RereadAsync() is not { } winner)
                 {
                     // No record holds the set, removed, expired or rebound, so the successor is revoked once
-                    // the gate is given up (GetAsync, #1544). From a provider that did not rotate, the
-                    // library's token carries the refresh token presented, which no record holds either.
+                    // the gate is given up (GetAsync, #1544). From a provider that did not rotate (T-A13),
+                    // the library's token carries the refresh token presented, which no record holds either
+                    // (Duende.AccessTokenManagement 4.2.0 keeps it when the response has none; pinned by
+                    // OrphanedSuccessorTests, decided on #1544).
                     LogWrite(refresh, "missing", attempts);
-                    refresh.Orphan = token.RefreshToken?.ToString();
+                    refresh.OrphanedRefreshToken = token.RefreshToken?.ToString();
                     return new AccessTokenResult.Unauthenticated();
                 }
 
@@ -751,7 +753,7 @@ internal sealed partial class AccessTokenSource(
         /// The successor's refresh token, when the write found the session gone: revoked once the set's
         /// gate is given up (#1544). Null on every other path.
         /// </summary>
-        public string? Orphan { get; set; }
+        public string? OrphanedRefreshToken { get; set; }
 
         /// <summary>A waiter's answer after the refresh it queued behind ended its set (T-D6).</summary>
         public AccessTokenResult EndedAnswer => Set.Fragment is null
