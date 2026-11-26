@@ -82,6 +82,12 @@ ADR-0020 records the decision and its reasons. What it adds to `docs/agents/issu
   writes a `Confirm`, a decision comment or an approval except on Adam's words, as the rules below
   allow, is a convention the shared account cannot enforce: the sessions' prompts and the reviewer
   guard it (#418; ADR-0022 → "This reopens").
+- **An issue opened from outside the repository arrives labelled `needs-triage`.**
+  `.github/workflows/outside-issues.yml` runs on `issues: opened` and adds the label, by name and
+  leaving the others, when the issue's `author_association` is other than `OWNER`, `MEMBER` or
+  `COLLABORATOR`, the test `docs/agents/review.md` applies to a review record; an issue opened
+  through `@adammedford` is `OWNER` and is left alone. `gh issue list --label needs-triage` finds
+  them (#1547).
 - **A decision Adam gives in a session is posted on the issue it decides, by the session he gave it
   in.** When a foreground session puts an open question that no grill numbered to Adam and he
   answers it there, the session posts his answer, before the work that rests on it is pushed, as a
