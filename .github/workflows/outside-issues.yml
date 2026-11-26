@@ -1,0 +1,61 @@
+# An issue opened from outside the repository is labelled needs-triage. Owner: integrator, #1547.
+#
+# The repository and its tracker are public, so anyone signed in to GitHub can open an issue. The
+# rules already stop such an issue from causing work (a lane takes only a ticket whose
+# `ready-for-agent` the human's account applied), but nothing brought it to the human's attention.
+# This job does: .github/outside-issues.py reads the event payload and decides, from the issue's
+# `author_association`, whether its author is from outside the repository (anything but OWNER,
+# MEMBER or COLLABORATOR, the test docs/agents/review.md applies to a review record), and the job
+# writes what it decides. Adam then finds outside reports with `gh issue list --label needs-triage`.
+#
+# - It runs on `issues: opened` alone, so a label the human later changes is never put back.
+# - It adds the label by name through the REST route (POST "adds labels to an issue", leaving the
+#   rest: https://docs.github.com/en/rest/issues/labels#add-labels-to-an-issue; the PUT route
+#   "removes any previous labels"), so labels issue-labels.yml or ticket-shape.yml write on the same
+#   event stay as they were. Its write, made with this job's token, "will not create a new workflow
+#   run" (https://docs.github.com/en/actions/writing-workflows/choosing-when-your-workflow-runs/triggering-a-workflow#triggering-a-workflow-from-a-workflow).
+# - A payload the script cannot judge (no `author_association`) fails the job, naming the issue,
+#   and writes no label; so does a verdict line the job does not recognise.
+# - Only the issue's number reaches the run block. Its title and body are the opener's text, and
+#   nothing here expands them into shell.
+# .github/outside_issues_tests.py runs this file's run block against a gh double.
+
+name: Outside issues
+
+on:
+  issues:
+    types: [opened]
+
+# The label route needs issues: write and the checkout contents: read; a permission left out of
+# this block is set to none
+# (https://docs.github.com/en/actions/writing-workflows/choosing-what-your-workflow-does/controlling-permissions-for-github_token).
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  triage:
+    name: Outside issues
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Label an issue opened from outside the repository needs-triage
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          NUMBER: ${{ github.event.issue.number }}
+        run: |
+          set -uo pipefail
+          verdict="$RUNNER_TEMP/outside-issues.txt"
+          status=0
+          python3 -I .github/outside-issues.py "$GITHUB_EVENT_PATH" > "$verdict" 2>&1 || status=$?
+          cat "$verdict"
+          # Only a decided verdict on this event's issue writes; a failed decision, an uncaught
+          # error's traceback or a verdict on another number falls to the last branch.
+          case "$(tail -n 1 "$verdict")" in
+            "outside-issues: label: #$NUMBER needs-triage: "*)
+              gh api --method POST "repos/$GH_REPO/issues/$NUMBER/labels" -f "labels[]=needs-triage" ;;
+            "outside-issues: leave: #$NUMBER: "*) ;;
+            *) echo "outside-issues: fail: #$NUMBER: no verdict on this issue (exit $status); no label is written"; exit 2 ;;
+          esac
