@@ -28,8 +28,8 @@ namespace Gateway.E2ETests.Deployed;
 /// O1 writes the shell's entry at each N with spactl, so <c>Policy:FragmentsPerShell</c> is raised to 6 for its
 /// run (#1011 row 1); O2 scales the gateway service to one task and two; F-T5 activates the winning fragment
 /// release. O9 pulls none: it reads the cap from <c>SPA_E2E_PLATFORM_CONFIG</c> and the live entry, and its
-/// padding probes are GETs of the mock API's <c>/pad</c> through a fragment's API route (#1530), so it runs at
-/// the cap only where O1's run at the cap left the entry. O1 and F-T5 read <c>SPA_E2E_PLATFORM_CONFIG</c> and the outputs document
+/// padding probes are GETs of the mock API's <c>/pad</c> through a fragment's API route (#1530), so it records
+/// the merged CSP only where the live entry already holds the cap's fragments: O1 puts the entry back to its start N. O1 and F-T5 read <c>SPA_E2E_PLATFORM_CONFIG</c> and the outputs document
 /// <c>SPA_E2E_OUTPUTS</c> names (the repository's when unset); O2 reads neither. The browser rows launch Chromium, Firefox and
 /// WebKit through a loopback proxy to the tunnel; an engine that does not launch is named on standard output
 /// and missing from the record.</para>

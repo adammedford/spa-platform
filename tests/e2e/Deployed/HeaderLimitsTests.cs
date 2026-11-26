@@ -317,4 +317,41 @@ public sealed class HeaderLimitsTests
         Assert.Equal(16_350, record.AlbLargestAcceptedBytes);
         Assert.Equal("default-src 'self'".Length, record.MergedCspBytes);
     }
+
+    [Fact]
+    public async Task The_session_cookie_reaches_each_probe_and_nothing_the_drive_records()
+    {
+        // PadResponse's promise, "no cookie and no token is in it", proved as N-16 proves a log line: a canary cookie is
+        // planted, every probe carries it, and the record, its steps and the row's message and seen lines lack it.
+        // Mutation: appending cookies.Reveal() to the driver's single-header seen line fails the last assertion.
+        const string Canary = "__Host-spa=canary-7f3a91c2e4";
+        List<string?> sent = [];
+        FakeCell answers = new(16_350, PadHop.Alb, cap: 1, fragments: 1);
+        Task<HttpResponseMessage> Send(HttpRequestMessage request, CancellationToken ct)
+        {
+            sent.Add(request.Headers.TryGetValues("Cookie", out IEnumerable<string>? values) ? string.Join("; ", values) : null);
+            PadResponse answer = request.RequestUri!.PathAndQuery == "/" ? new PadResponse(200, "Kestrel", "text/html", null, [], null) : answers.Answer(request.RequestUri.PathAndQuery);
+            HttpResponseMessage response = new((HttpStatusCode)answer.Status!.Value) { Content = new StringContent(answer.ProblemCode is { } code ? $$"""{ "code": "{{code}}" }""" : "") };
+            response.Content.Headers.ContentType = answer.ContentType is { } type ? new System.Net.Http.Headers.MediaTypeHeaderValue(type) : null;
+            response.Headers.TryAddWithoutValidation("Server", answer.Server);
+            for (int k = 0; k < answer.PadLengths.Count; k++)
+            {
+                response.Headers.TryAddWithoutValidation($"X-Pad-{k + 1}", new string('x', answer.PadLengths[k]!.Value));
+            }
+
+            return Task.FromResult(response);
+        }
+
+        string registry = """{ "revision": 3, "apps": [ { "appId": "app1", "fragments": [ { "fragmentId": "f1", "release": "r1", "apis": [ { "name": "orders" } ] } ] } ] }""";
+        CellHeaderLimits cell = new(new FragmentsReaders(FragmentsObserverTests.Cell, new RecordedRunner(_ => registry)), "app1", Shell, Send,
+            (name, _) => Task.FromResult<(Step, SessionCookies?)>((new Step(name, "t", DateTimeOffset.UnixEpoch, 302), new SessionCookies(Canary))), cap: 1);
+
+        (HeaderLimitRecord record, IReadOnlyList<Step> steps, IReadOnlyList<string> agents) = await new HeaderLimitDrive(cell, new FakeEngines(answers), Shell).RunAsync(Ct);
+
+        Assert.NotEmpty(sent);
+        Assert.All(sent, cookie => Assert.Equal(Canary, cookie));
+        RowResult row = FragmentsObserver.HeaderLimits(record, agents);
+        string recorded = JsonSerializer.Serialize(new { record, steps, row.Message, row.Observations });
+        Assert.DoesNotContain("canary-7f3a91c2e4", recorded, StringComparison.Ordinal);
+    }
 }

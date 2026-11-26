@@ -58,9 +58,11 @@ public sealed record PadAnswer(bool Accepted, PadHop? RefusedBy, string Seen)
     /// gateway's": a 502 whose <c>Server</c> is the load balancer's, <c>awselb/2.0</c>, with no problem
     /// body. The ALB answers 502 when "the target response is malformed or contains HTTP headers that are
     /// not valid" (https://docs.aws.amazon.com/elasticloadbalancing/latest/application/load-balancer-troubleshooting.html#http-502-issues)
-    /// and names itself <c>awselb/2.0</c> on the responses it generates
-    /// (https://docs.aws.amazon.com/elasticloadbalancing/latest/application/load-balancer-access-logs.html,
-    /// "-" for target_status_code when the load balancer answered). Any other answer is
+    /// and sends <c>server:awselb/2.0</c> unless the listener attribute
+    /// <c>routing.http.response.server.enabled</c>, default <c>true</c>, turns it off
+    /// (https://docs.aws.amazon.com/elasticloadbalancing/latest/application/header-modification.html#disable-header);
+    /// infra/modules/cell/alb.tf leaves it at the default, and were it turned off the ALB's 502 would be
+    /// <see cref="PadHop.Other"/> and give no figure. Any other answer is
     /// <see cref="PadHop.Other"/>, so a figure is never the ALB's on an answer it did not give.
     /// </summary>
     public static PadAnswer Of(PadResponse response, int bytes, int count)
@@ -276,13 +278,17 @@ public sealed class HeaderLimitDrive(IHeaderLimitCell cell, IEngines engines, Ha
         return (new HeaderLimitRecord(cell.Cap, csp, alb, null, browsers) { Lines = lines }, steps, agents);
     }
 
-    /// <summary>The CSP's byte length, only while the live entry holds the cap's fragments: O9 measures the merged CSP at the cap, as O1's run at the cap leaves it.</summary>
+    /// <summary>
+    /// The CSP's byte length, only while the live entry holds the cap's fragments: O9 measures the merged CSP
+    /// at the cap and writes no entry (#1411). O1 puts the entry back to its start N after its run
+    /// (FragmentsBrowserRows.RedirectsAsync), so this holds where the cell's entry already stands at the cap.
+    /// </summary>
     private int? MergedCsp(int fragments, PadResponse shellAnswer, List<string> lines)
     {
         if (fragments != cell.Cap)
         {
             lines.Add($"the live entry lists {fragments.ToString(CultureInfo.InvariantCulture)} fragments, not the cap's {cell.Cap.ToString(CultureInfo.InvariantCulture)}: "
-                + "the merged CSP is measured at the cap only, as O1's run at the cap leaves the registry, and this drive writes no entry");
+                + "the merged CSP is measured at the cap only, and this drive writes no entry (O1 puts the entry back to its start N after its run)");
             return null;
         }
 
