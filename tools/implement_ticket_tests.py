@@ -168,6 +168,13 @@ class Harness(unittest.TestCase):
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "The first commit")
         self.git("push", "-q", "origin", "HEAD:refs/heads/main")
+        # origin/main moves on from another clone, so the checkout's main and its origin/main trail
+        # it until the tool fetches: a base read from either, unfetched, is not origin's.
+        other = base / "other"
+        self.git("clone", "-q", str(self.origin), str(other), cwd=base)
+        self.git("commit", "-q", "--allow-empty", "-m", "Landed elsewhere", cwd=other)
+        self.git("push", "-q", "origin", "HEAD:main", cwd=other)
+        self.base_sha = self.git("rev-parse", "HEAD", cwd=other)
         self.wt = base / "worktrees" / "issue-7"
         self.addCleanup(self.stop_checks)
 
@@ -255,7 +262,7 @@ class Read(Harness):
         self.assertEqual("task/issue-7-the-thing-prints-its-name-and-its-companion",
                          record["branch"])
         self.assertEqual(str(self.wt), record["worktree"])
-        self.assertEqual(self.git("rev-parse", "origin/main"), record["base"])
+        self.assertEqual(self.base_sha, record["base"])
         self.assertFalse(record["branchExists"])
         self.assertEqual(["script", "docs"], record["kinds"])
         self.assertEqual(("OPEN", [], []), (record["state"], record["assignees"],
@@ -307,6 +314,8 @@ class Read(Harness):
         self.set_issue(issue(body=BODY.replace("- [ ] Its companion", "\f- [ ] Its companion")))
         code, record, verdict, _ = self.read()
         self.assert_verdict(code, verdict, "read", 1, "boxes")
+        self.assertEqual(["boxes"], [entry["gate"] for entry in record["gates"] if not entry["ok"]])
+        self.assertEqual(["The thing prints its name."], record["boxes"])
 
     def test_an_unreachable_gh_exits_2(self):
         code, record, verdict, _ = self.read(env={"GH_FAIL": "1"})
@@ -332,7 +341,7 @@ class Start(Harness):
         self.assertEqual("new", record["state"])
         self.assertEqual(["case"], self.assignees())
         self.assertEqual([["issue", "edit", "7", "--add-assignee", "@me"]], self.edits())
-        base = self.git("rev-parse", "origin/main")
+        base = self.base_sha
         self.assertEqual(base, self.git("rev-parse", "HEAD", cwd=self.wt))
         self.assertEqual(BRANCH, self.git("rev-parse", "--abbrev-ref", "HEAD", cwd=self.wt))
         self.assertEqual((base, base, str(self.wt)), (record["head"], record["fork"],
@@ -403,8 +412,7 @@ class Check(Harness):
         self.assertEqual(["integrator"], record["ownership"]["named"])
         log = (self.log_dir() / "check.log").read_text().splitlines()
         self.assertEqual(f"HEAD={head}", log[0])
-        fork = self.git("rev-parse", "origin/main")
-        self.assertIn(f"stub check: --full --base {fork} --port 5180", log)
+        self.assertIn(f"stub check: --full --base {self.base_sha} --port 5180", log)
         self.assertNotIn("testReach", record)
 
     def test_the_port_is_passed_on(self):
@@ -441,8 +449,10 @@ class Check(Harness):
     def test_an_uncommitted_change_before_the_check_starts_no_check(self):
         commit(self, "tools/thing.py")
         (self.wt / "tools" / "thing_tests.py").write_text("not committed\n")
-        code, _, verdict, _ = self.tool("check", "7")
+        code, record, verdict, _ = self.tool("check", "7")
         self.assert_verdict(code, verdict, "check", 1, "uncommitted")
+        self.assertEqual(("fail", False, ["?? tools/thing_tests.py"]),
+                         (record["state"], record["started"], record["uncommitted"]))
         self.assertEqual(0, self.runs())
 
     def test_another_owners_path_fails_naming_a05(self):
@@ -476,15 +486,17 @@ class Check(Harness):
     def test_a_call_while_a_check_runs_for_the_head_starts_no_second(self):
         head = commit(self, "tools/thing.py")
         self.behave('sleep 3\necho "check: pass: stub"\n')
-        code, record, _, _ = self.tool("check", "7", env={"IMPLEMENT_TICKET_WAIT": "0.5"})
-        self.assertEqual((2, True), (code, record["started"]))
+        code, record, verdict, _ = self.tool("check", "7", env={"IMPLEMENT_TICKET_WAIT": "0.5"})
+        self.assert_verdict(code, verdict, "check", 2, "still running")
+        self.assertEqual((True, "running"), (record["started"], record["state"]))
         code, record, verdict, _ = self.tool("check", "7")
         self.assert_verdict(code, verdict, "check", 0)
         self.assertEqual((head, False), (record["head"], record["started"]))
         self.assertEqual(1, self.runs())
         # And a call after the verdict judges the same log again, with no new run.
-        code, _, _, _ = self.tool("check", "7")
-        self.assertEqual((0, 1), (code, self.runs()))
+        code, record, verdict, _ = self.tool("check", "7")
+        self.assert_verdict(code, verdict, "check", 0)
+        self.assertEqual(("pass", False, 1), (record["state"], record["started"], self.runs()))
 
     def test_the_check_starts_with_sigint_at_its_default_whatever_the_caller_ignores(self):
         """#1532: a job a non-interactive bash backgrounds starts with SIGINT ignored, and a
@@ -528,6 +540,7 @@ class Check(Harness):
         os.utime(claim, (old, old))
         code, record, verdict, _ = self.tool("check", "7", env={"IMPLEMENT_TICKET_WAIT": "5"})
         self.assert_verdict(code, verdict, "check", 0)
+        self.assertEqual((True, "pass"), (record["started"], record["state"]))
         self.assertEqual(1, self.runs())
 
 

@@ -525,8 +525,10 @@ def do_check(number: int, args) -> tuple[int, dict, str]:
 
     process = None
     while True:
-        logged, verdict = log_state(log)
+        # The pid file first: a check that ends after it is read has written its verdict before
+        # the log is, so no finished log is taken for one with no verdict and run again.
         pid = running_pid(pid_file)
+        logged, verdict = log_state(log)
         if pid is None:
             if logged == head and verdict:
                 break   # this head's log has its verdict: judged below, with no new run
