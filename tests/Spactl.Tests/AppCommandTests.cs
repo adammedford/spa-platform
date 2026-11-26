@@ -1,11 +1,13 @@
 using System.Text.Json.Nodes;
+using Spactl;
 
 namespace Spactl.Tests;
 
 /// <summary>
 /// <c>spactl app add</c> and <c>app remove</c> (plan row 2.6). <c>app add</c> completes a definition
 /// from <c>fixtures/apps/</c> with the client id and secret reference in the infrastructure outputs
-/// (contracts/infra-outputs.schema.json, <c>clients</c>) and applies the registry.
+/// (contracts/infra-outputs.schema.json, <c>clients</c>) and applies the registry. <c>app validate</c>
+/// runs <c>app add</c>'s definition check alone, offline (#1509).
 /// </summary>
 public sealed class AppCommandTests : IDisposable
 {
@@ -264,5 +266,133 @@ public sealed class AppCommandTests : IDisposable
 
         Assert.Equal(1, await spactl.Run("app", "remove", "app2"));
         Assert.Equal(1, spactl.Store.VersionCount(Harness.RegistryKey));
+    }
+
+    // ---- app validate (#1509) -------------------------------------------------------------------
+
+    private string offlineOut = "";
+
+    private string offlineError = "";
+
+    /// <summary>
+    /// Runs spactl in a world where every store, history and HTTP call throws, so a command that reaches
+    /// any of them fails the test. No outputs path is passed: the harness's is never named.
+    /// </summary>
+    private async Task<int> RunOffline(params string[] args)
+    {
+        StringWriter output = new();
+        StringWriter error = new();
+        SpactlEnvironment environment = new()
+        {
+            Store = _ => throw new InvalidOperationException("app validate built a store."),
+            History = _ => throw new InvalidOperationException("app validate built a registry history."),
+            Http = new ThrowingHandler(),
+            Out = output,
+            Error = error,
+        };
+        int exit = await SpactlApp.RunAsync(args, environment, TestContext.Current.CancellationToken);
+        offlineOut = output.ToString();
+        offlineError = error.ToString();
+        return exit;
+    }
+
+    private string Definition(Action<JsonObject> change)
+    {
+        JsonObject definition = Harness.ExampleJson("apps", "app1.json");
+        change(definition);
+        return spactl.WriteFile("definition.json", definition.ToJsonString());
+    }
+
+    [Fact]
+    public async Task Validate_accepts_a_definition_inside_the_bounds_and_names_its_appId_on_one_line()
+    {
+        Assert.Equal(0, await RunOffline("app", "validate", App1Definition, "--config", spactl.ConfigPath));
+
+        string line = Assert.Single(offlineOut.Split('\n', StringSplitOptions.RemoveEmptyEntries));
+        Assert.Contains("app1", line, StringComparison.Ordinal);
+        Assert.Contains("app add", line, StringComparison.Ordinal);
+
+        // app1 names two upstreams under one token set, which the validator warns on: the warning goes
+        // to stderr as app add writes it.
+        Assert.NotEqual("", offlineError);
+        Assert.All(offlineError.Split('\n', StringSplitOptions.RemoveEmptyEntries), warning => Assert.StartsWith("warning: ", warning, StringComparison.Ordinal));
+        await Publish("app1", "r1");
+        Assert.Equal(0, await spactl.Run("app", "add", App1Definition, "--release", "r1"));
+        // app add's definition check writes the same lines first; its registry check may warn again.
+        Assert.StartsWith(offlineError, spactl.Error.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Validate_runs_without_outputs_with_a_store_factory_that_throws()
+    {
+        // RunOffline passes no --outputs, and since #1355 there is no default path, so any read of the
+        // outputs document would exit 2; its store, history and HTTP factories throw, so building a store
+        // or making a call would fail the test. The definition and the config are all it reads.
+        Assert.Equal(0, await RunOffline("app", "validate", App1Definition, "--config", spactl.ConfigPath));
+    }
+
+    [Fact]
+    public async Task Validate_refuses_an_upstream_outside_the_bounds_in_the_text_app_add_prints()
+    {
+        string path = Definition(d => d["apis"]![0]!["upstream"] = "http://127.0.0.1:5999");
+
+        Assert.Equal(1, await RunOffline("app", "validate", path, "--config", spactl.ConfigPath));
+        Assert.Contains("[upstream-not-allowed]", offlineError, StringComparison.Ordinal);
+        Assert.Contains($"{path} is not a valid app definition", offlineError, StringComparison.Ordinal);
+        Assert.Equal("", offlineOut);
+
+        Assert.Equal(1, await spactl.Run("app", "add", path, "--release", "r1"));
+        Assert.Equal(spactl.Error.ToString(), offlineError);
+    }
+
+    [Fact]
+    public async Task Validate_refuses_an_issuer_the_configuration_does_not_name()
+    {
+        string path = Definition(d => d["oauth"]!["issuer"] = "an-issuer-not-configured");
+
+        Assert.Equal(1, await RunOffline("app", "validate", path, "--config", spactl.ConfigPath));
+        Assert.Contains("[unknown-issuer]", offlineError, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Validate_refuses_a_host_outside_the_allowed_suffixes()
+    {
+        string path = Definition(d => d["host"] = "app1.elsewhere.test:8443");
+
+        Assert.Equal(1, await RunOffline("app", "validate", path, "--config", spactl.ConfigPath));
+        Assert.Contains("[host-suffix-not-allowed]", offlineError, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Validate_without_config_is_a_usage_error()
+    {
+        Assert.Equal(2, await RunOffline("app", "validate", App1Definition));
+        Assert.Contains("--config", offlineError, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("--outputs")]
+    [InlineData("--bucket")]
+    [InlineData("--region")]
+    [InlineData("--release")]
+    public async Task Validate_refuses_an_option_it_does_not_read(string option)
+    {
+        Assert.Equal(2, await RunOffline("app", "validate", App1Definition, "--config", spactl.ConfigPath, option, "x"));
+        Assert.Equal("", offlineOut);
+    }
+
+    [Fact]
+    public async Task Usage_lists_app_validate_and_spactl_with_no_arguments_prints_it()
+    {
+        Assert.Contains("spactl app validate      <definition.json> --config <platform-config.json>", SpactlApp.Usage, StringComparison.Ordinal);
+
+        Assert.Equal(2, await RunOffline());
+        Assert.Contains("spactl app validate", offlineError, StringComparison.Ordinal);
+    }
+
+    private sealed class ThrowingHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            throw new InvalidOperationException("app validate made a network call.");
     }
 }

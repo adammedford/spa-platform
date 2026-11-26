@@ -363,6 +363,22 @@ internal sealed class Commands(Arguments arguments, SpactlEnvironment environmen
     // ---- app ------------------------------------------------------------------------------------
 
     /// <summary>
+    /// The definition check <see cref="AppAddAsync"/> makes, alone: <see cref="RegistryValidator.ValidateAppDefinition"/>
+    /// against the <c>--config</c> policy, with the same warnings and the same refusal. It reads no outputs
+    /// document, builds no store and makes no network call, so it runs before anyone registers a client
+    /// or writes a secret: the onboarding procedure's first step (#1509).
+    /// </summary>
+    public async Task<int> AppValidateAsync()
+    {
+        string path = arguments.Operands(2, 1, "app validate <definition.json> --config <platform-config.json>")[0];
+        string appId = ValidDefinition(path, ReadFile(path), Policy())["appId"]!.GetValue<string>();
+        await Out.WriteLineAsync(
+            $"Valid: the definition of '{appId}' is inside the platform configuration's bounds. " +
+            "No outputs, store or provider were read; app add checks it again.");
+        return 0;
+    }
+
+    /// <summary>
     /// Completes an app definition into a registry entry and applies it (docs/plan/02-contracts.md:
     /// "spactl app add completes it from the infrastructure outputs and applies the registry, so each
     /// app is described once"). The client id and the secret reference come from the outputs' entry
@@ -386,14 +402,7 @@ internal sealed class Commands(Arguments arguments, SpactlEnvironment environmen
         string? release = arguments.Option("--release") is { } value ? Release(value) : null;
         Dictionary<string, string> named = arguments.Option("--fragment-release") is { } listed ? FragmentReleases(listed) : [];
 
-        AppDefinitionValidation validation = RegistryValidator.ValidateAppDefinition(text, policy);
-        Warn(validation.Warnings);
-        if (!validation.IsValid)
-        {
-            throw Refused($"{path} is not a valid app definition", validation.Errors);
-        }
-
-        JsonObject definition = JsonNode.Parse(text)!.AsObject();
+        JsonObject definition = ValidDefinition(path, text, policy);
         string appId = definition["appId"]!.GetValue<string>();
         JsonObject client = Outputs(ClientsNeedOutputs)["clients"]?[appId]?.AsObject()
             ?? throw new RefusedException(
@@ -1079,6 +1088,19 @@ internal sealed class Commands(Arguments arguments, SpactlEnvironment environmen
         long.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out long parsed) && parsed >= minimum
             ? parsed
             : throw new UsageException($"{option} must be an integer of at least {minimum}.");
+
+    /// <summary>
+    /// An app definition checked as the gateway's registry source checks it, its warnings written and
+    /// its errors refused; both <c>app validate</c> and <c>app add</c> run this.
+    /// </summary>
+    private JsonObject ValidDefinition(string path, string text, PlatformPolicy policy)
+    {
+        AppDefinitionValidation validation = RegistryValidator.ValidateAppDefinition(text, policy);
+        Warn(validation.Warnings);
+        return validation.IsValid
+            ? JsonNode.Parse(text)!.AsObject()
+            : throw Refused($"{path} is not a valid app definition", validation.Errors);
+    }
 
     private void Warn(ImmutableArray<RegistryIssue> warnings)
     {
