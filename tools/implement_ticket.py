@@ -40,7 +40,8 @@ the fork point (`git merge-base` of the branch and origin/main) and the head.
 check runs `tools/check.sh --full --base <fork> --port <p>` in the worktree, detached, by the
 recipe in .claude/workflows/overnight.js's GATE: SIGINT reset to its default before bash starts
 (#1532), stdout and stderr to one log, check.log, whose first line is `HEAD=<sha>`, and the pid in
-check.pid beside it. One check runs per issue: the pid file is claimed with O_EXCL, and a call that
+check.pid beside it. One check runs per issue: the pid file is claimed with O_EXCL under a lock on
+check.lock, and a call that
 finds a check running waits on it rather than starting a second; one running for an earlier head is
 waited out, and then this head's starts. A pid file naming a pid that is gone is stale and removed. Every call returns within
 WAIT_BOUND seconds, with state `running` when there is no verdict yet; IMPLEMENT_TICKET_WAIT may
@@ -57,6 +58,8 @@ release removes the assignee and records the branch and worktree it left in plac
 from __future__ import annotations
 
 import argparse
+import contextlib
+import fcntl
 import fnmatch
 import importlib.util
 import json
@@ -441,21 +444,34 @@ def launch(wt: pathlib.Path, fork: str, port: int, log: pathlib.Path,
     return process
 
 
-# A pid file left empty this long is a claim whose writer died between creating and writing it.
+# A pid file left empty this long is a claim whose writer died between creating and writing it;
+# one younger is read as CLAIMING, a check being started.
 EMPTY_CLAIM = 10.0
+CLAIMING = -1
+
+
+@contextlib.contextmanager
+def locked(path: pathlib.Path):
+    """An exclusive lock on path, held for the block."""
+    with open(path, "a", encoding="utf-8") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
 
 
 def running_pid(pid_file: pathlib.Path) -> int | None:
     """The live pid the issue's pid file names, or None, removing a stale file: one naming a pid
     that is gone, one that is no pid, or one left empty past EMPTY_CLAIM. A file still empty
-    within it is a claim being written, read as running (-1)."""
+    within it is a claim being written, CLAIMING."""
     try:
         text = pid_file.read_text().strip()
         age = time.time() - pid_file.stat().st_mtime
     except FileNotFoundError:
         return None
     if not text and age < EMPTY_CLAIM:
-        return -1
+        return CLAIMING
     pid = int(text) if text.isdigit() else 0
     if pid > 0 and alive(pid):
         return pid
@@ -523,38 +539,41 @@ def do_check(number: int, args) -> tuple[int, dict, str]:
         return 1, record, (f"the worktree has {len(changes)} uncommitted change(s), so no check "
                            "is started: commit them first")
 
+    # Every look at the pid file and the log, and every claim or drop of it, happens under one
+    # lock, so two calls never both read a claim as stale and both start a check.
+    lock = directory / "check.lock"
     process = None
     while True:
-        # The pid file first: a check that ends after it is read has written its verdict before
-        # the log is, so no finished log is taken for one with no verdict and run again.
-        pid = running_pid(pid_file)
-        logged, verdict = log_state(log)
-        if pid is None:
-            if logged == head and verdict:
-                break   # this head's log has its verdict: judged below, with no new run
-            process = launch(wt, fork, port, log, pid_file)
-            if process is not None:
-                record.update(started=True, pid=process.pid)
-            continue
-        record["pid"] = pid
-        ours = process is not None and process.pid == pid
-        if (process.poll() is None) if ours else (pid < 0 or alive(pid)):
-            if time.monotonic() - started_at >= limit:
-                whose = "this head" if logged == head else f"{(logged or '?')[:12]}, not this head"
-                record.update(state="running", logHead=logged, tail=last_lines(log, 5))
-                return 2, record, (f"no verdict yet: the check for {whose} is still running "
-                                   f"(pid {pid}); run check again")
-            time.sleep(POLL)
-            continue
-        # The check ended.
-        drop_claim(pid_file, str(pid))
-        logged, verdict = log_state(log)
-        if not verdict:
-            record.update(state="fail", logHead=logged, tail=last_lines(log))
-            return 1, record, f"the check stopped with no verdict line; its log is {log}"
-        if logged == head:
-            break
-        # It was another head's check; the next pass starts one for this head.
+        with locked(lock):
+            pid = running_pid(pid_file)
+            logged, verdict = log_state(log)
+            current = git("rev-parse", "HEAD", cwd=wt)
+            if pid is None:
+                # head is the head this call began on, current the worktree's now: a log of either
+                # is judged, and the judgement below fails one that is not current's.
+                if logged in (head, current) and verdict:
+                    break
+                if logged in (head, current) and record["started"]:
+                    record.update(state="fail", logHead=logged, tail=last_lines(log))
+                    return 1, record, f"the check stopped with no verdict line; its log is {log}"
+                if current != head:
+                    head, fork = current, git("merge-base", current, "origin/main", cwd=wt)
+                    record.update(head=head, fork=fork)
+                process = launch(wt, fork, port, log, pid_file)
+                if process is not None:
+                    record.update(started=True, pid=process.pid)
+                continue
+            record["pid"] = pid
+            ours = process is not None and process.pid == pid
+            if not (process.poll() is None if ours else (pid == CLAIMING or alive(pid))):
+                drop_claim(pid_file, str(pid))   # it ended; the next pass reads its log
+                continue
+        if time.monotonic() - started_at >= limit:
+            whose = "this head" if logged in (head, current) else f"{(logged or '?')[:12]}"
+            record.update(state="running", logHead=logged, tail=last_lines(log, 5))
+            return 2, record, (f"no verdict yet: the check for {whose} is still running "
+                               f"(pid {pid}); run check again")
+        time.sleep(POLL)
 
     head = git("rev-parse", "HEAD", cwd=wt)
     fork = git("merge-base", head, "origin/main", cwd=wt)

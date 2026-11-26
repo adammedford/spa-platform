@@ -359,16 +359,18 @@ class Start(Harness):
     def test_a_branch_whose_head_has_a_passing_check_is_finished(self):
         self.read()
         self.tool("start", "7")
-        commit(self, "tools/thing.py")
-        code, _, verdict, _ = self.tool("check", "7")
+        head = commit(self, "tools/thing.py")
+        code, record, verdict, _ = self.tool("check", "7")
         self.assert_verdict(code, verdict, "check", 0)
+        self.assertEqual(("pass", head), (record["state"], record["head"]))
         code, record, verdict, _ = self.tool("start", "7")
         self.assert_verdict(code, verdict, "start", 0, "finished")
-        self.assertEqual("finished", record["state"])
+        self.assertEqual(("finished", head), (record["state"], record["head"]))
         # A commit after the pass makes it a run to continue again.
-        commit(self, "tools/thing_tests.py")
-        _, record, _, _ = self.tool("start", "7")
-        self.assertEqual("continued", record["state"])
+        later = commit(self, "tools/thing_tests.py")
+        code, record, verdict, _ = self.tool("start", "7")
+        self.assert_verdict(code, verdict, "start", 0, "continued")
+        self.assertEqual(("continued", later), (record["state"], record["head"]))
 
     def test_a_ticket_relabelled_since_read_is_refused_with_nothing_written(self):
         self.read()
@@ -438,6 +440,13 @@ class Check(Harness):
         self.assert_verdict(code, verdict, "check", 1, "ran on")
         self.assertEqual(first, record["logHead"])
         self.assertNotEqual(first, record["head"])
+
+    def test_a_check_that_stops_with_no_verdict_line_fails_and_is_not_run_again(self):
+        commit(self, "tools/thing.py")
+        self.behave('echo "the check was cut off"\n')
+        code, record, verdict, _ = self.tool("check", "7")
+        self.assert_verdict(code, verdict, "check", 1, "no verdict line")
+        self.assertEqual(("fail", True, 1), (record["state"], record["started"], self.runs()))
 
     def test_an_uncommitted_change_is_no_pass(self):
         commit(self, "tools/thing.py")
@@ -531,6 +540,22 @@ class Check(Harness):
         code, record, verdict, _ = self.tool("check", "7")
         self.assert_verdict(code, verdict, "check", 0)
         self.assertEqual((True, 1), (record["started"], self.runs()))
+
+    def test_an_earlier_heads_check_that_dies_unfinished_is_waited_out_then_this_heads_runs(self):
+        """A check another call started for an earlier head ends with no verdict while this call
+        waits on it: that is no verdict on this head, which then gets its own check."""
+        earlier = self.git("rev-parse", "HEAD", cwd=self.wt)
+        commit(self, "tools/thing.py")
+        # Started through bash so that init, not this process, reaps it: an unreaped child stays a
+        # zombie, which a pid probe reads as alive.
+        dying = int(subprocess.run(["bash", "-c", "sleep 1 > /dev/null 2>&1 & echo $!"],
+                                   capture_output=True, text=True, check=True).stdout)
+        (self.log_dir() / "check.log").write_text(f"HEAD={earlier}\nstub check: cut off\n")
+        (self.log_dir() / "check.pid").write_text(f"{dying}\n")
+        code, record, verdict, _ = self.tool("check", "7")
+        self.assert_verdict(code, verdict, "check", 0)
+        self.assertEqual((True, "pass"), (record["started"], record["state"]))
+        self.assertEqual(1, self.runs())
 
     def test_a_claim_left_empty_by_a_call_that_died_is_cleared(self):
         commit(self, "tools/thing.py")
