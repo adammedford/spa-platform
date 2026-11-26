@@ -158,15 +158,21 @@ parallel under one `ProviderDeadline`, each through its own client in the profil
 style; a set with no live scheme, or recorded to a client the entry no longer names, is not
 revoked (outcomes `no_scheme` and `client_changed`). One log line records each set's outcome.
 Then it removes the session, and redirects once through the provider's logout by the shell's
-client with its ID token. A token no current credential can revoke, such as a removed fragment's
-or a rotated client's, is dropped unrevoked and logged, and lives at the provider until it expires.
+client with its ID token. A refresh whose write finds the session gone, such as one on another
+task that obtained a successor while the logout ran, revokes that successor through the set's
+own client in the profile's credential style, under one `ProviderDeadline` and once it has given
+up the set's gate, then answers unauthenticated and logs one line with the outcome. A write that
+ends any other way revokes nothing, as a precaution: the record still holds the set's provider
+grant, and whether revoking a successor reaches its predecessor is not established. A token no current credential can revoke, such as a removed fragment's or a rotated client's,
+is dropped unrevoked and logged, and lives at the provider until it expires.
 
 The bound. The clock starts at logout's entry. The whole operation takes at most
 `LogoutGateBudget` + `StoreDeadline` (the re-read) + `ProviderDeadline` (the parallel
 revocations) + `StoreDeadline` (the remove, under the `continuity` spec's F11) = 20 + 5 +
 10 + 5 = 40 s at today's values, inside the load balancer's idle timeout; revocation and removal alone, from the
 re-read's return, take at most `ProviderDeadline` + `StoreDeadline`. The provider logout is the
-browser's redirect and outside the bound.
+browser's redirect and outside the bound. So is the revocation by a refresh whose write found
+the session gone, which runs after the removal, outside the set's gate, within that refresh's call.
 
 ### Fragment activation
 
