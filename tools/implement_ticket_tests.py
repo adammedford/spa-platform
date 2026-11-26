@@ -227,6 +227,12 @@ class Harness(unittest.TestCase):
     def saved(self, step: str) -> dict:
         return json.loads((self.log_dir() / f"{step}.json").read_text())
 
+    def assert_unjudged(self, code, record, verdict, step, *words):
+        """Exit 2, its verdict line, and a record saying nothing was judged, as it was saved."""
+        self.assert_verdict(code, verdict, step, 2, *words)
+        self.assertEqual(("unjudged", 2), (record["state"], record["exit"]))
+        self.assertEqual(record, self.saved(step))
+
     def assert_verdict(self, code, verdict, step, expected_code, *words):
         kind = "pass" if expected_code == 0 else "fail"
         self.assertEqual(expected_code, code, verdict)
@@ -303,12 +309,12 @@ class Read(Harness):
         self.assert_verdict(code, verdict, "read", 1, "boxes")
 
     def test_an_unreachable_gh_exits_2(self):
-        code, _, verdict, _ = self.read(env={"GH_FAIL": "1"})
-        self.assert_verdict(code, verdict, "read", 2)
+        code, record, verdict, _ = self.read(env={"GH_FAIL": "1"})
+        self.assert_unjudged(code, record, verdict, "read", "could not reach GitHub")
 
     def test_a_missing_argument_exits_2_with_a_verdict(self):
-        code, _, verdict, _ = self.tool("read", "7")
-        self.assert_verdict(code, verdict, "read", 2, "--wt")
+        code, record, verdict, _ = self.tool("read", "7")
+        self.assert_unjudged(code, record, verdict, "read", "--wt")
 
 
 BRANCH = "task/issue-7-the-thing-prints-its-name-and-its-companion"
@@ -367,8 +373,8 @@ class Start(Harness):
         self.assertEqual("", self.git("branch", "--list", BRANCH))
 
     def test_start_with_no_read_record_exits_2(self):
-        code, _, verdict, _ = self.tool("start", "7")
-        self.assert_verdict(code, verdict, "start", 2, "read record")
+        code, record, verdict, _ = self.tool("start", "7")
+        self.assert_unjudged(code, record, verdict, "start", "read record")
 
 
 def commit(case: Harness, *paths: str) -> str:
@@ -403,8 +409,9 @@ class Check(Harness):
 
     def test_the_port_is_passed_on(self):
         commit(self, "tools/thing.py")
-        code, _, verdict, _ = self.tool("check", "7", "--port", "5191")
+        code, record, verdict, _ = self.tool("check", "7", "--port", "5191")
         self.assert_verdict(code, verdict, "check", 0)
+        self.assertEqual(5191, record["port"])
         self.assertIn("--port 5191", (self.log_dir() / "check.log").read_text())
 
     def test_a_fail_line_fails_and_carries_test_reach(self):
@@ -447,6 +454,16 @@ class Check(Harness):
                 self.assert_verdict(code, verdict, "check", 1, "A-05")
                 self.assertIn("ws6-verification", record["ownership"]["output"])
 
+    def test_a_branch_that_rewrites_a05_does_not_judge_itself(self):
+        """A-05 is the main checkout's copy: a branch whose own copy always passes still fails."""
+        commit(self, "tools/bench/x.py")
+        (self.wt / ".github" / "path-ownership.py").write_text(
+            'print("A-05: 1 file(s), all owned by integrator.")\n')
+        self.git("commit", "-q", "-am", "A-05 passes everything", cwd=self.wt)
+        code, record, verdict, _ = self.tool("check", "7")
+        self.assert_verdict(code, verdict, "check", 1, "A-05")
+        self.assertIn("ws6-verification", record["ownership"]["output"])
+
     def test_a_check_with_no_verdict_yet_returns_running_within_the_bound(self):
         commit(self, "tools/thing.py")
         self.behave('sleep 60\necho "check: pass: stub"\n')
@@ -481,14 +498,37 @@ class Check(Harness):
             cwd=self.checkout, env={**self.env, "PYTHON": sys.executable},
             capture_output=True, text=True, check=False, timeout=120)
         self.assertEqual(0, done.returncode, done.stdout)
+        record_line, verdict = done.stdout.splitlines()
+        self.assertTrue(verdict.startswith("implement-ticket: check: pass: "), verdict)
+        self.assertEqual(json.loads(record_line), self.saved("check"))
         log = (self.log_dir() / "check.log").read_text()
         self.assertIn("SIGINT <built-in function default_int_handler>", log)
 
     def test_check_with_no_start_record_exits_2(self):
         record_path = self.log_dir() / "start.json"
         record_path.unlink()
-        code, _, verdict, _ = self.tool("check", "7")
-        self.assert_verdict(code, verdict, "check", 2, "start record")
+        code, record, verdict, _ = self.tool("check", "7")
+        self.assert_unjudged(code, record, verdict, "check", "start record")
+
+    def test_a_pid_file_naming_a_pid_that_is_gone_starts_a_check(self):
+        """A check killed with its pid file left behind holds nothing up."""
+        commit(self, "tools/thing.py")
+        gone = subprocess.Popen(["true"])
+        gone.wait()
+        (self.log_dir() / "check.pid").write_text(f"{gone.pid}\n")
+        code, record, verdict, _ = self.tool("check", "7")
+        self.assert_verdict(code, verdict, "check", 0)
+        self.assertEqual((True, 1), (record["started"], self.runs()))
+
+    def test_a_claim_left_empty_by_a_call_that_died_is_cleared(self):
+        commit(self, "tools/thing.py")
+        claim = self.log_dir() / "check.pid"
+        claim.write_text("")
+        old = time.time() - 60
+        os.utime(claim, (old, old))
+        code, record, verdict, _ = self.tool("check", "7", env={"IMPLEMENT_TICKET_WAIT": "5"})
+        self.assert_verdict(code, verdict, "check", 0)
+        self.assertEqual(1, self.runs())
 
 
 class Release(Harness):
@@ -508,8 +548,8 @@ class Release(Harness):
     def test_an_unreachable_gh_exits_2(self):
         self.read()
         self.tool("start", "7")
-        code, _, verdict, _ = self.tool("release", "7", env={"GH_FAIL": "1"})
-        self.assert_verdict(code, verdict, "release", 2)
+        code, record, verdict, _ = self.tool("release", "7", env={"GH_FAIL": "1"})
+        self.assert_unjudged(code, record, verdict, "release", "could not reach GitHub")
         self.assertEqual(["case"], self.assignees())
 
 

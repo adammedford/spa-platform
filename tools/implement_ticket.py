@@ -41,12 +41,14 @@ check runs `tools/check.sh --full --base <fork> --port <p>` in the worktree, det
 recipe in .claude/workflows/overnight.js's GATE: SIGINT reset to its default before bash starts
 (#1532), stdout and stderr to one log, check.log, whose first line is `HEAD=<sha>`, and the pid in
 check.pid beside it. One check runs per issue: the pid file is claimed with O_EXCL, and a call that
-finds a check running waits on it rather than starting a second. Every call returns within
+finds a check running waits on it rather than starting a second; one running for an earlier head is
+waited out, and then this head's starts. A pid file naming a pid that is gone is stale and removed. Every call returns within
 WAIT_BOUND seconds, with state `running` when there is no verdict yet; IMPLEMENT_TICKET_WAIT may
 shorten the bound, never lengthen it. A log for the worktree's head that already has a verdict is
 judged without a new run. The verdict passes only when the log's last line starts `check: pass:`,
 its `HEAD=` equals the worktree's HEAD, the worktree has no uncommitted or untracked change, and
-`.github/path-ownership.py <fork> <head>` names the ticket's owner and no other. The record lists
+`.github/path-ownership.py <fork> <head>`, the main checkout's copy, names the ticket's owner and
+no other, so a branch that edits A-05 does not judge itself. The record lists
 the changed files outside the Touches paths without failing on them, and on a red check carries what
 `tools/test_reach.py` prints for the log.
 
@@ -77,7 +79,8 @@ JUDGING_RESERVE = 30.0
 POLL = 0.2
 
 # The kinds of change a Touches path is, in this order, and the test command each runs for a named
-# project ("{project}"), which `prove` uses. A path may be of several kinds and of none. dotnet,
+# project ("{project}"): #1564 asks for the table whole, the commands included, so that the
+# mutation proof #1566 adds reads them here. A path may be of several kinds and of none. dotnet,
 # terraform and workflow are the halves .github/touches.sh answers for, read from it so the two
 # never disagree; script and docs are this table's own.
 KINDS = (
@@ -196,9 +199,12 @@ def kinds_of(paths: list[str]) -> list[str]:
     found = set()
     for path in paths:
         for kind, half in HALVES.items():
-            # touches.sh exits 0 when the half is touched.
-            if run(["bash", str(ROOT / ".github" / "touches.sh"), half], stdin=path + "\n",
-                   check=False).returncode == 0:
+            # touches.sh exits 0 when the half is touched and 1 when not; anything else is no answer.
+            done = run(["bash", str(ROOT / ".github" / "touches.sh"), half], stdin=path + "\n",
+                       check=False)
+            if done.returncode not in (0, 1):
+                raise Unjudged(f".github/touches.sh {half} exited {done.returncode} on {path}")
+            if done.returncode == 0:
                 found.add(kind)
         if SCRIPT.match(path):
             found.add("script")
@@ -213,14 +219,7 @@ def judged(raw: dict, worktree: str) -> dict:
     shape = c.ticket_shape()
     try:
         labels = [label["name"] for label in raw["labels"]]
-        nodes = raw["blockedBy"]["nodes"]
-        issue = c.Issue(
-            number=int(raw["number"]), title=raw["title"], body=raw["body"] or "",
-            label=READY if READY in labels else "", assigned=bool(raw["assignees"]),
-            url=raw["url"],
-            blockers=tuple(int(n["number"]) for n in nodes if n["state"] == "OPEN"),
-            sub_issues=int(raw["subIssuesSummary"]["total"]),
-            closed_blockers=tuple(int(n["number"]) for n in nodes if n["state"] != "OPEN"))
+        issue = c.issues_of({READY: [raw]})[0]
         assignees = [entry["login"] for entry in raw["assignees"]]
         state = raw["state"]
     except (KeyError, TypeError, ValueError) as error:
@@ -354,9 +353,13 @@ def do_start(number: int, args) -> tuple[int, dict, str]:
         added = run(["git", "worktree", "add", "-q", "--no-track", "-b", branch, str(wt),
                      record["base"]], check=False)
         if added.returncode != 0:
-            gh("issue", "edit", str(number), "--remove-assignee", "@me")
-            raise Failed(f"git worktree add failed, and the assignment was undone: "
-                         f"{added.stderr.strip()[:300]}")
+            cause = f"git worktree add failed: {added.stderr.strip()[:300]}"
+            try:
+                gh("issue", "edit", str(number), "--remove-assignee", "@me")
+            except Unjudged as undo:
+                raise Unjudged(f"{cause}; and the assignment could not be undone, so #{number} "
+                               f"is still assigned: {undo}") from undo
+            raise Failed(f"{cause}; the assignment was undone")
         head = git("rev-parse", "HEAD", cwd=wt)
         record["state"] = "new"
     record["worktree"] = str(wt)
@@ -409,12 +412,14 @@ def bound() -> float:
 def launch(wt: pathlib.Path, fork: str, port: int, log: pathlib.Path,
            pid_file: pathlib.Path) -> subprocess.Popen | None:
     """Start the check detached, as GATE does, once the pid file is ours; None when another call
-    holds it."""
+    holds it. The claim names this process until the check's pid replaces it, so a call that reads
+    the file in between sees a live pid and waits; a launch that fails removes its claim."""
     try:
         claim = os.open(pid_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
     except FileExistsError:
         return None
     try:
+        os.write(claim, f"{os.getpid()}\n".encode())
         log.unlink(missing_ok=True)
         script = ('{ echo "HEAD=$(git -C "$1" rev-parse HEAD)"; '
                   'tools/check.sh --full --base "$2" --port "$3"; } > "$4" 2>&1')
@@ -425,30 +430,46 @@ def launch(wt: pathlib.Path, fork: str, port: int, log: pathlib.Path,
              "bash", "-c", script, "bash", str(wt), fork, str(port), str(log)],
             cwd=wt, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL, start_new_session=True)
+        os.lseek(claim, 0, os.SEEK_SET)
+        os.ftruncate(claim, 0)
         os.write(claim, f"{process.pid}\n".encode())
+    except BaseException:
+        pid_file.unlink(missing_ok=True)
+        raise
     finally:
         os.close(claim)
     return process
 
 
+# A pid file left empty this long is a claim whose writer died between creating and writing it.
+EMPTY_CLAIM = 10.0
+
+
 def running_pid(pid_file: pathlib.Path) -> int | None:
-    """The pid of a check still running for this issue, or None, clearing a stale pid file. A pid
-    file still empty is a claim being written: read as running."""
+    """The live pid the issue's pid file names, or None, removing a stale file: one naming a pid
+    that is gone, one that is no pid, or one left empty past EMPTY_CLAIM. A file still empty
+    within it is a claim being written, read as running (-1)."""
     try:
         text = pid_file.read_text().strip()
+        age = time.time() - pid_file.stat().st_mtime
     except FileNotFoundError:
         return None
-    if not text:
+    if not text and age < EMPTY_CLAIM:
         return -1
-    try:
-        pid = int(text)
-    except ValueError:
-        pid_file.unlink(missing_ok=True)
-        return None
-    if alive(pid):
+    pid = int(text) if text.isdigit() else 0
+    if pid > 0 and alive(pid):
         return pid
-    pid_file.unlink(missing_ok=True)
+    drop_claim(pid_file, text)
     return None
+
+
+def drop_claim(pid_file: pathlib.Path, text: str) -> None:
+    """Remove the pid file only while it still holds text, so another call's fresh claim stays."""
+    try:
+        if pid_file.read_text().strip() == text:
+            pid_file.unlink()
+    except FileNotFoundError:
+        pass
 
 
 def dirty(wt: pathlib.Path) -> list[str]:
@@ -464,9 +485,11 @@ def covered(path: str, touches: list[str]) -> bool:
     return False
 
 
-def ownership(wt: pathlib.Path, fork: str, head: str, owner: str) -> dict:
-    done = run([sys.executable, "-I", str(wt / ".github" / "path-ownership.py"), fork, head],
-               cwd=wt, check=False)
+def ownership(fork: str, head: str, owner: str) -> dict:
+    """A-05 on the fork and head by sha, run by the main checkout's copy in the main checkout, which
+    shares the worktree's objects: the branch under judgement never judges itself."""
+    done = run([sys.executable, "-I", str(ROOT / ".github" / "path-ownership.py"), fork, head],
+               check=False)
     output = done.stdout.strip()
     named = [found.group("owner") for found in A05_WHOLE.finditer(output)]
     named += [found.group("owner") for found in A05_COMMIT.finditer(output)]
@@ -504,48 +527,37 @@ def do_check(number: int, args) -> tuple[int, dict, str]:
     while True:
         logged, verdict = log_state(log)
         pid = running_pid(pid_file)
-        if pid is None and logged == head and verdict:
-            break   # judged below, with no new run
         if pid is None:
+            if logged == head and verdict:
+                break   # this head's log has its verdict: judged below, with no new run
             process = launch(wt, fork, port, log, pid_file)
             if process is not None:
-                record["started"] = True
-                record["pid"] = process.pid
+                record.update(started=True, pid=process.pid)
             continue
-        # A check runs: ours, or another call's; wait for it to end.
         record["pid"] = pid
-        while time.monotonic() - started_at < limit:
-            if process is not None and process.pid == pid:
-                if process.poll() is not None:
-                    break
-            elif pid > 0 and not alive(pid):
-                break
-            if log_state(log)[1] and (process is None or process.poll() is not None):
-                break
+        ours = process is not None and process.pid == pid
+        if (process.poll() is None) if ours else (pid < 0 or alive(pid)):
+            if time.monotonic() - started_at >= limit:
+                whose = "this head" if logged == head else f"{(logged or '?')[:12]}, not this head"
+                record.update(state="running", logHead=logged, tail=last_lines(log, 5))
+                return 2, record, (f"no verdict yet: the check for {whose} is still running "
+                                   f"(pid {pid}); run check again")
             time.sleep(POLL)
-        else:
-            logged, _ = log_state(log)
-            record.update(state="running", logHead=logged, tail=last_lines(log, 5))
-            return 2, record, (f"no verdict yet: the check for {(logged or '?')[:12]} is still "
-                               f"running (pid {pid}); run check again")
-        if process is not None and process.pid == pid:
-            process.wait()
+            continue
+        # The check ended.
+        drop_claim(pid_file, str(pid))
         logged, verdict = log_state(log)
         if not verdict:
-            pid_file.unlink(missing_ok=True)
             record.update(state="fail", logHead=logged, tail=last_lines(log))
             return 1, record, f"the check stopped with no verdict line; its log is {log}"
-        pid_file.unlink(missing_ok=True)
-        if logged != head and git("rev-parse", "HEAD", cwd=wt) == head:
-            # That run was another head's; start one for this head.
-            continue
-        break
+        if logged == head:
+            break
+        # It was another head's check; the next pass starts one for this head.
 
-    logged, verdict = log_state(log)
     head = git("rev-parse", "HEAD", cwd=wt)
     fork = git("merge-base", head, "origin/main", cwd=wt)
     changes = dirty(wt)
-    owned = ownership(wt, fork, head, ticket["owner"])
+    owned = ownership(fork, head, ticket["owner"])
     changed = [path for path in git("diff", "--no-renames", "--name-only", fork, head,
                                     cwd=wt).splitlines() if path]
     record.update(head=head, fork=fork, logHead=logged, lastLine=verdict, clean=not changes,
@@ -556,7 +568,8 @@ def do_check(number: int, args) -> tuple[int, dict, str]:
     reasons = []
     if not verdict.startswith(PASS_LINE):
         reasons.append(f"the log's last line is {verdict!r}")
-        reach = run([sys.executable, "-I", str(wt / "tools" / "test_reach.py"), "--log",
+        # The main checkout's copy, run in the worktree the log was written in.
+        reach = run([sys.executable, "-I", str(ROOT / "tools" / "test_reach.py"), "--log",
                      str(log), "--base", fork, "--head", head], cwd=wt, check=False)
         try:
             record["testReach"] = json.loads(reach.stdout)
