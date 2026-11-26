@@ -41,9 +41,12 @@ check runs `tools/check.sh --full --base <fork> --port <p>` in the worktree, det
 recipe in .claude/workflows/overnight.js's GATE: SIGINT reset to its default before bash starts
 (#1532), stdout and stderr to one log, check.log, whose first line is `HEAD=<sha>`, and the pid in
 check.pid beside it. One check runs per issue: the pid file is claimed with O_EXCL under a lock on
-check.lock, and a call that
-finds a check running waits on it rather than starting a second; one running for an earlier head is
-waited out, and then this head's starts. A pid file naming a pid that is gone is stale and removed. Every call returns within
+check.lock as `claim <the tool's pid>`, and the check itself replaces the claim with its own pid
+before it execs bash, so a tool killed once the check is launched leaves the file naming the check.
+A call that finds a check running, or a claim being started, waits on it rather than starting a
+second; one running for an earlier head is waited out, and then this head's starts. A pid file
+naming a pid that is gone is stale and removed, and so is a claim once its writer is gone and
+EMPTY_CLAIM seconds have passed; a launch that ends without naming itself fails. Every call returns within
 WAIT_BOUND seconds, with state `running` when there is no verdict yet; IMPLEMENT_TICKET_WAIT may
 shorten the bound, never lengthen it. A log for the worktree's head that already has a verdict is
 judged without a new run. The verdict passes only when the log's last line starts `check: pass:`,
@@ -415,27 +418,28 @@ def bound() -> float:
 def launch(wt: pathlib.Path, fork: str, port: int, log: pathlib.Path,
            pid_file: pathlib.Path) -> subprocess.Popen | None:
     """Start the check detached, as GATE does, once the pid file is ours; None when another call
-    holds it. The claim names this process until the check's pid replaces it, so a call that reads
-    the file in between sees a live pid and waits; a launch that fails removes its claim."""
+    holds it. The claim reads `claim <this process's pid>` until the check replaces it with its own
+    pid, which it writes itself before it execs bash: the tool never writes the check's pid, so a
+    tool killed after Popen still leaves the file naming the check. A launch that fails removes its
+    claim."""
     try:
         claim = os.open(pid_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
     except FileExistsError:
         return None
     try:
-        os.write(claim, f"{os.getpid()}\n".encode())
+        os.write(claim, f"{CLAIM_PREFIX}{os.getpid()}\n".encode())
         log.unlink(missing_ok=True)
         script = ('{ echo "HEAD=$(git -C "$1" rev-parse HEAD)"; '
                   'tools/check.sh --full --base "$2" --port "$3"; } > "$4" 2>&1')
         process = subprocess.Popen(
             [sys.executable, "-I", "-c",
              "import os, signal, sys; signal.signal(signal.SIGINT, signal.SIG_DFL); "
-             "os.execvp(sys.argv[1], sys.argv[1:])",
-             "bash", "-c", script, "bash", str(wt), fork, str(port), str(log)],
+             "named = sys.argv[1] + '.named'; "
+             "open(named, 'w').write(f'{os.getpid()}\\n'); os.replace(named, sys.argv[1]); "
+             "os.execvp(sys.argv[2], sys.argv[2:])",
+             str(pid_file), "bash", "-c", script, "bash", str(wt), fork, str(port), str(log)],
             cwd=wt, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL, start_new_session=True)
-        os.lseek(claim, 0, os.SEEK_SET)
-        os.ftruncate(claim, 0)
-        os.write(claim, f"{process.pid}\n".encode())
     except BaseException:
         pid_file.unlink(missing_ok=True)
         raise
@@ -444,10 +448,12 @@ def launch(wt: pathlib.Path, fork: str, port: int, log: pathlib.Path,
     return process
 
 
-# A pid file left empty this long is a claim whose writer died between creating and writing it;
-# one younger is read as CLAIMING, a check being started.
+# A pid file left empty, or holding a claim whose writer is gone, this long is a claim whose check
+# never named itself; one younger is read as CLAIMING, a check being started. A claim whose writer
+# lives is CLAIMING at any age: that call is starting a check, or watching one it started.
 EMPTY_CLAIM = 10.0
 CLAIMING = -1
+CLAIM_PREFIX = "claim "
 
 
 @contextlib.contextmanager
@@ -462,13 +468,20 @@ def locked(path: pathlib.Path):
 
 
 def running_pid(pid_file: pathlib.Path) -> int | None:
-    """The pid the issue's pid file names, CLAIMING for a file still empty within EMPTY_CLAIM, or
-    None when there is none, removing a file that is no pid or was left empty past EMPTY_CLAIM.
+    """The pid the issue's pid file names; CLAIMING for a file still empty within EMPTY_CLAIM, or a
+    claim whose writer lives or that is younger than EMPTY_CLAIM; or None when there is none,
+    removing a file that is no pid, or an empty file or claim past EMPTY_CLAIM whose writer is gone.
     Whether the pid still runs is live()'s to say, or the Popen's for this call's own check."""
     try:
         text = pid_file.read_text().strip()
         age = time.time() - pid_file.stat().st_mtime
     except FileNotFoundError:
+        return None
+    if text.startswith(CLAIM_PREFIX):
+        writer = text[len(CLAIM_PREFIX):]
+        if age < EMPTY_CLAIM or (writer.isdigit() and alive(int(writer))):
+            return CLAIMING
+        drop_claim(pid_file, text)
         return None
     if not text and age < EMPTY_CLAIM:
         return CLAIMING
@@ -482,6 +495,13 @@ def running_pid(pid_file: pathlib.Path) -> int | None:
 def live(pid: int) -> bool:
     """Whether a check another call started still runs: a claim being written, or a pid alive."""
     return pid == CLAIMING or alive(pid)
+
+
+def claim_text(pid_file: pathlib.Path) -> str | None:
+    try:
+        return pid_file.read_text().strip()
+    except FileNotFoundError:
+        return None
 
 
 def drop_claim(pid_file: pathlib.Path, text: str) -> None:
@@ -569,6 +589,13 @@ def do_check(number: int, args) -> tuple[int, dict, str]:
                 if process is not None:
                     record.update(started=True, pid=process.pid)
                 continue
+            own_claim = f"{CLAIM_PREFIX}{os.getpid()}"
+            if (pid == CLAIMING and process is not None and process.poll() is not None
+                    and claim_text(pid_file) == own_claim):
+                drop_claim(pid_file, own_claim)
+                record.update(state="fail", launchExit=process.returncode, tail=last_lines(log))
+                return 1, record, (f"the check ended (exit {process.returncode}) before it named "
+                                   f"itself in {pid_file}, so it never ran")
             record["pid"] = pid
             ours = process is not None and process.pid == pid
             if not (process.poll() is None if ours else live(pid)):

@@ -568,6 +568,66 @@ class Check(Harness):
         self.assertEqual((True, "pass"), (record["started"], record["state"]))
         self.assertEqual(1, self.runs())
 
+    def gone_pid(self) -> int:
+        gone = subprocess.Popen(["true"])
+        gone.wait()
+        return gone.pid
+
+    def test_a_tool_killed_once_it_has_launched_the_check_leaves_the_check_named(self):
+        """The check names itself in the pid file, so a tool killed after launching it leaves no
+        claim naming the dead tool, which a later call would clear and start a second check over.
+        The file is aged past EMPTY_CLAIM, so a claim left by the dead tool would read as stale."""
+        head = commit(self, "tools/thing.py")
+        self.behave('sleep 3\necho "check: pass: stub"\n')
+        tool = subprocess.Popen([sys.executable, "-I", str(self.checkout / TOOL), "check", "7"],
+                                cwd=self.checkout, env=self.env, stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL)
+        deadline = time.monotonic() + 30
+        while self.runs() == 0 and time.monotonic() < deadline:
+            time.sleep(0.05)
+        tool.kill()
+        tool.wait()
+        self.assertEqual(1, self.runs())
+        pid_file = self.log_dir() / "check.pid"
+        old = time.time() - 60
+        os.utime(pid_file, (old, old))
+        code, record, verdict, _ = self.tool("check", "7")
+        self.assert_verdict(code, verdict, "check", 0)
+        self.assertEqual((head, False, "pass"), (record["head"], record["started"], record["state"]))
+        self.assertEqual(1, self.runs())
+
+    def test_a_young_claim_whose_writer_is_gone_is_waited_on(self):
+        """A claim whose writer died after launching the check, before the check named itself."""
+        commit(self, "tools/thing.py")
+        (self.log_dir() / "check.pid").write_text(f"claim {self.gone_pid()}\n")
+        code, record, verdict, _ = self.tool("check", "7", env={"IMPLEMENT_TICKET_WAIT": "1"})
+        self.assert_verdict(code, verdict, "check", 2, "still running")
+        self.assertEqual(("running", False, 0), (record["state"], record["started"], self.runs()))
+
+    def test_an_old_claim_whose_writer_is_gone_is_cleared(self):
+        commit(self, "tools/thing.py")
+        claim = self.log_dir() / "check.pid"
+        claim.write_text(f"claim {self.gone_pid()}\n")
+        old = time.time() - 60
+        os.utime(claim, (old, old))
+        code, record, verdict, _ = self.tool("check", "7", env={"IMPLEMENT_TICKET_WAIT": "5"})
+        self.assert_verdict(code, verdict, "check", 0)
+        self.assertEqual((True, "pass", 1), (record["started"], record["state"], self.runs()))
+
+    def test_a_check_that_ends_before_naming_itself_fails_and_leaves_no_claim(self):
+        """The launched check cannot write its name (a directory sits where it writes it), so it
+        ends without running; the call that started it fails at once rather than wait on its own
+        claim to the bound."""
+        commit(self, "tools/thing.py")
+        (self.log_dir() / "check.pid.named").mkdir()
+        began = time.monotonic()
+        code, record, verdict, _ = self.tool("check", "7", env={"IMPLEMENT_TICKET_WAIT": "8"})
+        self.assertLess(time.monotonic() - began, 6)
+        self.assert_verdict(code, verdict, "check", 1, "before it named itself")
+        self.assertEqual(("fail", True, 0), (record["state"], record["started"], self.runs()))
+        self.assertNotEqual(0, record["launchExit"])
+        self.assertFalse((self.log_dir() / "check.pid").exists())
+
 
 class Release(Harness):
     def test_release_unassigns_and_keeps_the_branch_and_the_worktree(self):
