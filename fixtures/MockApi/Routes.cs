@@ -9,9 +9,10 @@ using Microsoft.Extensions.Primitives;
 namespace MockApi;
 
 /// <summary>
-/// The three routes of task 5.3, and <c>/pad</c> for G9's O9 (#1545). Authentication has already checked the signature, the issuer, the
-/// expiry, <c>token_use</c> and the audience where this API binds one; what is left is the API
-/// owner's own two decisions, which client it accepts and which scope a route needs.
+/// The three routes of task 5.3, and <c>/pad</c> for G9's O9 (#1545). Authentication has already
+/// checked the signature, the issuer, the expiry, <c>token_use</c> and the audience where this API
+/// binds one; what is left is the API owner's own two decisions, which client it accepts and which
+/// scope a route needs.
 /// </summary>
 internal static class Routes
 {
