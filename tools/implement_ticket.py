@@ -41,13 +41,14 @@ check runs `tools/check.sh --full --base <fork> --port <p>` in the worktree, det
 recipe in .claude/workflows/overnight.js's GATE: SIGINT reset to its default before bash starts
 (#1532), stdout and stderr to one log, check.log, whose first line is `HEAD=<sha>`, and the pid in
 check.pid beside it. One check runs per issue: the pid file is claimed with O_EXCL under a lock on
-check.lock as `claim <the tool's pid>`, and the check itself replaces the claim with its own pid
-before it execs bash, so a tool killed once the check is launched leaves the file naming the check.
+check.lock as `claim <the tool's pid>`, and the check itself, under the same lock, replaces the
+claim with its own pid before it execs bash, so a tool killed once the check is launched leaves the
+file naming the check (#1564); a check that finds its starter's claim already cleared exits unrun.
 A call that finds a check running, or a claim being started, waits on it rather than starting a
 second; one running for an earlier head is waited out, and then this head's starts. A pid file
 naming a pid that is gone is stale and removed, and so is a claim once its writer is gone and
-EMPTY_CLAIM seconds have passed; a launch that ends without naming itself fails. Every call returns within
-WAIT_BOUND seconds, with state `running` when there is no verdict yet; IMPLEMENT_TICKET_WAIT may
+EMPTY_CLAIM seconds have passed; a launch that ends without naming itself fails. Every call
+returns within WAIT_BOUND seconds, with state `running` when there is no verdict yet; IMPLEMENT_TICKET_WAIT may
 shorten the bound, never lengthen it. A log for the worktree's head that already has a verdict is
 judged without a new run. The verdict passes only when the log's last line starts `check: pass:`,
 its `HEAD=` equals the worktree's HEAD, the worktree has no uncommitted or untracked change, and
@@ -415,29 +416,53 @@ def bound() -> float:
         return longest
 
 
+# The check's first act, run as `python3 -I -c LAUNCHER <pid file> <lock> <claim> <command...>`
+# (#1564): SIGINT back to its default (#1532), then, under the lock every call's look at the pid
+# file takes, its own pid in place of the claim, written to a side file and renamed so no reader
+# sees half of it, then exec, which keeps that pid. It names itself only while the file still holds
+# the claim of the call that started it: a call that has since cleared that claim as stale may have
+# started a check of its own, so this one exits 3 without running. The lock's file is closed before
+# the exec, so the check holds no lock while it runs.
+LAUNCHER = """\
+import fcntl, os, signal, sys
+signal.signal(signal.SIGINT, signal.SIG_DFL)
+pid_file, lock, claim, command = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4:]
+with open(lock, "a") as held:
+    fcntl.flock(held, fcntl.LOCK_EX)
+    try:
+        with open(pid_file) as current:
+            mine = current.read().strip() == claim
+    except FileNotFoundError:
+        mine = False
+    if not mine:
+        sys.exit(3)
+    named = pid_file + ".named"
+    with open(named, "w") as handle:
+        handle.write(f"{os.getpid()}\\n")
+    os.replace(named, pid_file)
+os.execvp(command[0], command)
+"""
+
+
 def launch(wt: pathlib.Path, fork: str, port: int, log: pathlib.Path,
-           pid_file: pathlib.Path) -> subprocess.Popen | None:
+           pid_file: pathlib.Path, lock: pathlib.Path) -> subprocess.Popen | None:
     """Start the check detached, as GATE does, once the pid file is ours; None when another call
-    holds it. The claim reads `claim <this process's pid>` until the check replaces it with its own
-    pid, which it writes itself before it execs bash: the tool never writes the check's pid, so a
-    tool killed after Popen still leaves the file naming the check. A launch that fails removes its
-    claim."""
+    holds it. The claim reads claim_for(this process) until the check replaces it with its own pid
+    by LAUNCHER: the tool never writes the check's pid, so a tool killed after Popen still leaves
+    the file naming the check (#1564). A launch that fails removes its claim."""
     try:
         claim = os.open(pid_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
     except FileExistsError:
         return None
     try:
-        os.write(claim, f"{CLAIM_PREFIX}{os.getpid()}\n".encode())
+        os.write(claim, f"{claim_for(os.getpid())}\n".encode())
         log.unlink(missing_ok=True)
         script = ('{ echo "HEAD=$(git -C "$1" rev-parse HEAD)"; '
                   'tools/check.sh --full --base "$2" --port "$3"; } > "$4" 2>&1')
         process = subprocess.Popen(
-            [sys.executable, "-I", "-c",
-             "import os, signal, sys; signal.signal(signal.SIGINT, signal.SIG_DFL); "
-             "named = sys.argv[1] + '.named'; "
-             "open(named, 'w').write(f'{os.getpid()}\\n'); os.replace(named, sys.argv[1]); "
-             "os.execvp(sys.argv[2], sys.argv[2:])",
-             str(pid_file), "bash", "-c", script, "bash", str(wt), fork, str(port), str(log)],
+            [sys.executable, "-I", "-c", LAUNCHER, str(pid_file), str(lock),
+             claim_for(os.getpid()),
+             "bash", "-c", script, "bash", str(wt), fork, str(port), str(log)],
             cwd=wt, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL, start_new_session=True)
     except BaseException:
@@ -450,10 +475,25 @@ def launch(wt: pathlib.Path, fork: str, port: int, log: pathlib.Path,
 
 # A pid file left empty, or holding a claim whose writer is gone, this long is a claim whose check
 # never named itself; one younger is read as CLAIMING, a check being started. A claim whose writer
-# lives is CLAIMING at any age: that call is starting a check, or watching one it started.
+# lives is CLAIMING at any age: that call is starting a check, or watching one it started (#1564).
 EMPTY_CLAIM = 10.0
 CLAIMING = -1
 CLAIM_PREFIX = "claim "
+
+
+def claim_for(pid: int) -> str:
+    """The pid file's text while the call with this pid starts a check, before the check names
+    itself."""
+    return f"{CLAIM_PREFIX}{pid}"
+
+
+def claim_writer(text: str) -> int | None:
+    """The pid of the call whose claim text is, or None when text is no claim; 0 for a claim that
+    names no pid."""
+    if not text.startswith(CLAIM_PREFIX):
+        return None
+    writer = text[len(CLAIM_PREFIX):]
+    return int(writer) if writer.isdigit() else 0
 
 
 @contextlib.contextmanager
@@ -477,9 +517,9 @@ def running_pid(pid_file: pathlib.Path) -> int | None:
         age = time.time() - pid_file.stat().st_mtime
     except FileNotFoundError:
         return None
-    if text.startswith(CLAIM_PREFIX):
-        writer = text[len(CLAIM_PREFIX):]
-        if age < EMPTY_CLAIM or (writer.isdigit() and alive(int(writer))):
+    writer = claim_writer(text)
+    if writer is not None:
+        if age < EMPTY_CLAIM or (writer > 0 and alive(writer)):
             return CLAIMING
         drop_claim(pid_file, text)
         return None
@@ -498,6 +538,7 @@ def live(pid: int) -> bool:
 
 
 def claim_text(pid_file: pathlib.Path) -> str | None:
+    """The pid file's text, or None when there is no file: no call holds the issue."""
     try:
         return pid_file.read_text().strip()
     except FileNotFoundError:
@@ -558,16 +599,18 @@ def do_check(number: int, args) -> tuple[int, dict, str]:
     record = {"issue": number, "worktree": str(wt), "head": head, "fork": fork, "port": port,
               "log": str(log), "started": False}
 
+    # Every look at the pid file and the log, and every claim or drop of it, happens under one
+    # lock, which LAUNCHER also takes to name the check, so two calls never both read a claim as
+    # stale and both start a check, and no call clears a claim while its check names itself.
+    lock = directory / "check.lock"
     changes = dirty(wt)
-    claimed = running_pid(pid_file)
+    with locked(lock):
+        claimed = running_pid(pid_file)
     if changes and (claimed is None or not live(claimed)):
         record.update(state="fail", clean=False, uncommitted=changes)
         return 1, record, (f"the worktree has {len(changes)} uncommitted change(s), so no check "
                            "is started: commit them first")
 
-    # Every look at the pid file and the log, and every claim or drop of it, happens under one
-    # lock, so two calls never both read a claim as stale and both start a check.
-    lock = directory / "check.lock"
     process = None
     while True:
         with locked(lock):
@@ -585,11 +628,11 @@ def do_check(number: int, args) -> tuple[int, dict, str]:
                 if current != head:
                     head, fork = current, git("merge-base", current, "origin/main", cwd=wt)
                     record.update(head=head, fork=fork)
-                process = launch(wt, fork, port, log, pid_file)
+                process = launch(wt, fork, port, log, pid_file, lock)
                 if process is not None:
                     record.update(started=True, pid=process.pid)
                 continue
-            own_claim = f"{CLAIM_PREFIX}{os.getpid()}"
+            own_claim = claim_for(os.getpid())
             if (pid == CLAIMING and process is not None and process.poll() is not None
                     and claim_text(pid_file) == own_claim):
                 drop_claim(pid_file, own_claim)

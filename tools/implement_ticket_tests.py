@@ -15,6 +15,8 @@ gh and git show afterwards.
 """
 from __future__ import annotations
 
+import ast
+import fcntl
 import importlib.util
 import json
 import os
@@ -576,7 +578,9 @@ class Check(Harness):
     def test_a_tool_killed_once_it_has_launched_the_check_leaves_the_check_named(self):
         """The check names itself in the pid file, so a tool killed after launching it leaves no
         claim naming the dead tool, which a later call would clear and start a second check over.
-        The file is aged past EMPTY_CLAIM, so a claim left by the dead tool would read as stale."""
+        The file is aged past EMPTY_CLAIM, so a claim left by the dead tool would read as stale.
+        The kill lands once the check runs, after it has named itself: no case can time it inside
+        the window between Popen and the naming, which the young-claim case stands in for."""
         head = commit(self, "tools/thing.py")
         self.behave('sleep 3\necho "check: pass: stub"\n')
         tool = subprocess.Popen([sys.executable, "-I", str(self.checkout / TOOL), "check", "7"],
@@ -593,13 +597,25 @@ class Check(Harness):
         os.utime(pid_file, (old, old))
         code, record, verdict, _ = self.tool("check", "7")
         self.assert_verdict(code, verdict, "check", 0)
-        self.assertEqual((head, False, "pass"), (record["head"], record["started"], record["state"]))
+        self.assertEqual((head, False, "pass"),
+                         (record["head"], record["started"], record["state"]))
         self.assertEqual(1, self.runs())
 
     def test_a_young_claim_whose_writer_is_gone_is_waited_on(self):
         """A claim whose writer died after launching the check, before the check named itself."""
         commit(self, "tools/thing.py")
         (self.log_dir() / "check.pid").write_text(f"claim {self.gone_pid()}\n")
+        code, record, verdict, _ = self.tool("check", "7", env={"IMPLEMENT_TICKET_WAIT": "1"})
+        self.assert_verdict(code, verdict, "check", 2, "still running")
+        self.assertEqual(("running", False, 0), (record["state"], record["started"], self.runs()))
+
+    def test_an_old_claim_whose_writer_lives_is_waited_on(self):
+        """A call that claimed long ago and still lives is watching the check it started."""
+        commit(self, "tools/thing.py")
+        claim = self.log_dir() / "check.pid"
+        claim.write_text(f"claim {os.getpid()}\n")
+        old = time.time() - 60
+        os.utime(claim, (old, old))
         code, record, verdict, _ = self.tool("check", "7", env={"IMPLEMENT_TICKET_WAIT": "1"})
         self.assert_verdict(code, verdict, "check", 2, "still running")
         self.assertEqual(("running", False, 0), (record["state"], record["started"], self.runs()))
@@ -649,6 +665,57 @@ class Release(Harness):
         code, record, verdict, _ = self.tool("release", "7", env={"GH_FAIL": "1"})
         self.assert_unjudged(code, record, verdict, "release", "could not reach GitHub")
         self.assertEqual(["case"], self.assignees())
+
+
+def launcher_source() -> str:
+    """The tool's LAUNCHER, read from its source rather than by importing the tool."""
+    tree = ast.parse((ROOT / TOOL).read_text())
+    for node in tree.body:
+        names = [getattr(target, "id", None) for target in getattr(node, "targets", [])]
+        if isinstance(node, ast.Assign) and names == ["LAUNCHER"]:
+            return ast.literal_eval(node.value)
+    raise AssertionError("tools/implement_ticket.py defines no LAUNCHER")
+
+
+class Launcher(unittest.TestCase):
+    """The check's first act, run alone: the one step of the claim that a case driving the tool
+    cannot time, since it races the tool's own polling."""
+
+    def setUp(self):
+        scratch = tempfile.TemporaryDirectory(prefix="implement-launcher-")
+        self.addCleanup(scratch.cleanup)
+        self.dir = pathlib.Path(scratch.name)
+        self.pid_file, self.lock = self.dir / "check.pid", self.dir / "check.lock"
+        self.out = self.dir / "out"
+
+    def launch(self, claim: str) -> subprocess.Popen:
+        return subprocess.Popen([sys.executable, "-I", "-c", launcher_source(), str(self.pid_file),
+                                 str(self.lock), claim, "sh", "-c", f'echo $$ > "{self.out}"'],
+                                env={"PATH": "/usr/bin:/bin"})
+
+    def test_the_check_names_itself_under_the_lock_and_then_runs_as_that_pid(self):
+        self.pid_file.write_text("claim 1\n")
+        with open(self.lock, "a") as held:
+            fcntl.flock(held, fcntl.LOCK_EX)
+            process = self.launch("claim 1")
+            time.sleep(0.5)
+            self.assertEqual("claim 1\n", self.pid_file.read_text())
+            self.assertFalse(self.out.exists())
+        self.assertEqual(0, process.wait(timeout=30))
+        self.assertEqual(f"{process.pid}\n", self.pid_file.read_text())
+        self.assertEqual(f"{process.pid}\n", self.out.read_text())
+
+    def test_a_check_whose_claim_was_cleared_exits_unrun(self):
+        """A call cleared the starter's claim as stale and may have started its own check."""
+        for held in ("claim 2\n", None):
+            if held is None:
+                self.pid_file.unlink()
+            else:
+                self.pid_file.write_text(held)
+            self.assertEqual(3, self.launch("claim 1").wait(timeout=30))
+            self.assertFalse(self.out.exists())
+            self.assertEqual(held, self.pid_file.read_text() if held else None)
+            self.assertEqual(held is None, not self.pid_file.exists())
 
 
 if __name__ == "__main__":
