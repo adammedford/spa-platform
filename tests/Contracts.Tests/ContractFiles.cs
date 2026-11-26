@@ -38,6 +38,7 @@ internal static class ContractFiles
         "http-contract.md",
         "request-gate.md",
         "upstream-contract.md",
+        "identity-provider-contract.md",
         "s3-layout.md",
         "telemetry.md",
         "resource-tags.md",

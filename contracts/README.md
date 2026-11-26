@@ -25,6 +25,7 @@ decision made or revised after the 11 October 2026 export belongs in `docs/adr/`
 | Browser contract | [`http-contract.md`](http-contract.md) | G1a | Workstreams 3, 4, 5, 6 |
 | Request gate | [`request-gate.md`](request-gate.md) | G1a, with the browser contract | Workstream 4, and workstream 6's negative suite |
 | Upstream contract | [`upstream-contract.md`](upstream-contract.md) | G1a | Workstream 4 and the mock API |
+| Identity provider contract | [`identity-provider-contract.md`](identity-provider-contract.md) | On landing, after G6's tag | Whoever runs the identity provider an app's issuer names, and whoever registers an app's or a fragment's OAuth client at it |
 | S3 layout | [`s3-layout.md`](s3-layout.md) | G1a | Workstreams 1 and 2 |
 | Infrastructure outputs | [`infra-outputs.schema.json`](infra-outputs.schema.json), [`infra-outputs.example.json`](infra-outputs.example.json) | G1a | `spactl`, workstream 1, the scripts, workstream 6 |
 | Resource tags | [`resource-tags.md`](resource-tags.md) | G1a | Workstream 1, `teardown.sh`, workstream 6 |
@@ -36,6 +37,7 @@ decision made or revised after the 11 October 2026 export belongs in `docs/adr/`
 
 The integrator writes every file in this table. Workstreams 1 and 6 propose the infrastructure
 outputs and telemetry contracts, and workstream 1 proposed the resource tags; they do not edit them.
+Workstream 3 proposes the identity provider contract.
 
 `resource-tags.md` is the one file here that did not come from `docs/plan/02-contracts.md`. The plan
 names "the platform tag" three times without defining it, and three parties have to agree on the
@@ -68,6 +70,7 @@ The unit's:
 - `infra-outputs.schema.json`, with `infra-outputs.example.json`
 - `http-contract.md`
 - `upstream-contract.md`
+- `identity-provider-contract.md`
 - `s3-layout.md`
 - `telemetry.md`
 
