@@ -193,8 +193,10 @@ internal sealed partial class SessionEnd(
     /// sends the request and reads the answer. Nothing of the protocol is written here. A fragment's
     /// scheme carries the fragment's client and the shell's issuer, whose credential style governs
     /// (ADR-0017 decision 2: Cognito authenticates a client with a secret by a Basic header only).
+    /// <para>The one revocation call: a refresh whose write finds the session gone revokes the successor
+    /// it obtained through it too (<see cref="AccessTokenSource"/>, #1544).</para>
     /// </summary>
-    private async Task<string> RevokeAsync(AppDefinition app, string scheme, string refreshToken, CancellationToken deadline)
+    internal async Task<string> RevokeAsync(AppDefinition app, string scheme, string refreshToken, CancellationToken deadline)
     {
         try
         {
