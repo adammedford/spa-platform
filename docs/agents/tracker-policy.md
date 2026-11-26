@@ -330,8 +330,9 @@ empty, and the comment file before it says why.
 
 **What waits on Adam.** A decision comment, a body rewrite, a `ready-for-agent` label, a close as
 not planned and an answer given for him carry `decide: yes`. A body rewrite is two files: the dated
-comment preserving the previous body verbatim, then the edit, posted only while the issue's body
-still matches that copy. A `Confirm` is never included among these delegated tracker writes:
+comment holding the changed paragraphs as a diff, then the edit, each posted only while that diff,
+applied to the issue's body, gives the edit's body exactly; the previous body verbatim is the
+issue's edit history. A `Confirm` is never included among these delegated tracker writes:
 confirmation remains Adam's act. A draft prepared for him follows
 `docs/agents/landing-work.md` -> "Drafting a Confirm comment", including its parser check.
 

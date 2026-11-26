@@ -10,6 +10,9 @@
   the morning pass runs no Apply, and #1082 holds the current fact.
   **Amended 2026-11-13 by [ADR-0037](0037-foreground-confirm-posting.md):** decision 2
   defines when a foreground session may post the human's confirmation.
+  **Amended 2026-11-25 by [ADR-0044](0044-a-body-rewrite-posts-its-changed-paragraphs-as-a-diff.md):**
+  decision 6's comment carries the changed paragraphs as a diff, and the previous body verbatim is
+  the issue's edit history; the rest of decision 6 is unchanged.
 - **Date:** 2026-10-17
 - **Deciders:** integrator
 - **Plan ref:** No decision row. The grill of #78 (the morning workflow spec), questions Q1, Q2, Q7
