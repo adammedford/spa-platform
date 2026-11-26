@@ -263,6 +263,22 @@ public sealed class FragmentsDriver : IAsyncDisposable
     }
 
     /// <summary>
+    /// O9 (<see cref="HeaderLimitDrive"/>): the cap from the platform configuration, the live entry and the shell's
+    /// CSP read, and the padding searches through a fragment's API route by the driver's raw client and each
+    /// engine's <c>fetch</c>. It writes nothing to the registry (#1411).
+    /// </summary>
+    public async Task<Driven<HeaderLimitRecord>> HeaderLimitsAsync(CancellationToken ct)
+    {
+        int cap = HeaderLimitDrive.CapOf(await File.ReadAllTextAsync(PlatformConfig("O9 records the cap, Policy:FragmentsPerShell"), ct));
+        HarnessAppUrl shell = new(stack.App(Shell).Origin);
+        CellSessions sessions = new(this);
+        CellHeaderLimits cell = new(Readers, Shell, shell, stack.SendRawCancellableAsync, sessions.SignInAsync, cap);
+        (HeaderLimitRecord record, IReadOnlyList<Step> steps, IReadOnlyList<string> agents) =
+            await new HeaderLimitDrive(cell, engines ??= new PlaywrightEngines(stack, stack.App(Shell)), shell).RunAsync(ct);
+        return new Driven<HeaderLimitRecord>(await ContextAsync(agents, [], ct), steps, record);
+    }
+
+    /// <summary>
     /// O1 (<see cref="FragmentsBrowserRows.RedirectsAsync"/>): the shell's entry written at each N by spactl in this
     /// process over the cell's bucket, from the fixture definition the seed's fragment step writes, and put back
     /// at the N the live registry gave it.
