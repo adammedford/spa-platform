@@ -77,7 +77,9 @@
 // report lists it under that request, its dependant skips at once naming it, and neither counts as a failure; a red
 // check whose request blocks nothing or another ticket, a green check with a self-blocking request, and a self-blocking
 // request with no verdict line keep today's routing. Every house-rules prompt sends docker to ~/.docker/bin before an agent may call it
-// absent (#742). No agent, gh or git call is made.
+// absent (#742). No prompt names run_in_background or asks for a sub-agent, since a workflow agent has no Agent
+// tool, and every review prompt asks for the Standards and Spec axes in turn, as two reports (#1475). No agent, gh or git
+// call is made.
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -3095,6 +3097,37 @@ const forkOf = (prompt) => (/Otherwise fork from [^:]+: forkSha = (\S+?)\. Take 
     if (!line.includes('default_int_handler')) fail(`#1532: the check started by the closing prompt's command logs ${JSON.stringify(line || 'nothing')}, not SIGINT at default_int_handler`)
     fs.rmSync(dir, { recursive: true, force: true })
   }
+}
+
+// 54. No prompt asks for a tool its agent lacks (#1475). A workflow agent has no Agent tool, yet on 2026-11-22 the
+//     implement and review prompts told it to launch sub-agents with run_in_background: false, and the #1349 and
+//     #1350 reviewers each said "No sub-agent tool was available" before doing both axes themselves. No prompt names
+//     run_in_background, says "use the Agent tool", or puts a launch, spawn, start, dispatch or run within three words
+//     of a sub-agent or a background agent, and every review prompt, the second review
+//     after a conflict included, asks for the two axes in turn as two separate reports, overriding the code-review
+//     skill's parallel sub-agents. A prompt that calls a skill whose steps hand work to an agent (research's
+//     background agent, grilling's fact-finding sub-agent, tdd's hand-on to codebase-design's parallel sub-agents) carries the override that keeps the step in its session.
+{
+  const ASKS_FOR_AGENT = /run_in_background|\b(launch|spawn|start|dispatch|run)\w*\s+(?:\S+\s+){0,3}?(?:background |sub-?)agents?\b|\buse (?:the |an )?Agent tool/i
+  for (const c of allPrompts) {
+    const m = ASKS_FOR_AGENT.exec(c.prompt)
+    if (m) fail(`#1475: the ${c.label} prompt asks for a sub-agent its agent has no Agent tool to launch: ${JSON.stringify(m[0])}`)
+  }
+  const OVERRIDE = '; you have no Agent tool, so do yourself, in this session, every step the skill hands to a background agent or a sub-agent)'
+  for (const name of ['research', 'grilling', 'tdd']) {
+    const calls = allPrompts.filter((c) => c.prompt.includes(`call the Skill tool with "${name}"`))
+    if (!calls.length) fail(`#1475: no prompt calls the ${name} skill, so its override check read nothing`)
+    for (const c of calls) {
+      const at = c.prompt.indexOf(`call the Skill tool with "${name}"`)
+      if (!c.prompt.slice(at, c.prompt.indexOf(')', at) + 1).endsWith(OVERRIDE)) fail(`#1475: the ${c.label} prompt calls the ${name} skill without the override that keeps its agent steps in the session`)
+    }
+  }
+  const AXES_SENTENCE = 'You have no Agent tool, so the skill\'s two sub-agents cannot run here: do the Standards axis yourself and write its report, then the Spec axis and its report, and keep the two reports separate in your record.'
+  const reviews = allPrompts.filter((c) => c.label.startsWith('review:'))
+  if (!reviews.length) fail('#1475: no review prompt was rendered, so the axes check read nothing')
+  if (!reviews.some((c) => c.prompt.includes('This is the second review (#279)'))) fail('#1475: no second review was rendered, so the axes check did not read one')
+  if (!allPrompts.some((c) => c.label.startsWith('implement:'))) fail('#1475: no implement prompt was rendered, so the sub-agent check did not read one')
+  for (const c of reviews) if (!c.prompt.includes(AXES_SENTENCE)) fail(`#1475: the ${c.label} prompt does not ask for the Standards and Spec axes in turn, as two separate reports`)
 }
 
 // 41. The forecast run (#740): `--forecast <fixture> [script]` runs the script on a fixture preflight's --fixture
