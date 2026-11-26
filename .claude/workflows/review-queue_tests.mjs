@@ -119,7 +119,9 @@ function run(scriptArgs, served, behave = {}) {
   // resolves a thrower to null and never rejects, and whose agent() returns null for an agent that
   // dies (the workflow-authoring reference, "Script body hooks"). The stub is strict on purpose, so
   // the script's own guard turns a dying mutation agent into a row and no check rests on that promise.
-  globalThis.parallel = (fns) => Promise.all(fns.map((f) => f()))
+  // Each task's return comes back as a JSON round trip, as the Workflow tool hands it back as plain
+  // data: a Map or a Set returned from a task arrives as an object with none of its methods (#1576).
+  globalThis.parallel = (fns) => Promise.all(fns.map(async (f) => { const v = await f(); return v === undefined ? null : JSON.parse(JSON.stringify(v)) }))
   // Agents in flight now and at most, across the run: what the slot count bounds.
   // events: every agent's start and end, in order, as `start <label>` and `end <label>`.
   const flight = { now: 0, max: 0 }
