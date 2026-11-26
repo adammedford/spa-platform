@@ -194,6 +194,9 @@ internal sealed class ScriptedSessionStore(ISessionStore inner) : ISessionStore
     /// <summary>Runs before each read.</summary>
     public Func<string, Task>? BeforeGet { get; set; }
 
+    /// <summary>Runs after each read, with its key: to know a request has read the session.</summary>
+    public Func<string, Task>? AfterGet { get; set; }
+
     /// <summary>Runs before each create: to fail the login callback's.</summary>
     public Func<Task>? BeforeCreate { get; set; }
 
@@ -216,7 +219,13 @@ internal sealed class ScriptedSessionStore(ISessionStore inner) : ISessionStore
             await hook(key);
         }
 
-        return await Inner.GetAsync(key, ct);
+        SessionRecord? record = await Inner.GetAsync(key, ct);
+        if (AfterGet is { } after)
+        {
+            await after(key);
+        }
+
+        return record;
     }
 
     public async Task<bool> ReplaceAsync(string key, SessionRecord record, long expectedVersion, CancellationToken ct)

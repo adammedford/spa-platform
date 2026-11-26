@@ -81,6 +81,7 @@ internal sealed partial class AccessTokenSource(
     TimeProvider clock,
     ILogger<AccessTokenSource> logger,
     IHostApplicationLifetime lifetime,
+    SessionEnd end,
     IRefreshLeases? leases = null) : IAccessTokenSource
 {
     /// <summary>
@@ -126,9 +127,11 @@ internal sealed partial class AccessTokenSource(
         // On a fragment route the answer is that fragment's set and never the shell's (#995): host
         // resolution pins the fragment, from the same snapshot as the app (contracts/pipeline.md).
         TokenSet set = context.Features.Get<IFragmentFeature>()?.Fragment is { } fragment ? TokenSet.Of(fragment) : TokenSet.Shell;
+        Refresh refresh = new(app, key, set);
+        AccessTokenResult answer;
         try
         {
-            return await ForSetAsync(context, new Refresh(app, key, set));
+            answer = await ForSetAsync(context, refresh);
         }
         catch (SessionStoreUnavailableException e)
         {
@@ -137,6 +140,39 @@ internal sealed partial class AccessTokenSource(
             // no cookie is cleared, and the proxy's access-token step answers the result.
             StoreFailure.Note(context, e.Operation);
             return new AccessTokenResult.StoreUnavailable();
+        }
+
+        if (refresh.OrphanedRefreshToken is { } successor)
+        {
+            // ForSetAsync has returned, so the set's gate and any lease are given up: the revocation runs
+            // outside them, and the gate's hold stays within the refresh write deadline (#1544).
+            await RevokeOrphanAsync(refresh, successor);
+        }
+
+        return answer;
+    }
+
+    /// <summary>
+    /// The successor a refresh obtained and could not write because the session was gone, revoked
+    /// (contracts/http-contract.md -> "Logout", #1544): through the set's own scheme, the one the refresh
+    /// used, in the issuer's credential style, with logout's revocation call, under one fresh
+    /// <see cref="AccessTokenSourceOptions.ProviderDeadline"/> and never the request's cancellation token.
+    /// One orphaned successor line records the outcome (contracts/telemetry.md); the call answers
+    /// unauthenticated whatever it is. The scheme and its client come from the snapshot the request is
+    /// pinned to, the one the refresh used, so of that line's outcomes <c>no_scheme</c> and
+    /// <c>client_changed</c> cannot arise here.
+    /// </summary>
+    private async Task RevokeOrphanAsync(Refresh refresh, string successor)
+    {
+        using CancellationTokenSource deadline = new(options.ProviderDeadline);
+        string outcome = await end.RevokeAsync(refresh.App, refresh.Set.ChallengeScheme(refresh.App), successor, deadline.Token);
+        if (refresh.Set.Fragment is { } f)
+        {
+            FragmentOrphanRevoked(logger, refresh.App.AppId, f.FragmentId, SessionRef.Of(refresh.Key), outcome);
+        }
+        else
+        {
+            OrphanRevoked(logger, refresh.App.AppId, SessionRef.Of(refresh.Key), outcome);
         }
     }
 
@@ -482,7 +518,11 @@ internal sealed partial class AccessTokenSource(
     /// (#995 -> "Writes after a lost versioned replace"):
     /// <list type="bullet">
     /// <item>A lost replace re-reads. A null re-read (removed, expired, rebound) stops the write, which
-    /// resurrects nothing, and answers <see cref="AccessTokenResult.Unauthenticated"/>.</item>
+    /// resurrects nothing, and answers <see cref="AccessTokenResult.Unauthenticated"/>; the successor the
+    /// provider issued is revoked once the set's gate is given up (<see cref="RevokeOrphanAsync"/>,
+    /// #1544). No other end of the write revokes: a superseded or exhausted write leaves a record that
+    /// still holds the set's provider grant, and whether revoking a successor reaches its predecessor is
+    /// not established.</item>
     /// <item>The set is re-applied onto the winner only while the winner's set still holds the refresh
     /// token this refresh presented. Otherwise the refresh is superseded and drops its tokens, answering
     /// the winner's token when it is fresh, else <see cref="AccessTokenResult.FragmentLoginRequired"/>
@@ -527,7 +567,13 @@ internal sealed partial class AccessTokenSource(
 
                 if (await turn.RereadAsync() is not { } winner)
                 {
+                    // No record holds the set, removed, expired or rebound, so the successor is revoked once
+                    // the gate is given up (GetAsync, #1544). From a provider that did not rotate (T-A13),
+                    // the library's token carries the refresh token presented, which no record holds either
+                    // (Duende.AccessTokenManagement 4.2.0 keeps it when the response has none; pinned by
+                    // OrphanedSuccessorTests, decided on #1544).
                     LogWrite(refresh, "missing", attempts);
+                    refresh.OrphanedRefreshToken = token.RefreshToken?.ToString();
                     return new AccessTokenResult.Unauthenticated();
                 }
 
@@ -703,6 +749,12 @@ internal sealed partial class AccessTokenSource(
     /// <summary>One call's refresh: the app, the session's key and the token set it is for.</summary>
     private sealed record Refresh(AppDefinition App, string Key, TokenSet Set)
     {
+        /// <summary>
+        /// The successor's refresh token, when the write found the session gone: revoked once the set's
+        /// gate is given up (#1544). Null on every other path.
+        /// </summary>
+        public string? OrphanedRefreshToken { get; set; }
+
         /// <summary>A waiter's answer after the refresh it queued behind ended its set (T-D6).</summary>
         public AccessTokenResult EndedAnswer => Set.Fragment is null
             ? new AccessTokenResult.SessionEnded()
@@ -777,6 +829,14 @@ internal sealed partial class AccessTokenSource(
     [LoggerMessage(Level = LogLevel.Warning,
         Message = "No refresh lease for app {AppId}, session {SessionRef} could be held long enough to refresh, within two times to live. The session is kept.")]
     private static partial void NoLease(ILogger logger, string appId, string sessionRef);
+
+    [LoggerMessage(Level = LogLevel.Information,
+        Message = "The refresh for app {AppId}, session {SessionRef} found the session gone at its write; revoking the successor it obtained: {Outcome}.")]
+    private static partial void OrphanRevoked(ILogger logger, string appId, string sessionRef, string outcome);
+
+    [LoggerMessage(Level = LogLevel.Information,
+        Message = "The refresh for app {AppId}, fragment {FragmentId}, session {SessionRef} found the session gone at its write; revoking the successor it obtained: {Outcome}.")]
+    private static partial void FragmentOrphanRevoked(ILogger logger, string appId, string fragmentId, string sessionRef, string outcome);
 
     [LoggerMessage(Level = LogLevel.Information,
         Message = "The host is stopping, so no refresh was started for app {AppId}, session {SessionRef}. The session is kept.")]
