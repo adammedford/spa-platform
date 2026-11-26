@@ -3,7 +3,7 @@ export const meta = {
   description: 'Review every open pull request into main, or a named list, on the Standards and Spec axes, and post one comment per pull request ending in its review record',
   whenToUse: 'An integrator session, in the foreground, wants the open pull requests into main, or the ones it names, to carry a review record before tools/land.sh merges them; launched by scriptPath .claude/workflows/review-queue.js with args { repo, date, wt } and an optional prs list (the header comment has the full launch)',
   phases: [
-    { title: 'Inventory', detail: 'with no list, one queue agent lists the open pull requests into main; then one agent per pull request reads head, fork point, files, owner set, CI, citations and the comments and reviews already posted, and one agent per comment or COMMENTED review from a repository account whose body the inventory flags as holding the text of a record, a record line or a sentence quoting one, returns its body, read again by a fresh agent, a bounded number of times, when its copy comes back short or long, and, when the commit messages are more than the inventory returns in one piece, one agent per batch of them returns those messages; they judge nothing. When the latest record names another head, one range agent says whether it is an ancestor and what the commits since it touch, or, for a rebuilt head, which new commits have the tree of an old one' },
+    { title: 'Inventory', detail: 'with no list, one queue agent lists the open pull requests into main; then one agent per pull request reads head, fork point, files, owner set, CI, citations and the comments and reviews already posted, and one agent per comment or COMMENTED review from a repository account whose body the inventory flags as holding the text of a record, a record line or a sentence quoting one, returns its body, read again by a fresh agent, a bounded number of times, when its copy comes back short or long or its agent returns an error or nothing, and, when the commit messages are more than the inventory returns in one piece, one agent per batch of them returns those messages, read again the same way; they judge nothing. When the latest record names another head, one range agent says whether it is an ancestor and what the commits since it touch, or, for a rebuilt head, which new commits have the tree of an old one' },
     { title: 'Review', detail: 'two fresh agents per pull request, Standards and Spec, read the branch through origin and rebuild nothing' },
     { title: 'Mutate', detail: 'one agent per mutation, up to the cap, breaks what a test guards in a throwaway worktree, runs that test\'s project, and removes the worktree' },
     { title: 'Verdict', detail: 'one agent per pull request re-takes the severity of every finding the axes report and says merge or hold, held to the mutation rows; one comment is posted, its last line the record' },
@@ -52,14 +52,14 @@ export const meta = {
 // mutations start while another is still under review. A run starts one launch agent (#687), then at
 // most one queue agent (none with a list), then per pull request one inventory, one body agent per
 // flagged body, a comment or a COMMENTED review from an account of the repository whose body
-// RECORD_TEST flags (#1018, #1073), and a fresh one for each read again after a copy short or long,
-// up to BODY_READS reads of a body in all (#1423), one range agent when an earlier head carries a record, two axes,
-// up to maxMutationsPerPr mutations, one verdict and one post: 6 + the cap + the flagged bodies and their re-reads
+// RECORD_TEST flags (#1018, #1073), and a fresh one for each read again after a copy short or long
+// or a return of an error or nothing, up to BODY_READS reads of a body in all (#1423, #1522), one
+// range agent when an earlier head carries a record, two axes, up to maxMutationsPerPr mutations, one verdict and one post: 6 + the cap + the flagged bodies and their re-reads
 // each, 9 + those with the defaults, beside the run's launch and queue agents. RECORD_TEST
 // also flags a sentence quoting a record, so the flagged bodies can outnumber the records. A pull
 // request whose commit messages run past MESSAGES_AT_ONCE characters adds one message agent per
-// batch of that size ("Commit messages past one return" below); most add none. The
-// return's agents is the count that ran, beside the date, the base tip the run saw and the log
+// batch of that size, and one per read of a batch again, up to MESSAGE_READS reads in all ("Commit
+// messages past one return" below); most add none. The return's agents is the count that ran, beside the date, the base tip the run saw and the log
 // directory. A wide queue is kept under a session's guideline by naming pull requests or lowering the
 // cap.
 //
@@ -219,7 +219,8 @@ export const meta = {
 // MESSAGES_AT_ONCE or less. The script then has every message that did not come back whole, by
 // that length, read by message agents, in the commits' order and in batches of at most
 // MESSAGES_AT_ONCE characters, a longer message alone in its batch. A message is taken only whole: a
-// batch whose agent dies or errors, or a message short, long or missing, fails the review at the
+// batch whose agent dies or errors, or a message short, long or missing, is read again by a fresh
+// agent (#1522), and when no read within MESSAGE_READS returns it whole the review fails at the
 // inventory naming the commit, so no date or ticket is searched for in a text that is not all there.
 // They are read after the skip of a recorded head, which reads none of them.
 //
@@ -260,8 +261,11 @@ const MUTATION_CAP = A.maxMutationsPerPr || 3
 const SKIP_RECORDED = A.skipRecorded !== false
 // The characters of commit messages one agent is asked to copy into one return: the inventory when
 // every message fits, otherwise a message agent per batch. #796's body agents each returned a body
-// of 11 to 21 KB whole (#1018), and the inventory carries the rest of its return beside them.
-const MESSAGES_AT_ONCE = 16000
+// of 11 to 21 KB whole (#1018), but on 2026-11-24 returns of 10,043 and 14,990 characters came back
+// as stand-ins (#1522), so a batch is kept under the smaller of those, at the cost of about twice
+// the message agents on a long landing. A body is one return at any size, so bodies are covered only
+// by being read again (BODY_READS).
+const MESSAGES_AT_ONCE = 8000
 // The run's directory under the git-ignored scratch log (.gitignore: .scratch/*/log/). It is the only
 // place the run writes in the main checkout, apart from git's own bookkeeping for fetches and worktrees.
 const LOG = `${REPO}/.scratch/review-queue/log/${DATE}`
@@ -704,9 +708,10 @@ OUTPUT FILE: ${DIR(n)}/inventory.json
 8. Write the whole result as JSON to the OUTPUT FILE, then return it. error is "" when nothing stopped you.`
 
 // One flagged comment's or review's body, read whole by an agent of its own (#1018).
-// A read after the first (k > 1) follows one whose copy ran missed characters, not the inventory's
-// count (BODY_READS below, #1423), and writes a file of its own.
-const bodyPrompt = (n, e, review, k = 1, missed = null) => `Read one ${review ? 'review' : 'comment'} on pull request #${n} and return its body whole. Read and report; judge nothing.${k > 1 ? ` This is read ${k}: the copy before it ran ${missed} characters, not ${e.length}, so read the body from gh again and copy it whole.` : ''}
+// A read after the first (k > 1) follows one that did not return the body whole, which missed says
+// (missedBy below: a copy short or long, #1423, or an error or nothing, #1522), and writes a file of
+// its own.
+const bodyPrompt = (n, e, review, k = 1, missed = null) => `Read one ${review ? 'review' : 'comment'} on pull request #${n} and return its body whole. Read and report; judge nothing.${k > 1 ? ` This is read ${k}: the read before it ${missed}, so read the body from gh again and return it whole in the body field, not a pointer to the OUTPUT FILE.` : ''}
 
 ${HOUSE}
 
@@ -716,12 +721,14 @@ OUTPUT FILE: ${DIR(n)}/body-${e.id}${k > 1 ? `-read-${k}` : ''}.json
 2. body: the JSON's body field, its decoded value byte for byte, not --jq's printed form, which adds a newline. It runs ${e.length} characters before any whitespace at its end; copy every one, and never a summary, an elision or a stand-in: the script counts them and fails the review on a body that is short or long. If gh cannot be reached, body is "" and error says why.
 3. Write the whole result as JSON to the OUTPUT FILE, then return it. error is "" when nothing stopped you.`
 
-// One batch of commit messages, read whole by an agent of its own (MESSAGES_AT_ONCE above).
-const messagesPrompt = (n, batch, i) => `Read ${batch.length} commit message(s) of pull request #${n} and return each whole. Read and report; judge nothing.
+// One batch of commit messages, read whole by an agent of its own (MESSAGES_AT_ONCE above). A read
+// after the first (k > 1) asks for those of batch i that the read before it did not return whole,
+// which missed says (MESSAGE_READS below, #1522), and writes a file of its own.
+const messagesPrompt = (n, batch, i, k = 1, missed = null) => `Read ${batch.length} commit message(s) of pull request #${n} and return each whole. Read and report; judge nothing.${k > 1 ? ` This is read ${k}: the read before it ${missed}, so read them from git again and return each whole in the messages field, not a pointer to the OUTPUT FILE.` : ''}
 
 ${HOUSE}
 
-OUTPUT FILE: ${DIR(n)}/messages-${i}.json
+OUTPUT FILE: ${DIR(n)}/messages-${i}${k > 1 ? `-read-${k}` : ''}.json
 
 1. \`git -C ${REPO} fetch origin --tags\`. The commits, each with the characters its message runs before any whitespace at its end:
 ${batch.map((c) => `COMMIT: ${c.sha} ${c.length}`).join('\n')}
@@ -1531,11 +1538,17 @@ const review = async (n) => {
 // record came back as 10,587 characters in one run and 13,724 in the next, so neither got past the
 // inventory. Such a body is read again by a fresh agent, up to BODY_READS reads in all, inside its
 // own task so each read takes a slot, and the reason above is returned only when no read came back
-// whole. An agent that returns nothing or an error, or throws, is no miscopy and fails at once, as
-// before. Each read after the first has a label and OUTPUT FILE of its own, so the log keeps every copy.
+// whole. A read whose agent returns nothing or an error, or throws, is read again the same way
+// (#1522): on 2026-11-24 #1521's 10,043-character record was read and written to its OUTPUT FILE
+// whole three times, and each agent returned {"body":"FILE","error":"PLACEHOLDER"} in place of it,
+// which the script cannot tell from a gh it could not reach. Each read after the first has a label
+// and OUTPUT FILE of its own, so the log keeps every copy.
 const BODY_READS = 3
 const TRAILING_SPACE = /[ \t\r\n]+$/
 const codePoints = (s) => Array.from(s.replace(TRAILING_SPACE, '')).length
+// What a read's agent gave in place of the text it was asked for, for the next read's prompt to
+// name: an error, nothing, or a copy of `got` characters where `want` were counted.
+const missedBy = (b, got, want) => (b && b.error ? `returned the error ${JSON.stringify(b.error)} in place of it` : !b || got === null ? 'returned nothing' : `ran ${got} characters, not ${want}`)
 const readBodies = async (n, inv) => {
   const wanted = [
     ...(inv.comments || []).map((e) => ({ e, review: false })),
@@ -1548,18 +1561,19 @@ const readBodies = async (n, inv) => {
     const label = `inventory:${n}:body:${e.id}${k > 1 ? `:read-${k}` : ''}`
     try { return await run(bodyPrompt(n, e, review, k, missed), { label, phase: 'Inventory', schema: BODY }) } catch (err) { return { body: '', error: `its agent threw: ${thrownReason(err)}` } }
   }
+  const textOf = (b) => (b && typeof b.body === 'string' ? b.body : null)
   const got = await parallel(wanted.map(({ e, review }) => async () => {
     let b = null
     for (let k = 1; k <= BODY_READS; k++) {
-      b = await readOnce(e, review, k, b && codePoints(b.body))
-      if (!b || typeof b.body !== 'string' || b.error || codePoints(b.body) === e.length) return b
+      b = await readOnce(e, review, k, k > 1 ? missedBy(b, textOf(b) === null ? null : codePoints(textOf(b)), e.length) : null)
+      if (textOf(b) !== null && !b.error && codePoints(b.body) === e.length) return b
     }
     return b
   }))
   for (const [i, { e }] of wanted.entries()) {
     const b = got[i]
-    if (!b || typeof b.body !== 'string') return `the body agent for ${e.html_url} returned nothing`
-    if (b.error) return `the body of ${e.html_url} could not be read: ${b.error}`
+    if (!b || typeof b.body !== 'string') return `the body agent for ${e.html_url} returned nothing in ${BODY_READS} reads`
+    if (b.error) return `the body of ${e.html_url} could not be read in ${BODY_READS} reads, the last returning: ${b.error}`
     const length = codePoints(b.body)
     if (length !== e.length) return `the body of ${e.html_url} did not come back whole in ${BODY_READS} reads, the last ${length < e.length ? 'abridged' : 'altered'}: ${length} of the ${e.length} characters the inventory counted, so its record, follow-ups and mutation rows are not read from it`
   }
@@ -1570,9 +1584,14 @@ const readBodies = async (n, inv) => {
 // return" in the header): each one the inventory did not return whole, by the length it counted, is
 // read by a message agent and written into its entry. The batches keep the commits' order and hold at
 // most MESSAGES_AT_ONCE characters each, a longer message alone. As with a body, a message is taken
-// only whole, a throw is caught per agent, and the reason returned names the commit, so the review
-// fails at the inventory. null when every message is whole, which costs no agent when the inventory
-// returned them all.
+// only whole, a throw is caught per agent, and a batch whose agent returns nothing or an error, or
+// leaves a message out or copies one short or long, is read again by a fresh agent, up to
+// MESSAGE_READS reads in all (#1522): on 2026-11-24 the agent for #1521's twelve messages wrote them
+// whole to messages-1.json and returned {"messages":[],"error":"PLACEHOLDER"}, in two runs. When no
+// read returns a message whole, the reason names the batch by its first commit, or the commit, and
+// the last read's fault, so the review fails at the inventory. null when every message is whole,
+// which costs no agent when the inventory returned them all.
+const MESSAGE_READS = 3
 const messageBatches = (wanted) => {
   const batches = []
   let size = 0
@@ -1590,24 +1609,44 @@ const readMessages = async (n, inv) => {
     if (!Number.isInteger(c.length) || c.length < 0) return `the commit message of ${c.sha} has no length to read it by`
   }
   const batches = messageBatches(all.filter((c) => typeof c.message !== 'string' || codePoints(c.message) !== c.length))
-  const got = await parallel(batches.map((batch, i) => async () => {
-    try { return await run(messagesPrompt(n, batch, i + 1), { label: `inventory:${n}:messages:${i + 1}`, phase: 'Inventory', schema: MESSAGES }) } catch (err) { return { messages: [], error: `its agent threw: ${thrownReason(err)}` } }
-  }))
-  const read = []
-  for (const [i, batch] of batches.entries()) {
-    const b = got[i]
-    const named = batch.length > 1 ? `the commit messages of ${batch[0].sha} and the ${batch.length - 1} after it` : `the commit message of ${batch[0].sha}`
-    if (!b || !Array.isArray(b.messages)) return `the message agent for ${named} returned nothing`
-    if (b.error) return `${named} could not be read: ${b.error}`
-    for (const c of batch) {
-      const m = b.messages.find((x) => x && x.sha === c.sha)
-      if (!m || typeof m.message !== 'string') return `the commit message of ${c.sha} did not come back from its message agent`
-      const length = codePoints(m.message)
-      if (length !== c.length) return `the commit message of ${c.sha} came back ${length < c.length ? 'abridged' : 'altered'}: ${length} of the ${c.length} characters the inventory counted, so no date or ticket is read from it`
-      read.push([c, m.message])
-    }
+  const readOnce = async (batch, i, k, missed) => {
+    const label = `inventory:${n}:messages:${i}${k > 1 ? `:read-${k}` : ''}`
+    try { return await run(messagesPrompt(n, batch, i, k, missed), { label, phase: 'Inventory', schema: MESSAGES }) } catch (err) { return { messages: [], error: `its agent threw: ${thrownReason(err)}` } }
   }
-  for (const [c, message] of read) c.message = message
+  // Each batch in a task of its own: a read takes only the messages it returns whole, and the next
+  // read asks for the rest, so a batch read again is no larger than what is still missing. An agent
+  // that returns nothing or an error is a read that took none.
+  const got = await parallel(batches.map((batch, i) => async () => {
+    const read = new Map()
+    let b = null
+    let missed = null
+    for (let k = 1; k <= MESSAGE_READS && read.size < batch.length; k++) {
+      const pending = batch.filter((c) => !read.has(c.sha))
+      b = await readOnce(pending, i + 1, k, missed)
+      if (!b || !Array.isArray(b.messages)) { missed = 'returned nothing'; continue }
+      if (b.error) { missed = `returned the error ${JSON.stringify(b.error)} in place of them`; continue }
+      for (const c of pending) {
+        const m = b.messages.find((x) => x && x.sha === c.sha)
+        if (m && typeof m.message === 'string' && codePoints(m.message) === c.length) read.set(c.sha, m.message)
+      }
+      missed = 'did not return each of them whole'
+    }
+    return { b, read }
+  }))
+  for (const [i, batch] of batches.entries()) {
+    // parallel() makes a task that dies a null (#1076): a batch with no read at all.
+    const { b, read } = got[i] || { b: null, read: new Map() }
+    if (read.size === batch.length) continue
+    const named = batch.length > 1 ? `the commit messages of ${batch[0].sha} and the ${batch.length - 1} after it` : `the commit message of ${batch[0].sha}`
+    if (!b || !Array.isArray(b.messages)) return `the message agent for ${named} returned nothing in ${MESSAGE_READS} reads`
+    if (b.error) return `${named} could not be read in ${MESSAGE_READS} reads, the last returning: ${b.error}`
+    const c = batch.find((x) => !read.has(x.sha))
+    const m = b.messages.find((x) => x && x.sha === c.sha)
+    if (!m || typeof m.message !== 'string') return `the commit message of ${c.sha} did not come back from its message agent in ${MESSAGE_READS} reads`
+    const length = codePoints(m.message)
+    return `the commit message of ${c.sha} did not come back whole in ${MESSAGE_READS} reads, the last ${length < c.length ? 'abridged' : 'altered'}: ${length} of the ${c.length} characters the inventory counted, so no date or ticket is read from it`
+  }
+  for (const [i, batch] of batches.entries()) for (const c of batch) c.message = got[i].read.get(c.sha)
   return null
 }
 const reviewOne = async (n, res, at) => {
