@@ -143,12 +143,12 @@ printf '%s\\n' "$*" >> "$GH_LOG"
 class RunBlock(Case):
     """The workflow's run block, under bash, against a gh that only logs."""
 
-    def run_workflow(self, body: dict, number: str | None = None
+    def run_workflow(self, body: dict, number: str | None = None, gh_exit: int = 0
                      ) -> tuple[subprocess.CompletedProcess, list[str]]:
         bin_dir = self.dir / "bin"
         bin_dir.mkdir()
         gh = bin_dir / "gh"
-        gh.write_text(FAKE_GH, encoding="utf-8")
+        gh.write_text(FAKE_GH + f"exit {gh_exit}\n", encoding="utf-8")
         gh.chmod(0o755)
         log = self.dir / "gh.log"
         script = self.dir / "run.sh"
@@ -160,9 +160,11 @@ class RunBlock(Case):
         env = {"PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}", "GH_LOG": str(log),
                "GITHUB_EVENT_PATH": str(self.event(body)), "RUNNER_TEMP": str(runner_temp),
                "GH_REPO": "owner/repo", "NUMBER": number}
-        # The shell line GitHub documents for a `run:` step on Linux
+        # The shell line GitHub documents for a `run:` step with no `shell:` key on Linux, as this
+        # step is: "unspecified", `bash -e {0}`; `bash --noprofile --norc -eo pipefail {0}` is the
+        # line for an explicit `shell: bash`, so pipefail comes only from the block's own `set`
         # (https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#jobsjob_idstepsshell).
-        run = subprocess.run(["bash", "--noprofile", "--norc", "-eo", "pipefail", str(script)],
+        run = subprocess.run(["bash", "-e", str(script)],
                              cwd=ROOT, capture_output=True, text=True, env=env)
         calls = log.read_text(encoding="utf-8").splitlines() if log.exists() else []
         return run, calls
@@ -196,6 +198,13 @@ class RunBlock(Case):
         run, calls = self.run_workflow(payload("NONE", number=41), number="42")
         self.assertNotEqual(run.returncode, 0, run.stdout + run.stderr)
         self.assertEqual(calls, [])
+
+    def test_a_label_write_that_fails_fails_the_job(self):
+        # A write GitHub refused must not read as a labelled issue (CODING_STANDARDS.md, "A check
+        # fails closed").
+        run, calls = self.run_workflow(payload("NONE"), gh_exit=1)
+        self.assertEqual(len(calls), 1, calls)
+        self.assertNotEqual(run.returncode, 0, run.stdout + run.stderr)
 
 
 def top_level_block(text: str, key: str) -> dict[str, str]:
@@ -238,7 +247,10 @@ class WorkflowText(unittest.TestCase):
     def test_it_never_puts_issue_text_into_the_run_block(self):
         # The title and body are written by whoever opened the issue; expanded into a run block
         # they would run as shell.
-        self.assertNotRegex(self.text, r"github\.event\.issue\.(title|body|user)")
+        # Compared whole, so any other expression (`toJSON(github.event.issue)`, the sender's
+        # login) fails rather than passing beside a list of names to keep out.
+        self.assertEqual(sorted(re.findall(r"\$\{\{\s*(.*?)\s*\}\}", self.text)),
+                         ["github.event.issue.number", "github.repository", "github.token"])
 
 
 if __name__ == "__main__":
