@@ -224,7 +224,7 @@ public sealed class HeaderLimitsTests
     [Fact]
     public async Task A_refused_smallest_probe_gives_no_figure_anywhere_and_names_the_answer()
     {
-        // On the cell today a fragment's client is refused on /pad until the mock API admits it there (#1545's merge).
+        // A mock API that does not admit the driver's client on /pad answers 403 to the smallest probe.
         PadResponse notAdmitted = new(403, "Kestrel", "application/json", null, [], null);
         (HeaderLimitRecord record, _, IReadOnlyList<string> agents) = await DriveAsync(new FakeCell(16_350, PadHop.Alb) { Smallest = notAdmitted }, "chromium");
 

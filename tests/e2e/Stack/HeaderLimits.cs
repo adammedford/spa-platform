@@ -179,8 +179,11 @@ public sealed class HeaderLimitDrive(IHeaderLimitCell cell, IEngines engines, Ha
 {
     /// <summary>
     /// The bound of the single-header search: the largest value <c>/pad</c> answers, 1 MiB
-    /// (fixtures/MockApi/Routes.cs, <c>PadMaxTotalBytes</c>), past the ALB's 16 K single header and the
-    /// gateway client's 64 KiB, so a limit below it is found and one above it is reported as not found.
+    /// (fixtures/MockApi/Routes.cs, <c>PadMaxTotalBytes</c>), past the ALB's 16 K single header
+    /// (https://docs.aws.amazon.com/elasticloadbalancing/latest/application/load-balancer-limits.html,
+    /// "HTTP header limits") and the gateway client's 64 KiB, the default of
+    /// https://learn.microsoft.com/dotnet/api/system.net.http.socketshttphandler.maxresponseheaderslength,
+    /// so a limit below it is found and one above it is reported as not found.
     /// </summary>
     public const int SingleBound = 1_048_576;
 
