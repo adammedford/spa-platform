@@ -1615,8 +1615,11 @@ const readMessages = async (n, inv) => {
   }
   // Each batch in a task of its own: a read takes only the messages it returns whole, and the next
   // read asks for the rest, so a batch read again is no larger than what is still missing. An agent
-  // that returns nothing or an error is a read that took none.
-  const got = await parallel(batches.map((batch, i) => async () => {
+  // that returns nothing or an error is a read that took none. A task returns the messages it took as
+  // [sha, message] pairs and the Maps are rebuilt below: in #1576 a Map returned from a task came back
+  // from parallel() with no has or get. How parallel() serialises a return is undocumented, and
+  // whether its round trip is exactly JSON is unverified.
+  const got = (await parallel(batches.map((batch, i) => async () => {
     const read = new Map()
     let b = null
     let missed = null
@@ -1631,8 +1634,8 @@ const readMessages = async (n, inv) => {
       }
       missed = 'did not return each of them whole'
     }
-    return { b, read }
-  }))
+    return { b, read: [...read] }
+  }))).map((g) => (g ? { b: g.b, read: new Map(g.read) } : null))
   for (const [i, batch] of batches.entries()) {
     // parallel() makes a task that dies a null (#1076): a batch with no read at all.
     const { b, read } = got[i] || { b: null, read: new Map() }

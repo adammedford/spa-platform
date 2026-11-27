@@ -119,7 +119,12 @@ function run(scriptArgs, served, behave = {}) {
   // resolves a thrower to null and never rejects, and whose agent() returns null for an agent that
   // dies (the workflow-authoring reference, "Script body hooks"). The stub is strict on purpose, so
   // the script's own guard turns a dying mutation agent into a row and no check rests on that promise.
-  globalThis.parallel = (fns) => Promise.all(fns.map((f) => f()))
+  // Each task's return comes back as a JSON round trip. In #1576 the Workflow tool handed a Map
+  // returned from a task back with none of its methods, which this models; how parallel() serialises a
+  // return is undocumented (the workflow-authoring reference does not say), so whether the tool's round
+  // trip is exactly JSON is unverified. behave.dies: a predicate on a task's return, for a task the
+  // tool kills: the stub yields null in its place, as the tool's parallel() does for a task that dies.
+  globalThis.parallel = (fns) => Promise.all(fns.map(async (f) => { const v = await f(); return v === undefined || (behave.dies && behave.dies(v)) ? null : JSON.parse(JSON.stringify(v)) }))
   // Agents in flight now and at most, across the run: what the slot count bounds.
   // events: every agent's start and end, in order, as `start <label>` and `end <label>`.
   const flight = { now: 0, max: 0 }
@@ -3079,6 +3084,27 @@ try {
     if (env.messageReads.get(target) !== 3) fail(`#1522 a batch that errors on every read: ${target} read ${env.messageReads.get(target)} time(s) before failing, expected the bound, 3`)
     const after = env.calls.filter((c) => !c.startsWith('inventory:') && c !== 'launch')
     if (after.length || env.posted.length) fail(`#1522 a batch that errors on every read: ${after.join(', ') || 'nothing'} ran after the inventory and ${env.posted.length} comment(s) were posted, expected none`)
+  }
+
+  // A batch task that dies inside parallel() is a batch with no read at all (#1076, #1576). The tool's
+  // parallel() gives null for a task that dies, where the strict stub would reject, so behave.dies
+  // turns the task that read commit 70's batch into that null: the review fails at the inventory,
+  // its reason naming the batch's first sha as returning nothing, and nothing runs after it. A script
+  // that rebuilt each batch's Map without passing a null over would throw instead, and its stage
+  // would name no batch.
+  checks++
+  {
+    const target = C1175[70]
+    env = run({ prs: [1175] }, served1175())
+    await execute(env)
+    const batch = env.batches.find((b) => b.asked.some((c) => c.sha === target)) || { asked: [{}] }
+    const first = batch.asked[0].sha
+    env = run({ prs: [1175] }, served1175(), { dies: (v) => Boolean(v && Array.isArray(v.read) && v.read.some((e) => Array.isArray(e) && e[0] === target)) })
+    const r = resultOf(1175, await execute(env))
+    const stage = String(r.stage)
+    if (r.outcome !== 'failed' || !stage.startsWith('inventory: ') || !stage.includes(first) || !stage.includes('returned nothing in 3 reads')) fail(`a batch task that dies inside parallel(): outcome ${r.outcome} at ${JSON.stringify(r.stage)}, expected failed at the inventory naming ${first} as returning nothing in 3 reads`)
+    const after = env.calls.filter((c) => !c.startsWith('inventory:') && c !== 'launch')
+    if (after.length || env.posted.length) fail(`a batch task that dies inside parallel(): ${after.join(', ') || 'nothing'} ran after the inventory and ${env.posted.length} comment(s) were posted, expected none`)
   }
 
   // Each return is kept small enough to be copied whole (#1522). The returns that came back as
