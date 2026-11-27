@@ -81,7 +81,14 @@ public sealed record FallbackRecord(DateTimeOffset? SignedInAt, FallbackHalf? In
 public sealed record BrowserHeaderLimit(string UserAgent, int? LargestAcceptedBytes);
 
 /// <summary>O9 (#961 O9): the merged CSP's size at the cap, and the largest response header each layer accepted.</summary>
-public sealed record HeaderLimitRecord(int? Cap, int? MergedCspBytes, int? AlbLargestAcceptedBytes, int? KestrelLargestAcceptedBytes, IReadOnlyList<BrowserHeaderLimit> Browsers);
+public sealed record HeaderLimitRecord(int? Cap, int? MergedCspBytes, int? AlbLargestAcceptedBytes, int? KestrelLargestAcceptedBytes, IReadOnlyList<BrowserHeaderLimit> Browsers)
+{
+    /// <summary>
+    /// What the drive saw beside the figures (#1530): each search's boundary and the hop that refused past
+    /// it, the whole block's figure, and why a figure is empty. The row's seen lines carry them.
+    /// </summary>
+    public IReadOnlyList<string> Lines { get; init; } = [];
+}
 
 /// <summary>One O12 case (#961 O12): the fragment, its entry's name, whether the import loaded, and the chunk's resolved path.</summary>
 public sealed record EntryImport(string FragmentId, string Entry, bool? Loaded, string? ChunkPath);
@@ -489,7 +496,7 @@ public static partial class FragmentsObserver
     /// <summary>O9 (record): the merged CSP's size at the cap, and the ALB's, Kestrel's and every named browser's largest accepted header.</summary>
     public static RowResult HeaderLimits(HeaderLimitRecord record, IReadOnlyList<string> userAgents)
     {
-        List<string> seen = [];
+        List<string> seen = [.. record.Lines];
         List<string> missing = [];
         if (record.Cap is null)
         {
