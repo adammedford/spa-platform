@@ -132,11 +132,30 @@ public sealed class FragmentsDriver : IAsyncDisposable
         return new Driven<RefreshContention>(await ContextAsync([], [], ct), steps, record);
     }
 
+    /// <summary>
+    /// O3 (<see cref="SuccessorRace"/>) on the shell's first live fragment with an API, attempt by attempt. The
+    /// race needs the logout and the refresh on two tasks, so a service whose desired count is under two is
+    /// refused, naming it, before anything is sent: the sitting sets the count, as row 4's does (#1382).
+    /// </summary>
+    public async Task<Driven<SuccessorRecord>> SuccessorAsync(int attempt, CancellationToken ct)
+    {
+        int desired = await Workloads.DesiredCountAsync(ct);
+        if (desired < 2)
+        {
+            throw new RowRefusedException($"O3 races the logout and a refresh on two gateway tasks, and the service's desired count is {desired}: set it to two or more before the row.");
+        }
+
+        LiveFragment fragment = (await Readers.LiveFragmentsAsync(Shell, ct)).FirstOrDefault(each => each.Apis.Count > 0)
+            ?? throw new InvalidOperationException($"O3 refreshes a fragment's set through its API, and {Shell}'s live entry names no fragment with one.");
+        (SuccessorRecord record, IReadOnlyList<Step> steps) = await new SuccessorRace(new CellSessions(this)).RunAsync(fragment, attempt, ct);
+        return new Driven<SuccessorRecord>(await ContextAsync([], [], ct), steps, record);
+    }
+
     /// <summary>O2's and O4's workloads over the cell's browser and tunnel.</summary>
     public FragmentsWorkloads Workloads => new(stack.Cell, Readers.Runner, new CellSessions(this));
 
     /// <summary>The cell's sessions: each sign-in a fresh Chromium profile, closed once its cookies are read.</summary>
-    private sealed class CellSessions(FragmentsDriver driver) : IFragmentsSessions
+    private sealed class CellSessions(FragmentsDriver driver) : ISuccessorSessions
     {
         private HarnessApp App => driver.stack.App(driver.Shell);
 
@@ -158,6 +177,40 @@ public sealed class FragmentsDriver : IAsyncDisposable
 
         public Task<Step> SendAsync(string name, string path, SessionCookies cookies, CancellationToken ct) =>
             driver.raw.SendAsync(name, HttpMethod.Get, App.Url(path), cookies, null, ct, "api");
+
+        /// <summary>
+        /// The shell's logout form as a raw request: <c>POST</c> with an empty form body, the fetch metadata of a
+        /// same-origin form navigation and the app's <c>Origin</c>, which the request gate asks of
+        /// <c>/bff/logout</c> (contracts/request-gate.md).
+        /// </summary>
+        public async Task<Step> LogoutAsync(string name, SessionCookies cookies, CancellationToken ct)
+        {
+            ClientTrace trace = ClientTrace.Fresh();
+            DateTimeOffset at = DateTimeOffset.UtcNow;
+            using HttpRequestMessage request = new(HttpMethod.Post, App.Url("/bff/logout"));
+            request.Headers.TryAddWithoutValidation(ClientTrace.Header, trace.Traceparent);
+            foreach ((string header, string value) in LogoutHeaders)
+            {
+                request.Headers.TryAddWithoutValidation(header, value);
+            }
+
+            request.Headers.TryAddWithoutValidation("Origin", FetchMetadata.Origin(App.Origin));
+            request.Headers.TryAddWithoutValidation("Cookie", cookies.Reveal());
+            request.Content = new FormUrlEncodedContent([]);
+            try
+            {
+                using HttpResponseMessage response = await driver.stack.SendRawCancellableAsync(request, ct);
+                return new Step(name, trace.TraceId, at, (int)response.StatusCode) { Expect = 302, Route = "bff" };
+            }
+            catch (Exception failed) when (failed is HttpRequestException or IOException or System.Net.Sockets.SocketException
+                                           || (failed is TaskCanceledException && !ct.IsCancellationRequested))
+            {
+                return Step.Failed(name, trace, at, failed) with { Expect = 302, Route = "bff" };
+            }
+        }
+
+        private static readonly (string Name, string Value)[] LogoutHeaders =
+            [("Sec-Fetch-Site", "same-origin"), ("Sec-Fetch-Mode", "navigate"), ("Sec-Fetch-Dest", "document")];
 
         public async Task<IReadOnlyList<Step>> OverlapAsync(string name, string fallbackFragment, CancellationToken ct)
         {

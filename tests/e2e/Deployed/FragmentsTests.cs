@@ -27,7 +27,8 @@ namespace Gateway.E2ETests.Deployed;
 /// <para>The drives pull the cell's levers they need and put them back (#1411's decision of 2026-11-24):
 /// O1 writes the shell's entry at each N with spactl, so <c>Policy:FragmentsPerShell</c> is raised to 6 for its
 /// run (#1011 row 1); O2 scales the gateway service to one task and two; F-T5 activates the winning fragment
-/// release. O9 pulls none: it reads the cap from <c>SPA_E2E_PLATFORM_CONFIG</c> and the live entry, and its
+/// release. O3 pulls none: it races a fragment's refresh against <c>POST /bff/logout</c> on two tasks
+/// (<see cref="SuccessorRace"/>, #1529), and refuses a service whose desired count is under two. O9 pulls none: it reads the cap from <c>SPA_E2E_PLATFORM_CONFIG</c> and the live entry, and its
 /// padding probes are GETs of the mock API's <c>/pad</c> through a fragment's API route (#1530), so it records
 /// the merged CSP only where the live entry already holds the cap's fragments: O1 puts the entry back
 /// to its start N. O1 and F-T5 read <c>SPA_E2E_PLATFORM_CONFIG</c> and the outputs document
@@ -69,9 +70,8 @@ public sealed class FragmentsTests
         await using FragmentsDriver driver = await FragmentsDriver.StartAsync();
         Step control = await driver.ControlAsync(Ct);
         RowResult result = await driver.Run.RowAsync(FragmentsBounds.O3, control,
-            (_, ct) => driver.NotDrivenAsync(new SuccessorRecord("", "", null, null),
-                "present the successor a concurrent refresh obtained to the provider after the logout: the token never leaves the gateway task, and the seam that would reach it is #1529", ct),
-            (driven, capture) => FragmentsObserver.Successor(driven.Steps, driven.Record, capture),
+            (attempt, ct) => driver.SuccessorAsync(attempt, ct),
+            (driven, capture) => FragmentsObserver.Successor(driven.Steps, SuccessorRace.WithSession(driven.Record, driven.Steps, capture), capture),
             Ct);
         result.Assert();
     }

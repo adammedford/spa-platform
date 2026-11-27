@@ -135,10 +135,11 @@ public sealed record TaskImage(string TaskId, string? Digest);
 public sealed record RollingRefusalRecord(ImageProvenance? PreFragments, ImageProvenance? Fragments, long? Revision, IReadOnlyList<TaskImage> Tasks);
 
 /// <summary>
-/// N-38's steps by name (#961 O3): <c>logout</c> on one task, <c>refresh</c> on the other, and the
-/// provider's answer to the successor after the logout, which the driver records as a probe.
+/// N-38's race (#961 O3, #1529): the session it signed in and the fragment whose set it raced. Its steps
+/// are named <c>logout</c>, on one task, and <c>refresh</c>, on the other; what each task did is read
+/// from the gateway's lines (<see cref="FragmentsObserver.Successor"/>).
 /// </summary>
-public sealed record SuccessorRecord(string SessionRef, string FragmentId, int? ProbeStatus, DateTimeOffset? ProbeAt);
+public sealed record SuccessorRecord(string SessionRef, string FragmentId);
 
 /// <summary>
 /// The fragments class's observer (#1005): each row's recording, and for the rows that read the
@@ -791,10 +792,12 @@ public static partial class FragmentsObserver
     }
 
     /// <summary>
-    /// N-38 (O3): the logout and the refresh on two tasks; the refresh obtained the fragment set's
-    /// successor while the logout ran; the logout revoked the set; and the successor was refused at the
-    /// provider after it. A successor that refreshes after the logout, or a set the logout did not
-    /// revoke, is a counterexample, failed naming both tasks.
+    /// N-38 (O3, #1529): the logout and the refresh on two tasks; the refresh obtained the fragment set's
+    /// successor while the logout ran; the logout revoked the set; no refresh of the set follows; the
+    /// refresh's write found the record gone (<c>missing</c>); and on the refresh's task the orphaned
+    /// successor line, after the logout's removal, reads <c>revoked</c>. A successor that refreshes after the
+    /// logout, a set the logout did not revoke, or an orphaned successor left unrevoked is a counterexample,
+    /// failed naming both tasks. A write that ended otherwise is the race missed, not proved.
     /// </summary>
     public static RowResult Successor(IReadOnlyList<Step> steps, SuccessorRecord record, GatewayCapture capture)
     {
@@ -806,6 +809,11 @@ public static partial class FragmentsObserver
             return RowResult.NotProved("N-38 needs a logout step and a refresh step", seen);
         }
 
+        if (string.IsNullOrEmpty(record.SessionRef))
+        {
+            return RowResult.NotProved("no session reference was read for the race's session", seen);
+        }
+
         Placement on = capture.Locate(logout);
         Placement other = capture.Locate(refresh);
         seen.Add($"logout: {on}; refresh: {other}");
@@ -815,15 +823,17 @@ public static partial class FragmentsObserver
         }
 
         GatewayEvent[] successors = [.. capture.Refreshed(record.SessionRef).Where(line => line.TaskId == other.TaskId && FragmentOf(capture, line, record.FragmentId))];
-        GatewayEvent? revocation = capture.Events.FirstOrDefault(line =>
-            line.TaskId == on.TaskId && line.Field("session_ref") == record.SessionRef && line.Field("fragment_id") == record.FragmentId && line.Field("outcome") is not null);
+        GatewayEvent[] logoutLines = [.. capture.Events.Where(line =>
+            line.TaskId == on.TaskId && line.Field("session_ref") == record.SessionRef && line.Field("outcome") is not null
+            && line.Field("msg")?.StartsWith(LogoutRevocationPrefix, StringComparison.Ordinal) == true)];
+        GatewayEvent? revocation = logoutLines.FirstOrDefault(line => line.Field("fragment_id") == record.FragmentId);
         if (revocation is null)
         {
             return RowResult.NotProved($"no logout revocation line for fragment {record.FragmentId} on {on.TaskId}", seen);
         }
 
-        DateTimeOffset revokedAt = revocation.Ts ?? revocation.Timestamp;
-        GatewayEvent? successor = successors.FirstOrDefault(line => (line.Ts ?? line.Timestamp) >= logout.At);
+        DateTimeOffset revokedAt = At(revocation);
+        GatewayEvent? successor = successors.FirstOrDefault(line => At(line) >= logout.At);
         if (successor is null)
         {
             return RowResult.NotProved($"no successor was obtained on {other.TaskId} while the logout ran", seen);
@@ -834,25 +844,66 @@ public static partial class FragmentsObserver
             return RowResult.Failed($"the logout on {on.TaskId} left fragment {record.FragmentId}'s set with outcome {revocation.Field("outcome")}, so the successor obtained on {other.TaskId} lives on", seen);
         }
 
-        if (capture.Refreshed(record.SessionRef).FirstOrDefault(line => FragmentOf(capture, line, record.FragmentId) && (line.Ts ?? line.Timestamp) > revokedAt && line != successor) is { } late)
+        if (capture.Refreshed(record.SessionRef).FirstOrDefault(line => FragmentOf(capture, line, record.FragmentId) && At(line) > revokedAt && line != successor) is { } late)
         {
             return RowResult.Failed($"the successor refreshed on {late.TaskId} after the logout on {on.TaskId} revoked the set (refresh on {other.TaskId})", seen);
         }
 
-        if (record.ProbeStatus is not { } probe || record.ProbeAt is not { } probedAt || probedAt <= revokedAt)
+        // The refresh's write line on its own task, after the successor was obtained.
+        GatewayEvent? write = OnSet(capture, other.TaskId!, record)
+            .FirstOrDefault(line => line.Field("msg")?.StartsWith(FragmentsLines.RefreshWritePrefix, StringComparison.Ordinal) == true && At(line) >= At(successor));
+        if (write is null)
         {
-            return RowResult.NotProved("the successor was not presented to the provider after the logout", seen);
+            return RowResult.NotProved($"the race was missed: no refresh write line for fragment {record.FragmentId} on {other.TaskId}", seen);
         }
 
-        // RFC 6749 section 5.2: a revoked refresh token is invalid_grant, a 400.
-        if (probe is >= 200 and < 300)
+        if (write.Field("outcome") != Missing)
         {
-            return RowResult.Failed($"the provider accepted the successor obtained on {other.TaskId} after the logout on {on.TaskId}", seen);
+            return RowResult.NotProved($"the race was missed: the refresh's write on {other.TaskId} ended {write.Field("outcome")}, not {Missing}", seen);
         }
 
-        seen.Add($"successor refused at the provider with {probe}");
-        return RowResult.Passed("the successor obtained during the logout was refused at the provider", seen);
+        seen.Add($"refresh write on {other.TaskId}: {Missing}");
+
+        // The logout writes its revocation lines and then removes the record (SessionEnd.EndAsync), so the
+        // removal follows the last of them.
+        DateTimeOffset removedAt = logoutLines.Max(At);
+        GatewayEvent? orphan = OnSet(capture, other.TaskId!, record).FirstOrDefault(line =>
+            line.Field("msg") is { } msg && msg.StartsWith(OrphanPrefix, StringComparison.Ordinal) && msg.Contains(OrphanMarker, StringComparison.Ordinal)
+            && At(line) > removedAt);
+        if (orphan is null)
+        {
+            return RowResult.NotProved($"no orphaned successor line for fragment {record.FragmentId} on {other.TaskId} after the logout's removal", seen);
+        }
+
+        seen.Add($"orphaned successor on {other.TaskId}: {orphan.Field("outcome")}");
+        if (orphan.Field("outcome") != "revoked")
+        {
+            return RowResult.Failed($"the refresh on {other.TaskId} left the successor it orphaned after the logout on {on.TaskId} with outcome {orphan.Field("outcome")}, so it lives on at the provider", seen);
+        }
+
+        return RowResult.Passed("the successor obtained during the logout was revoked by the task that orphaned it, after the logout's removal", seen);
     }
+
+    /// <summary>The lines on one task for the record's session and fragment set, which carry both fields.</summary>
+    private static IEnumerable<GatewayEvent> OnSet(GatewayCapture capture, string taskId, SuccessorRecord record) =>
+        capture.Events.Where(line => line.TaskId == taskId && line.Field("session_ref") == record.SessionRef && line.Field("fragment_id") == record.FragmentId);
+
+    private static DateTimeOffset At(GatewayEvent line) => line.Ts ?? line.Timestamp;
+
+    /// <summary>
+    /// The identity library's own wording (src/Platform.Identity): the head of SessionEnd's revocation lines,
+    /// <c>Logout for app {AppId} is removing session …</c>; the head and the marker of AccessTokenSource's
+    /// orphaned successor line, <c>The refresh for app … found the session gone at its write; revoking the
+    /// successor it obtained: {Outcome}.</c>; and the outcome its write line ends with when the record is
+    /// gone. FragmentsObserverTests reads each from those files and fails when one no longer holds it (#872's shape).
+    /// </summary>
+    public const string LogoutRevocationPrefix = "Logout for app ";
+
+    public const string OrphanPrefix = "The refresh for app ";
+
+    public const string OrphanMarker = " found the session gone at its write; revoking the successor it obtained: ";
+
+    public const string Missing = "missing";
 
     /// <summary>
     /// The registry's own wording, from src/Platform.Registry/RegistrySource.cs's error, rejection and

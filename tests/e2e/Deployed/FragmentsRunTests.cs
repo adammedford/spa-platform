@@ -135,7 +135,7 @@ public sealed class FragmentsRunTests : IDisposable
             (_, _) =>
             {
                 made++;
-                return Task.FromResult(new Driven<SuccessorRecord>(Context(), [], new SuccessorRecord("", "", null, null)));
+                return Task.FromResult(new Driven<SuccessorRecord>(Context(), [], new SuccessorRecord("", "")));
             },
             (d, c) => FragmentsObserver.Successor(d.Steps, d.Record, c),
             Ct);
@@ -182,7 +182,7 @@ public sealed class FragmentsRunTests : IDisposable
             {
                 made++;
                 await Task.Delay(TimeSpan.FromSeconds(1.2), ct);
-                return new Driven<SuccessorRecord>(Context(), [], new SuccessorRecord("", "", null, null));
+                return new Driven<SuccessorRecord>(Context(), [], new SuccessorRecord("", ""));
             },
             (d, c) => FragmentsObserver.Successor(d.Steps, d.Record, c),
             Ct);

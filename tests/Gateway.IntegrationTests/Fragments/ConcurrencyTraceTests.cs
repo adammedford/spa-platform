@@ -486,8 +486,9 @@ public sealed class ConcurrencyTraceTests
     /// A holder stuck past <c>LogoutGateBudget</c> (20 s, the write deadline): orders' refresh is granted
     /// and then stalls in its versioned replace, holding orders' gate. Logout skips that gate, logs orders
     /// <c>gate_timeout</c> and revokes nothing for it, revokes the shell's set and removes the record. The
-    /// stalled write then loses, re-reads nothing and stops: no record comes back, and the call answers
-    /// 401 <c>unauthenticated</c>. Runs the budget's 20 s on the system's timers.
+    /// stalled write then loses and re-reads nothing, so it ends <c>missing</c> and revokes the successor it
+    /// orphaned by orders' client (#1544, F-48): no record comes back, and the call answers 401
+    /// <c>unauthenticated</c>. Runs the budget's 20 s on the system's timers.
     /// </summary>
     [Fact]
     public async Task G9_O7_logout_skips_a_gate_held_past_LogoutGateBudget()
@@ -528,6 +529,11 @@ public sealed class ConcurrencyTraceTests
         Assert.Equal("unauthenticated", TwoHostShell.Code(late));
         Assert.Null(sent);
         Assert.Null(await cell.RecordAsync(Ct));
+
+        // The holder's late write revokes its own successor, the one revocation by orders' client (#1529).
+        TokenGrant successor = Assert.Single(cell.Harness.Idp.RefreshGrants, g => g.ClientId == cell.Orders.ClientId);
+        Assert.Equal(successor.RefreshTokenIssued, Assert.Single(cell.Harness.Idp.Revocations, r => r.ClientId == cell.Orders.ClientId).Token);
+        Assert.Single(cell.Harness.Log.Lines, line => line.Text.EndsWith("found the session gone at its write; revoking the successor it obtained: revoked.", StringComparison.Ordinal));
     }
 }
 
@@ -568,12 +574,13 @@ internal sealed class TwoHostShell : IAsyncDisposable
     public string Key { get; }
 
     public static async Task<TwoHostShell> StartAsync(
-        CancellationToken ct, Func<SteppedClock, TimeProvider>? idpClock = null, int fragments = 1)
+        CancellationToken ct, Func<SteppedClock, TimeProvider>? idpClock = null, int fragments = 1, string profile = "standard")
     {
         SteppedClock clock = new();
         GatewayHarness harness = await GatewayHarness.StartAsync(
             GatewayHarnessOptions.Shell(fragments) with
             {
+                Profile = profile,
                 Hosts = 2,
                 KeyRing = KeyRingSharing.OneParameterStore,
                 Clock = clock,
