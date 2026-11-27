@@ -3,15 +3,17 @@
 
 Run: python3 -I tools/implement_ticket_tests.py
 
-Every case runs a command of the tool as a subprocess, from the main checkout of a throwaway
-repository with a bare origin, in an environment that inherits nothing, as
+Every case but the Launcher cases runs a command of the tool as a subprocess, from the main
+checkout of a throwaway repository with a bare origin, in an environment that inherits nothing, as
 tools/overnight_collect_tests.py runs its own: a fake `gh` on PATH answers from a world file and logs
 every call, so no case reaches GitHub. The repository holds the tool and the rules it loads by path
 (tools/overnight_collect.py, tools/ticket_shape.py, .github/path-ownership.py, .github/touches.sh,
 OWNERSHIP.md), copied from this checkout, beside two stubs: a tools/check.sh that writes the log a
-case chooses and counts its runs, and a tools/test_reach.py that prints one fixed judgement. Each case
-asserts on the record the command writes, its verdict line and its exit code, and on what the fake
-gh and git show afterwards.
+case chooses and counts its runs, and a tools/test_reach.py that prints one fixed judgement. Each of
+those cases asserts on the record the command writes, its verdict line and its exit code, and on what
+the fake gh and git show afterwards. A case may overwrite one of the copied rules in that checkout,
+uncommitted, to make it misbehave. The Launcher cases run the tool's LAUNCHER alone, with no
+command, and assert on the pid file, what the launched command wrote and the exit code.
 """
 from __future__ import annotations
 
@@ -209,6 +211,13 @@ class Harness(unittest.TestCase):
     def log_dir(self) -> pathlib.Path:
         return self.checkout / ".scratch" / "implement" / "log" / "7"
 
+    def replace_rule(self, part: str, text: str) -> None:
+        """Overwrite one of the copied rules in the main checkout, uncommitted: the tool runs the
+        main checkout's copies."""
+        path = self.checkout / part
+        path.write_text(text)
+        path.chmod(0o755)
+
     def stop_checks(self) -> None:
         pid_file = self.log_dir() / "check.pid"
         try:
@@ -219,11 +228,11 @@ class Harness(unittest.TestCase):
 
     # --- the tool -------------------------------------------------------------------------------
 
-    def tool(self, *argv: str, env: dict | None = None):
+    def tool(self, *argv: str, env: dict | None = None, timeout: float = 120):
         """Run a command; return (exit code, record, verdict line, stdout)."""
         done = subprocess.run([sys.executable, "-I", str(self.checkout / TOOL), *argv],
                               cwd=self.checkout, env={**self.env, **(env or {})},
-                              capture_output=True, text=True, check=False, timeout=120)
+                              capture_output=True, text=True, check=False, timeout=timeout)
         lines = done.stdout.splitlines()
         self.assertTrue(lines, f"nothing on stdout; stderr: {done.stderr}")
         verdict = lines[-1]
@@ -322,6 +331,12 @@ class Read(Harness):
     def test_an_unreachable_gh_exits_2(self):
         code, record, verdict, _ = self.read(env={"GH_FAIL": "1"})
         self.assert_unjudged(code, record, verdict, "read", "could not reach GitHub")
+
+    def test_a_touches_sh_that_gives_no_answer_exits_2(self):
+        """touches.sh answers 0 or 1; any other exit is no answer, and read judges no kinds on it."""
+        self.replace_rule(".github/touches.sh", "#!/bin/bash\nexit 2\n")
+        code, record, verdict, _ = self.read()
+        self.assert_unjudged(code, record, verdict, "read", ".github/touches.sh", "exited 2")
 
     def test_a_missing_argument_exits_2_with_a_verdict(self):
         code, record, verdict, _ = self.tool("read", "7")
@@ -475,6 +490,32 @@ class Check(Harness):
                 self.assert_verdict(code, verdict, "check", 1, "A-05")
                 self.assertIn("ws6-verification", record["ownership"]["output"])
 
+    def test_a05_exiting_non_zero_fails_though_it_names_the_owner_alone(self):
+        """A-05's verdict is its exit code and the owners it names, both: a run that names the
+        right owner and still exits 1 is no pass."""
+        commit(self, "tools/thing.py")
+        self.replace_rule(".github/path-ownership.py",
+                          'print("A-05: 1 file(s), all owned by integrator.")\n'
+                          'raise SystemExit(1)\n')
+        code, record, verdict, _ = self.tool("check", "7")
+        self.assert_verdict(code, verdict, "check", 1, "A-05", "exit 1")
+        self.assertEqual((False, 1, ["integrator"]),
+                         (record["ownership"]["ok"], record["ownership"]["exit"],
+                          record["ownership"]["named"]))
+
+    def test_a_helper_that_hangs_ends_the_call_unjudged_within_its_bound(self):
+        """The judging after the wait has only the reserve left: an A-05 that never ends is
+        killed at the call's deadline, and the call exits 2 rather than pass or hang."""
+        commit(self, "tools/thing.py")
+        self.replace_rule(".github/path-ownership.py", "import time\ntime.sleep(120)\n")
+        began = time.monotonic()
+        code, record, verdict, _ = self.tool(
+            "check", "7", env={"IMPLEMENT_TICKET_WAIT": "3", "IMPLEMENT_TICKET_RESERVE": "2"},
+            timeout=60)
+        self.assertLess(time.monotonic() - began, 30)
+        self.assert_unjudged(code, record, verdict, "check", "path-ownership.py",
+                             "did not end within")
+
     def test_a_branch_that_rewrites_a05_does_not_judge_itself(self):
         """A-05 is the main checkout's copy: a branch whose own copy always passes still fails."""
         commit(self, "tools/bench/x.py")
@@ -570,6 +611,28 @@ class Check(Harness):
         self.assertEqual((True, "pass"), (record["started"], record["state"]))
         self.assertEqual(1, self.runs())
 
+    def test_a_pid_file_naming_a_gone_pid_in_another_form_is_dropped_within_the_bound(self):
+        """int() reads `0<pid>` and `<pid>` in full-width digits as the pid, but they are not the
+        text str() writes: such a file is no pid, dropped, and a check starts. Each ends within
+        its bound and does not spin on a file it cannot drop."""
+        head = commit(self, "tools/thing.py")
+        gone = str(self.gone_pid())
+        full_width = "".join(chr(ord(digit) + 0xFEE0) for digit in gone)
+        for text in (f"0{gone}", full_width):
+            with self.subTest(text=text):
+                runs = self.runs() + 1
+                (self.log_dir() / "check.log").unlink(missing_ok=True)
+                (self.log_dir() / "check.pid").write_text(f"{text}\n", encoding="utf-8")
+                began = time.monotonic()
+                code, record, verdict, _ = self.tool("check", "7",
+                                                     env={"IMPLEMENT_TICKET_WAIT": "5"},
+                                                     timeout=60)
+                self.assertLess(time.monotonic() - began, 30)
+                self.assert_verdict(code, verdict, "check", 0)
+                self.assertEqual((head, True, "pass", runs),
+                                 (record["head"], record["started"], record["state"],
+                                  self.runs()))
+
     def gone_pid(self) -> int:
         gone = subprocess.Popen(["true"])
         gone.wait()
@@ -650,14 +713,28 @@ class Release(Harness):
         self.read()
         self.tool("start", "7")
         code, record, verdict, _ = self.tool("release", "7")
-        self.assert_verdict(code, verdict, "release", 0)
+        self.assert_verdict(code, verdict, "release", 0, "#7 is unassigned")
         self.assertEqual(record, self.saved("release"))
         self.assertEqual([], self.assignees())
+        self.assertEqual([], record["assignees"])
         self.assertIn(["issue", "edit", "7", "--remove-assignee", "@me"], self.gh_calls())
         self.assertEqual((BRANCH, str(self.wt), True, True),
                          (record["branch"], record["worktree"], record["branchKept"],
                           record["worktreeKept"]))
         self.assertEqual(BRANCH, self.git("rev-parse", "--abbrev-ref", "HEAD", cwd=self.wt))
+
+    def test_release_names_another_login_that_still_holds_the_issue(self):
+        """start continues an issue another login holds when its task branch exists; removing @me
+        leaves that login, and release says so rather than that the issue is unassigned."""
+        self.git("branch", BRANCH)
+        self.set_issue(issue(assignees=[{"login": "someone"}]))
+        self.read()
+        self.tool("start", "7")
+        code, record, verdict, _ = self.tool("release", "7")
+        self.assert_verdict(code, verdict, "release", 0, "#7 is still assigned to someone")
+        self.assertNotIn("unassigned", verdict)
+        self.assertEqual(record, self.saved("release"))
+        self.assertEqual((["someone"], ["someone"]), (record["assignees"], self.assignees()))
 
     def test_an_unreachable_gh_exits_2(self):
         self.read()

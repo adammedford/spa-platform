@@ -453,6 +453,15 @@ jobs:
         # tool does not cover.
         run: python3 -I tools/test_reach_tests.py
 
+      - name: The implement harness passes a ticket's check only on the log of the head it judges, and keeps one check per issue
+        # tools/implement_ticket.py is what a foreground session building one ticket reads its
+        # gates and its tools/check.sh --full verdict from (#1563, #1564), so a check that read an
+        # earlier head's log, an A-05 that named another owner, or a second check started over a
+        # running one would pass a landing on nothing. Its companion runs each command against a
+        # throwaway origin and main checkout, with a gh double on PATH in an environment that
+        # inherits nothing and a stub check.sh, so no case reaches GitHub or runs the real check.
+        run: python3 -I tools/implement_ticket_tests.py
+
       - name: The wiz skill's redaction leaves no account id, code or secret in a post, and stops on AccessDenied
         # Every post the wiz skill makes to a ticket goes through tools/wiz_redact.py (#259), and a rule
         # that stops matching would leak into a public comment without a word. Its companion starts the

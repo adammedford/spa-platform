@@ -47,9 +47,12 @@ file naming the check (#1564); a check that finds its starter's claim already cl
 A call that finds a check running, or a claim being started, waits on it rather than starting a
 second; one running for an earlier head is waited out, and then this head's starts. A pid file
 naming a pid that is gone is stale and removed, and so is a claim once its writer is gone and
-EMPTY_CLAIM seconds have passed; a launch that ends without naming itself fails. Every call
-returns within WAIT_BOUND seconds, with state `running` when there is no verdict yet; IMPLEMENT_TICKET_WAIT may
-shorten the bound, never lengthen it. A log for the worktree's head that already has a verdict is
+EMPTY_CLAIM seconds have passed; a pid file whose text is not a pid as str() writes it (`0123`)
+is removed as no pid. A launch that ends without naming itself fails. Every call returns within
+WAIT_BOUND seconds: its wait for a verdict ends JUDGING_RESERVE seconds before that, with state
+`running` when there is no verdict yet, and every git, gh and helper it runs is given only the time
+left, so one that hangs ends the call unjudged (exit 2), never passed. IMPLEMENT_TICKET_WAIT and
+IMPLEMENT_TICKET_RESERVE may shorten the two, never lengthen them. A log for the worktree's head that already has a verdict is
 judged without a new run. The verdict passes only when the log's last line starts `check: pass:`,
 its `HEAD=` equals the worktree's HEAD, the worktree has no uncommitted or untracked change, and
 `.github/path-ownership.py <fork> <head>`, the main checkout's copy, names the ticket's owner and
@@ -57,7 +60,10 @@ no other, so a branch that edits A-05 does not judge itself. The record lists
 the changed files outside the Touches paths without failing on them, and on a red check carries what
 `tools/test_reach.py` prints for the log.
 
-release removes the assignee and records the branch and worktree it left in place.
+release removes the assignee, reads the assignees again, and records who still holds the issue,
+with the branch and worktree it left in place: it says the issue is unassigned only when nobody
+does, and names whoever still does (another login, which start may have continued under) without
+failing, since its own removal went through.
 """
 from __future__ import annotations
 
@@ -80,7 +86,8 @@ FIELDS = "number,title,state,body,labels,assignees,blockedBy,subIssuesSummary,ur
 READY = "ready-for-agent"
 DEFAULT_PORT = 5180
 # The Bash tool's limit is 600 s. A call returns within WAIT_BOUND, so its wait ends JUDGING_RESERVE
-# earlier, leaving room for A-05 and test_reach.py after it.
+# earlier, leaving room for A-05 and test_reach.py after it; run() gives every command only the time
+# left before the call's deadline, so the reserve holds (#1569's review).
 WAIT_BOUND = 540.0
 JUDGING_RESERVE = 30.0
 POLL = 0.2
@@ -122,11 +129,23 @@ def test_command(kind: str, project: str) -> list[str] | None:
 
 # --- the world: git, gh and the records -----------------------------------------------------------
 
+# When the call must have returned, by time.monotonic(): main() sets it from bound() and reserve().
+DEADLINE = float("inf")
+
+
 def run(args: list[str], cwd: pathlib.Path = ROOT, stdin: str | None = None,
         check: bool = True) -> subprocess.CompletedProcess:
+    """args run to its end, given only the time left before DEADLINE: one that does not end in it
+    is killed and nothing is judged."""
+    left = DEADLINE - time.monotonic()
+    if left <= 0:
+        raise Unjudged(f"{' '.join(args[:4])} was not run: the call's time bound has passed")
     try:
         done = subprocess.run(args, cwd=cwd, capture_output=True, text=True, input=stdin,
-                              check=False)
+                              check=False, timeout=left)
+    except subprocess.TimeoutExpired as error:
+        raise Unjudged(f"{' '.join(args[:4])} did not end within the call's time bound "
+                       f"({left:.1f} s were left), so it was killed") from error
     except OSError as error:
         raise Unjudged(f"{args[0]} could not run: {error}") from error
     if check and done.returncode != 0:
@@ -406,14 +425,23 @@ def last_lines(log: pathlib.Path, count: int = 25) -> list[str]:
         return []
 
 
-def bound() -> float:
-    """How long a call waits for a verdict: IMPLEMENT_TICKET_WAIT seconds when it is shorter, which
-    the companion uses, never longer."""
-    longest = WAIT_BOUND - JUDGING_RESERVE
+def shortened(name: str, longest: float) -> float:
+    """The environment's value of name in seconds when it is shorter than longest, which the
+    companion uses, never longer."""
     try:
-        return min(longest, max(0.0, float(os.environ.get("IMPLEMENT_TICKET_WAIT", longest))))
+        return min(longest, max(0.0, float(os.environ.get(name, longest))))
     except ValueError:
         return longest
+
+
+def bound() -> float:
+    """How long a call waits for a verdict."""
+    return shortened("IMPLEMENT_TICKET_WAIT", WAIT_BOUND - JUDGING_RESERVE)
+
+
+def reserve() -> float:
+    """How long a call has, after its wait, to judge what it waited for."""
+    return shortened("IMPLEMENT_TICKET_RESERVE", JUDGING_RESERVE)
 
 
 # The check's first act, run as `python3 -I -c LAUNCHER <pid file> <lock> <claim> <command...>`
@@ -487,13 +515,19 @@ def claim_for(pid: int) -> str:
     return f"{CLAIM_PREFIX}{pid}"
 
 
+def as_pid(text: str) -> int:
+    """The pid text names, or 0 when it names none. Only the form str() writes is a pid: `0123` or
+    a non-ASCII digit, which int() reads, would make the pid and the text drop_claim compares
+    disagree, and the file would never be dropped (#1569's review)."""
+    return int(text) if text.isascii() and text.isdigit() and str(int(text)) == text else 0
+
+
 def claim_writer(text: str) -> int | None:
     """The pid of the call whose claim text is, or None when text is no claim; 0 for a claim that
     names no pid."""
     if not text.startswith(CLAIM_PREFIX):
         return None
-    writer = text[len(CLAIM_PREFIX):]
-    return int(writer) if writer.isdigit() else 0
+    return as_pid(text[len(CLAIM_PREFIX):])
 
 
 @contextlib.contextmanager
@@ -525,7 +559,7 @@ def running_pid(pid_file: pathlib.Path) -> int | None:
         return None
     if not text and age < EMPTY_CLAIM:
         return CLAIMING
-    pid = int(text) if text.isdigit() else 0
+    pid = as_pid(text)
     if pid > 0:
         return pid
     drop_claim(pid_file, text)
@@ -581,7 +615,6 @@ def ownership(fork: str, head: str, owner: str) -> dict:
 
 
 def do_check(number: int, args) -> tuple[int, dict, str]:
-    started_at = time.monotonic()
     ticket = read_record(number, "read")
     begun = read_record(number, "start")
     if begun.get("state") not in ("new", "continued", "finished"):
@@ -593,7 +626,8 @@ def do_check(number: int, args) -> tuple[int, dict, str]:
     directory = LOG_ROOT / str(number)
     directory.mkdir(parents=True, exist_ok=True)
     log, pid_file = directory / "check.log", directory / "check.pid"
-    limit = bound()
+    # The wait ends reserve() before the call's deadline, so the judging after it has that long.
+    wait_until = DEADLINE - reserve()
     head = git("rev-parse", "HEAD", cwd=wt)
     fork = git("merge-base", head, "origin/main", cwd=wt)
     record = {"issue": number, "worktree": str(wt), "head": head, "fork": fork, "port": port,
@@ -631,24 +665,28 @@ def do_check(number: int, args) -> tuple[int, dict, str]:
                 process = launch(wt, fork, port, log, pid_file, lock)
                 if process is not None:
                     record.update(started=True, pid=process.pid)
-                continue
-            own_claim = claim_for(os.getpid())
-            if (pid == CLAIMING and process is not None and process.poll() is not None
-                    and claim_text(pid_file) == own_claim):
-                drop_claim(pid_file, own_claim)
-                record.update(state="fail", launchExit=process.returncode, tail=last_lines(log))
-                return 1, record, (f"the check ended (exit {process.returncode}) before it named "
-                                   f"itself in {pid_file}, so it never ran")
-            record["pid"] = pid
-            ours = process is not None and process.pid == pid
-            if not (process.poll() is None if ours else live(pid)):
-                drop_claim(pid_file, str(pid))   # it ended; the next pass reads its log
-                continue
-        if time.monotonic() - started_at >= limit:
+            else:
+                own_claim = claim_for(os.getpid())
+                if (pid == CLAIMING and process is not None and process.poll() is not None
+                        and claim_text(pid_file) == own_claim):
+                    drop_claim(pid_file, own_claim)
+                    record.update(state="fail", launchExit=process.returncode,
+                                  tail=last_lines(log))
+                    return 1, record, (f"the check ended (exit {process.returncode}) before it "
+                                       f"named itself in {pid_file}, so it never ran")
+                record["pid"] = pid
+                ours = process is not None and process.pid == pid
+                if not (process.poll() is None if ours else live(pid)):
+                    drop_claim(pid_file, str(pid))   # it ended; a later pass reads its log
+        # Every pass, one that launched or dropped included, reaches the bound and the sleep, so a
+        # pid file a pass cannot drop holds the call to its bound rather than spinning it (#1569's
+        # review).
+        if time.monotonic() >= wait_until:
             whose = "this head" if logged in (head, current) else f"{(logged or '?')[:12]}"
             record.update(state="running", logHead=logged, tail=last_lines(log, 5))
+            held = "being started" if pid in (None, CLAIMING) else f"pid {pid}"
             return 2, record, (f"no verdict yet: the check for {whose} is still running "
-                               f"(pid {pid}); run check again")
+                               f"({held}); run check again")
         time.sleep(POLL)
 
     head = git("rev-parse", "HEAD", cwd=wt)
@@ -697,13 +735,24 @@ def do_release(number: int, args) -> tuple[int, dict, str]:
     except Unjudged:
         begun = ticket
     gh("issue", "edit", str(number), "--remove-assignee", "@me")
+    # Read back, not assumed: start continues an issue another login holds when its task branch
+    # exists, and removing @me leaves that login assigned (#1569's review).
+    try:
+        remaining = [entry["login"] for entry in fetch_issue(number)["assignees"]]
+    except (KeyError, TypeError) as error:
+        raise Unjudged(f"the removal was sent, but gh gave #{number}'s assignees back unreadable: "
+                       f"{error}") from error
+    except Unjudged as error:
+        raise Unjudged(f"the removal was sent, but #{number}'s assignees could not be read back: "
+                       f"{error}") from error
     branch = begun.get("branch") or ticket["branch"]
     wt = begun.get("worktree") or ticket["worktree"]
     kept = run(["git", "rev-parse", "--verify", "-q", f"refs/heads/{branch}"],
                check=False).returncode == 0
-    record = {"issue": number, "branch": branch, "worktree": wt, "branchKept": kept,
-              "worktreeKept": pathlib.Path(wt).is_dir()}
-    return 0, record, (f"#{number} is unassigned; branch {branch} "
+    record = {"issue": number, "assignees": remaining, "branch": branch, "worktree": wt,
+              "branchKept": kept, "worktreeKept": pathlib.Path(wt).is_dir()}
+    held = (f"still assigned to {', '.join(remaining)}" if remaining else "unassigned")
+    return 0, record, (f"#{number} is {held}; branch {branch} "
                        f"{'kept' if kept else 'absent'}, worktree {wt} "
                        f"{'kept' if record['worktreeKept'] else 'absent'}")
 
@@ -719,6 +768,8 @@ class Parser(argparse.ArgumentParser):
 
 
 def main(argv: list[str]) -> int:
+    global DEADLINE
+    DEADLINE = time.monotonic() + bound() + reserve()
     step = argv[0] if argv and argv[0] in STEPS else "usage"
     number = None
     try:
