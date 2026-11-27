@@ -67,7 +67,6 @@ function stub(served) {
   let checks = 0
   globalThis.phase = () => {}
   globalThis.log = () => {}
-  globalThis.parallel = (fns) => Promise.all(fns.map((f) => f().catch(() => null)))
   globalThis.agent = async (prompt, opts) => {
     const label = opts.label
     calls.push({ label, prompt, opts })
@@ -146,7 +145,7 @@ try {
       ['a seam with no interface', second({ seams: [{ name: 'x', boxes: [1] }], noTest: [] })],
       ['a seam with a box as a string', second({ seams: [{ name: 'x', interface: 'y', boxes: ['1'] }] })],
       ['a noTest box with no why', second({ seams: [], noTest: [{ box: 1 }] })],
-      ['an empty seams object', second({ seams: [], noTest: [] })],
+      ['a seams object with an unknown field', second({ ...CONFIRMED, extra: 1 })],
     ]) {
       const { result, calls } = await execute(a)
       if (!result || !/^bad launch; no agent started/.test(result.halted || '') || calls.length) fail(`${label}: ${calls.length} agent(s) ran; returned ${JSON.stringify(result).slice(0, 200)}`)
@@ -216,11 +215,18 @@ try {
     const fin = await execute(second(), { start: courierReturn(RUN.startFinished) })
     if (fin.labels.join() !== 'start,check:1' || fin.result.done !== true) fail(`a finished start: ran ${fin.labels.join(', ')}, returned ${JSON.stringify(fin.result).slice(0, 200)}`)
     const other = await execute(second(), { build: { ...BUILT, headSha: 'f'.repeat(40) } })
-    if (other.result.done || other.result.stop !== 'failed' || !other.labels.includes('release')) fail(`a pass on another head: ${JSON.stringify(other.result).slice(0, 300)}`)
+    if (other.result.done || other.result.stop !== 'head-mismatch' || other.labels.includes('release') || !String(other.result.next).includes('f'.repeat(40))) fail(`a pass on another head: ran ${other.labels.join(', ')}; ${JSON.stringify(other.result).slice(0, 300)}`)
     const finOther = await execute(second(), { start: courierReturn({ ...RUN.startFinished, head: 'e'.repeat(40) }) })
-    if (finOther.result.done) fail('a finished start whose head is not the check\'s ended as done')
+    if (finOther.result.done || finOther.result.stop !== 'head-mismatch') fail(`a finished start whose head is not the check's: ${finOther.result.stop}`)
     const unexited = await execute(second(), { checks: [courierReturn(RUN.checkPass, { exit: 2 })] })
-    if (unexited.result.done) fail('a pass record with a non-zero exit ended as done')
+    if (unexited.result.done || unexited.result.stop !== 'check-unjudged') fail(`a pass record with a non-zero exit: ${unexited.result.stop}`)
+    const { head: _h, ...headless } = RUN.checkPass
+    const noHeads = await execute(second(), { start: courierReturn({ ...RUN.startFinished, head: undefined }), checks: [courierReturn(headless)] })
+    if (noHeads.result.done) fail('a finished start and a pass that both lack a head ended as done')
+    const { boxes: _b, ...boxless } = RUN.startNew
+    const noBoxes = await execute(second(), { start: courierReturn(boxless) })
+    if (noBoxes.labels.join() !== 'start' || noBoxes.result.stop !== 'start-unjudged') fail(`a start record with no boxes: ran ${noBoxes.labels.join(', ')}; ${noBoxes.result.stop}`)
+    if (!String(x.result.next).includes('wait on his word') || commands(x.result.next).some((c) => /\bgit\s+push\b|gh\s+pr\s+create/.test(c))) fail(`done's next does not leave pushing to Adam: ${x.result.next}`)
     const stuck = await execute(second(), { checks: ['checkRunning'] })
     if (stuck.result.stop !== 'check-running' || stuck.labels.filter((l) => l.startsWith('check:')).length !== 8 || stuck.labels.includes('release')) fail(`a check running at every ask: ${stuck.labels.join(', ')}; ${stuck.result.stop}`)
   }
@@ -235,6 +241,9 @@ try {
     const last = RUN.checkFail.tail[RUN.checkFail.tail.length - 1]
     if (!(Array.isArray(red.result.tail) && red.result.tail.includes(last)) || !String(red.result.next).includes(last)) fail('a red check\'s return lacks the log\'s last lines')
     if (!red.result.release || red.result.release.step !== 'release') fail('a red check\'s return lacks the release record')
+    const { log: _l, ...logless } = RUN.checkFail
+    const noLog = await execute(second(), { checks: [courierReturn(logless)] })
+    if (noLog.result.stop !== 'check-unjudged' || noLog.labels.includes('release')) fail(`a failed check record with no log: ${noLog.result.stop}`)
     const refused = await execute(second(), { start: courierReturn(RUN.startRefused) })
     if (refused.labels.join() !== 'start' || refused.result.stop !== 'start-refused' || !String(refused.result.next).includes('ready-for-agent')) fail(`a refused start: ran ${refused.labels.join(', ')}; ${JSON.stringify(refused.result).slice(0, 200)}`)
     const garbled = await execute(second(), { start: courierReturn(RUN.checkPass) })

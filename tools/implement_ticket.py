@@ -85,6 +85,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import copy
 import fcntl
 import fnmatch
 import importlib.util
@@ -363,6 +364,9 @@ def seam_problems(seams, boxes: list[str]) -> list[str]:
     if not isinstance(seams, dict) or not isinstance(seams.get("seams"), list):
         return ['the seams file holds neither {"seams": [...], "noTest": [...]} nor the word '
                 '"implementer"']
+    unknown = sorted(set(seams) - {"seams", "noTest"})
+    if unknown:
+        return [f"{', '.join(unknown)}: not a field; a seams file has seams and noTest"]
     no_test = seams.get("noTest", [])
     if not isinstance(no_test, list):
         return ["noTest is not a list"]
@@ -430,9 +434,9 @@ def do_launch(number: int, args) -> tuple[int, dict, str]:
     problems = seam_problems(seams, ticket["boxes"])
     if problems:
         return 1, record, "; ".join(problems)
-    launch_line = json.loads(json.dumps(ticket["launch"]))
-    launch_line["args"]["seams"] = seams
-    record["launch"] = launch_line
+    second = copy.deepcopy(ticket["launch"])
+    second["args"]["seams"] = seams
+    record["launch"] = second
     held = ("the implementer's own" if seams == "implementer" else
             f"{len(seams['seams'])} seam(s) and {len(seams.get('noTest', []))} box(es) with no "
             "test")
@@ -896,6 +900,8 @@ def main(argv: list[str]) -> int:
         number = args.issue
         if args.wt and step != "read":
             raise Unjudged("--wt is read's alone; later steps take it from read's record")
+        if args.port is not None and not 1024 <= args.port <= 65535:
+            raise Unjudged("--port is an integer from 1024 to 65535, as the script takes it")
         if args.port and step not in ("read", "check"):
             raise Unjudged("--port is read's and check's alone")
         if args.seams and step != "launch":

@@ -77,7 +77,6 @@ const seamsProblems = (s) => {
     if (!x || !text(x.name) || !text(x.interface) || !Array.isArray(x.boxes) || !x.boxes.length || !x.boxes.every(box)) bad.push(`seams.seams[${i}]: {name, interface, boxes}, boxes a non-empty list of 1-based box numbers`)
   })
   if (s.noTest !== undefined && !(Array.isArray(s.noTest) && s.noTest.every((x) => x && box(x.box) && text(x.why)))) bad.push('seams.noTest: a list of {box, why}')
-  if (!s.seams.length && !(s.noTest || []).length) bad.push('seams: no seam and no noTest box; the tool\'s launch prints a seams argument that covers every open box')
   return bad
 }
 const badArguments = (a) => {
@@ -224,7 +223,7 @@ const release = async (left) => {
   const command = `${TOOL} release ${ISSUE}`
   const got = await courier('release', command, 'release', 'Check')
   const record = recordOf(got, 'release')
-  return { record, command, ran: Boolean(record && record.verdict === 'pass'), left: record && record.verdict === 'pass' ? left : `${left}; but release did not report a pass, so run \`${command}\` yourself` }
+  return { record, command, left: record && record.verdict === 'pass' ? left : `${left}; but release did not report a pass, so run \`${command}\` yourself` }
 }
 
 phase('Start')
@@ -235,11 +234,11 @@ if (!begun) return garbled('start', startCommand, startGot, 'unknown: start may 
 if (begun.state === 'refused') {
   return { stop: 'start-refused', record: begun, left: 'nothing: start refused before any write', next: `start refused #${ISSUE}: ${begun.why}. Once the gate holds, run \`${TOOL} read ${ISSUE} --wt ${A.wt}\` again and launch what it prints.` }
 }
-if (!['new', 'continued', 'finished'].includes(begun.state) || startGot.exit !== 0) {
+if (!['new', 'continued', 'finished'].includes(begun.state) || startGot.exit !== 0 || !text(begun.worktree) || !text(begun.branch) || !text(begun.head) || !Array.isArray(begun.boxes)) {
   return { stop: 'start-unjudged', record: begun, left: 'unknown: see the start record', next: `start did not judge #${ISSUE}: ${begun.why || startGot.verdictLine}. Fix what it names, then relaunch ${LAUNCH_AGAIN}.` }
 }
 const WT = begun.worktree
-const BOXES = begun.boxes || []
+const BOXES = begun.boxes
 
 let build = null
 let expectedHead = begun.head
@@ -296,21 +295,22 @@ const tail = (checked.tail || []).slice(-10)
 if (checked.state === 'running') {
   return { stop: 'check-running', build, check: checked, left: `assigned, branch ${begun.branch} kept in ${WT}; the check is still running`, next: `The check is still running after ${CHECK_ASKS} asks. Run \`${checkCommand}\` until it gives a verdict, then relaunch ${LAUNCH_AGAIN}.` }
 }
-if (checked.state === 'pass' && checked.verdict === 'pass' && checkGot.exit === 0 && checked.head === expectedHead) {
+if (checked.state === 'pass' && checked.verdict === 'pass' && checkGot.exit === 0 && text(checked.head) && checked.head === expectedHead) {
   return {
     done: true, branch: begun.branch, worktree: WT, head: checked.head, fork: checked.fork, seams: SEAMS, build, check: checked,
     left: `assigned, branch ${begun.branch} at the checked head ${checked.head} in ${WT}; nothing pushed`,
-    next: `The branch is checked on ${checked.head}. The hand-over command is #1567's and not yet built: until it lands, write the pull request body and the issue's "## Answer" from this return, push the branch and open the pull request as docs/agents/landing-work.md -> "Land it" says. Then the review-queue launch, from a fresh top-level session Adam starts (docs/agents/landing-work.md -> "Launching the review"); then \`land ${ISSUE}\`.`,
+    next: `The branch is checked on ${checked.head}; nothing is pushed. The hand-over command is #1567's and not yet built, so stop here and tell Adam: pushing the branch and opening the pull request wait on his word. Then the review-queue launch, from a fresh top-level session Adam starts (docs/agents/landing-work.md -> "Launching the review"); then \`land ${ISSUE}\`.`,
   }
 }
-if (checked.state === 'pass') {
-  const r = await release('release run, branch kept')
+if (checked.state === 'pass' && checked.verdict === 'pass' && checkGot.exit === 0 && text(checked.head)) {
+  // Not a pass, and not a failure either: most likely the build misreported its head on a branch the
+  // check passed, so the issue stays assigned and the session compares the two.
   return {
-    stop: 'failed', build, check: checked, release: r.record, left: r.left, log: checked.log, tail,
-    next: `The check passed on ${checked.head}, and the build returned ${expectedHead}: a pass on another head is not a pass. Read ${checked.log}; its last lines: ${tail.join(' | ')}. Then relaunch ${LAUNCH_AGAIN}.`,
+    stop: 'head-mismatch', build, check: checked, left: `assigned, branch ${begun.branch} kept in ${WT}`,
+    next: `The check passed on ${checked.head}, and the ${build ? 'build returned' : 'start record named'} ${expectedHead}: a pass on another head is not a pass. Compare \`git -C ${WT} log --oneline ${expectedHead}...${checked.head}\`, then relaunch ${LAUNCH_AGAIN}.`,
   }
 }
-if (checked.state === 'fail') {
+if (checked.state === 'fail' && text(checked.log)) {
   const r = await release('release run, branch kept')
   return {
     stop: 'red', build, check: checked, release: r.record, left: r.left, log: checked.log, tail,

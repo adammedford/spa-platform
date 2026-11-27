@@ -837,7 +837,9 @@ class LaunchLines(Harness):
                               ({"seams": [{"name": "cli", "interface": "x", "boxes": ["1"]}]},
                                "boxes"),
                               ({"seams": [], "noTest": [{"box": 1}, {"box": 2}]}, "why"),
-                              ("everything", "implementer")):
+                              ("everything", "implementer"),
+                              ({"seams": [], "noTest": [{"box": 1, "why": "a"}, {"box": 2, "why": "b"}],
+                                "extra": 1}, "extra")):
             with self.subTest(word=word):
                 code, record, verdict, _ = self.tool("launch", "7", "--seams",
                                                      self.seams(content))
@@ -861,6 +863,8 @@ class LaunchLines(Harness):
         self.assert_unjudged(code, record, verdict, "launch", "seams file")
         code, record, verdict, _ = self.tool("start", "7", "--seams", "implementer")
         self.assert_unjudged(code, record, verdict, "start", "--seams is launch's alone")
+        code, record, verdict, _ = self.tool("read", "7", "--wt", str(self.wt), "--port", "80")
+        self.assert_unjudged(code, record, verdict, "read", "1024 to 65535")
 
 
 # --- the shared fixture -------------------------------------------------------------------------
@@ -924,7 +928,7 @@ class FixtureKeys(Harness):
 
     def test_the_fixture_says_where_it_came_from_and_holds_each_kind(self):
         self.assertIn("implement_ticket_tests.py", self.fixture["note"])
-        self.assertEqual([kind for kind, _ in implement_ticket().KINDS],
+        self.assertEqual([kind for kind, _ in load("implement_ticket").KINDS],
                          [ticket["kind"] for ticket in self.fixture["tickets"]])
         for ticket in self.fixture["tickets"]:
             self.assertIn(ticket["kind"], ticket["read"]["kinds"])
@@ -944,15 +948,6 @@ class FixtureKeys(Harness):
                 self.assert_keys(name, record, written[name])
                 self.assertEqual((record["step"], record["state"] if "state" in record else None),
                                  (written[name]["step"], written[name].get("state")))
-
-
-def implement_ticket():
-    if not hasattr(implement_ticket, "module"):
-        spec = importlib.util.spec_from_file_location("implement_ticket", ROOT / TOOL)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        implement_ticket.module = module
-    return implement_ticket.module
 
 
 def launcher_source() -> str:
