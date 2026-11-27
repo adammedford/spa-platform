@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
@@ -98,7 +99,7 @@ public sealed class GatewayHarness : IAsyncDisposable
     }
 
     /// <summary>Builds the next host's factory over the harness's shared parts; set once in <see cref="StartAsync"/>.</summary>
-    private Func<int, (GatewayFactory Factory, string? Instance, ParameterStoreStub? Store)> newHost = null!;
+    private Func<int, (GatewayFactory Factory, string? Instance, ParameterStoreStub? Store, HostSessionStore? Sessions)> newHost = null!;
 
     private int nextTarget = -1;
 
@@ -173,7 +174,7 @@ public sealed class GatewayHarness : IAsyncDisposable
     {
         options ??= new GatewayHarnessOptions();
 
-        TestIdentityProvider idp = new(options.Clock);
+        TestIdentityProvider idp = new(options.IdpClock ?? options.Clock);
         idp.EndSessionStyle = options.Profile == "cognito" ? EndSessionStyle.Cognito : EndSessionStyle.Standard;
         await idp.StartAsync(ct);
 
@@ -190,11 +191,8 @@ public sealed class GatewayHarness : IAsyncDisposable
         FakeClientSecretSource secrets = new();
         CapturedLog log = new();
 
-        Dictionary<string, string> upstreams = new(StringComparer.Ordinal)
-        {
-            ["orders"] = FetchMetadata.Origin(mockApi.BaseAddressOf("orders")),
-            ["reports"] = FetchMetadata.Origin(mockApi.BaseAddressOf("reports")),
-        };
+        Dictionary<string, string> upstreams = MockApiListeners.ToDictionary(
+            name => name, name => FetchMetadata.Origin(mockApi.BaseAddressOf(name)), StringComparer.Ordinal);
         if (options.EchoApi is { } echoApi)
         {
             upstreams[echoApi] = FetchMetadata.Origin(echoListener.BaseAddress);
@@ -249,7 +247,7 @@ public sealed class GatewayHarness : IAsyncDisposable
         RecordingRefreshLeases? leases = cell && !options.RefreshLeasesPerHost ? new RecordingRefreshLeases(options.Clock ?? TimeProvider.System) : null;
         ParameterStoreStub? sharedParameterStore = options.KeyRing == KeyRingSharing.OneParameterStore ? new ParameterStoreStub() : null;
 
-        (GatewayFactory, string?, ParameterStoreStub?) NewHost(int index)
+        (GatewayFactory, string?, ParameterStoreStub?, HostSessionStore?) NewHost(int index)
         {
             string? instance = cell ? options.InstanceIds[index] : null;
             ParameterStoreStub? parameterStore = options.KeyRing switch
@@ -259,11 +257,12 @@ public sealed class GatewayHarness : IAsyncDisposable
                 _ => null,
             };
 
-            GatewayFactory hostFactory = new(settings, services => ConfigureHost(services, instance, parameterStore));
-            return (hostFactory, instance, parameterStore);
+            HostSessionStore? sessions = instance is null ? null : new HostSessionStore(sessionStore!);
+            GatewayFactory hostFactory = new(settings, services => ConfigureHost(services, instance, parameterStore, sessions));
+            return (hostFactory, instance, parameterStore, sessions);
         }
 
-        void ConfigureHost(IServiceCollection services, string? instance, ParameterStoreStub? parameterStore)
+        void ConfigureHost(IServiceCollection services, string? instance, ParameterStoreStub? parameterStore, HostSessionStore? sessions)
         {
             if (parameterStore is not null)
             {
@@ -301,7 +300,7 @@ public sealed class GatewayHarness : IAsyncDisposable
                 // (plan rows P2-1 and P2-3), and the instance id /readyz names (change request P2-5,
                 // decision 2: the harness injects a deterministic id through test services).
                 services.RemoveAll<ISessionStore>();
-                services.AddSingleton<ISessionStore>(sessionStore!);
+                services.AddSingleton<ISessionStore>(sessions!);
                 services.RemoveAll<IRefreshLeases>();
                 services.AddSingleton<IRefreshLeases>(leases ?? new RecordingRefreshLeases(options.Clock ?? TimeProvider.System));
                 services.RemoveAll<GatewayInstance>();
@@ -320,6 +319,7 @@ public sealed class GatewayHarness : IAsyncDisposable
             options, idp, mockApi, echo, echoListener, store, gatewayStore, secrets, log,
             new JsonObject { ["schemaVersion"] = 1, ["revision"] = 0, ["apps"] = new JsonArray() });
         harness.upstreamsByApi = upstreams;
+        harness.settings = settings;
         harness.newHost = NewHost;
         harness.SessionStore = sessionStore;
         harness.RefreshLeases = leases;
@@ -331,8 +331,14 @@ public sealed class GatewayHarness : IAsyncDisposable
             JsonArray entries = [];
             foreach (string appId in options.Apps)
             {
-                HarnessApp app = harness.Register(appId);
+                HarnessApp app = harness.Register(appId, options.Fragments.GetValueOrDefault(appId) ?? []);
                 await harness.PublishReleaseAsync(appId, options.Release, FixtureFiles.Spa(appId), ct);
+                foreach (HarnessFragment fragment in app.Fragments)
+                {
+                    await harness.PublishFragmentReleaseAsync(
+                        appId, fragment.FragmentId, options.Release, FixtureFiles.Fragment(appId, fragment.FragmentId), ct);
+                }
+
                 entries.Add(harness.EntryFor(app, options.Release));
             }
 
@@ -342,6 +348,7 @@ public sealed class GatewayHarness : IAsyncDisposable
             if (options.RegistryAtStart)
             {
                 JsonObject first = new() { ["schemaVersion"] = 1, ["revision"] = 1, ["apps"] = entries };
+                RaiseSchemaVersion(first);
                 if (!await store.PutAsync(RegistryKey, Utf8(first.ToJsonString()), ifMatch: null, ct))
                 {
                     throw new InvalidOperationException("the registry object already exists in a new store.");
@@ -384,8 +391,8 @@ public sealed class GatewayHarness : IAsyncDisposable
             throw new InvalidOperationException($"the harness has instance ids for {Options.InstanceIds.Count} hosts.");
         }
 
-        (GatewayFactory factory, string? instance, ParameterStoreStub? parameterStore) = newHost(hosts.Count);
-        GatewayHost host = new(instance, factory, parameterStore);
+        (GatewayFactory factory, string? instance, ParameterStoreStub? parameterStore, HostSessionStore? sessions) = newHost(hosts.Count);
+        GatewayHost host = new(instance, factory, parameterStore) { SessionStore = sessions };
         hosts.Add(host);
         host.StartServer();
 
@@ -505,8 +512,93 @@ public sealed class GatewayHarness : IAsyncDisposable
         JsonObject next = RegistryDocument;
         next["revision"] = long.Parse(next["revision"]!.ToJsonString(), CultureInfo.InvariantCulture) + 1;
         edit(next);
+        RaiseSchemaVersion(next);
         return await PublishRegistryAsync(next, ct);
     }
+
+    /// <summary>
+    /// <c>schemaVersion</c> as <c>spactl</c> writes it (#992, #993): 2 once any entry carries
+    /// <c>fragments[]</c>, and never lowered, so a document no entry of which has ever carried a
+    /// fragment stays at 1. <see cref="PublishRegistryAsync"/> writes a document as it stands, for a
+    /// test that writes a version on purpose.
+    /// </summary>
+    private static void RaiseSchemaVersion(JsonObject next)
+    {
+        bool fragments = next["apps"] is JsonArray entries
+            && entries.OfType<JsonObject>().Any(entry => entry["fragments"] is JsonArray { Count: > 0 });
+        if (fragments)
+        {
+            next["schemaVersion"] = 2;
+        }
+    }
+
+    /// <summary>
+    /// Reads the registry object back into <see cref="RegistryDocument"/> after something other than the
+    /// harness wrote it, as <c>spactl</c> run over <see cref="Store"/> does, and polls once, so the next
+    /// <see cref="UpdateRegistryAsync"/> starts from what is in the bucket.
+    /// </summary>
+    public async Task<RefreshOutcome> ReloadRegistryDocumentAsync(CancellationToken ct = default)
+    {
+        StoredObject current = await Store.GetAsync(RegistryKey, ifNoneMatch: null, ct)
+            ?? throw new InvalidOperationException("the registry object is missing.");
+        await using (Stream body = current.Body!)
+        {
+            document = (await JsonNode.ParseAsync(body, cancellationToken: ct))!.AsObject();
+        }
+
+        registryWritten = true;
+        return OutcomeOfWrite(await RefreshRegistryAsync(ct), current.ETag);
+    }
+
+    /// <summary>
+    /// The platform configuration the gateway runs under, in the shape of
+    /// contracts/platform-config.schema.json, for <c>spactl</c>'s <c>--config</c>: its <c>Policy</c> and
+    /// <c>Issuers</c> sections bound a registry write as they bound the gateway's read.
+    /// </summary>
+    public JsonObject PlatformConfiguration()
+    {
+        JsonObject root = [];
+        foreach ((string key, string? value) in settings.OrderBy(pair => pair.Key, StringComparer.Ordinal))
+        {
+            string[] path = key.Split(':');
+            JsonNode parent = root;
+            for (int i = 0; i < path.Length; i++)
+            {
+                bool last = i == path.Length - 1;
+                bool nextIsIndex = !last && int.TryParse(path[i + 1], NumberStyles.None, CultureInfo.InvariantCulture, out _);
+                // Configuration holds every value as text; the schema types its counts (PollSeconds,
+                // MaxSessions) as integers, so a value that reads as one is written as one.
+                JsonNode? child = !last ? (nextIsIndex ? new JsonArray() : new JsonObject())
+                    : long.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out long number) ? JsonValue.Create(number)
+                    : JsonValue.Create(value);
+                if (parent is JsonArray array)
+                {
+                    int at = int.Parse(path[i], CultureInfo.InvariantCulture);
+                    while (array.Count <= at)
+                    {
+                        array.Add(null);
+                    }
+
+                    array[at] ??= child;
+                    parent = array[at]!;
+                }
+                else
+                {
+                    JsonObject node = parent.AsObject();
+                    if (!node.ContainsKey(path[i]))
+                    {
+                        node[path[i]] = child;
+                    }
+
+                    parent = node[path[i]]!;
+                }
+            }
+        }
+
+        return root;
+    }
+
+    private Dictionary<string, string?> settings = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// Writes <paramref name="next"/> as the registry object, as it stands, and polls once. The outcome is
@@ -575,6 +667,29 @@ public sealed class GatewayHarness : IAsyncDisposable
         return current.ETag;
     }
 
+    /// <summary>
+    /// Writes one release of a fragment into the bucket under
+    /// <c>apps/{appId}/fragments/{fragmentId}/releases/{release}/</c>, the entry file last, as
+    /// <c>fragment publish</c> writes it (#993), so a reader never finds an entry whose chunks are not
+    /// there yet.
+    /// </summary>
+    public async Task PublishFragmentReleaseAsync(
+        string appId, string fragmentId, string release, IReadOnlyDictionary<string, byte[]> files, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(files);
+        string entry = FixtureFiles.AppDefinition(appId)["fragments"]?.AsArray().OfType<JsonObject>()
+            .FirstOrDefault(fragment => fragment["fragmentId"]?.GetValue<string>() == fragmentId)?["entry"]?.GetValue<string>()
+            ?? PlatformPaths.DefaultEntry;
+        string prefix = $"apps/{appId}/fragments/{fragmentId}/releases/{release}/";
+        foreach ((string path, byte[] bytes) in files.OrderBy(file => file.Key == entry ? 1 : 0))
+        {
+            if (!await Store.PutAsync(prefix + path, new MemoryStream(bytes), ifMatch: null, ct))
+            {
+                throw new InvalidOperationException($"{prefix}{path} already exists: a release is written once.");
+            }
+        }
+    }
+
     /// <summary>Writes one release of an app into the bucket under <c>apps/{appId}/releases/{release}/</c>.</summary>
     public async Task PublishReleaseAsync(string appId, string release, IReadOnlyDictionary<string, byte[]> files, CancellationToken ct = default)
     {
@@ -633,12 +748,53 @@ public sealed class GatewayHarness : IAsyncDisposable
             JsonArray entries = next["apps"]!.AsArray();
             int index = entries.Select((entry, i) => (entry, i))
                 .Single(pair => pair.entry?["appId"]?.GetValue<string>() == appId).i;
-            entries[index] = EntryFor(after, entries[index]!["release"]!.GetValue<string>());
+            JsonObject rotated = EntryFor(after, entries[index]!["release"]!.GetValue<string>());
+            KeepFragmentReleases(entries[index]!.AsObject(), rotated);
+            entries[index] = rotated;
         }, ct);
         return (before, after, outcome);
     }
 
     private readonly Dictionary<string, int> rotations = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Rotates one fragment of a shell onto a new client while the gateway runs: a new client at the
+    /// provider with its own callback and secret, and the fragment's item naming it in a new registry
+    /// revision, its release kept. The old client stays registered at the provider, as in
+    /// <see cref="RotateClientAsync"/>. <see cref="HarnessApp.Fragment"/> names the new client afterwards.
+    /// </summary>
+    public async Task<(HarnessFragment Before, HarnessFragment After, RefreshOutcome Outcome)> RotateFragmentClientAsync(
+        string appId, string fragmentId, CancellationToken ct = default)
+    {
+        HarnessApp app = App(appId);
+        HarnessFragment before = app.Fragment(fragmentId);
+        string key = appId + "/" + fragmentId;
+        int rotation = rotations.TryGetValue(key, out int done) ? done + 1 : 1;
+        rotations[key] = rotation;
+        HarnessFragment after = before with
+        {
+            ClientId = ClientIdFor(appId, fragmentId) + "-r" + rotation.ToString(CultureInfo.InvariantCulture),
+            ClientSecret = "secret-" + appId + "-" + fragmentId + "-" + Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(16)),
+            SecretRef = $"ssm:/spa-platform/harness/apps/{appId}/fragments/{fragmentId}/client-secret:{rotation + 1}",
+        };
+        Idp.AddClient(
+            after.ClientId,
+            after.ClientSecret,
+            app.Url("/signin-oidc/" + fragmentId).ToString(),
+            [app.Url("/signout-callback-oidc").ToString(), app.Url("/").ToString()]);
+        Secrets[after.SecretRef] = after.ClientSecret;
+        apps[appId] = app with { Fragments = [.. app.Fragments.Select(f => f.FragmentId == fragmentId ? after : f)] };
+
+        RefreshOutcome outcome = await UpdateRegistryAsync(next =>
+        {
+            JsonObject item = next["apps"]!.AsArray().OfType<JsonObject>()
+                .Single(entry => entry["appId"]?.GetValue<string>() == appId)["fragments"]!.AsArray().OfType<JsonObject>()
+                .Single(fragment => fragment["fragmentId"]?.GetValue<string>() == fragmentId);
+            item["oauth"]!["clientId"] = after.ClientId;
+            item["oauth"]!["clientSecretRef"] = after.SecretRef;
+        }, ct);
+        return (before, after, outcome);
+    }
 
     /// <summary>
     /// The registry entry for an app: its fixture definition, with what onboarding fills in (the release,
@@ -657,6 +813,40 @@ public sealed class GatewayHarness : IAsyncDisposable
         oauth["clientSecretRef"] = app.SecretRef;
 
         JsonArray apis = entry["apis"] as JsonArray ?? [];
+        entry["apis"] = WithUpstreams(apis);
+
+        // Only the fragments the harness registered, in the definition's order (#1007).
+        JsonArray fragments = [];
+        foreach (JsonObject fragment in (entry["fragments"] as JsonArray ?? []).OfType<JsonObject>())
+        {
+            string fragmentId = fragment["fragmentId"]!.GetValue<string>();
+            if (app.Fragments.FirstOrDefault(known => known.FragmentId == fragmentId) is not { } registered)
+            {
+                continue;
+            }
+
+            JsonObject copy = fragment.DeepClone().AsObject();
+            copy["release"] = release;
+            JsonObject fragmentOauth = copy["oauth"]!.AsObject();
+            fragmentOauth["issuer"] = Options.IssuerName;
+            fragmentOauth["clientId"] = registered.ClientId;
+            fragmentOauth["clientSecretRef"] = registered.SecretRef;
+            copy["apis"] = WithUpstreams(copy["apis"] as JsonArray ?? []);
+            fragments.Add(copy);
+        }
+
+        entry.Remove("fragments");
+        if (fragments.Count > 0)
+        {
+            entry["fragments"] = fragments;
+        }
+
+        return entry;
+    }
+
+    /// <summary>Each mock API upstream pointed at the listener the harness started, and the echo API added.</summary>
+    private JsonArray WithUpstreams(JsonArray apis)
+    {
         foreach (JsonObject api in apis.OfType<JsonObject>())
         {
             if (api["name"]?.GetValue<string>() is { } name && upstreamsByApi.TryGetValue(name, out string? upstream))
@@ -670,8 +860,21 @@ public sealed class GatewayHarness : IAsyncDisposable
             apis.Add(new JsonObject { ["name"] = echoApi, ["upstream"] = upstreamsByApi[echoApi], ["timeoutSeconds"] = 30 });
         }
 
-        entry["apis"] = apis;
-        return entry;
+        return apis;
+    }
+
+    /// <summary>Carries each fragment's live release from <paramref name="from"/> onto the same fragment of <paramref name="to"/>.</summary>
+    private static void KeepFragmentReleases(JsonObject from, JsonObject to)
+    {
+        foreach (JsonObject fragment in (to["fragments"] as JsonArray ?? []).OfType<JsonObject>())
+        {
+            string fragmentId = fragment["fragmentId"]!.GetValue<string>();
+            if ((from["fragments"] as JsonArray ?? []).OfType<JsonObject>()
+                .FirstOrDefault(old => old["fragmentId"]?.GetValue<string>() == fragmentId)?["release"]?.GetValue<string>() is { } release)
+            {
+                fragment["release"] = release;
+            }
+        }
     }
 
     public async ValueTask DisposeAsync()
@@ -691,8 +894,16 @@ public sealed class GatewayHarness : IAsyncDisposable
 
     private Dictionary<string, string> upstreamsByApi = new(StringComparer.Ordinal);
 
-    /// <summary>Gives an app a client at the provider and its secret where the gateway reads it.</summary>
-    private HarnessApp Register(string appId)
+    /// <summary>
+    /// Gives an app a client at the provider and its secret where the gateway reads it, and each of
+    /// <paramref name="fragmentIds"/> a client of its own, registered with the callback
+    /// <c>/signin-oidc/{fragmentId}</c> on the shell's host and its own secret (#961, "Composition").
+    /// A shell with fragments has every one of its clients, the shell's included, admitted on each mock
+    /// API listener its entry names, shell and fragments alike: one upstream serving the shell's and a
+    /// fragment's clients (#998). A route-level admission a test adds
+    /// (<c>MockApi.AdmissionOf(name).Admit(clientId, route)</c>) then narrows one route.
+    /// </summary>
+    private HarnessApp Register(string appId, IReadOnlyList<string>? fragmentIds = null)
     {
         string host = FixtureFiles.AppDefinition(appId)["host"]!.GetValue<string>();
         HarnessApp app = new(
@@ -712,9 +923,62 @@ public sealed class GatewayHarness : IAsyncDisposable
             [app.Url("/signout-callback-oidc").ToString(), app.Url("/").ToString()]);
         Secrets[app.SecretRef] = app.ClientSecret;
 
+        if (fragmentIds is { Count: > 0 })
+        {
+            JsonObject definition = FixtureFiles.AppDefinition(appId);
+            List<HarnessFragment> fragments = [];
+            foreach (string fragmentId in fragmentIds)
+            {
+                HarnessFragment fragment = new(
+                    fragmentId,
+                    ClientIdFor(appId, fragmentId),
+                    "secret-" + appId + "-" + fragmentId + "-" + Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(16)),
+                    $"ssm:/spa-platform/harness/apps/{appId}/fragments/{fragmentId}/client-secret:1");
+                Idp.AddClient(
+                    fragment.ClientId,
+                    fragment.ClientSecret,
+                    app.Url("/signin-oidc/" + fragmentId).ToString(),
+                    [app.Url("/signout-callback-oidc").ToString(), app.Url("/").ToString()]);
+                Secrets[fragment.SecretRef] = fragment.ClientSecret;
+                fragments.Add(fragment);
+            }
+
+            app = app with { Fragments = [.. fragments] };
+
+            IEnumerable<string> apiNames = (definition["apis"] as JsonArray ?? [])
+                .Concat((definition["fragments"] as JsonArray ?? []).OfType<JsonObject>().SelectMany(f => f["apis"] as JsonArray ?? []))
+                .OfType<JsonObject>()
+                .Select(api => api["name"]!.GetValue<string>())
+                .Where(MockApiListeners.Contains)
+                .Distinct(StringComparer.Ordinal);
+            foreach (string name in apiNames)
+            {
+                MockApi.AdmissionOf(name).Admit(app.ClientId);
+                foreach (HarnessFragment fragment in fragments)
+                {
+                    MockApi.AdmissionOf(name).Admit(fragment.ClientId);
+                }
+            }
+        }
+
         apps[appId] = app;
         return app;
     }
+
+    /// <summary>
+    /// The mock API's listeners, by the API names the fixture definitions give them, read from
+    /// <c>MockApiOptions.Default</c> so a listener added there is an upstream here too: each is an upstream
+    /// of the cell, and admits the clients of the apps and fragments whose entries name it. The names do not
+    /// depend on the issuer or the clients, so those are left empty.
+    /// </summary>
+    private static readonly string[] MockApiListeners =
+        [.. MockApiOptions.Default(string.Empty, string.Empty, string.Empty, string.Empty).Listeners.Select(listener => listener.Name)];
+
+    /// <summary>
+    /// The client id the provider issues a fragment, <c>client-{appId}-{fragmentId}</c>: distinct from every
+    /// other fragment's and from the shell's of every fixture app, none of whose ids has that form.
+    /// </summary>
+    public static string ClientIdFor(string appId, string fragmentId) => "client-" + appId + "-" + fragmentId;
 
     /// <summary>The client id the provider issues an app. Fixed per appId, so the mock API can admit it before it exists.</summary>
     public static string ClientIdFor(string appId) => "client-" + appId;
@@ -731,9 +995,24 @@ public sealed record HarnessApp(
     string ClientSecret,
     string SecretRef)
 {
+    /// <summary>The fragments the harness registered for this app, in the order its entry lists them.</summary>
+    public ImmutableArray<HarnessFragment> Fragments { get; init; } = [];
+
+    /// <summary>The fragment with this id.</summary>
+    public HarnessFragment Fragment(string fragmentId) =>
+        Fragments.FirstOrDefault(fragment => fragment.FragmentId == fragmentId)
+        ?? throw new KeyNotFoundException($"{AppId} has no fragment {fragmentId} in the harness.");
+
     /// <summary>A URL on the app's host.</summary>
     public Uri Url(string path) => new(Origin, path);
 
     /// <summary>Names the app without its secret, so it is safe in assertion output.</summary>
     public override string ToString() => $"{AppId} ({Host}, {ClientId})";
+}
+
+/// <summary>One fragment of a shell as the harness set it up: its client at the test provider.</summary>
+public sealed record HarnessFragment(string FragmentId, string ClientId, string ClientSecret, string SecretRef)
+{
+    /// <summary>Names the fragment without its secret, so it is safe in assertion output.</summary>
+    public override string ToString() => $"{FragmentId} ({ClientId})";
 }

@@ -37,6 +37,12 @@ public sealed class GatewayHost
     /// <summary>The Parameter Store client this host's key ring reads, or null under the framework's default ring.</summary>
     public ParameterStoreStub? ParameterStore { get; }
 
+    /// <summary>
+    /// This host's way to the cell's one session store, whose hook runs before each versioned replace this
+    /// host sends (#1007), or null outside cell mode.
+    /// </summary>
+    public HostSessionStore? SessionStore { get; init; }
+
     /// <summary>The host's services.</summary>
     public IServiceProvider Services => factory.Services;
 

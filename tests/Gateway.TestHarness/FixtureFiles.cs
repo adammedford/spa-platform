@@ -28,12 +28,13 @@ public static class FixtureFiles
     public static ImmutableHashSet<string> PlatformInstrumentNames => InstrumentNames.Value;
 
     /// <summary>
-    /// An app definition (contracts/app-definition.schema.json), from <c>fixtures/apps/</c> or, for an
-    /// app that is onboarded during a test, <c>fixtures/onboarding/</c>.
+    /// An app definition (contracts/app-definition.schema.json), from <c>fixtures/apps/</c>, for an
+    /// app that is onboarded during a test <c>fixtures/onboarding/</c>, or, for a shell with fragments,
+    /// <c>fixtures/fragments/</c> (#998).
     /// </summary>
     public static JsonObject AppDefinition(string appId)
     {
-        foreach (string folder in new[] { "apps", "onboarding" })
+        foreach (string folder in new[] { "apps", "onboarding", "fragments" })
         {
             string path = Path.Combine(RepositoryRoot, "fixtures", folder, appId + ".json");
             if (File.Exists(path))
@@ -42,16 +43,25 @@ public static class FixtureFiles
             }
         }
 
-        throw new FileNotFoundException($"no app definition for {appId} under fixtures/apps or fixtures/onboarding.");
+        throw new FileNotFoundException($"no app definition for {appId} under fixtures/apps, fixtures/onboarding or fixtures/fragments.");
     }
 
+    /// <summary>
+    /// Every file of one fixture fragment release, from <c>fixtures/fragments/{appId}/{fragmentId}/</c>,
+    /// keyed as <see cref="Spa"/> keys a shell's.
+    /// </summary>
+    public static IReadOnlyDictionary<string, byte[]> Fragment(string appId, string fragmentId) =>
+        Files(Path.Combine(RepositoryRoot, "fixtures", "fragments", appId, fragmentId), $"fixtures/fragments/{appId}/{fragmentId}");
+
     /// <summary>Every file of one fixture SPA, keyed by its path relative to the release root, with '/' separators.</summary>
-    public static IReadOnlyDictionary<string, byte[]> Spa(string appId)
+    public static IReadOnlyDictionary<string, byte[]> Spa(string appId) =>
+        Files(Path.Combine(RepositoryRoot, "fixtures", "spa", appId), $"fixtures/spa/{appId}");
+
+    private static Dictionary<string, byte[]> Files(string root, string named)
     {
-        string root = Path.Combine(RepositoryRoot, "fixtures", "spa", appId);
         if (!Directory.Exists(root))
         {
-            throw new DirectoryNotFoundException($"no fixture SPA at fixtures/spa/{appId}.");
+            throw new DirectoryNotFoundException($"no fixture files at {named}.");
         }
 
         return Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)

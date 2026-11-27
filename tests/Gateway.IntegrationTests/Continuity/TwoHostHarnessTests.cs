@@ -48,9 +48,12 @@ public sealed class TwoHostHarnessTests
             Assert.NotSame(host.ParameterStore, resolved);
         }
 
-        // One session store and one lease table, the harness's, in both hosts.
-        Assert.Same(harness.SessionStore, a.Services.GetService(typeof(ISessionStore)));
-        Assert.Same(harness.SessionStore, b.Services.GetService(typeof(ISessionStore)));
+        // One session store and one lease table, the harness's, in both hosts: each host resolves its own
+        // view (HostSessionStore, #1007), and both views reach the one store.
+        Assert.Same(a.SessionStore, a.Services.GetService(typeof(ISessionStore)));
+        Assert.Same(b.SessionStore, b.Services.GetService(typeof(ISessionStore)));
+        Assert.Same(harness.SessionStore, a.SessionStore!.Shared);
+        Assert.Same(harness.SessionStore, b.SessionStore!.Shared);
         Assert.Same(harness.RefreshLeases, a.Services.GetService(typeof(IRefreshLeases)));
         Assert.Same(harness.RefreshLeases, b.Services.GetService(typeof(IRefreshLeases)));
     }

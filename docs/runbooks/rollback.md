@@ -66,5 +66,20 @@ so a tunnel started before it can still be up; if it has ended, start it again. 
 tools/scripts/verify-tunnel.sh /healthz
 ```
 
+## Past the fragments build
+
+A gateway build from before #961's fragments work refuses a `schemaVersion: 2` document by its
+version, and `spactl` never lowers the version once a fragment is written: it writes 2 with the
+first fragment, refuses a `registry apply` whose document declares less than the live one, and has
+`registry rollback` keep the live version, so restoring an earlier revision's content from before the
+fragments still writes 2. So once a cell's registry declares 2, a gateway rolled back past the fragments build
+starts with no snapshot it can read, and its `/readyz` never reports a revision. Removing every
+fragment does not help; the version stays 2.
+
+In a cell whose registry declares `schemaVersion: 2`, roll back only to a fragments build: read the
+task definition revisions as "First, is it needed?" lists them, and name one with
+`rollback.sh --to-revision`. The bare `rollback.sh` takes the previous image, whichever build it is.
+The deployment prerequisite in [deploy.md](deploy.md) is the same rule the other way.
+
 A later `deploy.sh` builds from the working tree again, so revert or fix the change that made the
 rollback necessary before the next deployment.

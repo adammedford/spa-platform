@@ -51,6 +51,10 @@ It refuses an app the registry does not hold, and a release whose prefix has no 
 never published, or its publish stopped part way). It prints `Applied revision N`, or `Nothing to
 change` when the app already serves that release.
 
+It also refuses an older release whose import map no hash in the definition's `csp.script-src`
+admits any more, naming the `'sha256-…'` source to add. Add it back to the definition, run
+`spactl app add` with it, then activate.
+
 ## 3. Wait for it
 
 ```bash

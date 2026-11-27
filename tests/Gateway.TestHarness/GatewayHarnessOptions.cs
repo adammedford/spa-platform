@@ -13,6 +13,34 @@ public sealed record GatewayHarnessOptions
     /// </summary>
     public IReadOnlyList<string> Apps { get; init; } = ["app1", "app2"];
 
+    /// <summary>
+    /// The fragments each app of <see cref="Apps"/> carries in the first registry revision, by appId, as
+    /// fragment ids of its definition (<c>fixtures/fragments/{appId}.json</c>), in the order the entry
+    /// lists them. An app not named here carries none, whatever its definition lists. Each fragment gets
+    /// its own client at the test provider, its callback <c>/signin-oidc/{fragmentId}</c> and its own
+    /// secret, and its release under <c>apps/{appId}/fragments/{fragmentId}/releases/</c> (#1007, part
+    /// of #961). The default is none, so every suite before fragments sees the cell it had.
+    /// </summary>
+    public IReadOnlyDictionary<string, IReadOnlyList<string>> Fragments { get; init; } =
+        new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
+
+    /// <summary>
+    /// A cell with one shell, <c>shell</c>, carrying the first <paramref name="count"/> fragments its
+    /// fixture definition lists. At most five: the policy's cap per shell (<c>PlatformPolicy.FragmentsPerShell</c>).
+    /// </summary>
+    public static GatewayHarnessOptions Shell(int count) => new()
+    {
+        Apps = ["shell"],
+        Fragments = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal)
+        {
+            ["shell"] = [.. ShellFragmentIds.Take(count)],
+        },
+    };
+
+    /// <summary>The fragment ids of <c>fixtures/fragments/shell.json</c>, in its order, read from the file.</summary>
+    public static IReadOnlyList<string> ShellFragmentIds { get; } =
+        [.. FixtureFiles.AppDefinition("shell")["fragments"]!.AsArray().Select(fragment => fragment!["fragmentId"]!.GetValue<string>())];
+
     /// <summary>The release every app is published under.</summary>
     public string Release { get; init; } = "2026-10-10.1";
 
@@ -45,6 +73,13 @@ public sealed record GatewayHarnessOptions
     /// should start at the real time if API calls must succeed.
     /// </summary>
     public TimeProvider? Clock { get; init; }
+
+    /// <summary>
+    /// The test identity provider's clock alone, in place of <see cref="Clock"/> there, or null for
+    /// <see cref="Clock"/>. A <see cref="HoldingClock"/> here holds the provider's delays until a test
+    /// releases them, while the gateway's own timers run (#1007, F-35).
+    /// </summary>
+    public TimeProvider? IdpClock { get; init; }
 
     /// <summary>More gateway configuration, applied over the harness's own. A null value removes nothing: it sets an empty value.</summary>
     public IReadOnlyDictionary<string, string?> Configuration { get; init; } = new Dictionary<string, string?>();

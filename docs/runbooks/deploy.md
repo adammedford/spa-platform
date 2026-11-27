@@ -99,6 +99,17 @@ tools/scripts/verify-tunnel.sh /healthz
 On one task with sessions in memory, every user signs in again on their next request. On two tasks
 with the durable session store, every user stays signed in.
 
+## Before a cell's first fragment: the fragments build
+
+No registry write that carries a fragment reaches a cell until that cell runs a gateway build
+containing the fragments work of #961: the registry's (#992), `spactl`'s (#993), identity's (#994,
+#995) and the proxy's (#996), at a commit where #1007's composed suite passed. A build without it
+refuses a `schemaVersion: 2` document by its version and keeps the snapshot it has, and `spactl`
+writes 2 with the document's first fragment. So deploy the fragments build first, with
+`deploy.sh` as above, and only then add a fragment with `spactl app add`
+([fragments.md](fragments.md)). Going back past that build is a step of its own:
+[rollback.md](rollback.md), "Past the fragments build".
+
 ## If it fails
 
 - **Before the apply** (steps 1 and 2): nothing the cell runs changed (step 2 may have pushed an
