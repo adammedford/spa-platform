@@ -742,6 +742,9 @@ public sealed class FragmentsObserverTests
 
     private const string WriteTemplate = FragmentsLines.RefreshWritePrefix + "{AppId}, fragment {FragmentId}, session {SessionRef}: ended {Outcome} after {StoreAttempts} versioned replaces.";
 
+    /// <summary>FragmentEvents' sign-in write line (src/Platform.Identity/FragmentEvents.cs), its writer filled as <c>chain</c>.</summary>
+    private const string SignInWriteTemplate = FragmentsLines.FragmentWritePrefix + "{AppId}, fragment {FragmentId}, session {SessionRef}: the chain write ended {Outcome} after {StoreAttempts} versioned replaces.";
+
     private const string OrphanTemplate = FragmentsObserver.OrphanPrefix + "{AppId}, fragment {FragmentId}, session {SessionRef}" + FragmentsObserver.OrphanMarker + "{Outcome}.";
 
     /// <summary>
@@ -778,6 +781,20 @@ public sealed class FragmentsObserverTests
 
         Assert.True(result.Verdict == Verdict.Passed, result.Message);
         Assert.Contains($"orphaned successor on {TaskB}: revoked", result.Observations);
+    }
+
+    [Fact]
+    public async Task O3_a_fragment_sign_in_line_on_the_logouts_task_is_no_logout_revocation_line()
+    {
+        // Mutation: dropping the logout line's message head from FragmentsObserver.Successor takes the earlier
+        // sign-in write line, which carries the same session, fragment and outcome fields, as orders' revocation,
+        // outcome written, and the row fails in place of passing.
+        (IReadOnlyList<Step> steps, SuccessorRecord record, JsonObject[] lines) = GoodSuccessor();
+        JsonObject signIn = Logged(TaskA, steps[0].At.AddSeconds(-20), SignInWriteTemplate, "written");
+
+        RowResult result = FragmentsObserver.Successor(steps, record, await CaptureAsync([signIn, .. lines]));
+
+        Assert.True(result.Verdict == Verdict.Passed, result.Message);
     }
 
     [Theory]
@@ -818,7 +835,8 @@ public sealed class FragmentsObserverTests
     [InlineData("exhausted")]
     public async Task O3_a_refresh_write_that_did_not_end_missing_is_the_missed_race_not_proved(string write)
     {
-        // Mutation: dropping the `missing` check from FragmentsObserver.Successor reaches the orphan line and passes these.
+        // Mutation: dropping the `missing` check from FragmentsObserver.Successor goes on to the orphan line's search, which
+        // finds none in these lines, so the row is still not proved but for that reason, and the reason assertion fails.
         (IReadOnlyList<Step> steps, SuccessorRecord record, JsonObject[] lines) = GoodSuccessor(write: write);
 
         RowResult result = FragmentsObserver.Successor(steps, record, await CaptureAsync(lines[..6]));
