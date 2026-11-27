@@ -422,14 +422,15 @@ public sealed class ConcurrencyTraceTests
         }
 
         BrowserResponse atIdp = await browser.NavigateAsync(authorize, manual, Ct);
-        BrowserResponse callback = await browser.NavigateAsync(new Uri(atIdp.Url, atIdp.Header("Location")!), manual, Ct);
+        (string callbackTrace, RequestOptions tracedManual) = TracedLine.Options(manual);
+        BrowserResponse callback = await browser.NavigateAsync(new Uri(atIdp.Url, atIdp.Header("Location")!), tracedManual, Ct);
         Assert.Equal("/signin-oidc/orders", callback.Url.AbsolutePath);
 
         if (!rotated)
         {
             Assert.Equal(HttpStatusCode.NotFound, callback.StatusCode);
             Assert.Equal("not_found", TwoHostShell.Code(callback));
-            JsonElement line = harness.Log.Json.Last(j => j.GetProperty("msg").GetString() == "request");
+            JsonElement line = await TracedLine.OfAsync(harness, callbackTrace, Ct);
             Assert.Equal("path.reserved", line.GetProperty("rule").GetString());
             Assert.DoesNotContain(harness.Idp.Grants, g => g.GrantType == "authorization_code" && g.ClientId == shell.Fragment("orders").ClientId);
             Assert.Equal(new Dictionary<string, string> { ["reports"] = "loginRequired" }, Fragments.States(await Fragments.SessionAsync(browser, shell, Ct)));

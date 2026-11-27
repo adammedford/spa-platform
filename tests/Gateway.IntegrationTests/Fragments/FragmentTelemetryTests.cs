@@ -39,15 +39,15 @@ public sealed class FragmentTelemetryTests
         await harness.SignInAsync(browser, "app1", Ct);
         await browser.NavigateAsync(shell.Url("/"), ct: Ct);
 
-        JsonElement entry = await LineOfAsync(harness, () => browser.GetAsync(shell.Url("/fragments/orders/entry.js").ToString(), ct: Ct));
-        JsonElement api = await LineOfAsync(harness, () => browser.GetAsync(shell.Url("/fragments/orders/api/echo/items/1").ToString(), ct: Ct));
-        JsonElement document = await LineOfAsync(harness, () => browser.GetAsync(shell.Url("/").ToString(), ct: Ct));
-        JsonElement unknown = await LineOfAsync(harness, () => browser.GetAsync(shell.Url("/fragments/nope/a.js").ToString(), ct: Ct));
-        JsonElement reserved = await LineOfAsync(harness, () => browser.GetAsync(app1.Url("/fragments/x/a.js").ToString(), ct: Ct));
+        JsonElement entry = await LineOfAsync(harness, options => browser.GetAsync(shell.Url("/fragments/orders/entry.js").ToString(), options, Ct));
+        JsonElement api = await LineOfAsync(harness, options => browser.GetAsync(shell.Url("/fragments/orders/api/echo/items/1").ToString(), options, Ct));
+        JsonElement document = await LineOfAsync(harness, options => browser.GetAsync(shell.Url("/").ToString(), options, Ct));
+        JsonElement unknown = await LineOfAsync(harness, options => browser.GetAsync(shell.Url("/fragments/nope/a.js").ToString(), options, Ct));
+        JsonElement reserved = await LineOfAsync(harness, options => browser.GetAsync(app1.Url("/fragments/x/a.js").ToString(), options, Ct));
 
         // A rejection under the resolved fragment: an unsafe call with no antiforgery token.
-        JsonElement rejected = await LineOfAsync(harness, () => browser.FetchAsync(
-            HttpMethod.Post, shell.Url("/fragments/orders/api/echo/items/2").ToString(), new StringContent("{}"), ct: Ct));
+        JsonElement rejected = await LineOfAsync(harness, options => browser.FetchAsync(
+            HttpMethod.Post, shell.Url("/fragments/orders/api/echo/items/2").ToString(), new StringContent("{}"), options, Ct));
 
         Assert.Equal("orders", entry.GetProperty("fragment_id").GetString());
         Assert.Equal("orders", api.GetProperty("fragment_id").GetString());
@@ -155,18 +155,18 @@ public sealed class FragmentTelemetryTests
         return leaks;
     }
 
-    /// <summary>Sends one request and returns the request line it produced, the last in the harness's log.</summary>
-    private static async Task<JsonElement> LineOfAsync(GatewayHarness harness, Func<Task<BrowserResponse>> send)
+    /// <summary>
+    /// Sends one request under its own trace id and returns the one request line it produced. Counting
+    /// lines before and after cannot say which is this request's: the line is written after the response
+    /// can reach the browser, so the previous request's line can land after the count (CI run
+    /// 45934858031 saw 11 lines where 10 were expected).
+    /// </summary>
+    private static async Task<JsonElement> LineOfAsync(GatewayHarness harness, Func<RequestOptions, Task<BrowserResponse>> send)
     {
-        int before = RequestLines(harness).Count;
-        await send();
-        IReadOnlyList<JsonElement> lines = RequestLines(harness);
-        Assert.Equal(before + 1, lines.Count);
-        return lines[^1];
+        (string traceId, RequestOptions options) = TracedLine.Options();
+        await send(options);
+        return await TracedLine.OfAsync(harness, traceId, Ct);
     }
-
-    private static IReadOnlyList<JsonElement> RequestLines(GatewayHarness harness) =>
-        [.. harness.Log.Json.Where(line => line.GetProperty("msg").GetString() == "request")];
 
     private static List<Dictionary<string, object?>> Points(CapturedTelemetry telemetry, string name)
     {

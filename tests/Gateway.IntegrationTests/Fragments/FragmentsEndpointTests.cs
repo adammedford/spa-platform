@@ -50,9 +50,10 @@ public sealed class FragmentsEndpointTests
         Assert.Equal(FixtureFiles.Fragment("shell", "reports")["main.js"], entry.Bytes);
 
         // GET only. Mutation: mapping the endpoint for any method answers this POST with the list.
-        BrowserResponse posted = await browser.FetchAsync(HttpMethod.Post, shell.Url("/bff/fragments").ToString(), new StringContent(""), ct: Ct);
+        (string traceId, RequestOptions traced) = TracedLine.Options();
+        BrowserResponse posted = await browser.FetchAsync(HttpMethod.Post, shell.Url("/bff/fragments").ToString(), new StringContent(""), traced, Ct);
         Assert.Equal(HttpStatusCode.MethodNotAllowed, posted.StatusCode);
-        JsonElement line = harness.Log.Json.Last(j => j.GetProperty("msg").GetString() == "request");
+        JsonElement line = await TracedLine.OfAsync(harness, traceId, Ct);
         Assert.Equal("gate.method", line.GetProperty("rule").GetString());
     }
 }
