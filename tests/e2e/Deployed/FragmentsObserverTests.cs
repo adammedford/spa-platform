@@ -708,25 +708,25 @@ public sealed class FragmentsObserverTests
     /// </summary>
     private static JsonObject Logged(string task, DateTimeOffset at, string template, string? outcome = null, int attempts = 1)
     {
-        Dictionary<string, string?> values = new(StringComparer.Ordinal)
-        {
-            ["AppId"] = "app1",
-            ["FragmentId"] = "orders",
-            ["SessionRef"] = SessionRef,
-            ["Outcome"] = outcome,
-            ["StoreAttempts"] = attempts.ToString(System.Globalization.CultureInfo.InvariantCulture),
-        };
+        (string Placeholder, string Field, string? Value)[] values =
+        [
+            ("AppId", "app_id", "app1"),
+            ("FragmentId", "fragment_id", "orders"),
+            ("SessionRef", "session_ref", SessionRef),
+            ("Outcome", "outcome", outcome),
+            ("StoreAttempts", "store_attempts", attempts.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+        ];
         JsonObject line = new() { ["ts"] = at.ToString("O") };
         string msg = template;
-        foreach ((string name, string? value) in values)
+        foreach ((string placeholder, string field, string? value) in values)
         {
-            if (value is null || !template.Contains("{" + name + "}", StringComparison.Ordinal))
+            if (value is null || !template.Contains("{" + placeholder + "}", StringComparison.Ordinal))
             {
                 continue;
             }
 
-            msg = msg.Replace("{" + name + "}", value, StringComparison.Ordinal);
-            line[name switch { "AppId" => "app_id", "FragmentId" => "fragment_id", "SessionRef" => "session_ref", "StoreAttempts" => "store_attempts", _ => "outcome" }] = value;
+            msg = msg.Replace("{" + placeholder + "}", value, StringComparison.Ordinal);
+            line[field] = value;
         }
 
         line["msg"] = msg;
@@ -873,7 +873,7 @@ public sealed class FragmentsObserverTests
         (IReadOnlyList<Step> steps, SuccessorRecord record, JsonObject[] lines) = GoodSuccessor();
         Step refresh = steps[1];
         DateTimeOffset refreshedAt = refresh.At.AddSeconds(1);
-        // A line with fragment_id on the request line only, trace_id on both (#986's form).
+        // As contracts/telemetry.md (#986) writes them: fragment_id on the request line only, trace_id on both.
         JsonObject refreshed = Line(TaskB, refreshedAt, new JsonObject { ["msg"] = "Refreshed the access token", ["session_ref"] = SessionRef, ["trace_id"] = refresh.TraceId, ["ts"] = refreshedAt.ToString("O") });
         JsonObject fragmentRequest = RequestLine(refresh, "api", SessionRef);
         fragmentRequest["fragment_id"] = "orders";
