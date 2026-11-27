@@ -56,7 +56,7 @@ public sealed class MockApiPaddingTests
     [InlineData("/pad?bytes=abc")]
     [InlineData("/pad?bytes=1.5")]
     [InlineData("/pad?bytes=-1")]
-    [InlineData("/pad?bytes=+1")]
+    [InlineData("/pad?bytes=%2B1")]
     [InlineData("/pad?bytes=%201")]
     [InlineData("/pad?bytes=0")]
     [InlineData("/pad?bytes=1048577")]
@@ -72,8 +72,9 @@ public sealed class MockApiPaddingTests
     [InlineData("/pad?bytes=2097152&count=1024")]
     public async Task A_missing_malformed_or_out_of_range_size_or_count_answers_400(string path)
     {
-        // N is 1 to 1 MiB, M is 1 to 1,024 and N x M is at most 1 MiB. The last three rows break
-        // only the total; the last is 2^31, which an int product would wrap to a negative total.
+        // N is 1 to 1 MiB, M is 1 to 1,024 and N x M is at most 1 MiB. %2B1 sends a literal plus
+        // sign, since a bare + in a query decodes to a space. The last three rows break only the
+        // total; the last is 2^31, which an int product would wrap to a negative total.
         await using MockApiHarness harness = await MockApiHarness.StartAsync();
 
         HttpResponseMessage response = await harness.CallOwnAppAsync("orders", path);

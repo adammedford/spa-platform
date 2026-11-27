@@ -86,8 +86,9 @@ internal static class Routes
     /// <summary>
     /// The largest padding value, and the largest sum of them in one response: 1 MiB, the range
     /// #1545 asks for so that every limit O9 probes is passed (the ALB's 16 K for one header and 32 K
-    /// for the whole response header among them), and small enough that a caller cannot make the
-    /// listener build an unbounded response.
+    /// for the whole response header among them, under "HTTP header limits" in
+    /// https://docs.aws.amazon.com/elasticloadbalancing/latest/application/load-balancer-limits.html),
+    /// and small enough that a caller cannot make the listener build an unbounded response.
     /// </summary>
     internal const int PadMaxTotalBytes = 1_048_576;
 
