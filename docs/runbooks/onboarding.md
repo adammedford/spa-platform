@@ -50,8 +50,8 @@ Register one confidential client for the app at the identity provider, and check
 contract's per-client section, `contracts/identity-provider-contract.md` → "Each client": its grants,
 its callback `https://{host}/signin-oidc` on the host exactly as the definition has it, its logout
 return under the issuer's profile, its token lifetimes, its scopes and, when the definition sets
-`oauth.resource`, its audience. A provider that issues a refresh token only for `offline_access`
-needs `offline_access` in the definition's `oauth.scopes`; if you add it, run step 1 again.
+`oauth.resource`, its audience. If the contract's refresh-token row makes you add a scope to the
+definition, run step 1 again.
 
 Keep the client id. The client secret goes straight to step 3, by file or pipe.
 
@@ -174,7 +174,8 @@ team are the gateway's two contracts: `contracts/http-contract.md` for what the 
 - **The host** your app is served on.
 - **The client id, and the audience** when you set `oauth.resource`, for your API owners.
 - **Your release prefix and the right to publish under it**: the bucket, its Region and
-  `apps/{appId}/releases/`. You publish each release with `spactl release publish <appId>
+  `apps/{appId}/releases/`, with `apps/{appId}/claims/` beside it, where publishing records each
+  `assets/` file first. You publish each release with `spactl release publish <appId>
   <directory> <release> --bucket <bucket> --region <region>`, and the operator makes a release live
   with a registry change.
 - **The registry revision** that added your app.
@@ -231,13 +232,8 @@ There are two recoveries, each followed by `spactl wait`:
   A fix that changes the name or the version instead goes through step 4 and step 7 again, and the
   wait is for the revision that `app add` prints.
 
-- **Remove the app** ("Removal", below), which writes a revision without the entry. Wait for the
-  revision `app remove` prints:
-
-  ```bash
-  spactl app remove "$APP" --outputs "$SPA_OUTPUTS_FILE" --config "$CONFIG"
-  spactl wait --url "$ORIGIN" --revision M
-  ```
+- **Remove the app**, as "Removal" step 1 below has it: `app remove` writes a revision without the
+  entry, and the wait is for the revision it prints.
 
 At a cold start a gateway does not stall: it leaves out only the app whose secret it cannot read and
 serves the rest, so that app's host answers 404 on the new task alone. If it can read no app's
