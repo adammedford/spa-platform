@@ -6,7 +6,7 @@ export const meta = {
     { title: 'Plan', detail: 'the first launch only: one agent reads the ticket, its plan row and the contracts and proposes seams, a test per open box, any integrator path and any human-owned question; nothing is written' },
     { title: 'Start', detail: 'a courier runs the tool\'s start and returns its record: the worktree and branch, new, continued or finished' },
     { title: 'Build', detail: 'one agent builds in the worktree, following the /implement skill at the confirmed seams, with no review step' },
-    { title: 'Check', detail: 'a courier runs the tool\'s check, again while its record says running; a red check, or a pass on another head, runs the tool\'s release' },
+    { title: 'Check', detail: 'a courier runs the tool\'s check, again while its record says running; a red check runs the tool\'s release, and a pass on another head stops with the issue still assigned' },
   ],
 }
 
@@ -53,6 +53,9 @@ export const meta = {
 //   start refused           nothing                              the gate that failed
 //   a human-owned question  assigned, branch kept                the question; the same line continues
 //   failed, or red          release run, branch kept             the check log's path and last lines
+//   a pass on another head  assigned, branch kept                compare the two heads; the same line
+//   check unjudged, or      assigned, branch kept                what the tool names; the same line
+//     still running
 //   done                    assigned, branch at the checked head hand-over, review, land
 // A red check is a stop in this ticket; the repair loop is #1566's.
 const A = args || {}

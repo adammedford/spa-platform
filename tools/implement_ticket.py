@@ -42,8 +42,10 @@ the second launch: the first's args with "seams" added, the file's JSON unchange
 file `{"seams": [{"name", "interface", "boxes"}], "noTest": [{"box", "why"}]}`, where a box is the
 1-based index of an open box in read's record ("boxes"), or the one word `implementer`, which lets
 the build agent choose and list its own seams. It fails naming each box that is in no seam and not in
-noTest, each box in two seams (or a seam and noTest), each index the ticket has no box for, and each
-field missing or of the wrong kind; and it fails when read did not pass.
+noTest, each box in two seams (or a seam and noTest), each index the ticket has no box for, each
+field missing or of the wrong kind, and a field the file should not have; and it fails when read did
+not pass. --port, read's and check's alone, is an integer from 1024 to 65535, the range the script
+takes, so the tool never prints a launch the script refuses.
 
 start reads the issue again and applies the same gates to what it finds now, so a ticket
 relabelled or claimed since read is refused before anything is written. With no task branch it
