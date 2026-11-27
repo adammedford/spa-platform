@@ -3,9 +3,7 @@ using System.Text.Json.Nodes;
 using Amazon.SimpleSystemsManagement;
 using Amazon.SimpleSystemsManagement.Model;
 using Gateway.TestHarness;
-using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.WebUtilities;
-using Microsoft.Extensions.DependencyInjection;
 using Platform.Registry;
 
 namespace Gateway.IntegrationTests.Functional;
@@ -58,8 +56,6 @@ public sealed class AdopterOnboardingTests
         using TestBrowser one = harness.CreateBrowser();
         using TestBrowser two = harness.CreateBrowser();
         using TestBrowser three = harness.CreateBrowser();
-        IServiceProvider services = harness.Services;
-        IServer server = services.GetRequiredService<IServer>();
         await harness.SignInAsync(one, "app1", Ct);
         await harness.SignInAsync(two, "app2", Ct);
         Assert.Equal(HttpStatusCode.OK, (await one.GetAsync("/api/orders/whoami", ct: Ct)).StatusCode);
@@ -92,9 +88,8 @@ public sealed class AdopterOnboardingTests
         Assert.Equal(app3.ClientId, QueryHelpers.ParseQuery(authorize.Query)["client_id"].ToString());
         Assert.Equal(app3.Url("/signin-oidc").ToString(), QueryHelpers.ParseQuery(authorize.Query)["redirect_uri"].ToString());
 
-        // No restart: the same process and listener, and apps 1 and 2 kept their sessions throughout.
-        Assert.Same(services, harness.Services);
-        Assert.Same(server, harness.Services.GetRequiredService<IServer>());
+        // No restart: the one host took app 3 by a registry swap (asserted in OnboardApp3Async), and
+        // apps 1 and 2 kept their sessions throughout.
         Assert.Equal(HttpStatusCode.OK, (await one.GetAsync("/api/orders/whoami", ct: Ct)).StatusCode);
         Assert.Equal(HttpStatusCode.OK, (await two.GetAsync("/api/reports/whoami", ct: Ct)).StatusCode);
         Assert.Equal(3, harness.Idp.Authorizations.Count);
@@ -157,7 +152,10 @@ public sealed class AdopterOnboardingTests
     /// <summary>
     /// F-46: removal runs registry first. <c>app remove</c> and <c>wait</c> exit 0, app 3's host answers
     /// 404 and its session is gone, and only then are the parameter, the outputs entry and the client at
-    /// the provider deleted, after which an unrelated change still converges.
+    /// the provider deleted, after which an unrelated change still converges. It runs the procedure; it
+    /// cannot fail on removal's order, since a run that deletes the parameter and the client before
+    /// <c>app remove</c> passes as well, the running host having the secret cached. The control below
+    /// carries why the order matters: it goes red when the parameter is kept.
     /// </summary>
     [Fact]
     public async Task Removal_runs_registry_first_and_leaves_an_unrelated_change_converging()
@@ -263,9 +261,10 @@ public sealed class AdopterOnboardingTests
     }
 
     /// <summary>
-    /// Steps 2 to 7 of the onboarding note for app 3, with its definition already validated: the client
-    /// at the provider, the secret at version 1, the outputs entry, the first release, <c>app add
-    /// --release</c> and <c>wait</c>, each asserted. Answers the app as the provider knows it.
+    /// Steps 2 to 7 of the onboarding note for app 3 but step 5, the release prefix grant, which is IAM
+    /// and not hermetic, with its definition already validated: the client at the provider, the secret
+    /// at version 1, the outputs entry, the first release, <c>app add --release</c> and <c>wait</c>,
+    /// each asserted. Answers the app as the provider knows it.
     /// </summary>
     private static async Task<HarnessApp> OnboardApp3Async(GatewayHarness harness, HarnessSpactl spactl, string definition)
     {
@@ -289,7 +288,8 @@ public sealed class AdopterOnboardingTests
         WriteOutputsEntry(spactl, app3);
         await AddApp3Async(harness, spactl, spactl.WriteFile("app3.json", harness.DefinitionFor("app3")));
 
-        // Mutation that turns it red: the parameter written before app add (WriteSecretAsync moved up).
+        // Mutation that turns it red: the parameter written before app add, by inserting
+        // `await WriteSecretAsync(harness, app3);` ahead of AddApp3Async above; both F-45 tests go red.
         Assert.Equal(RefreshOutcome.SecretsUnreadable, await harness.ReloadRegistryDocumentAsync(Ct));
         Assert.Equal(1, harness.Registry.Current.Revision);
         SpactlRun stalled = await spactl.RunAsync(Ct, "wait", "--url", HarnessSpactl.Url, "--revision", "2", "--timeout", "1");
