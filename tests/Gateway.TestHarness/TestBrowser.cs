@@ -376,6 +376,9 @@ public sealed record BrowserResponse(
     public IReadOnlyList<string> SetCookies =>
         Headers.TryGetValue("Set-Cookie", out ImmutableArray<string> values) ? values : [];
 
-    /// <summary>Names the exchange without its body or cookie values, so it is safe in assertion output.</summary>
-    public override string ToString() => $"{Method} {Url} -> {(int)StatusCode}";
+    /// <summary>
+    /// Names the exchange by its URL's path, without its query, fragment, body or cookie values, so it is
+    /// safe in assertion output: a callback's or a chain step's query holds the provider's code and state.
+    /// </summary>
+    public override string ToString() => $"{Method} {Url.GetLeftPart(UriPartial.Path)} -> {(int)StatusCode}";
 }

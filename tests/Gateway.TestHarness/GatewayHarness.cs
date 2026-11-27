@@ -966,11 +966,13 @@ public sealed class GatewayHarness : IAsyncDisposable
     }
 
     /// <summary>
-    /// The mock API's listeners, by the API names the fixture definitions give them
-    /// (<c>MockApiOptions.Default</c>): each is an upstream of the cell, and admits the clients of the apps
-    /// and fragments whose entries name it.
+    /// The mock API's listeners, by the API names the fixture definitions give them, read from
+    /// <c>MockApiOptions.Default</c> so a listener added there is an upstream here too: each is an upstream
+    /// of the cell, and admits the clients of the apps and fragments whose entries name it. The names do not
+    /// depend on the issuer or the clients, so those are left empty.
     /// </summary>
-    private static readonly string[] MockApiListeners = ["orders", "reports"];
+    private static readonly string[] MockApiListeners =
+        [.. MockApiOptions.Default(string.Empty, string.Empty, string.Empty, string.Empty).Listeners.Select(listener => listener.Name)];
 
     /// <summary>
     /// The client id the provider issues a fragment, <c>client-{appId}-{fragmentId}</c>: distinct from every
