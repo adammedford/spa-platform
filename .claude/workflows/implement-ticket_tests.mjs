@@ -221,8 +221,10 @@ try {
     const unexited = await execute(second(), { checks: [courierReturn(RUN.checkPass, { exit: 2 })] })
     if (unexited.result.done || unexited.result.stop !== 'check-unjudged') fail(`a pass record with a non-zero exit: ${unexited.result.stop}`)
     const { head: _h, ...headless } = RUN.checkPass
-    const noHeads = await execute(second(), { start: courierReturn({ ...RUN.startFinished, head: undefined }), checks: [courierReturn(headless)] })
-    if (noHeads.result.done) fail('a finished start and a pass that both lack a head ended as done')
+    const noHeads = await execute(second(), { build: { ...BUILT, headSha: '' }, checks: [courierReturn({ ...RUN.checkPass, head: '' })] })
+    if (noHeads.result.done) fail('a build and a pass that both name an empty head ended as done')
+    const headlessStart = await execute(second(), { start: courierReturn({ ...RUN.startFinished, head: undefined }), checks: [courierReturn(headless)] })
+    if (headlessStart.result.done || headlessStart.labels.join() !== 'start') fail(`a finished start with no head: ran ${headlessStart.labels.join(', ')}; ${headlessStart.result.stop}`)
     const { boxes: _b, ...boxless } = RUN.startNew
     const noBoxes = await execute(second(), { start: courierReturn(boxless) })
     if (noBoxes.labels.join() !== 'start' || noBoxes.result.stop !== 'start-unjudged') fail(`a start record with no boxes: ran ${noBoxes.labels.join(', ')}; ${noBoxes.result.stop}`)
