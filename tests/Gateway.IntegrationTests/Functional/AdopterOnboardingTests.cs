@@ -78,7 +78,8 @@ public sealed class AdopterOnboardingTests
         SpactlRun valid = await spactl.RunAsync(Ct, "app", "validate", definition, "--config", spactl.ConfigPath);
         Assert.Equal(0, valid.Exit);
 
-        // 3 to 7: the client, the secret at version 1, the outputs entry, the release, app add and wait.
+        // The note's steps 2 to 7 but 5: the client, the secret at version 1, the outputs entry, the
+        // release, app add and wait.
         HarnessApp app3 = await OnboardApp3Async(harness, spactl, definition);
         BrowserResponse landed = await harness.SignInAsync(three, app3, Ct);
 
