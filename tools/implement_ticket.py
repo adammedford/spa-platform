@@ -48,7 +48,8 @@ not pass. --port, read's and check's alone, is an integer from 1024 to 65535, th
 takes, so the tool never prints a launch the script refuses.
 
 start reads the issue again and applies the same gates to what it finds now, so a ticket
-relabelled or claimed since read is refused before anything is written. With no task branch it
+relabelled or claimed since read is refused before anything is written. It is refused, too, when
+the open boxes it reads are not read's, in the same order: the confirmed seams number read's boxes. With no task branch it
 assigns the issue (`gh issue edit --add-assignee @me`) and adds the worktree on a new branch at
 read's base, undoing the assignment when the worktree cannot be added. With a branch it adds the
 worktree on it, or reuses the one that has it checked out, and assigns nobody anew. Its state is
@@ -475,6 +476,12 @@ def do_start(number: int, args) -> tuple[int, dict, str]:
     if code:
         record["state"] = "refused"
         return code, record, why
+    if record["boxes"] != earlier.get("boxes"):
+        # The confirmed seams number read's boxes, and the build is handed these: when the two lists
+        # differ, a seam's box number may point at another box (#1594's review).
+        record["state"] = "refused"
+        return 1, record, (f"#{number}'s open boxes are not the ones read recorded, so the seams "
+                           "confirmed against them may name other boxes: run read and launch again")
     branch, wt = record["branch"], pathlib.Path(record["worktree"])
     local = run(["git", "rev-parse", "--verify", "-q", f"refs/heads/{branch}"],
                 check=False).returncode == 0

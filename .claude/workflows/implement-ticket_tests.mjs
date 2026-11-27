@@ -228,6 +228,9 @@ try {
     const { boxes: _b, ...boxless } = RUN.startNew
     const noBoxes = await execute(second(), { start: courierReturn(boxless) })
     if (noBoxes.labels.join() !== 'start' || noBoxes.result.stop !== 'start-unjudged') fail(`a start record with no boxes: ran ${noBoxes.labels.join(', ')}; ${noBoxes.result.stop}`)
+    // A good start record with a non-zero exit: the tool could not write the record it printed.
+    const startUnexited = await execute(second(), { start: courierReturn(RUN.startNew, { exit: 2 }) })
+    if (startUnexited.labels.join() !== 'start' || startUnexited.result.stop !== 'start-unjudged') fail(`a new start record with a non-zero exit: ran ${startUnexited.labels.join(', ')}; ${startUnexited.result.stop}`)
     if (!String(x.result.next).includes('wait on his word') || commands(x.result.next).some((c) => /\bgit\s+push\b|gh\s+pr\s+create/.test(c))) fail(`done's next does not leave pushing to Adam: ${x.result.next}`)
     const stuck = await execute(second(), { checks: ['checkRunning'] })
     if (stuck.result.stop !== 'check-running' || stuck.labels.filter((l) => l.startsWith('check:')).length !== 8 || stuck.labels.includes('release')) fail(`a check running at every ask: ${stuck.labels.join(', ')}; ${stuck.result.stop}`)

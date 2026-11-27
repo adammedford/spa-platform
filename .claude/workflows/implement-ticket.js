@@ -56,8 +56,13 @@ export const meta = {
 //   a pass on another head  assigned, branch kept                compare the two heads; the same line
 //   check unjudged, or      assigned, branch kept                what the tool names; the same line
 //     still running
-//   done                    assigned, branch at the checked head hand-over, review, land
-// A red check is a stop in this ticket; the repair loop is #1566's.
+//   done                    assigned, branch at the checked head tell Adam; pushing waits on his word
+// Departures from #1563's table, named in #1565's pull request: a pass on another head
+// (head-mismatch), a check unjudged and a check still running are stops that table does not have.
+// None runs release: the branch may hold good work the tool could not judge, so the issue stays
+// assigned and the same line continues. And done's next names no hand-over command, where that table
+// names one: #1565 leaves the hand-over out of its scope, so pushing the branch and opening the pull
+// request wait on Adam's word.
 const A = args || {}
 const KNOWN_ARGS = ['repo', 'issue', 'wt', 'port', 'seams', 'skills']
 const REPO_DEFAULT = '/Users/adammedford/Projects/spa-platform'
@@ -302,7 +307,7 @@ if (checked.state === 'pass' && checked.verdict === 'pass' && checkGot.exit === 
   return {
     done: true, branch: begun.branch, worktree: WT, head: checked.head, fork: checked.fork, seams: SEAMS, build, check: checked,
     left: `assigned, branch ${begun.branch} at the checked head ${checked.head} in ${WT}; nothing pushed`,
-    next: `The branch is checked on ${checked.head}; nothing is pushed. The hand-over command is #1567's and not yet built, so stop here and tell Adam: pushing the branch and opening the pull request wait on his word. Then the review-queue launch, from a fresh top-level session Adam starts (docs/agents/landing-work.md -> "Launching the review"); then \`land ${ISSUE}\`.`,
+    next: `The branch is checked on ${checked.head}; nothing is pushed. Stop here and tell Adam: pushing the branch and opening the pull request wait on his word. Then the review-queue launch, from a fresh top-level session Adam starts (docs/agents/landing-work.md -> "Launching the review"); then \`land ${ISSUE}\`.`,
   }
 }
 if (checked.state === 'pass' && checked.verdict === 'pass' && checkGot.exit === 0 && text(checked.head)) {

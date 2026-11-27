@@ -400,6 +400,20 @@ class Start(Harness):
         self.assertFalse(self.wt.exists())
         self.assertEqual("", self.git("branch", "--list", BRANCH))
 
+    def test_a_ticket_whose_open_boxes_changed_since_read_is_refused_with_nothing_written(self):
+        self.read()
+        first = "- [ ] The thing prints its name."
+        last = "- [ ] Its companion fails when the name is wrong."
+        self.set_issue(issue(body=BODY.replace(first, "@").replace(last, first).replace("@", last)))
+        code, record, verdict, _ = self.tool("start", "7")
+        self.assert_verdict(code, verdict, "start", 1, "open boxes", "read and launch again")
+        self.assertEqual("refused", record["state"])
+        self.assertEqual(list(reversed(self.saved("read")["boxes"])), record["boxes"])
+        self.assertEqual([], self.assignees())
+        self.assertEqual([], self.edits())
+        self.assertFalse(self.wt.exists())
+        self.assertEqual("", self.git("branch", "--list", BRANCH))
+
     def test_start_with_no_read_record_exits_2(self):
         code, record, verdict, _ = self.tool("start", "7")
         self.assert_unjudged(code, record, verdict, "start", "read record")
