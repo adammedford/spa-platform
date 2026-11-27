@@ -5,10 +5,10 @@ exactly three resources:
 
 | Resource | Settings | Why |
 | --- | --- | --- |
-| Cognito app client `spa-platform-<cell>-<appId>` | Confidential, code grant only, the definition's `oauth.scopes`, `COGNITO` sign-in | The gateway holds the secret and the tokens |
-| | Callback `https://<host>/signin-oidc`, sign-out `https://<host>/` | `host` carries the port; Cognito's logout lands on `/` (R-C7, plan row 3.7) |
-| | Access and ID tokens 5 minutes; refresh token the registry's longest session (720 minutes, read from `contracts/registry.schema.json`) plus an hour | Refresh happens during a test run; a session never outlives its refresh token |
-| | Refresh rotation with a 60-second grace, Cognito's maximum (#332 D1), token revocation on, `ALLOW_REFRESH_TOKEN_AUTH` off | Rotation rules that flow out; a successor can recover a refresh whose holder died after rotation; logout revokes |
+| Cognito app client `spa-platform-<cell>-<appId>` | Confidential, code grant only, the definition's `oauth.scopes`, `COGNITO` sign-in | Kind, grants and client authentication: `contracts/identity-provider-contract.md` -> Each client. `COGNITO` is the pool's own sign-in |
+| | Callback `https://<host>/signin-oidc`, sign-out `https://<host>/` | The contract's "Callback" and "Logout return, `cognito`" rows. `host` carries the port because Cognito redirects back to the tunnel's local port; Cognito's logout returns no state, so it lands on `/` (R-C7, plan row 3.7) |
+| | Access and ID tokens 5 minutes; refresh token the registry's longest session (720 minutes, read from `contracts/registry.schema.json`) plus an hour | The contract's "Refresh-token validity" and "Access-token validity" floors. Five minutes is the proof cell's choice, so refresh happens during a test run; the hour is margin |
+| | Refresh rotation with a 60-second grace, Cognito's maximum (#332 D1), token revocation on, `ALLOW_REFRESH_TOKEN_AUTH` off | Revocation at the issuer's endpoint with the profile's secret style (the contract -> The issuer, "Revocation"; Each client, "Client authentication"); the gateway copes without rotation and revocation (-> What the gateway copes without), but unrevoked tokens stay valid until they expire. Cognito's 60-second maximum lets a successor recover a refresh whose holder died after rotation; rotation rules `ALLOW_REFRESH_TOKEN_AUTH` out |
 | Managed-login branding style | Cognito's default values | Managed login serves a client only once it has a style |
 | `SecureString` parameter `/spa-platform/<cell>/apps/<appId>/client-secret` | The client secret; later value changes ignored; re-created when its client's id changes | A rotation (docs/plan/05 -> Rotating a client secret) is not undone by the next apply, and a replaced client does not leave its old secret in the parameter (#554) |
 
@@ -16,8 +16,8 @@ And for each entry of a definition's `fragments[]` (#999, part of #961), the sam
 
 | Resource | Settings | Why |
 | --- | --- | --- |
-| Cognito app client `spa-platform-<cell>-<appId>.<fragmentId>` | The shell's client's settings, with the fragment's own `oauth.scopes` under the same grantable-scope precondition | A fragment's token set is refreshed, rotated and revoked through its own client |
-| | Callback `https://<shell host>/signin-oidc/<fragmentId>` only; no sign-out URL | Without the redirect URI a silent sign-in stops at the provider with a 400 (#961, "Failing hops"); the one provider logout is the shell's |
+| Cognito app client `spa-platform-<cell>-<appId>.<fragmentId>` | The shell's client's settings, with the fragment's own `oauth.scopes` under the same grantable-scope precondition | `contracts/identity-provider-contract.md` -> A fragment's client: every other row of Each client holds for it as for the shell's |
+| | Callback `https://<shell host>/signin-oidc/<fragmentId>` only; no sign-out URL | The contract -> A fragment's client: that one callback and no logout return. Without the redirect URI a silent sign-in stops at the provider with a 400 (#961, "Failing hops") |
 | Managed-login branding style | Cognito's default values | The fragment fallback is a managed-login sign-in; each style counts against Cognito's 20 per pool |
 | `SecureString` parameter `/spa-platform/<cell>/apps/<appId>/fragments/<fragmentId>/client-secret` | The shell parameter's lifecycle | Under the cell's `apps/` path, which the task role's and the CI plan role's grants already cover, so no IAM change |
 

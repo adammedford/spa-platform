@@ -70,9 +70,9 @@ locals {
     flatten(values(data.terraform_remote_state.idp.outputs.resource_servers)),
   ))
 
-  # The refresh token outlives the longest session the registry allows (plan row 1.8), so a
-  # session never ends early for want of a refresh. Read from the contract: a longer maximum
-  # there raises this without an edit here. One hour of margin; Cognito's floor is 60 minutes.
+  # The refresh token's floor is the gateway's (contracts/identity-provider-contract.md -> Each
+  # client, "Refresh-token validity"). Read from the registry schema, so a longer maximum there
+  # raises this without an edit here. One hour of margin; Cognito's floor is 60 minutes.
   longest_session_minutes = jsondecode(file("${path.module}/../../../../contracts/registry.schema.json"))["$defs"].session.properties.lifetimeMinutes.maximum
   refresh_token_minutes   = local.longest_session_minutes + 60
 }
@@ -85,26 +85,30 @@ resource "aws_cognito_user_pool_client" "app" {
   name         = "spa-platform-${var.cell}-${each.key}"
   user_pool_id = local.user_pool_id
 
-  # Confidential and code grant only: the gateway holds the secret and the tokens (ADR-0001's
-  # server-side tokens), and the browser never sees either.
+  # Kind and grants: contracts/identity-provider-contract.md -> Each client.
+  # COGNITO is the pool's own sign-in, the proof cell's only identity provider.
   generate_secret                      = true
   allowed_oauth_flows_user_pool_client = true
   allowed_oauth_flows                  = ["code"]
   allowed_oauth_scopes                 = each.value.oauth.scopes
   supported_identity_providers         = ["COGNITO"]
 
-  # The host carries the port (app1.spa-poc.test:8443), so the callback does too: Cognito
-  # redirects back to the tunnel's local port (docs/plan/01-plan.md -> assumptions; G0 item 3).
-  # /signin-oidc is the shared callback path (docs/plan/02-contracts.md -> reserved paths).
+  # The callback: contracts/identity-provider-contract.md -> Each client, "Callback", with the host
+  # exactly as the registry has it, port included (app1.spa-poc.test:8443). Here the port is the
+  # tunnel's: Cognito redirects back to its local port (docs/plan/01-plan.md -> assumptions; G0
+  # item 3).
   callback_urls = ["https://${each.value.host}/signin-oidc"]
 
-  # Cognito's logout returns no state, and /signout-callback-oidc answers an empty page without
-  # one (R-C7), so the cognito profile lands users on / (plan row 3.7).
+  # The logout return: contracts/identity-provider-contract.md -> Each client, "Logout return,
+  # `cognito`". Cognito's logout returns no state, and /signout-callback-oidc answers an empty page
+  # without one (R-C7), so the cognito profile lands users on / (plan row 3.7).
   logout_urls = ["https://${each.value.host}/"]
 
-  # Five-minute access tokens, so refresh happens during a test run (docs/plan/01-plan.md ->
-  # gate item 2). The ID token is read once, at the callback, and gets the same life. Units are
-  # explicit: without this block the numbers would be hours, hours and days.
+  # Above the access-token floor (contracts/identity-provider-contract.md -> Each client,
+  # "Access-token validity"). Five minutes is the proof cell's choice, so refresh happens during a
+  # test run (docs/plan/01-plan.md -> gate item 2). The ID token is read once, at the callback, and
+  # gets the same life. Units are explicit: without this block the numbers would be hours, hours
+  # and days.
   access_token_validity  = 5
   id_token_validity      = 5
   refresh_token_validity = local.refresh_token_minutes
@@ -115,20 +119,25 @@ resource "aws_cognito_user_pool_client" "app" {
     refresh_token = "minutes"
   }
 
-  # Each refresh returns a new refresh token, and the one it replaces still works for 60 seconds,
-  # the most Cognito allows (#332 D1, which amends ADR-0017's rejected alternative "raise Cognito's
-  # grace window instead of locking": this raises it with locking). The window buys recovery: a
-  # successor can recover a refresh whose holder died after rotation and before its write, while a
-  # retry reaches the provider inside the window (lease expiry < t < rotation + grace). It costs
-  # width: the longer window widens the two-grant hazard ADR-0017 found (C-2.17), which the lease
-  # and its check-before-call narrow.
+  # The gateway copes without rotation and its grace (contracts/identity-provider-contract.md ->
+  # What the gateway copes without). Here each refresh returns a new refresh token, and the one it
+  # replaces still works for 60 seconds, the most Cognito allows (#332 D1, which amends ADR-0017's
+  # rejected alternative "raise Cognito's grace window instead of locking": this raises it with
+  # locking). The window buys recovery: a successor can recover a refresh whose holder died after
+  # rotation and before its write, while a retry reaches the provider inside the window (lease
+  # expiry < t < rotation + grace). It costs width: the longer window widens the two-grant hazard
+  # ADR-0017 found (C-2.17), which the lease and its check-before-call narrow.
   # https://docs.aws.amazon.com/cognito/latest/developerguide/amazon-cognito-user-pools-using-the-refresh-token.html
   refresh_token_rotation {
     feature                    = "ENABLED"
     retry_grace_period_seconds = 60
   }
 
-  # Logout revokes the refresh token (docs/plan/02-contracts.md -> POST /bff/logout).
+  # Revocation at the issuer's endpoint, with the secret in the cognito profile's style there
+  # (contracts/identity-provider-contract.md -> The issuer, "Revocation"; Each client, "Client
+  # authentication"). On, so logout revokes the refresh token: the gateway copes without it, but
+  # the tokens then stay valid at the provider until they expire
+  # (contracts/identity-provider-contract.md -> What the gateway copes without).
   enable_token_revocation       = true
   prevent_user_existence_errors = "ENABLED"
 
@@ -181,9 +190,8 @@ resource "aws_ssm_parameter" "client_secret" {
 }
 
 # One confidential client per fragment, in the same pool, configured as its shell's client above
-# (#961, "The registry entry and the app definition"): a fragment's token set is refreshed, rotated
-# and revoked through its own client, so rotation with the 60-second grace and revocation matter as
-# much here as for the shell. The test holds every argument both blocks share to the shell's value.
+# (contracts/identity-provider-contract.md -> A fragment's client). The test holds every argument
+# both blocks share to the shell's value.
 # The name joins the ids with a dot, which neither id may hold and Cognito's client name allows
 # (ClientName's pattern, [\w\s+=,.@-]+).
 # https://docs.aws.amazon.com/cognito-user-identity-pools/latest/APIReference/API_CreateUserPoolClient.html
@@ -199,9 +207,9 @@ resource "aws_cognito_user_pool_client" "fragment" {
   allowed_oauth_scopes                 = each.value.scopes
   supported_identity_providers         = ["COGNITO"]
 
-  # The fragment's own callback at its shell's host, and nothing else: a silent sign-in whose
-  # redirect URI the client lacks stops at the provider with a 400 and never returns (#961,
-  # "Failing hops"). No logout URL: the one provider logout is the shell client's.
+  # Only /signin-oidc/{fragmentId} at its shell's host, and no logout return
+  # (contracts/identity-provider-contract.md -> A fragment's client). Without that redirect URI a
+  # silent sign-in stops at the provider with a 400 and never returns (#961, "Failing hops").
   callback_urls = ["https://${each.value.host}/signin-oidc/${each.value.fragment_id}"]
   logout_urls   = []
 
