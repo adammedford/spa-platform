@@ -230,7 +230,8 @@ try {
   {
     const red = await execute(second(), { checks: ['checkFail'] })
     if (red.labels.join() !== 'start,build,check:1,release' || red.result.stop !== 'red') fail(`a red check: ran ${red.labels.join(', ')}, returned ${red.result.stop}`)
-    if (red.result.log !== RUN.checkFail.log || !String(red.result.next).includes(RUN.checkFail.log)) fail(`a red check's return lacks the log's path: ${JSON.stringify(red.result).slice(0, 300)}`)
+    const LOG_PATH = `${FIRST.repo}/.scratch/implement/log/${ISSUE}/check.log`
+    if (red.result.log !== LOG_PATH || !String(red.result.next).includes(LOG_PATH)) fail(`a red check's return lacks the log's path: ${JSON.stringify(red.result).slice(0, 300)}`)
     const last = RUN.checkFail.tail[RUN.checkFail.tail.length - 1]
     if (!(Array.isArray(red.result.tail) && red.result.tail.includes(last)) || !String(red.result.next).includes(last)) fail('a red check\'s return lacks the log\'s last lines')
     if (!red.result.release || red.result.release.step !== 'release') fail('a red check\'s return lacks the release record')
