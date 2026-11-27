@@ -9,6 +9,8 @@
     <ProjectReference Include="../../src/Platform.Testing/Platform.Testing.csproj" />
     <ProjectReference Include="../../fixtures/TestIdp/TestIdp.csproj" />
     <ProjectReference Include="../../fixtures/MockApi/MockApi.csproj" />
+    <!-- HarnessSpactl runs spactl in process against the harness's bucket and hosts (#1516). -->
+    <ProjectReference Include="../../tools/spactl/spactl.csproj" />
   </ItemGroup>
 
   <ItemGroup>
