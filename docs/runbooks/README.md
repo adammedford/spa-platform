@@ -1,6 +1,6 @@
 # Operating notes
 
-The eight operations an operator performs on a cell built from the reference module, each as the
+The ten operations an operator performs on a cell built from the reference module, each as the
 command sequence the scripts in `tools/scripts/` and `spactl` already run. Owner: workstream 6.
 
 These notes are the order and the reasons. Each script's header is its manual, printed by
@@ -16,6 +16,7 @@ disagree the header wins and the note is wrong: fix the note.
 | Publish, activate or roll back a fragment | [fragments.md](fragments.md) | Fragment release | No one |
 | Rotate a client secret | [secret-rotation.md](secret-rotation.md) | Registry | No one |
 | End every session for an app | [end-app-sessions.md](end-app-sessions.md) | Registry | Every user of that app, and only that app |
+| Onboard or remove an app | [onboarding.md](onboarding.md) | Registry | Onboarding, no one; removal, every user of that app, and only that app |
 | Widen or narrow the bounds | [widening-the-bounds.md](widening-the-bounds.md) | Gateway | As Deploy: on one task with sessions in memory, every user of every app; on two tasks with the durable session store, no one |
 | Tear the cell down | [teardown.md](teardown.md) | Infrastructure | Everyone; nothing is left |
 
