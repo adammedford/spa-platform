@@ -1,0 +1,821 @@
+{
+ "note": "The records tools/implement_ticket.py writes, for implement-ticket_tests.mjs to serve as its couriers' returns (#1565). Written on 2026-11-27 by running tools/implement_ticket_tests.py's kind_records (a ticket of each of the tool's KINDS: tickets) and run_records (one run, read to release: run) against that companion's throwaway repository, fake gh and stub check, with its temporary directory replaced by /tmp/implement-ticket-fixture. That companion's FixtureKeys fails when a record the tool writes lacks a key held here, so a record's shape changes in the tool, this file and the script together.",
+ "tickets": [
+  {
+   "kind": "dotnet",
+   "read": {
+    "step": "read",
+    "issue": 7,
+    "title": "The thing prints its name, and its companion holds it",
+    "state": "OPEN",
+    "labels": [
+     "ready-for-agent",
+     "kind:ticket"
+    ],
+    "assignees": [],
+    "blockers": [],
+    "boxes": [
+     "The thing prints its name.",
+     "Its companion fails when the name is wrong."
+    ],
+    "touches": [
+     "Directory.Build.props",
+     "tools/thing.py"
+    ],
+    "owner": "integrator",
+    "id": "issue-7",
+    "slug": "the-thing-prints-its-name-and-its-companion",
+    "branch": "task/issue-7-the-thing-prints-its-name-and-its-companion",
+    "worktree": "/tmp/implement-ticket-fixture/worktrees/issue-7",
+    "branchExists": false,
+    "kinds": [
+     "dotnet",
+     "script"
+    ],
+    "gates": [
+     {
+      "gate": "open",
+      "ok": true,
+      "detail": "the issue is OPEN"
+     },
+     {
+      "gate": "ready-for-agent",
+      "ok": true,
+      "detail": "its labels are ready-for-agent, kind:ticket"
+     },
+     {
+      "gate": "no-open-blocker",
+      "ok": true,
+      "detail": "open blockers: none"
+     },
+     {
+      "gate": "ticket-shape",
+      "ok": true,
+      "detail": "the shape holds"
+     },
+     {
+      "gate": "unclaimed",
+      "ok": true,
+      "detail": "assignees: none; branch task/issue-7-the-thing-prints-its-name-and-its-companion is new"
+     },
+     {
+      "gate": "boxes",
+      "ok": true,
+      "detail": "2 open box text(s) read, and overnight_collect.py counts 2"
+     }
+    ],
+    "base": "5ac4a71beaea23b5d9ce7d96a8ec6a28e15281e7",
+    "port": 5180,
+    "verdict": "pass",
+    "exit": 0,
+    "why": "#7 passes every gate",
+    "launch": {
+     "scriptPath": "/tmp/implement-ticket-fixture/checkout/.claude/workflows/implement-ticket.js",
+     "args": {
+      "repo": "/tmp/implement-ticket-fixture/checkout",
+      "issue": 7,
+      "wt": "/tmp/implement-ticket-fixture/worktrees/issue-7",
+      "port": 5180
+     }
+    }
+   }
+  },
+  {
+   "kind": "terraform",
+   "read": {
+    "step": "read",
+    "issue": 7,
+    "title": "The thing prints its name, and its companion holds it",
+    "state": "OPEN",
+    "labels": [
+     "ready-for-agent",
+     "kind:ticket"
+    ],
+    "assignees": [],
+    "blockers": [],
+    "boxes": [
+     "The thing prints its name.",
+     "Its companion fails when the name is wrong."
+    ],
+    "touches": [
+     "infra/modules/thing/main.tf",
+     "infra/modules/thing/tests/thing.tftest.hcl"
+    ],
+    "owner": "ws1-infra",
+    "id": "issue-7",
+    "slug": "the-thing-prints-its-name-and-its-companion",
+    "branch": "task/issue-7-the-thing-prints-its-name-and-its-companion",
+    "worktree": "/tmp/implement-ticket-fixture/worktrees/issue-7",
+    "branchExists": false,
+    "kinds": [
+     "terraform"
+    ],
+    "gates": [
+     {
+      "gate": "open",
+      "ok": true,
+      "detail": "the issue is OPEN"
+     },
+     {
+      "gate": "ready-for-agent",
+      "ok": true,
+      "detail": "its labels are ready-for-agent, kind:ticket"
+     },
+     {
+      "gate": "no-open-blocker",
+      "ok": true,
+      "detail": "open blockers: none"
+     },
+     {
+      "gate": "ticket-shape",
+      "ok": true,
+      "detail": "the shape holds"
+     },
+     {
+      "gate": "unclaimed",
+      "ok": true,
+      "detail": "assignees: none; branch task/issue-7-the-thing-prints-its-name-and-its-companion is new"
+     },
+     {
+      "gate": "boxes",
+      "ok": true,
+      "detail": "2 open box text(s) read, and overnight_collect.py counts 2"
+     }
+    ],
+    "base": "90cbf73c2e25864fb0b1eaca3d17a1335bccafba",
+    "port": 5180,
+    "verdict": "pass",
+    "exit": 0,
+    "why": "#7 passes every gate",
+    "launch": {
+     "scriptPath": "/tmp/implement-ticket-fixture/checkout/.claude/workflows/implement-ticket.js",
+     "args": {
+      "repo": "/tmp/implement-ticket-fixture/checkout",
+      "issue": 7,
+      "wt": "/tmp/implement-ticket-fixture/worktrees/issue-7",
+      "port": 5180
+     }
+    }
+   }
+  },
+  {
+   "kind": "script",
+   "read": {
+    "step": "read",
+    "issue": 7,
+    "title": "The thing prints its name, and its companion holds it",
+    "state": "OPEN",
+    "labels": [
+     "ready-for-agent",
+     "kind:ticket"
+    ],
+    "assignees": [],
+    "blockers": [],
+    "boxes": [
+     "The thing prints its name.",
+     "Its companion fails when the name is wrong."
+    ],
+    "touches": [
+     "tools/thing.py",
+     "tools/thing_tests.py"
+    ],
+    "owner": "integrator",
+    "id": "issue-7",
+    "slug": "the-thing-prints-its-name-and-its-companion",
+    "branch": "task/issue-7-the-thing-prints-its-name-and-its-companion",
+    "worktree": "/tmp/implement-ticket-fixture/worktrees/issue-7",
+    "branchExists": false,
+    "kinds": [
+     "script"
+    ],
+    "gates": [
+     {
+      "gate": "open",
+      "ok": true,
+      "detail": "the issue is OPEN"
+     },
+     {
+      "gate": "ready-for-agent",
+      "ok": true,
+      "detail": "its labels are ready-for-agent, kind:ticket"
+     },
+     {
+      "gate": "no-open-blocker",
+      "ok": true,
+      "detail": "open blockers: none"
+     },
+     {
+      "gate": "ticket-shape",
+      "ok": true,
+      "detail": "the shape holds"
+     },
+     {
+      "gate": "unclaimed",
+      "ok": true,
+      "detail": "assignees: none; branch task/issue-7-the-thing-prints-its-name-and-its-companion is new"
+     },
+     {
+      "gate": "boxes",
+      "ok": true,
+      "detail": "2 open box text(s) read, and overnight_collect.py counts 2"
+     }
+    ],
+    "base": "2bd03156802b3b3c1a0614e24f87fd2dc6e1af19",
+    "port": 5180,
+    "verdict": "pass",
+    "exit": 0,
+    "why": "#7 passes every gate",
+    "launch": {
+     "scriptPath": "/tmp/implement-ticket-fixture/checkout/.claude/workflows/implement-ticket.js",
+     "args": {
+      "repo": "/tmp/implement-ticket-fixture/checkout",
+      "issue": 7,
+      "wt": "/tmp/implement-ticket-fixture/worktrees/issue-7",
+      "port": 5180
+     }
+    }
+   }
+  },
+  {
+   "kind": "workflow",
+   "read": {
+    "step": "read",
+    "issue": 7,
+    "title": "The thing prints its name, and its companion holds it",
+    "state": "OPEN",
+    "labels": [
+     "ready-for-agent",
+     "kind:ticket"
+    ],
+    "assignees": [],
+    "blockers": [],
+    "boxes": [
+     "The thing prints its name.",
+     "Its companion fails when the name is wrong."
+    ],
+    "touches": [
+     ".claude/workflows/thing.js",
+     ".claude/workflows/thing_tests.mjs"
+    ],
+    "owner": "integrator",
+    "id": "issue-7",
+    "slug": "the-thing-prints-its-name-and-its-companion",
+    "branch": "task/issue-7-the-thing-prints-its-name-and-its-companion",
+    "worktree": "/tmp/implement-ticket-fixture/worktrees/issue-7",
+    "branchExists": false,
+    "kinds": [
+     "workflow"
+    ],
+    "gates": [
+     {
+      "gate": "open",
+      "ok": true,
+      "detail": "the issue is OPEN"
+     },
+     {
+      "gate": "ready-for-agent",
+      "ok": true,
+      "detail": "its labels are ready-for-agent, kind:ticket"
+     },
+     {
+      "gate": "no-open-blocker",
+      "ok": true,
+      "detail": "open blockers: none"
+     },
+     {
+      "gate": "ticket-shape",
+      "ok": true,
+      "detail": "the shape holds"
+     },
+     {
+      "gate": "unclaimed",
+      "ok": true,
+      "detail": "assignees: none; branch task/issue-7-the-thing-prints-its-name-and-its-companion is new"
+     },
+     {
+      "gate": "boxes",
+      "ok": true,
+      "detail": "2 open box text(s) read, and overnight_collect.py counts 2"
+     }
+    ],
+    "base": "2126b1893e812e2856680008f62864830e74ea06",
+    "port": 5180,
+    "verdict": "pass",
+    "exit": 0,
+    "why": "#7 passes every gate",
+    "launch": {
+     "scriptPath": "/tmp/implement-ticket-fixture/checkout/.claude/workflows/implement-ticket.js",
+     "args": {
+      "repo": "/tmp/implement-ticket-fixture/checkout",
+      "issue": 7,
+      "wt": "/tmp/implement-ticket-fixture/worktrees/issue-7",
+      "port": 5180
+     }
+    }
+   }
+  },
+  {
+   "kind": "docs",
+   "read": {
+    "step": "read",
+    "issue": 7,
+    "title": "The thing prints its name, and its companion holds it",
+    "state": "OPEN",
+    "labels": [
+     "ready-for-agent",
+     "kind:ticket"
+    ],
+    "assignees": [],
+    "blockers": [],
+    "boxes": [
+     "The thing prints its name.",
+     "Its companion fails when the name is wrong."
+    ],
+    "touches": [
+     "docs/thing.md"
+    ],
+    "owner": "integrator",
+    "id": "issue-7",
+    "slug": "the-thing-prints-its-name-and-its-companion",
+    "branch": "task/issue-7-the-thing-prints-its-name-and-its-companion",
+    "worktree": "/tmp/implement-ticket-fixture/worktrees/issue-7",
+    "branchExists": false,
+    "kinds": [
+     "docs"
+    ],
+    "gates": [
+     {
+      "gate": "open",
+      "ok": true,
+      "detail": "the issue is OPEN"
+     },
+     {
+      "gate": "ready-for-agent",
+      "ok": true,
+      "detail": "its labels are ready-for-agent, kind:ticket"
+     },
+     {
+      "gate": "no-open-blocker",
+      "ok": true,
+      "detail": "open blockers: none"
+     },
+     {
+      "gate": "ticket-shape",
+      "ok": true,
+      "detail": "the shape holds"
+     },
+     {
+      "gate": "unclaimed",
+      "ok": true,
+      "detail": "assignees: none; branch task/issue-7-the-thing-prints-its-name-and-its-companion is new"
+     },
+     {
+      "gate": "boxes",
+      "ok": true,
+      "detail": "2 open box text(s) read, and overnight_collect.py counts 2"
+     }
+    ],
+    "base": "fc0807812b53fcb854438c55b0cd9cae86c3f167",
+    "port": 5180,
+    "verdict": "pass",
+    "exit": 0,
+    "why": "#7 passes every gate",
+    "launch": {
+     "scriptPath": "/tmp/implement-ticket-fixture/checkout/.claude/workflows/implement-ticket.js",
+     "args": {
+      "repo": "/tmp/implement-ticket-fixture/checkout",
+      "issue": 7,
+      "wt": "/tmp/implement-ticket-fixture/worktrees/issue-7",
+      "port": 5180
+     }
+    }
+   }
+  }
+ ],
+ "run": {
+  "read": {
+   "step": "read",
+   "issue": 7,
+   "title": "The thing prints its name, and its companion holds it",
+   "state": "OPEN",
+   "labels": [
+    "ready-for-agent",
+    "kind:ticket"
+   ],
+   "assignees": [],
+   "blockers": [],
+   "boxes": [
+    "The thing prints its name.",
+    "Its companion fails when the name is wrong."
+   ],
+   "touches": [
+    "tools/thing.py",
+    "tools/thing_tests.py",
+    "docs/thing.md"
+   ],
+   "owner": "integrator",
+   "id": "issue-7",
+   "slug": "the-thing-prints-its-name-and-its-companion",
+   "branch": "task/issue-7-the-thing-prints-its-name-and-its-companion",
+   "worktree": "/tmp/implement-ticket-fixture/worktrees/issue-7",
+   "branchExists": false,
+   "kinds": [
+    "script",
+    "docs"
+   ],
+   "gates": [
+    {
+     "gate": "open",
+     "ok": true,
+     "detail": "the issue is OPEN"
+    },
+    {
+     "gate": "ready-for-agent",
+     "ok": true,
+     "detail": "its labels are ready-for-agent, kind:ticket"
+    },
+    {
+     "gate": "no-open-blocker",
+     "ok": true,
+     "detail": "open blockers: none"
+    },
+    {
+     "gate": "ticket-shape",
+     "ok": true,
+     "detail": "the shape holds"
+    },
+    {
+     "gate": "unclaimed",
+     "ok": true,
+     "detail": "assignees: none; branch task/issue-7-the-thing-prints-its-name-and-its-companion is new"
+    },
+    {
+     "gate": "boxes",
+     "ok": true,
+     "detail": "2 open box text(s) read, and overnight_collect.py counts 2"
+    }
+   ],
+   "base": "fc0807812b53fcb854438c55b0cd9cae86c3f167",
+   "port": 5180,
+   "verdict": "pass",
+   "exit": 0,
+   "why": "#7 passes every gate",
+   "launch": {
+    "scriptPath": "/tmp/implement-ticket-fixture/checkout/.claude/workflows/implement-ticket.js",
+    "args": {
+     "repo": "/tmp/implement-ticket-fixture/checkout",
+     "issue": 7,
+     "wt": "/tmp/implement-ticket-fixture/worktrees/issue-7",
+     "port": 5180
+    }
+   }
+  },
+  "launch": {
+   "step": "launch",
+   "issue": 7,
+   "seamsFile": "implementer",
+   "seams": "implementer",
+   "boxes": [
+    "The thing prints its name.",
+    "Its companion fails when the name is wrong."
+   ],
+   "verdict": "pass",
+   "exit": 0,
+   "why": "#7's 2 open box(es) are covered: the implementer's own",
+   "launch": {
+    "scriptPath": "/tmp/implement-ticket-fixture/checkout/.claude/workflows/implement-ticket.js",
+    "args": {
+     "repo": "/tmp/implement-ticket-fixture/checkout",
+     "issue": 7,
+     "wt": "/tmp/implement-ticket-fixture/worktrees/issue-7",
+     "port": 5180,
+     "seams": "implementer"
+    }
+   }
+  },
+  "startNew": {
+   "step": "start",
+   "issue": 7,
+   "title": "The thing prints its name, and its companion holds it",
+   "state": "new",
+   "labels": [
+    "ready-for-agent",
+    "kind:ticket"
+   ],
+   "assignees": [],
+   "blockers": [],
+   "boxes": [
+    "The thing prints its name.",
+    "Its companion fails when the name is wrong."
+   ],
+   "touches": [
+    "tools/thing.py",
+    "tools/thing_tests.py",
+    "docs/thing.md"
+   ],
+   "owner": "integrator",
+   "id": "issue-7",
+   "slug": "the-thing-prints-its-name-and-its-companion",
+   "branch": "task/issue-7-the-thing-prints-its-name-and-its-companion",
+   "worktree": "/tmp/implement-ticket-fixture/worktrees/issue-7",
+   "branchExists": false,
+   "kinds": [
+    "script",
+    "docs"
+   ],
+   "gates": [
+    {
+     "gate": "open",
+     "ok": true,
+     "detail": "the issue is OPEN"
+    },
+    {
+     "gate": "ready-for-agent",
+     "ok": true,
+     "detail": "its labels are ready-for-agent, kind:ticket"
+    },
+    {
+     "gate": "no-open-blocker",
+     "ok": true,
+     "detail": "open blockers: none"
+    },
+    {
+     "gate": "ticket-shape",
+     "ok": true,
+     "detail": "the shape holds"
+    },
+    {
+     "gate": "unclaimed",
+     "ok": true,
+     "detail": "assignees: none; branch task/issue-7-the-thing-prints-its-name-and-its-companion is new"
+    },
+    {
+     "gate": "boxes",
+     "ok": true,
+     "detail": "2 open box text(s) read, and overnight_collect.py counts 2"
+    }
+   ],
+   "base": "fc0807812b53fcb854438c55b0cd9cae86c3f167",
+   "head": "fc0807812b53fcb854438c55b0cd9cae86c3f167",
+   "fork": "fc0807812b53fcb854438c55b0cd9cae86c3f167",
+   "verdict": "pass",
+   "exit": 0,
+   "why": "#7 is new on task/issue-7-the-thing-prints-its-name-and-its-companion at fc0807812b53 in /tmp/implement-ticket-fixture/worktrees/issue-7"
+  },
+  "checkFail": {
+   "step": "check",
+   "issue": 7,
+   "worktree": "/tmp/implement-ticket-fixture/worktrees/issue-7",
+   "head": "f0e21798c5dbc88776e4a7bf733429acec31c14f",
+   "fork": "fc0807812b53fcb854438c55b0cd9cae86c3f167",
+   "port": 5180,
+   "log": "/tmp/implement-ticket-fixture/checkout/.scratch/implement/log/7/check.log",
+   "started": true,
+   "pid": 30887,
+   "logHead": "f0e21798c5dbc88776e4a7bf733429acec31c14f",
+   "lastLine": "check: fail: the tests failed.",
+   "clean": true,
+   "uncommitted": [],
+   "ownership": {
+    "ok": true,
+    "exit": 0,
+    "named": [
+     "integrator"
+    ],
+    "output": "A-05: 1 file(s), all owned by integrator."
+   },
+   "outsideTouches": [],
+   "tail": [
+    "HEAD=f0e21798c5dbc88776e4a7bf733429acec31c14f",
+    "stub check: --full --base fc0807812b53fcb854438c55b0cd9cae86c3f167 --port 5180",
+    "check: fail: the tests failed."
+   ],
+   "testReach": {
+    "failedAt": "tests",
+    "verdict": "check: fail: the tests failed.",
+    "projects": [
+     {
+      "project": "tests/Stub.Tests",
+      "reachedBy": [
+       "stub (project)"
+      ]
+     }
+    ],
+    "changed": [
+     "--log",
+     "/tmp/implement-ticket-fixture/checkout/.scratch/implement/log/7/check.log",
+     "--base",
+     "fc0807812b53fcb854438c55b0cd9cae86c3f167",
+     "--head",
+     "f0e21798c5dbc88776e4a7bf733429acec31c14f"
+    ]
+   },
+   "state": "fail",
+   "verdict": "fail",
+   "exit": 1,
+   "why": "the log's last line is 'check: fail: the tests failed.'"
+  },
+  "checkRunning": {
+   "step": "check",
+   "issue": 7,
+   "worktree": "/tmp/implement-ticket-fixture/worktrees/issue-7",
+   "head": "49550d4774005dfaf56d9733522f686addc6d18c",
+   "fork": "fc0807812b53fcb854438c55b0cd9cae86c3f167",
+   "port": 5180,
+   "log": "/tmp/implement-ticket-fixture/checkout/.scratch/implement/log/7/check.log",
+   "started": true,
+   "pid": 31003,
+   "state": "running",
+   "logHead": "49550d4774005dfaf56d9733522f686addc6d18c",
+   "tail": [
+    "HEAD=49550d4774005dfaf56d9733522f686addc6d18c",
+    "stub check: --full --base fc0807812b53fcb854438c55b0cd9cae86c3f167 --port 5180"
+   ],
+   "verdict": "fail",
+   "exit": 2,
+   "why": "no verdict yet: the check for this head is still running (pid 31003); run check again"
+  },
+  "checkPass": {
+   "step": "check",
+   "issue": 7,
+   "worktree": "/tmp/implement-ticket-fixture/worktrees/issue-7",
+   "head": "2b393ec49eb9d67bd6aed831bf92ee46412d787d",
+   "fork": "fc0807812b53fcb854438c55b0cd9cae86c3f167",
+   "port": 5180,
+   "log": "/tmp/implement-ticket-fixture/checkout/.scratch/implement/log/7/check.log",
+   "started": true,
+   "pid": 31173,
+   "logHead": "2b393ec49eb9d67bd6aed831bf92ee46412d787d",
+   "lastLine": "check: pass: stub",
+   "clean": true,
+   "uncommitted": [],
+   "ownership": {
+    "ok": true,
+    "exit": 0,
+    "named": [
+     "integrator"
+    ],
+    "output": "A-05: 3 file(s), all owned by integrator."
+   },
+   "outsideTouches": [],
+   "tail": [
+    "HEAD=2b393ec49eb9d67bd6aed831bf92ee46412d787d",
+    "stub check: --full --base fc0807812b53fcb854438c55b0cd9cae86c3f167 --port 5180",
+    "check: pass: stub"
+   ],
+   "state": "pass",
+   "verdict": "pass",
+   "exit": 0,
+   "why": "the full check passed on 2b393ec49eb9, all integrator's"
+  },
+  "startFinished": {
+   "step": "start",
+   "issue": 7,
+   "title": "The thing prints its name, and its companion holds it",
+   "state": "finished",
+   "labels": [
+    "ready-for-agent",
+    "kind:ticket"
+   ],
+   "assignees": [
+    "case"
+   ],
+   "blockers": [],
+   "boxes": [
+    "The thing prints its name.",
+    "Its companion fails when the name is wrong."
+   ],
+   "touches": [
+    "tools/thing.py",
+    "tools/thing_tests.py",
+    "docs/thing.md"
+   ],
+   "owner": "integrator",
+   "id": "issue-7",
+   "slug": "the-thing-prints-its-name-and-its-companion",
+   "branch": "task/issue-7-the-thing-prints-its-name-and-its-companion",
+   "worktree": "/tmp/implement-ticket-fixture/worktrees/issue-7",
+   "branchExists": true,
+   "kinds": [
+    "script",
+    "docs"
+   ],
+   "gates": [
+    {
+     "gate": "open",
+     "ok": true,
+     "detail": "the issue is OPEN"
+    },
+    {
+     "gate": "ready-for-agent",
+     "ok": true,
+     "detail": "its labels are ready-for-agent, kind:ticket"
+    },
+    {
+     "gate": "no-open-blocker",
+     "ok": true,
+     "detail": "open blockers: none"
+    },
+    {
+     "gate": "ticket-shape",
+     "ok": true,
+     "detail": "the shape holds"
+    },
+    {
+     "gate": "unclaimed",
+     "ok": true,
+     "detail": "assignees: case; branch task/issue-7-the-thing-prints-its-name-and-its-companion exists"
+    },
+    {
+     "gate": "boxes",
+     "ok": true,
+     "detail": "2 open box text(s) read, and overnight_collect.py counts 2"
+    }
+   ],
+   "base": "fc0807812b53fcb854438c55b0cd9cae86c3f167",
+   "head": "2b393ec49eb9d67bd6aed831bf92ee46412d787d",
+   "fork": "fc0807812b53fcb854438c55b0cd9cae86c3f167",
+   "verdict": "pass",
+   "exit": 0,
+   "why": "#7 is finished on task/issue-7-the-thing-prints-its-name-and-its-companion at 2b393ec49eb9 in /tmp/implement-ticket-fixture/worktrees/issue-7"
+  },
+  "release": {
+   "step": "release",
+   "issue": 7,
+   "assignees": [],
+   "branch": "task/issue-7-the-thing-prints-its-name-and-its-companion",
+   "worktree": "/tmp/implement-ticket-fixture/worktrees/issue-7",
+   "branchKept": true,
+   "worktreeKept": true,
+   "verdict": "pass",
+   "exit": 0,
+   "why": "#7 is unassigned; branch task/issue-7-the-thing-prints-its-name-and-its-companion kept, worktree /tmp/implement-ticket-fixture/worktrees/issue-7 kept"
+  },
+  "startRefused": {
+   "step": "start",
+   "issue": 7,
+   "title": "The thing prints its name, and its companion holds it",
+   "state": "refused",
+   "labels": [
+    "ready-for-human"
+   ],
+   "assignees": [],
+   "blockers": [],
+   "boxes": [
+    "The thing prints its name.",
+    "Its companion fails when the name is wrong."
+   ],
+   "touches": [
+    "tools/thing.py",
+    "tools/thing_tests.py",
+    "docs/thing.md"
+   ],
+   "owner": "integrator",
+   "id": "issue-7",
+   "slug": "the-thing-prints-its-name-and-its-companion",
+   "branch": "task/issue-7-the-thing-prints-its-name-and-its-companion",
+   "worktree": "/tmp/implement-ticket-fixture/worktrees/issue-7",
+   "branchExists": true,
+   "kinds": [
+    "script",
+    "docs"
+   ],
+   "gates": [
+    {
+     "gate": "open",
+     "ok": true,
+     "detail": "the issue is OPEN"
+    },
+    {
+     "gate": "ready-for-agent",
+     "ok": false,
+     "detail": "its labels are ready-for-human"
+    },
+    {
+     "gate": "no-open-blocker",
+     "ok": true,
+     "detail": "open blockers: none"
+    },
+    {
+     "gate": "ticket-shape",
+     "ok": true,
+     "detail": "the shape holds"
+    },
+    {
+     "gate": "unclaimed",
+     "ok": true,
+     "detail": "assignees: none; branch task/issue-7-the-thing-prints-its-name-and-its-companion exists"
+    },
+    {
+     "gate": "boxes",
+     "ok": true,
+     "detail": "2 open box text(s) read, and overnight_collect.py counts 2"
+    }
+   ],
+   "base": "fc0807812b53fcb854438c55b0cd9cae86c3f167",
+   "verdict": "fail",
+   "exit": 1,
+   "why": "#7 fails the gate(s) ready-for-agent (its labels are ready-for-human)"
+  }
+ }
+}
