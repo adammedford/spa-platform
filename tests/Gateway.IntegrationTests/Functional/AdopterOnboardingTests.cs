@@ -170,6 +170,7 @@ public sealed class AdopterOnboardingTests
         string app1Session = harness.SessionStore!.Created[^1];
         await harness.SignInAsync(browser, app3, Ct);
         string app3Session = harness.SessionStore.Created[^1];
+        Assert.Equal("app3", (await harness.SessionStore.GetAsync(app3Session, Ct))?.AppId);
 
         // The registry first.
         SpactlRun removed = await spactl.RunAsync(Ct, "app", "remove", "app3", "--outputs", spactl.OutputsPath, "--config", spactl.ConfigPath);
@@ -268,8 +269,9 @@ public sealed class AdopterOnboardingTests
     /// </summary>
     private static async Task<HarnessApp> OnboardApp3Async(GatewayHarness harness, HarnessSpactl spactl, string definition)
     {
-        HarnessApp app3 = RegisterApp3(harness, spactl);
+        HarnessApp app3 = RegisterApp3(harness);
         await WriteSecretAsync(harness, app3);
+        WriteOutputsEntry(spactl, app3);
         await AddApp3Async(harness, spactl, definition);
         Assert.Equal(RefreshOutcome.Swapped, await harness.ReloadRegistryDocumentAsync(Ct));
         SpactlRun ready = await spactl.RunAsync(Ct, "wait", "--url", HarnessSpactl.Url, "--revision", "2", "--timeout", "30");
@@ -283,7 +285,8 @@ public sealed class AdopterOnboardingTests
     /// </summary>
     private static async Task<HarnessApp> StallOnApp3Async(GatewayHarness harness, HarnessSpactl spactl)
     {
-        HarnessApp app3 = RegisterApp3(harness, spactl);
+        HarnessApp app3 = RegisterApp3(harness);
+        WriteOutputsEntry(spactl, app3);
         await AddApp3Async(harness, spactl, spactl.WriteFile("app3.json", harness.DefinitionFor("app3")));
 
         // Mutation that turns it red: the parameter written before app add (WriteSecretAsync moved up).
@@ -296,10 +299,11 @@ public sealed class AdopterOnboardingTests
     }
 
     /// <summary>
-    /// The client at the provider, with the <c>standard</c> callback and post-logout return, and its
-    /// outputs entry naming the parameter at version 1, as an adopter's tooling writes both.
+    /// The client at the provider, with the <c>standard</c> callback and post-logout return, as an
+    /// adopter's tooling registers it. Its secret is random per run, so a value seen in a log line is
+    /// this run's (N-16).
     /// </summary>
-    private static HarnessApp RegisterApp3(GatewayHarness harness, HarnessSpactl spactl)
+    private static HarnessApp RegisterApp3(GatewayHarness harness)
     {
         string host = harness.DefinitionFor("app3")["host"]!.GetValue<string>();
         HarnessApp app3 = new(
@@ -310,9 +314,14 @@ public sealed class AdopterOnboardingTests
             "secret-app3-" + Convert.ToHexStringLower(System.Security.Cryptography.RandomNumberGenerator.GetBytes(16)),
             "ssm:/spa-platform/harness/apps/app3/client-secret:1");
         harness.Idp.AddClient(app3.ClientId, app3.ClientSecret, app3.Url("/signin-oidc").ToString(), app3.Url("/signout-callback-oidc").ToString());
-        (string parameter, long version) = GatewayHarness.SecretParameter(app3.SecretRef);
-        spactl.WriteClient("app3", app3.ClientId, parameter, version);
         return app3;
+    }
+
+    /// <summary>The outputs document's <c>clients.app3</c>, naming the parameter at the version its reference pins.</summary>
+    private static void WriteOutputsEntry(HarnessSpactl spactl, HarnessApp app)
+    {
+        (string parameter, long version) = GatewayHarness.SecretParameter(app.SecretRef);
+        spactl.WriteClient(app.AppId, app.ClientId, parameter, version);
     }
 
     /// <summary>The provider's client secret alone, into the cell's store; the store must number it as the reference pins.</summary>
