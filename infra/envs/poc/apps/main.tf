@@ -85,7 +85,7 @@ resource "aws_cognito_user_pool_client" "app" {
   name         = "spa-platform-${var.cell}-${each.key}"
   user_pool_id = local.user_pool_id
 
-  # Kind, grants and client authentication: contracts/identity-provider-contract.md -> Each client.
+  # Kind and grants: contracts/identity-provider-contract.md -> Each client.
   # COGNITO is the pool's own sign-in, the proof cell's only identity provider.
   generate_secret                      = true
   allowed_oauth_flows_user_pool_client = true
@@ -123,11 +123,10 @@ resource "aws_cognito_user_pool_client" "app" {
   # What the gateway copes without). Here each refresh returns a new refresh token, and the one it
   # replaces still works for 60 seconds, the most Cognito allows (#332 D1, which amends ADR-0017's
   # rejected alternative "raise Cognito's grace window instead of locking": this raises it with
-  # locking). The window buys recovery: a
-  # successor can recover a refresh whose holder died after rotation and before its write, while a
-  # retry reaches the provider inside the window (lease expiry < t < rotation + grace). It costs
-  # width: the longer window widens the two-grant hazard ADR-0017 found (C-2.17), which the lease
-  # and its check-before-call narrow.
+  # locking). The window buys recovery: a successor can recover a refresh whose holder died after
+  # rotation and before its write, while a retry reaches the provider inside the window (lease
+  # expiry < t < rotation + grace). It costs width: the longer window widens the two-grant hazard
+  # ADR-0017 found (C-2.17), which the lease and its check-before-call narrow.
   # https://docs.aws.amazon.com/cognito/latest/developerguide/amazon-cognito-user-pools-using-the-refresh-token.html
   refresh_token_rotation {
     feature                    = "ENABLED"
@@ -136,7 +135,9 @@ resource "aws_cognito_user_pool_client" "app" {
 
   # Revocation at the issuer's endpoint, with the secret in the cognito profile's style there
   # (contracts/identity-provider-contract.md -> The issuer, "Revocation"; Each client, "Client
-  # authentication"), which the gateway copes without (-> What the gateway copes without).
+  # authentication"). On, so logout revokes the refresh token: the gateway copes without it, but
+  # the tokens then stay valid at the provider until they expire
+  # (contracts/identity-provider-contract.md -> What the gateway copes without).
   enable_token_revocation       = true
   prevent_user_existence_errors = "ENABLED"
 
