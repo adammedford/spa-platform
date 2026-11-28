@@ -864,7 +864,8 @@ class Prove(Harness):
         save_mutation(self, "name", 1, "tools/thing_tests.py",
                       {"tools/thing.py": "print('broken')\n"})
         code, record, verdict, _ = self.prove()
-        self.assert_unjudged(code, record, verdict, "prove", "check record")
+        self.assert_verdict(code, verdict, "prove", 1, "no check record")
+        self.assertEqual(("refused", None), (record["state"], record.get("patches")))
         self.behave('echo "check: fail: the tests failed."\n')
         self.tool("check", "7")
         code, record, verdict, _ = self.prove()
@@ -1163,6 +1164,11 @@ class FixtureKeys(Harness):
         for name, record in self.fixture["run"].items():
             with self.subTest(record=name):
                 self.assert_keys(name, record, written[name])
+                # prove's rows are read by the script row by row, so their keys are held too.
+                for rows in ("baselines", "patches", "boxes"):
+                    if record.get(rows):
+                        self.assert_keys(f"{name} {rows} row", record[rows][0],
+                                         written[name][rows][0])
                 self.assertEqual((record["step"], record["state"] if "state" in record else None),
                                  (written[name]["step"], written[name].get("state")))
 

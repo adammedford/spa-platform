@@ -357,6 +357,8 @@ try {
     const still = await execute(second(), { prove: { 0: courierReturn(proveOn(RUN.checkPass.head, ['unproved', 'no-test'])), 1: courierReturn(proveOn(REPAIR_HEADS[0], ['unproved', 'no-test'])) } })
     if (!still.prompt('repair:2').includes("Box 1's mutation proof is unproved") || !still.prompt('repair:2').includes(`box 1 at ${REPAIR_HEADS[0]}`)) fail(`a box still unproved on the repair's head is dropped as seen: ${still.labels.join(', ')}`)
     // The whole default of the fixture: prove's gaps record served as is.
+    const redBase = await execute(second(), { prove: { 0: courierReturn(proveOn(RUN.checkPass.head, ['baseline-red', 'no-test'])) } })
+    if (!redBase.prompt('repair:1').includes("Box 1's mutation proof is baseline-red")) fail(`a baseline-red box is no finding: ${redBase.labels.join(', ')}`)
     const asIs = await execute(second(), { prove: { 0: courierReturn({ ...RUN.prove, state: 'gaps', boxes: [RUN.prove.boxes[0], { ...RUN.prove.boxes[1], state: 'did-not-apply' }] }) } })
     if (!asIs.prompt('repair:1').includes("Box 2's mutation proof is did-not-apply")) fail('a did-not-apply box does not reach the repair')
   }
@@ -392,6 +394,8 @@ try {
     if (x.labels.includes('repair:3') || !x.labels.includes('repair:2') || !x.labels.includes('standards:2') || !x.labels.includes('prove:2')) fail(`three rounds of findings: ran ${x.labels.join(', ')}`)
     if (x.result.done !== true || x.result.rounds !== 2 || !same(x.result.findings.outstanding.map((f) => f.title), ['Bug of round 2']) || x.result.head !== REPAIR_HEADS[1]) fail(`findings left after the second round: ${JSON.stringify(x.result).slice(0, 400)}`)
     if (!same(x.result.findings.repaired.map((f) => f.title), ['Bug of round 0', 'Bug of round 1'])) fail(`the repaired findings: ${JSON.stringify(x.result.findings.repaired)}`)
+    const declined = await execute(second(), { reviews: { 'standards:0': axisReturn('Standards', [finding('Bug of round 0'), finding('A matter of taste')]) }, repair: { 1: { ...repairReturn(REPAIR_HEADS[0]), notFixed: [{ title: 'a matter of TASTE', why: 'the standard allows it' }] } } })
+    if (!same(declined.result.findings.repaired.map((f) => f.title), ['Bug of round 0']) || !same(declined.result.findings.outstanding.map((f) => [f.title, f.notFixedBecause]), [['A matter of taste', 'the standard allows it']])) fail(`a finding the repair did not fix: ${JSON.stringify(declined.result.findings)}`)
     const nothing = await execute(second(), { reviews: every, repair: { 1: repairReturn(RUN.checkPass.head) } })
     if (nothing.labels.includes('check:r1:1') || nothing.result.done !== true || nothing.result.rounds !== 1 || !same(nothing.result.findings.outstanding.map((f) => f.title), ['Bug of round 0'])) fail(`a repair that changed nothing: ran ${nothing.labels.join(', ')}; ${JSON.stringify(nothing.result.findings)}`)
     const red = courierReturn({ ...RUN.checkFail, head: REPAIR_HEADS[1] })

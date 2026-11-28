@@ -83,8 +83,8 @@ the changed files outside the Touches paths without failing on them, and on a re
 prove re-runs every mutation the build claims (#1566; "claims are re-run, not read", #202). A mutation
 is a patch made with `git diff` in the worktree, `mutations/<k>.patch` in the issue's log directory,
 beside `mutations/<k>.json`, the sidecar `{"box": <1-based open box>, "project": <path in the
-worktree>}`. prove refuses, with state `refused` and nothing run, unless check.json records a pass
-on the worktree's HEAD. A docs-only ticket (read's kinds are docs alone) then passes with nothing to
+worktree>}`. prove refuses, with state `refused`, exit 1 and nothing run, unless check.json exists
+and records a pass on the worktree's HEAD. A docs-only ticket (read's kinds are docs alone) then passes with nothing to
 prove. Otherwise every mutation is read first, and the step fails (state `fail`) naming each whose
 patch or sidecar is missing or unreadable, whose box is not an open box, or whose project is outside
 the worktree, absent from it, or of no single kind with a command in KINDS (kinds_of names its
@@ -962,7 +962,9 @@ def run_project(kind: str, project: str, cwd: pathlib.Path) -> dict:
     except subprocess.TimeoutExpired as error:
         with contextlib.suppress(OSError):
             os.killpg(process.pid, 9)
-        process.communicate()
+        # A grandchild that left the session may hold the pipe: the wait for it is bounded too.
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            process.communicate(timeout=5)
         raise Unjudged(f"{' '.join(command)} did not end within the call's time bound "
                        f"({left:.1f} s were left), so it was killed") from error
     return {"command": command, "exit": process.returncode,
@@ -1001,13 +1003,17 @@ def do_prove(number: int, args) -> tuple[int, dict, str]:
     ticket = read_record(number, "read")
     begun = read_record(number, "start")
     confirmed = read_record(number, "launch").get("seams")
-    checked = read_record(number, "check")
     wt = pathlib.Path(begun["worktree"])
     if not wt.is_dir():
         raise Unjudged(f"the worktree {wt} that start made is gone")
     head = git("rev-parse", "HEAD", cwd=wt)
     directory = LOG_ROOT / str(number) / "mutations"
     record = {"issue": number, "worktree": str(wt), "head": head, "mutations": str(directory)}
+    try:
+        checked = read_record(number, "check")
+    except Unjudged as error:
+        record["state"] = "refused"
+        return 1, record, f"there is no check record to prove against ({error}): run check first"
     if checked.get("state") != "pass" or checked.get("verdict") != "pass":
         record["state"] = "refused"
         return 1, record, (f"the check record {checked.get('head', '?')[:12]} did not pass, so "

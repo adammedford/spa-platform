@@ -15,7 +15,8 @@ export const meta = {
 
 // ---------------------------------------------------------------- what this is
 // The second and third tickets of the foreground implement harness (#1563, built under #1565 and
-// #1566): the workflow half, as far as a built, checked, proved and pre-reviewed branch. tools/implement_ticket.py decides what code can decide and
+// #1566): the workflow half, as far as a built, checked, proved and pre-reviewed branch.
+// tools/implement_ticket.py decides what code can decide and
 // writes each step's record; this script starts the agents that judge (the planner, the builder) and
 // the couriers that run one tool command each, and routes on the records they return. A Workflow
 // script has no filesystem and no network, so every read of git, the issue or a log is the tool's.
@@ -37,8 +38,9 @@ export const meta = {
 // The loop (#1566). A red check goes to Repair. A passing check goes to Prove, the tool's re-run of
 // every saved mutation patch, and Review: a Standards and a Spec agent read the diff by sha, each
 // suspected finding goes to a skeptic told to refute it, and survives only when not refuted; a box
-// prove left did-not-fail, did-not-apply or unproved is a verified finding of the script's own, which
-// no skeptic sees. Findings are deduplicated by key (FINDING below). Surviving findings go to Repair:
+// prove left did-not-fail, did-not-apply, baseline-red or unproved is a verified finding of the
+// script's own, which no skeptic sees. Findings are deduplicated by key (FINDING below). Surviving
+// findings go to Repair:
 // one agent, which returns a new head, and any new head goes back to Check, then Prove and the
 // pre-review of the new commits. Two repair rounds at most (MAX_REPAIRS): after the second, or a round
 // that changes nothing, the run ends, done with what is left as findings.outstanding when the last
@@ -379,7 +381,9 @@ const firstSeen = (f) => {
 }
 const findings = { repaired: [], outstanding: [], refuted: [] }
 let lastProve = null
-const PROVE_GAPS = ['did-not-fail', 'did-not-apply', 'unproved']
+// Every box state but proved and no-test: a baseline-red box is a test red at the checked head, which
+// no patch can prove, so it is a finding too rather than a run done with nothing outstanding.
+const PROVE_GAPS = ['did-not-fail', 'did-not-apply', 'baseline-red', 'unproved']
 const proveFindings = (rec) => (rec.boxes || []).filter((b) => PROVE_GAPS.includes(b.state)).map((b) => ({
   axis: 'Spec', title: `Box ${b.box}'s mutation proof is ${b.state}`, where: `box ${b.box} at ${rec.head}`,
   checked: `tools/implement_ticket.py prove on ${rec.head}: ${b.patches.length ? 'patch(es) ' + b.patches.join(', ') : 'no saved patch'}${b.text ? ', for "' + b.text + '"' : ''}`,
@@ -476,25 +480,26 @@ for (;;) {
     if (!surviving.length) break
   }
   const red = c.kind === 'red' ? checked : null
-  const close = () => {
-    if (!red) {
-      findings.outstanding.push(...surviving)
-      return null
-    }
-    return 'red'
-  }
   if (round >= MAX_REPAIRS) {
-    if (close() === 'red') return await failedRed(red, `${MAX_REPAIRS} repair rounds, the most a run takes, were used`)
+    if (red) return await failedRed(red, `${MAX_REPAIRS} repair rounds, the most a run takes, were used`)
+    findings.outstanding.push(...surviving)
     break
   }
   round++
   phase('Repair')
   const repair = await agent(repairPrompt(surviving, red, head), { label: `repair:${round}`, phase: 'Repair', schema: REPAIR })
   if (!repair || !text(repair.headSha) || repair.headSha === head) {
-    if (close() === 'red') return await failedRed(red, `repair round ${round} changed nothing`)
+    if (red) return await failedRed(red, `repair round ${round} changed nothing`)
+    findings.outstanding.push(...surviving)
     break
   }
-  findings.repaired.push(...surviving)
+  // A finding the repair names in notFixed stays outstanding: its key is seen, so no later round
+  // would report it again, and the repair's word is the only record that it still stands.
+  const declined = new Map((repair.notFixed || []).map((x) => [norm(x.title), x.why]))
+  for (const f of surviving) {
+    if (declined.has(norm(f.title))) findings.outstanding.push({ ...f, notFixedBecause: declined.get(norm(f.title)) })
+    else findings.repaired.push(f)
+  }
   expected = repair.headSha
   whose = `repair:${round} returned`
 }
