@@ -133,6 +133,45 @@ public sealed class GatewayHarness : IAsyncDisposable
     /// <summary>The client secrets the gateway reads. Set a new reference here before publishing it (F-09).</summary>
     public FakeClientSecretSource Secrets { get; }
 
+    /// <summary>
+    /// The cell's Parameter Store for client secrets, every host's, under
+    /// <see cref="GatewayHarnessOptions.SecretsThroughParameterStore"/>; null otherwise (#1516).
+    /// </summary>
+    public ParameterStoreStub? SecretParameters { get; private set; }
+
+    /// <summary>
+    /// The parameter name and version a <c>ssm:{name}:{version}</c> reference pins, split at its last
+    /// colon as <c>contracts/registry.schema.json</c> (<c>clientSecretRef</c>) shapes it.
+    /// </summary>
+    public static (string Name, long Version) SecretParameter(string secretRef)
+    {
+        ArgumentNullException.ThrowIfNull(secretRef);
+        const string Prefix = "ssm:";
+        int colon = secretRef.LastIndexOf(':');
+        return secretRef.StartsWith(Prefix, StringComparison.Ordinal) && colon > Prefix.Length
+            ? (secretRef[Prefix.Length..colon], long.Parse(secretRef[(colon + 1)..], NumberStyles.None, CultureInfo.InvariantCulture))
+            : throw new ArgumentException($"{secretRef} is not an ssm:{{name}}:{{version}} reference.", nameof(secretRef));
+    }
+
+    /// <summary>
+    /// Puts a secret the harness minted where the gateway reads it: <see cref="Secrets"/>, and under
+    /// <see cref="GatewayHarnessOptions.SecretsThroughParameterStore"/> also <see cref="SecretParameters"/>
+    /// at the version the reference pins, failing loudly when the store would number it otherwise.
+    /// </summary>
+    private void SetSecret(string secretRef, string value)
+    {
+        Secrets[secretRef] = value;
+        if (SecretParameters is { } store)
+        {
+            (string name, long version) = SecretParameter(secretRef);
+            long written = store.Put(name, value);
+            if (written != version)
+            {
+                throw new InvalidOperationException($"{secretRef} pins version {version}, but the store wrote version {written}.");
+            }
+        }
+    }
+
     /// <summary>Every line any gateway host logged, as its formatter wrote it.</summary>
     public CapturedLog Log { get; }
 
@@ -246,6 +285,7 @@ public sealed class GatewayHarness : IAsyncDisposable
         SwitchableSessionStore? sessionStore = cell ? new SwitchableSessionStore() : null;
         RecordingRefreshLeases? leases = cell && !options.RefreshLeasesPerHost ? new RecordingRefreshLeases(options.Clock ?? TimeProvider.System) : null;
         ParameterStoreStub? sharedParameterStore = options.KeyRing == KeyRingSharing.OneParameterStore ? new ParameterStoreStub() : null;
+        ParameterStoreStub? secretParameters = options.SecretsThroughParameterStore ? new ParameterStoreStub() : null;
 
         (GatewayFactory, string?, ParameterStoreStub?, HostSessionStore?) NewHost(int index)
         {
@@ -286,7 +326,16 @@ public sealed class GatewayHarness : IAsyncDisposable
             services.RemoveAll<IObjectStore>();
             services.AddSingleton<IObjectStore>(gatewayStore);
             services.RemoveAll<IClientSecretSource>();
-            services.AddSingleton<IClientSecretSource>(secrets);
+            if (secretParameters is not null)
+            {
+                // One real source per host, each with its own cache, over the cell's one store (#1516).
+                services.AddSingleton<IClientSecretSource>(provider => new ParameterStoreClientSecretSource(
+                    secretParameters, provider.GetRequiredService<ILogger<ParameterStoreClientSecretSource>>()));
+            }
+            else
+            {
+                services.AddSingleton<IClientSecretSource>(secrets);
+            }
             if (options.Clock is { } clock)
             {
                 services.RemoveAll<TimeProvider>();
@@ -323,6 +372,7 @@ public sealed class GatewayHarness : IAsyncDisposable
         harness.newHost = NewHost;
         harness.SessionStore = sessionStore;
         harness.RefreshLeases = leases;
+        harness.SecretParameters = secretParameters;
 
         try
         {
@@ -464,10 +514,17 @@ public sealed class GatewayHarness : IAsyncDisposable
     /// and the app's callback, back to the shell. Returns the shell the browser landed on. Throws, naming
     /// where the login ended, when it did not land on the app's own origin with a 200.
     /// </summary>
-    public async Task<BrowserResponse> SignInAsync(TestBrowser browser, string appId, CancellationToken ct = default)
+    public Task<BrowserResponse> SignInAsync(TestBrowser browser, string appId, CancellationToken ct = default) =>
+        SignInAsync(browser, App(appId), ct);
+
+    /// <summary>
+    /// As <see cref="SignInAsync(TestBrowser, string, CancellationToken)"/>, to an app the harness did not
+    /// register: one a test onboarded by hand, as an adopter's tooling does, through <c>spactl</c> (#1516).
+    /// </summary>
+    public async Task<BrowserResponse> SignInAsync(TestBrowser browser, HarnessApp app, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(browser);
-        HarnessApp app = App(appId);
+        ArgumentNullException.ThrowIfNull(app);
         BrowserResponse landed = await browser.NavigateAsync(app.Url("/bff/login"), ct: ct);
         if (landed.StatusCode != System.Net.HttpStatusCode.OK || !FetchMetadata.IsSameOrigin(app.Origin, landed.Url)
             || landed.RedirectedFrom.All(hop => hop.AbsolutePath != "/signin-oidc"))
@@ -740,7 +797,7 @@ public sealed class GatewayHarness : IAsyncDisposable
             after.ClientSecret,
             after.Url("/signin-oidc").ToString(),
             [after.Url("/signout-callback-oidc").ToString(), after.Url("/").ToString()]);
-        Secrets[after.SecretRef] = after.ClientSecret;
+        SetSecret(after.SecretRef, after.ClientSecret);
         apps[appId] = after;
 
         RefreshOutcome outcome = await UpdateRegistryAsync(next =>
@@ -782,7 +839,7 @@ public sealed class GatewayHarness : IAsyncDisposable
             after.ClientSecret,
             app.Url("/signin-oidc/" + fragmentId).ToString(),
             [app.Url("/signout-callback-oidc").ToString(), app.Url("/").ToString()]);
-        Secrets[after.SecretRef] = after.ClientSecret;
+        SetSecret(after.SecretRef, after.ClientSecret);
         apps[appId] = app with { Fragments = [.. app.Fragments.Select(f => f.FragmentId == fragmentId ? after : f)] };
 
         RefreshOutcome outcome = await UpdateRegistryAsync(next =>
@@ -842,6 +899,21 @@ public sealed class GatewayHarness : IAsyncDisposable
         }
 
         return entry;
+    }
+
+    /// <summary>
+    /// An app definition (contracts/app-definition.schema.json) as an operator hands it to <c>spactl</c>:
+    /// the fixture's, with <c>oauth.issuer</c> set to the harness's issuer and each mock API upstream
+    /// pointed at the listener the harness started, as an operator sets the cell's values on a team's
+    /// draft (#1516). Nothing is registered at the provider and no secret is written. A fragment's APIs
+    /// are left as the fixture gives them.
+    /// </summary>
+    public JsonObject DefinitionFor(string appId)
+    {
+        JsonObject definition = FixtureFiles.AppDefinition(appId);
+        definition["oauth"]!["issuer"] = Options.IssuerName;
+        definition["apis"] = WithUpstreams(definition["apis"] as JsonArray ?? []);
+        return definition;
     }
 
     /// <summary>Each mock API upstream pointed at the listener the harness started, and the echo API added.</summary>
@@ -921,7 +993,7 @@ public sealed class GatewayHarness : IAsyncDisposable
             app.Url("/signin-oidc").ToString(),
             // The standard profile returns to the signout callback; the Cognito profile lands on / (ADR-0011).
             [app.Url("/signout-callback-oidc").ToString(), app.Url("/").ToString()]);
-        Secrets[app.SecretRef] = app.ClientSecret;
+        SetSecret(app.SecretRef, app.ClientSecret);
 
         if (fragmentIds is { Count: > 0 })
         {
@@ -939,7 +1011,7 @@ public sealed class GatewayHarness : IAsyncDisposable
                     fragment.ClientSecret,
                     app.Url("/signin-oidc/" + fragmentId).ToString(),
                     [app.Url("/signout-callback-oidc").ToString(), app.Url("/").ToString()]);
-                Secrets[fragment.SecretRef] = fragment.ClientSecret;
+                SetSecret(fragment.SecretRef, fragment.ClientSecret);
                 fragments.Add(fragment);
             }
 

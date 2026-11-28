@@ -127,6 +127,18 @@ public sealed record GatewayHarnessOptions
     /// </summary>
     public bool RegistryAtStart { get; init; } = true;
 
+    /// <summary>
+    /// Whether the gateway reads client secrets through the real source (#1516). When set, each host
+    /// registers its own <c>ParameterStoreClientSecretSource</c> over one <see cref="ParameterStoreStub"/>,
+    /// <see cref="GatewayHarness.SecretParameters"/>, shared by every host: the per-host cache of the real
+    /// source and one store for the cell, so a parameter deleted while an app is live breaks only a host
+    /// started afterwards. The harness writes each secret it mints into that stub at the version its
+    /// reference pins, as well as into <see cref="GatewayHarness.Secrets"/>, which no host then reads.
+    /// The default is the one <see cref="FakeClientSecretSource"/> every host shares, which caches
+    /// nothing and cannot show a per-host cache.
+    /// </summary>
+    public bool SecretsThroughParameterStore { get; init; }
+
     /// <summary>Two hosts over one ring, one session store and one lease table: the cell of plan row P2-5.</summary>
     public static GatewayHarnessOptions TwoHosts => new() { Hosts = 2, KeyRing = KeyRingSharing.OneParameterStore };
 }
