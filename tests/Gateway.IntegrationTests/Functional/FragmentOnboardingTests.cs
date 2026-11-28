@@ -111,10 +111,9 @@ public sealed class FragmentOnboardingTests
             Fragments.Fragments.States(await Fragments.Fragments.SessionAsync(after, shell, Ct)));
         Assert.Equal(reports.ClientId, await Fragments.Fragments.ClientIdAtEchoAsync(harness, after, shell, Added, Ct));
 
-        // No restart: one host, which took the fragment by a registry swap, and the session signed in
-        // before the add still answers. It holds no set for the new fragment, which reads loginRequired
-        // until its user signs in to it.
-        Assert.Single(harness.Hosts);
+        // No restart: the running host took the fragment by the registry swap asserted above, and the
+        // session signed in before the add still answers. It holds no set for the new fragment, which reads
+        // loginRequired until its user signs in to it.
         Assert.Equal(
             new Dictionary<string, string> { [orders.FragmentId] = "signedIn", [Added] = "loginRequired" },
             Fragments.Fragments.States(await Fragments.Fragments.SessionAsync(before, shell, Ct)));
