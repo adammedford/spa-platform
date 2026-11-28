@@ -356,6 +356,7 @@ try {
     // A box still unproved on the repair's head is a finding there: its place names that head.
     const still = await execute(second(), { prove: { 0: courierReturn(proveOn(RUN.checkPass.head, ['unproved', 'no-test'])), 1: courierReturn(proveOn(REPAIR_HEADS[0], ['unproved', 'no-test'])) } })
     if (!still.prompt('repair:2').includes("Box 1's mutation proof is unproved") || !still.prompt('repair:2').includes(`box 1 at ${REPAIR_HEADS[0]}`)) fail(`a box still unproved on the repair's head is dropped as seen: ${still.labels.join(', ')}`)
+    if (!same(still.result.findings.repaired.map((f) => f.where), [`box 1 at ${REPAIR_HEADS[0]}`])) fail(`a box the first repair left unproved is returned as repaired: ${JSON.stringify(still.result.findings.repaired)}`)
     // The whole default of the fixture: prove's gaps record served as is.
     const redBase = await execute(second(), { prove: { 0: courierReturn(proveOn(RUN.checkPass.head, ['baseline-red', 'no-test'])) } })
     if (!redBase.prompt('repair:1').includes("Box 1's mutation proof is baseline-red")) fail(`a baseline-red box is no finding: ${redBase.labels.join(', ')}`)

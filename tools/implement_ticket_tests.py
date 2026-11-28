@@ -9,7 +9,11 @@ tools/overnight_collect_tests.py runs its own: a fake `gh` on PATH answers from 
 every call, so no case reaches GitHub. The repository holds the tool and the rules it loads by path
 (tools/overnight_collect.py, tools/ticket_shape.py, .github/path-ownership.py, .github/touches.sh,
 OWNERSHIP.md), copied from this checkout, beside two stubs: a tools/check.sh that writes the log a
-case chooses and counts its runs, and a tools/test_reach.py that prints one fixed judgement. Each of
+case chooses and counts its runs, and a tools/test_reach.py that prints one fixed judgement. The
+Prove cases commit a stub test project, tools/thing_tests.py, which fails when tools/thing.py says
+"broken", and save mutations as the build prompt asks; `python3` on PATH is this interpreter, which
+prove runs a script project with, and TMPDIR is the case's own, so a throwaway worktree left behind
+is seen. Each of
 those cases asserts on the record the command writes, its verdict line and its exit code, and on what
 the fake gh and git show afterwards. A case may overwrite one of the copied rules in that checkout,
 uncommitted, to make it misbehave. The Launcher cases run the tool's LAUNCHER alone, with no

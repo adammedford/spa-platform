@@ -384,6 +384,7 @@ let lastProve = null
 // Every box state but proved and no-test: a baseline-red box is a test red at the checked head, which
 // no patch can prove, so it is a finding too rather than a run done with nothing outstanding.
 const PROVE_GAPS = ['did-not-fail', 'did-not-apply', 'baseline-red', 'unproved']
+const boxOf = (f) => (/^Box (\d+)'s mutation proof is /.exec(f.title) || [])[1]
 const proveFindings = (rec) => (rec.boxes || []).filter((b) => PROVE_GAPS.includes(b.state)).map((b) => ({
   axis: 'Spec', title: `Box ${b.box}'s mutation proof is ${b.state}`, where: `box ${b.box} at ${rec.head}`,
   checked: `tools/implement_ticket.py prove on ${rec.head}: ${b.patches.length ? 'patch(es) ' + b.patches.join(', ') : 'no saved patch'}${b.text ? ', for "' + b.text + '"' : ''}`,
@@ -457,6 +458,11 @@ for (;;) {
     }
     lastProve = proved
     const made = ran ? proveFindings(proved) : [{ axis: 'Spec', title: 'The saved mutations cannot be proved', where: `${MUTATIONS_DIR} at ${head}`, checked: `tools/implement_ticket.py prove on ${head}: ${proved.why}`, status: 'verified', severity: 'high' }]
+    // A box that is a gap again on this head was not repaired by the round that moved off the last.
+    for (const f of made) {
+      const box = boxOf(f)
+      if (box) findings.repaired = findings.repaired.filter((r) => boxOf(r) !== box)
+    }
 
     phase('Review')
     const fork = checked.fork
