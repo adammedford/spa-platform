@@ -3,7 +3,10 @@
 
 A foreground session building one ticket runs these, from the main checkout, in this order:
 
-    python3 -I tools/implement_ticket.py read <n> --wt <path>   gate the ticket and record it
+    python3 -I tools/implement_ticket.py read <n> --wt <path> [--port <p>]
+                                                                gate the ticket and record it
+    python3 -I tools/implement_ticket.py launch <n> --seams <file>|implementer
+                                                                check the confirmed seams
     python3 -I tools/implement_ticket.py start <n>              claim it and make its worktree
     python3 -I tools/implement_ticket.py check <n> [--port <p>] the full check, detached, judged
     python3 -I tools/implement_ticket.py release <n>            unclaim a run that failed
@@ -29,8 +32,24 @@ every gate holds, and fails naming each that does not:
 - boxes: the open boxes OPEN_BOX reads are as many as overnight_collect.py's open_boxes() counts,
   so no box is built that the overnight run would not see, or the reverse.
 
+A passing read's record ends on the first launch of .claude/workflows/implement-ticket.js (#1565):
+`"launch": {"scriptPath": <the script in this checkout>, "args": {"repo", "issue", "wt", "port"}}`,
+port being --port, default DEFAULT_PORT. That launch runs the Plan agent alone and returns proposed
+seams. A refused read has no launch.
+
+launch checks the seams Adam confirmed against read's record and, when they hold, ends its record on
+the second launch: the first's args with "seams" added, the file's JSON unchanged. --seams is a JSON
+file `{"seams": [{"name", "interface", "boxes"}], "noTest": [{"box", "why"}]}`, where a box is the
+1-based index of an open box in read's record ("boxes"), or the one word `implementer`, which lets
+the build agent choose and list its own seams. It fails naming each box that is in no seam and not in
+noTest, each box in two seams (or a seam and noTest), each index the ticket has no box for, each
+field missing or of the wrong kind, and a field the file should not have; and it fails when read did
+not pass. --port, read's and check's alone, is an integer from 1024 to 65535, the range the script
+takes, so the tool never prints a launch the script refuses.
+
 start reads the issue again and applies the same gates to what it finds now, so a ticket
-relabelled or claimed since read is refused before anything is written. With no task branch it
+relabelled or claimed since read is refused before anything is written. It is refused, too, when
+the open boxes it reads are not read's, in the same order: the confirmed seams number read's boxes. With no task branch it
 assigns the issue (`gh issue edit --add-assignee @me`) and adds the worktree on a new branch at
 read's base, undoing the assignment when the worktree cannot be added. With a branch it adds the
 worktree on it, or reuses the one that has it checked out, and assigns nobody anew. Its state is
@@ -69,6 +88,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import copy
 import fcntl
 import fnmatch
 import importlib.util
@@ -85,6 +105,7 @@ LOG_ROOT = ROOT / ".scratch" / "implement" / "log"
 FIELDS = "number,title,state,body,labels,assignees,blockedBy,subIssuesSummary,url"
 READY = "ready-for-agent"
 DEFAULT_PORT = 5180
+SCRIPT_PATH = ".claude/workflows/implement-ticket.js"
 # The Bash tool's limit is 600 s. A call returns within WAIT_BOUND, so its wait ends JUDGING_RESERVE
 # earlier, leaving room for A-05 and test_reach.py after it; run() gives every command only the time
 # left before the call's deadline, so the reserve holds (#1569's review).
@@ -317,14 +338,112 @@ def fetch() -> str:
     return git("rev-parse", "origin/main")
 
 
+def first_launch(record: dict, port: int) -> dict:
+    return {"scriptPath": str(ROOT / SCRIPT_PATH),
+            "args": {"repo": str(ROOT), "issue": record["issue"], "wt": record["worktree"],
+                     "port": port}}
+
+
 def do_read(number: int, args) -> tuple[int, dict, str]:
     if not args.wt:
         raise Unjudged("read needs --wt <path>, the worktree to build in")
     base = fetch()
     record = judged(fetch_issue(number), str(pathlib.Path(args.wt).resolve()))
     record["base"] = base
+    record["port"] = args.port or DEFAULT_PORT
     code, why = gate_verdict(record, "read")
+    if code == 0:
+        record["launch"] = first_launch(record, record["port"])
     return code, record, why
+
+
+# --- launch ----------------------------------------------------------------------------------------
+
+def seam_problems(seams, boxes: list[str]) -> list[str]:
+    """What is wrong with the confirmed seams against the open boxes, each named; [] when every
+    open box is in exactly one seam or in noTest."""
+    if seams == "implementer":
+        return []
+    if not isinstance(seams, dict) or not isinstance(seams.get("seams"), list):
+        return ['the seams file holds neither {"seams": [...], "noTest": [...]} nor the word '
+                '"implementer"']
+    unknown = sorted(set(seams) - {"seams", "noTest"})
+    if unknown:
+        return [f"{', '.join(unknown)}: not a field; a seams file has seams and noTest"]
+    no_test = seams.get("noTest", [])
+    if not isinstance(no_test, list):
+        return ["noTest is not a list"]
+    problems, holders = [], {}
+
+    def index(value, where: str) -> int | None:
+        if isinstance(value, bool) or not isinstance(value, int):
+            problems.append(f"{where}: a box is a 1-based integer index, not {value!r}")
+            return None
+        if not 1 <= value <= len(boxes):
+            problems.append(f"{where}: box {value} is not one of the ticket's {len(boxes)} open "
+                            "box(es)")
+            return None
+        return value
+
+    for at, seam in enumerate(seams["seams"], 1):
+        if not isinstance(seam, dict):
+            problems.append(f"seam {at} is not an object")
+            continue
+        name = seam.get("name") if isinstance(seam.get("name"), str) else f"seam {at}"
+        for field in ("name", "interface"):
+            if not (isinstance(seam.get(field), str) and seam[field].strip()):
+                problems.append(f"{name}: {field} is missing or empty")
+        if not (isinstance(seam.get("boxes"), list) and seam["boxes"]):
+            problems.append(f"{name}: boxes is missing or empty")
+            continue
+        for value in seam["boxes"]:
+            box = index(value, f"{name}'s boxes")
+            if box is not None:
+                holders.setdefault(box, []).append(name)
+    for at, entry in enumerate(no_test, 1):
+        if not isinstance(entry, dict):
+            problems.append(f"noTest entry {at} is not an object")
+            continue
+        if not (isinstance(entry.get("why"), str) and entry["why"].strip()):
+            problems.append(f"noTest entry {at}: why is missing or empty")
+        box = index(entry.get("box"), f"noTest entry {at}")
+        if box is not None:
+            holders.setdefault(box, []).append("noTest")
+    for box, text in enumerate(boxes, 1):
+        held = holders.get(box, [])
+        if not held:
+            problems.append(f"box {box} ({text!r}) is in no seam and not in noTest")
+        elif len(held) > 1:
+            problems.append(f"box {box} is in {' and '.join(held)}; a box belongs to one")
+    return problems
+
+
+def do_launch(number: int, args) -> tuple[int, dict, str]:
+    ticket = read_record(number, "read")
+    if not args.seams:
+        raise Unjudged("launch needs --seams <file>, the confirmed seams, or --seams implementer")
+    if args.seams == "implementer":
+        seams = "implementer"
+    else:
+        try:
+            seams = json.loads(pathlib.Path(args.seams).read_text())
+        except (OSError, json.JSONDecodeError) as error:
+            raise Unjudged(f"the seams file {args.seams} is missing or unreadable: {error}") \
+                from error
+    record = {"issue": number, "seamsFile": args.seams, "seams": seams,
+              "boxes": ticket.get("boxes", [])}
+    if ticket.get("verdict") != "pass" or "launch" not in ticket:
+        return 1, record, "read did not pass, so there is nothing to launch: run read again"
+    problems = seam_problems(seams, ticket["boxes"])
+    if problems:
+        return 1, record, "; ".join(problems)
+    second = copy.deepcopy(ticket["launch"])
+    second["args"]["seams"] = seams
+    record["launch"] = second
+    held = ("the implementer's own" if seams == "implementer" else
+            f"{len(seams['seams'])} seam(s) and {len(seams.get('noTest', []))} box(es) with no "
+            "test")
+    return 0, record, f"#{number}'s {len(ticket['boxes'])} open box(es) are covered: {held}"
 
 
 # --- start -----------------------------------------------------------------------------------------
@@ -357,6 +476,12 @@ def do_start(number: int, args) -> tuple[int, dict, str]:
     if code:
         record["state"] = "refused"
         return code, record, why
+    if record["boxes"] != earlier.get("boxes"):
+        # The confirmed seams number read's boxes, and the build is handed these: when the two lists
+        # differ, a seam's box number may point at another box (#1594's review).
+        record["state"] = "refused"
+        return 1, record, (f"#{number}'s open boxes are not the ones read recorded, so the seams "
+                           "confirmed against them may name other boxes: run read and launch again")
     branch, wt = record["branch"], pathlib.Path(record["worktree"])
     local = run(["git", "rev-parse", "--verify", "-q", f"refs/heads/{branch}"],
                 check=False).returncode == 0
@@ -759,7 +884,8 @@ def do_release(number: int, args) -> tuple[int, dict, str]:
 
 # --- the command line ------------------------------------------------------------------------------
 
-STEPS = {"read": do_read, "start": do_start, "check": do_check, "release": do_release}
+STEPS = {"read": do_read, "launch": do_launch, "start": do_start, "check": do_check,
+         "release": do_release}
 
 
 class Parser(argparse.ArgumentParser):
@@ -778,12 +904,17 @@ def main(argv: list[str]) -> int:
         parser.add_argument("issue", type=int)
         parser.add_argument("--wt")
         parser.add_argument("--port", type=int)
+        parser.add_argument("--seams")
         args = parser.parse_args(argv)
         number = args.issue
         if args.wt and step != "read":
             raise Unjudged("--wt is read's alone; later steps take it from read's record")
-        if args.port and step != "check":
-            raise Unjudged("--port is check's alone")
+        if args.port is not None and not 1024 <= args.port <= 65535:
+            raise Unjudged("--port is an integer from 1024 to 65535, as the script takes it")
+        if args.port and step not in ("read", "check"):
+            raise Unjudged("--port is read's and check's alone")
+        if args.seams and step != "launch":
+            raise Unjudged("--seams is launch's alone")
         os.chdir(ROOT)
         try:
             code, record, why = STEPS[step](number, args)
@@ -795,6 +926,9 @@ def main(argv: list[str]) -> int:
     if record is not None:
         record = {"step": step, **record, "verdict": "pass" if code == 0 else "fail",
                   "exit": code, "why": why}
+        if "launch" in record:
+            # The launch line ends the record, as the session copies it from there.
+            record["launch"] = record.pop("launch")
         if number is not None:
             try:
                 write_record(number, step, record)

@@ -400,6 +400,20 @@ class Start(Harness):
         self.assertFalse(self.wt.exists())
         self.assertEqual("", self.git("branch", "--list", BRANCH))
 
+    def test_a_ticket_whose_open_boxes_changed_since_read_is_refused_with_nothing_written(self):
+        self.read()
+        first = "- [ ] The thing prints its name."
+        last = "- [ ] Its companion fails when the name is wrong."
+        self.set_issue(issue(body=BODY.replace(first, "@").replace(last, first).replace("@", last)))
+        code, record, verdict, _ = self.tool("start", "7")
+        self.assert_verdict(code, verdict, "start", 1, "open boxes", "read and launch again")
+        self.assertEqual("refused", record["state"])
+        self.assertEqual(list(reversed(self.saved("read")["boxes"])), record["boxes"])
+        self.assertEqual([], self.assignees())
+        self.assertEqual([], self.edits())
+        self.assertFalse(self.wt.exists())
+        self.assertEqual("", self.git("branch", "--list", BRANCH))
+
     def test_start_with_no_read_record_exits_2(self):
         code, record, verdict, _ = self.tool("start", "7")
         self.assert_unjudged(code, record, verdict, "start", "read record")
@@ -742,6 +756,212 @@ class Release(Harness):
         code, record, verdict, _ = self.tool("release", "7", env={"GH_FAIL": "1"})
         self.assert_unjudged(code, record, verdict, "release", "could not reach GitHub")
         self.assertEqual(["case"], self.assignees())
+
+
+SCRIPT_PATH = ".claude/workflows/implement-ticket.js"
+
+
+class LaunchLines(Harness):
+    """read's record ends on the first launch, and launch prints the second once the confirmed
+    seams cover every open box exactly once. BODY has two open boxes, 1 and 2."""
+
+    def first(self, port: int = 5180) -> dict:
+        return {"scriptPath": str(self.checkout / SCRIPT_PATH),
+                "args": {"repo": str(self.checkout), "issue": 7, "wt": str(self.wt), "port": port}}
+
+    def seams(self, content) -> str:
+        path = self.base / "seams.json"
+        path.write_text(json.dumps(content))
+        return str(path)
+
+    def launch(self, content):
+        argument = content if content == "implementer" else self.seams(content)
+        return self.tool("launch", "7", "--seams", argument)
+
+    def test_read_ends_its_record_with_the_first_launch(self):
+        code, record, verdict, _ = self.read()
+        self.assert_verdict(code, verdict, "read", 0)
+        self.assertEqual("launch", list(record)[-1])
+        self.assertEqual(self.first(), record["launch"])
+        code, record, verdict, _ = self.tool("read", "7", "--wt", str(self.wt), "--port", "5191")
+        self.assert_verdict(code, verdict, "read", 0)
+        self.assertEqual(self.first(5191), record["launch"])
+        self.assertEqual(record, self.saved("read"))
+
+    def test_a_refused_read_prints_no_launch(self):
+        self.set_issue(issue(state="CLOSED"))
+        code, record, verdict, _ = self.read()
+        self.assert_verdict(code, verdict, "read", 1, "open")
+        self.assertNotIn("launch", record)
+
+    def test_launch_prints_the_second_for_seams_covering_every_box(self):
+        self.read()
+        confirmed = {"seams": [{"name": "the command line", "interface": "thing.py's stdout",
+                                "boxes": [1]}],
+                     "noTest": [{"box": 2, "why": "the companion is the test"}]}
+        code, record, verdict, _ = self.launch(confirmed)
+        self.assert_verdict(code, verdict, "launch", 0)
+        expected = self.first()
+        expected["args"]["seams"] = confirmed
+        self.assertEqual(expected, record["launch"])
+        self.assertEqual("launch", list(record)[-1])
+        self.assertEqual(record, self.saved("launch"))
+
+    def test_launch_takes_the_word_implementer_for_seams(self):
+        self.read()
+        code, record, verdict, _ = self.launch("implementer")
+        self.assert_verdict(code, verdict, "launch", 0)
+        self.assertEqual("implementer", record["launch"]["args"]["seams"])
+
+    def test_launch_fails_naming_a_box_left_out(self):
+        self.read()
+        code, record, verdict, _ = self.launch(
+            {"seams": [{"name": "cli", "interface": "stdout", "boxes": [1]}], "noTest": []})
+        self.assert_verdict(code, verdict, "launch", 1, "box 2", "Its companion fails")
+        self.assertNotIn("box 1", verdict)
+        self.assertNotIn("launch", record)
+
+    def test_launch_fails_naming_a_box_in_two_seams(self):
+        self.read()
+        code, record, verdict, _ = self.launch(
+            {"seams": [{"name": "cli", "interface": "stdout", "boxes": [1, 2]},
+                       {"name": "api", "interface": "thing()", "boxes": [1]}], "noTest": []})
+        self.assert_verdict(code, verdict, "launch", 1, "box 1", "cli", "api")
+        self.assertNotIn("box 2", verdict)
+        self.assertNotIn("launch", record)
+
+    def test_launch_fails_naming_a_box_in_a_seam_and_in_no_test(self):
+        self.read()
+        code, record, verdict, _ = self.launch(
+            {"seams": [{"name": "cli", "interface": "stdout", "boxes": [1, 2]}],
+             "noTest": [{"box": 2, "why": "none needed"}]})
+        self.assert_verdict(code, verdict, "launch", 1, "box 2", "cli", "noTest")
+        self.assertNotIn("launch", record)
+
+    def test_launch_fails_on_a_box_the_ticket_does_not_have(self):
+        self.read()
+        code, record, verdict, _ = self.launch(
+            {"seams": [{"name": "cli", "interface": "stdout", "boxes": [1, 2, 3]}], "noTest": []})
+        self.assert_verdict(code, verdict, "launch", 1, "box 3")
+        self.assertNotIn("launch", record)
+
+    def test_a_misshapen_seams_file_fails_naming_the_field(self):
+        self.read()
+        for content, word in (({"seams": [{"name": "cli", "boxes": [1, 2]}]}, "interface"),
+                              ({"seams": [{"name": "cli", "interface": "x", "boxes": ["1"]}]},
+                               "boxes"),
+                              ({"seams": [], "noTest": [{"box": 1}, {"box": 2}]}, "why"),
+                              ("everything", "implementer"),
+                              ({"seams": [], "noTest": [{"box": 1, "why": "a"}, {"box": 2, "why": "b"}],
+                                "extra": 1}, "extra")):
+            with self.subTest(word=word):
+                code, record, verdict, _ = self.tool("launch", "7", "--seams",
+                                                     self.seams(content))
+                self.assert_verdict(code, verdict, "launch", 1, word)
+                self.assertNotIn("launch", record)
+
+    def test_launch_after_a_refused_read_fails(self):
+        self.set_issue(issue(state="CLOSED"))
+        self.read()
+        code, record, verdict, _ = self.launch("implementer")
+        self.assert_verdict(code, verdict, "launch", 1, "read did not pass")
+        self.assertNotIn("launch", record)
+
+    def test_launch_with_no_seams_or_no_read_record_exits_2(self):
+        code, record, verdict, _ = self.launch("implementer")
+        self.assert_unjudged(code, record, verdict, "launch", "read record")
+        self.read()
+        code, record, verdict, _ = self.tool("launch", "7")
+        self.assert_unjudged(code, record, verdict, "launch", "--seams")
+        code, record, verdict, _ = self.tool("launch", "7", "--seams", str(self.base / "none"))
+        self.assert_unjudged(code, record, verdict, "launch", "seams file")
+        code, record, verdict, _ = self.tool("start", "7", "--seams", "implementer")
+        self.assert_unjudged(code, record, verdict, "start", "--seams is launch's alone")
+        code, record, verdict, _ = self.tool("read", "7", "--wt", str(self.wt), "--port", "80")
+        self.assert_unjudged(code, record, verdict, "read", "1024 to 65535")
+
+
+# --- the shared fixture -------------------------------------------------------------------------
+# .claude/workflows/fixtures/implement-ticket.json holds the tool's records, which the script's
+# companion serves as its couriers' returns. Each scenario below makes the records of one entry, and
+# FixtureKeys fails when a record the tool writes no longer has the fixture's keys, so the two layers
+# change together. The same scenarios wrote the fixture (its note says how).
+
+FIXTURE = ROOT / ".claude" / "workflows" / "fixtures" / "implement-ticket.json"
+
+# A Touches line for one ticket of each kind of tools/implement_ticket.py's KINDS.
+KIND_TOUCHES = {
+    "dotnet": "`Directory.Build.props`, `tools/thing.py`",
+    "terraform": "`infra/modules/thing/main.tf`, `infra/modules/thing/tests/thing.tftest.hcl`",
+    "script": "`tools/thing.py`, `tools/thing_tests.py`",
+    "workflow": "`.claude/workflows/thing.js`, `.claude/workflows/thing_tests.mjs`",
+    "docs": "`docs/thing.md`",
+}
+
+
+def kind_records(case: Harness, kind: str) -> dict:
+    """read's record for a ticket whose Touches are of this kind."""
+    touches = BODY.split("\n")[1]
+    case.set_issue(issue(body=BODY.replace(touches, f"**Touches:** {KIND_TOUCHES[kind]}")))
+    return {"read": case.read()[1]}
+
+
+def run_records(case: Harness) -> dict:
+    """Every record one run of the script routes on, by name, from read to release."""
+    out = {}
+    out["read"] = case.read()[1]
+    out["launch"] = case.tool("launch", "7", "--seams", "implementer")[1]
+    out["startNew"] = case.tool("start", "7")[1]
+    commit(case, "tools/thing.py")
+    case.behave('echo "check: fail: the tests failed."\n')
+    out["checkFail"] = case.tool("check", "7")[1]
+    commit(case, "tools/thing_tests.py")
+    case.behave("sleep 30\n")
+    out["checkRunning"] = case.tool("check", "7", env={"IMPLEMENT_TICKET_WAIT": "1"})[1]
+    case.stop_checks()
+    (case.stub / "behaviour.sh").unlink()
+    (case.log_dir() / "check.pid").unlink(missing_ok=True)
+    commit(case, "docs/thing.md")
+    out["checkPass"] = case.tool("check", "7")[1]
+    out["startFinished"] = case.tool("start", "7")[1]
+    out["release"] = case.tool("release", "7")[1]
+    case.set_issue(issue(labels=[{"name": "ready-for-human"}]))
+    out["startRefused"] = case.tool("start", "7")[1]
+    return out
+
+
+class FixtureKeys(Harness):
+    def setUp(self):
+        super().setUp()
+        self.fixture = json.loads(FIXTURE.read_text())
+
+    def assert_keys(self, name: str, fixture: dict, written: dict) -> None:
+        missing = sorted(set(fixture) - set(written))
+        self.assertEqual([], missing, f"the tool's {name} record no longer has the fixture's keys "
+                                      f"{missing}: change {FIXTURE.name} and the script together")
+
+    def test_the_fixture_says_where_it_came_from_and_holds_each_kind(self):
+        self.assertIn("implement_ticket_tests.py", self.fixture["note"])
+        self.assertEqual([kind for kind, _ in load("implement_ticket").KINDS],
+                         [ticket["kind"] for ticket in self.fixture["tickets"]])
+        for ticket in self.fixture["tickets"]:
+            self.assertIn(ticket["kind"], ticket["read"]["kinds"])
+
+    def test_each_kinds_read_record_has_the_fixtures_keys(self):
+        for ticket in self.fixture["tickets"]:
+            with self.subTest(kind=ticket["kind"]):
+                written = kind_records(self, ticket["kind"])["read"]
+                self.assertIn(ticket["kind"], written["kinds"])
+                self.assert_keys(f"{ticket['kind']} read", ticket["read"], written)
+
+    def test_each_record_of_a_run_has_the_fixtures_keys(self):
+        written = run_records(self)
+        self.assertEqual(sorted(self.fixture["run"]), sorted(written))
+        for name, record in self.fixture["run"].items():
+            with self.subTest(record=name):
+                self.assert_keys(name, record, written[name])
+                self.assertEqual((record["step"], record["state"] if "state" in record else None),
+                                 (written[name]["step"], written[name].get("state")))
 
 
 def launcher_source() -> str:
