@@ -9,6 +9,7 @@ A foreground session building one ticket runs these, from the main checkout, in 
                                                                 check the confirmed seams
     python3 -I tools/implement_ticket.py start <n>              claim it and make its worktree
     python3 -I tools/implement_ticket.py check <n> [--port <p>] the full check, detached, judged
+    python3 -I tools/implement_ticket.py prove <n>              re-run each saved mutation
     python3 -I tools/implement_ticket.py release <n>            unclaim a run that failed
 
 Each command writes its record as one JSON object to `.scratch/implement/log/<n>/<step>.json` in
@@ -79,6 +80,26 @@ no other, so a branch that edits A-05 does not judge itself. The record lists
 the changed files outside the Touches paths without failing on them, and on a red check carries what
 `tools/test_reach.py` prints for the log.
 
+prove re-runs every mutation the build claims (#1566; "claims are re-run, not read", #202). A mutation
+is a patch made with `git diff` in the worktree, `mutations/<k>.patch` in the issue's log directory,
+beside `mutations/<k>.json`, the sidecar `{"box": <1-based open box>, "project": <path in the
+worktree>}`. prove refuses, with state `refused` and nothing run, unless check.json records a pass
+on the worktree's HEAD. A docs-only ticket (read's kinds are docs alone) then passes with nothing to
+prove. Otherwise every mutation is read first, and the step fails (state `fail`) naming each whose
+patch or sidecar is missing or unreadable, whose box is not an open box, or whose project is outside
+the worktree, absent from it, or of no single kind with a command in KINDS (kinds_of names its
+kinds). In a throwaway worktree at HEAD, under TMPDIR, it runs each named project once by its kind's
+command as a baseline, then for each patch, in name order, applies it, runs its project and restores
+the tree. A patch's result is `proved` when the run exits non-zero, `did-not-fail` when it exits 0,
+`did-not-apply` when `git apply` refuses it, and `baseline-red` when its project's baseline failed.
+A box's state is `no-test` when it has no patch and launch's confirmed noTest lists it, `unproved`
+when it has no patch otherwise (under seams `implementer` no noTest is confirmed), the first of
+did-not-fail, did-not-apply and baseline-red among its patches' results, or `proved`. The state is
+`proved` (exit 0) when every box is proved or no-test, and `gaps` (exit 1) naming each box that is
+not. A project run is given the time left before the call's deadline, in a session of its own, and
+one that does not end in it is killed and the call is unjudged. The throwaway worktree is removed
+whatever happens, with CLEANUP seconds of its own past that deadline.
+
 release removes the assignee, reads the assignees again, and records who still holds the issue,
 with the branch and worktree it left in place: it says the issue is unassigned only when nobody
 does, and names whoever still does (another login, which start may have continued under) without
@@ -96,8 +117,10 @@ import json
 import os
 import pathlib
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -851,6 +874,199 @@ def do_check(number: int, args) -> tuple[int, dict, str]:
     return 0, record, f"the full check passed on {head[:12]}, all {ticket['owner']}'s"
 
 
+# --- prove -----------------------------------------------------------------------------------------
+
+MUTATION_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+# A patch's result, and a box's state when one of its patches has it, in the order a box takes the
+# first it finds: a box is proved only when every patch it has is.
+GAPS = ("did-not-fail", "did-not-apply", "baseline-red")
+# How long the throwaway worktree's removal may take, after the call's deadline if need be: a project
+# that hung is the case that most needs it.
+CLEANUP = 30.0
+
+
+def project_kind(wt: pathlib.Path, project: str) -> tuple[str | None, str | None]:
+    """The kind whose command runs project, and None; or None and why no kind runs it. project is
+    a path inside the worktree, and the kind is the one KINDS entry with a command kinds_of names."""
+    if not isinstance(project, str) or not project.strip():
+        return None, "names no project"
+    target = (wt / project).resolve()
+    try:
+        relative = target.relative_to(wt.resolve()).as_posix()
+    except ValueError:
+        return None, f"names {project}, a path outside the worktree"
+    if not target.exists():
+        return None, f"names {project}, which the worktree does not hold"
+    runnable = [kind for kind in kinds_of([relative]) if dict(KINDS)[kind] is not None]
+    if len(runnable) != 1:
+        return None, (f"names {project}, which no kind's command runs" if not runnable else
+                      f"names {project}, which is of the kinds {', '.join(runnable)}, so no one "
+                      "kind's command runs it")
+    return runnable[0], None
+
+
+def mutations(directory: pathlib.Path, wt: pathlib.Path, boxes: int) -> tuple[list[dict], list[str]]:
+    """The saved mutations, by name, each with its box, project and kind; and what is wrong with
+    them, each named."""
+    found, problems = [], []
+    if not directory.is_dir():
+        return found, problems
+    names = sorted({path.stem for path in directory.iterdir()
+                    if path.suffix in (".patch", ".json")})
+    for name in names:
+        patch, sidecar = directory / f"{name}.patch", directory / f"{name}.json"
+        if not MUTATION_NAME.match(name):
+            problems.append(f"{name}: a mutation's name is letters, digits, '.', '_' and '-'")
+            continue
+        if not patch.is_file() or not sidecar.is_file():
+            problems.append(f"{name}: a mutation is {name}.patch beside {name}.json, and "
+                            f"{name}.{'patch' if not patch.is_file() else 'json'} is missing")
+            continue
+        try:
+            side = json.loads(sidecar.read_text())
+        except (OSError, json.JSONDecodeError) as error:
+            problems.append(f"{name}: its sidecar is unreadable: {error}")
+            continue
+        if not isinstance(side, dict):
+            problems.append(f"{name}: its sidecar is not an object")
+            continue
+        box = side.get("box")
+        if isinstance(box, bool) or not isinstance(box, int) or not 1 <= box <= boxes:
+            problems.append(f"{name}: its sidecar's box {box!r} is not one of the {boxes} open "
+                            "box(es)")
+            continue
+        kind, why = project_kind(wt, side.get("project"))
+        if kind is None:
+            problems.append(f"{name}: its sidecar {why}")
+            continue
+        found.append({"patch": name, "box": box, "project": side["project"], "kind": kind,
+                      "path": str(patch)})
+    return found, problems
+
+
+def run_project(kind: str, project: str, cwd: pathlib.Path) -> dict:
+    """One run of a project's tests by its kind's command, given the time left before DEADLINE, in
+    a session of its own, so a test host it starts is killed with it."""
+    command = test_command(kind, project)
+    left = DEADLINE - time.monotonic()
+    if left <= 0:
+        raise Unjudged(f"{' '.join(command)} was not run: the call's time bound has passed")
+    try:
+        process = subprocess.Popen(command, cwd=cwd, stdin=subprocess.DEVNULL,
+                                   stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                                   start_new_session=True)
+    except OSError as error:
+        raise Unjudged(f"{command[0]} could not run: {error}") from error
+    try:
+        output, _ = process.communicate(timeout=left)
+    except subprocess.TimeoutExpired as error:
+        with contextlib.suppress(OSError):
+            os.killpg(process.pid, 9)
+        process.communicate()
+        raise Unjudged(f"{' '.join(command)} did not end within the call's time bound "
+                       f"({left:.1f} s were left), so it was killed") from error
+    return {"command": command, "exit": process.returncode,
+            "tail": (output or "").splitlines()[-5:]}
+
+
+def remove_throwaway(path: pathlib.Path) -> None:
+    """Remove the throwaway worktree whatever the deadline says, with a bound of its own."""
+    with contextlib.suppress(OSError, subprocess.TimeoutExpired):
+        subprocess.run(["git", "worktree", "remove", "--force", str(path)], cwd=ROOT,
+                       capture_output=True, timeout=CLEANUP, check=False)
+    shutil.rmtree(path, ignore_errors=True)
+    with contextlib.suppress(OSError, subprocess.TimeoutExpired):
+        subprocess.run(["git", "worktree", "prune"], cwd=ROOT, capture_output=True,
+                       timeout=CLEANUP, check=False)
+
+
+def reset(path: pathlib.Path) -> None:
+    git("reset", "-q", "--hard", "HEAD", cwd=path)
+    git("clean", "-q", "-fd", cwd=path)
+
+
+def box_rows(boxes: list[str], patches: list[dict], no_test: set[int]) -> list[dict]:
+    rows = []
+    for at, text in enumerate(boxes, 1):
+        mine = [row for row in patches if row["box"] == at]
+        results = [row["result"] for row in mine]
+        state = ("no-test" if not mine and at in no_test else "unproved" if not mine else
+                 next((gap for gap in GAPS if gap in results), "proved"))
+        rows.append({"box": at, "text": text, "state": state,
+                     "patches": [row["patch"] for row in mine]})
+    return rows
+
+
+def do_prove(number: int, args) -> tuple[int, dict, str]:
+    ticket = read_record(number, "read")
+    begun = read_record(number, "start")
+    confirmed = read_record(number, "launch").get("seams")
+    checked = read_record(number, "check")
+    wt = pathlib.Path(begun["worktree"])
+    if not wt.is_dir():
+        raise Unjudged(f"the worktree {wt} that start made is gone")
+    head = git("rev-parse", "HEAD", cwd=wt)
+    directory = LOG_ROOT / str(number) / "mutations"
+    record = {"issue": number, "worktree": str(wt), "head": head, "mutations": str(directory)}
+    if checked.get("state") != "pass" or checked.get("verdict") != "pass":
+        record["state"] = "refused"
+        return 1, record, (f"the check record {checked.get('head', '?')[:12]} did not pass, so "
+                           "no mutation is proved: run check until it passes")
+    if checked.get("head") != head:
+        record["state"] = "refused"
+        return 1, record, (f"the check passed on an earlier head, {checked['head'][:12]}, and "
+                           f"the worktree is at {head[:12]}: run check on this head first")
+    boxes = ticket.get("boxes", [])
+    if ticket.get("kinds") == ["docs"]:
+        record.update(state="proved", docsOnly=True, baselines=[], patches=[], boxes=[])
+        return 0, record, "a docs-only ticket: nothing to prove"
+    found, problems = mutations(directory, wt, len(boxes))
+    if problems:
+        record.update(state="fail", problems=problems)
+        return 1, record, "the saved mutations cannot be proved: " + "; ".join(problems)
+    no_test = ({entry["box"] for entry in confirmed.get("noTest", [])}
+               if isinstance(confirmed, dict) else set())
+
+    throwaway = pathlib.Path(tempfile.mkdtemp(prefix=f"implement-prove-{number}-"))
+    record["throwaway"] = str(throwaway)
+    try:
+        git("worktree", "add", "-q", "--detach", str(throwaway), head)
+        baselines = {}
+        for row in found:
+            if row["project"] not in baselines:
+                baselines[row["project"]] = {"project": row["project"], "kind": row["kind"],
+                                             **run_project(row["kind"], row["project"],
+                                                           throwaway)}
+                reset(throwaway)
+        for row in found:
+            if baselines[row["project"]]["exit"] != 0:
+                row.update(result="baseline-red")
+                continue
+            applied = run(["git", "apply", row["path"]], cwd=throwaway, check=False)
+            if applied.returncode != 0:
+                row.update(result="did-not-apply",
+                           tail=(applied.stderr or applied.stdout).strip().splitlines()[-5:])
+                reset(throwaway)
+                continue
+            ran = run_project(row["kind"], row["project"], throwaway)
+            row.update(result="proved" if ran["exit"] != 0 else "did-not-fail", exit=ran["exit"],
+                       tail=ran["tail"])
+            reset(throwaway)
+    finally:
+        remove_throwaway(throwaway)
+    rows = box_rows(boxes, found, no_test)
+    record.update(baselines=list(baselines.values()), patches=found, boxes=rows)
+    gaps = [f"box {row['box']} {row['state']}" + (f" ({', '.join(row['patches'])})"
+                                                  if row["patches"] else "")
+            for row in rows if row["state"] not in ("proved", "no-test")]
+    if gaps:
+        record["state"] = "gaps"
+        return 1, record, "; ".join(gaps)
+    record["state"] = "proved"
+    return 0, record, (f"every open box is proved or has no test: {len(found)} patch(es) failed "
+                       f"their tests on {head[:12]}")
+
+
 # --- release ---------------------------------------------------------------------------------------
 
 def do_release(number: int, args) -> tuple[int, dict, str]:
@@ -885,7 +1101,7 @@ def do_release(number: int, args) -> tuple[int, dict, str]:
 # --- the command line ------------------------------------------------------------------------------
 
 STEPS = {"read": do_read, "launch": do_launch, "start": do_start, "check": do_check,
-         "release": do_release}
+         "prove": do_prove, "release": do_release}
 
 
 class Parser(argparse.ArgumentParser):

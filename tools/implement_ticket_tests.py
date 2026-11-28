@@ -141,6 +141,9 @@ class Harness(unittest.TestCase):
         tools = base / "bin"
         tools.mkdir()
         (tools / "git").symlink_to(found)
+        # prove runs a script project as `python3 -I <project>`: this interpreter, by that name.
+        (tools / "python3").symlink_to(sys.executable)
+        (base / "tmp").mkdir()
         gh = tools / "gh"
         gh.write_text(GH.format(python=sys.executable))
         gh.chmod(gh.stat().st_mode | stat.S_IXUSR)
@@ -155,7 +158,7 @@ class Harness(unittest.TestCase):
         self.env = {"PATH": f"{tools}:/usr/bin:/bin", "HOME": str(base / "home"),
                     "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": str(config), "LC_ALL": "C",
                     "GH_WORLD": str(self.world), "GH_LOG": str(self.gh_log),
-                    "STUB_DIR": str(self.stub)}
+                    "STUB_DIR": str(self.stub), "TMPDIR": str(base / "tmp")}
         self.set_issue(issue())
 
         self.origin, self.checkout = base / "origin.git", base / "checkout"
@@ -722,6 +725,201 @@ class Check(Harness):
         self.assertFalse((self.log_dir() / "check.pid").exists())
 
 
+# The stub test project prove runs: it fails when tools/thing.py says "broken", as a test that
+# guards the thing's name fails when the name is broken.
+THING = "print('the thing')\n"
+THING_TESTS = ('import pathlib, sys\n'
+               'sys.exit(1 if "broken" in pathlib.Path("tools/thing.py").read_text() else 0)\n')
+CONFIRMED = {"seams": [{"name": "the command line", "interface": "thing.py's stdout",
+                        "boxes": [1]}],
+             "noTest": [{"box": 2, "why": "the companion is the test"}]}
+
+
+def write(case: Harness, files: dict) -> None:
+    for path, text in files.items():
+        (case.wt / path).parent.mkdir(parents=True, exist_ok=True)
+        (case.wt / path).write_text(text)
+
+
+def commit_files(case: Harness, files: dict, message: str = "Change the thing") -> str:
+    write(case, files)
+    case.git("add", "-A", cwd=case.wt)
+    case.git("commit", "-q", "-m", message, cwd=case.wt)
+    return case.git("rev-parse", "HEAD", cwd=case.wt)
+
+
+def save_mutation(case: Harness, name: str, box: int, project: str, files: dict) -> None:
+    """A break saved as the build prompt asks: the edit made, `git diff` saved as the patch beside
+    its sidecar, and the files restored."""
+    write(case, files)
+    patch = case.git("diff", cwd=case.wt) + "\n"
+    case.git("checkout", "--", ".", cwd=case.wt)
+    directory = case.log_dir() / "mutations"
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / f"{name}.patch").write_text(patch)
+    (directory / f"{name}.json").write_text(json.dumps({"box": box, "project": project}))
+
+
+class Prove(Harness):
+    """prove re-runs each saved mutation in a throwaway worktree at the checked head."""
+
+    def setUp(self):
+        super().setUp()
+        self.read()
+        path = self.base / "seams.json"
+        path.write_text(json.dumps(CONFIRMED))
+        self.tool("launch", "7", "--seams", str(path))
+        self.tool("start", "7")
+        commit_files(self, {"tools/thing.py": THING, "tools/thing_tests.py": THING_TESTS})
+
+    def checked(self) -> str:
+        code, record, verdict, _ = self.tool("check", "7")
+        self.assert_verdict(code, verdict, "check", 0)
+        return record["head"]
+
+    def prove(self, **kw):
+        return self.tool("prove", "7", **kw)
+
+    def assert_no_throwaway(self) -> None:
+        """Only the main checkout and the task worktree are left, and nothing in TMPDIR."""
+        listed = [line for line in self.git("worktree", "list", "--porcelain").splitlines()
+                  if line.startswith("worktree ")]
+        self.assertEqual([f"worktree {self.checkout}", f"worktree {self.wt}"], listed)
+        self.assertEqual([], sorted(os.listdir(self.base / "tmp")))
+
+    def rows(self, record) -> dict:
+        return {row["patch"]: row["result"] for row in record["patches"]}
+
+    def boxes(self, record) -> list:
+        return [row["state"] for row in record["boxes"]]
+
+    def test_a_patch_that_makes_its_test_fail_is_proved_and_a_no_test_box_is_not_unproved(self):
+        save_mutation(self, "name", 1, "tools/thing_tests.py",
+                      {"tools/thing.py": "print('broken')\n"})
+        head = self.checked()
+        code, record, verdict, _ = self.prove()
+        self.assert_verdict(code, verdict, "prove", 0)
+        self.assertEqual(record, self.saved("prove"))
+        self.assertEqual(("proved", head), (record["state"], record["head"]))
+        self.assertEqual({"name": "proved"}, self.rows(record))
+        self.assertEqual(["proved", "no-test"], self.boxes(record))
+        self.assertEqual([["name"], []], [row["patches"] for row in record["boxes"]])
+        self.assertEqual([("tools/thing_tests.py", "script", 0)],
+                         [(row["project"], row["kind"], row["exit"])
+                          for row in record["baselines"]])
+        self.assert_no_throwaway()
+        # The patch ran in the throwaway worktree: the task worktree is untouched.
+        self.assertEqual(THING, (self.wt / "tools" / "thing.py").read_text())
+
+    def test_a_patch_that_leaves_its_test_passing_did_not_fail(self):
+        save_mutation(self, "harmless", 1, "tools/thing_tests.py",
+                      {"tools/thing.py": "print('the thing!')\n"})
+        self.checked()
+        code, record, verdict, _ = self.prove()
+        self.assert_verdict(code, verdict, "prove", 1, "box 1", "did-not-fail")
+        self.assertEqual("gaps", record["state"])
+        self.assertEqual({"harmless": "did-not-fail"}, self.rows(record))
+        self.assertEqual(["did-not-fail", "no-test"], self.boxes(record))
+        self.assert_no_throwaway()
+
+    def test_a_patch_that_no_longer_applies_did_not_apply(self):
+        save_mutation(self, "name", 1, "tools/thing_tests.py",
+                      {"tools/thing.py": "print('broken')\n"})
+        commit_files(self, {"tools/thing.py": "print('the thing, renamed')\n"})
+        self.checked()
+        code, record, verdict, _ = self.prove()
+        self.assert_verdict(code, verdict, "prove", 1, "box 1", "did-not-apply")
+        self.assertEqual({"name": "did-not-apply"}, self.rows(record))
+        self.assertEqual(["did-not-apply", "no-test"], self.boxes(record))
+        self.assert_no_throwaway()
+
+    def test_a_failing_baseline_is_baseline_red_for_every_patch_of_that_project(self):
+        commit_files(self, {"tools/red_tests.py": "import sys\nsys.exit(1)\n"})
+        save_mutation(self, "a", 1, "tools/red_tests.py", {"tools/thing.py": "print('broken')\n"})
+        save_mutation(self, "b", 1, "tools/red_tests.py", {"tools/thing.py": "print('x')\n"})
+        save_mutation(self, "c", 1, "tools/thing_tests.py",
+                      {"tools/thing.py": "print('broken')\n"})
+        self.checked()
+        code, record, verdict, _ = self.prove()
+        self.assert_verdict(code, verdict, "prove", 1, "baseline-red")
+        self.assertEqual({"a": "baseline-red", "b": "baseline-red", "c": "proved"},
+                         self.rows(record))
+        self.assertEqual({"tools/red_tests.py": 1, "tools/thing_tests.py": 0},
+                         {row["project"]: row["exit"] for row in record["baselines"]})
+        self.assert_no_throwaway()
+
+    def test_an_open_box_with_no_patch_is_unproved_unless_no_test_holds_it(self):
+        path = self.base / "seams.json"
+        path.write_text(json.dumps({"seams": [{"name": "cli", "interface": "stdout",
+                                               "boxes": [1, 2]}], "noTest": []}))
+        self.tool("launch", "7", "--seams", str(path))
+        save_mutation(self, "name", 1, "tools/thing_tests.py",
+                      {"tools/thing.py": "print('broken')\n"})
+        self.checked()
+        code, record, verdict, _ = self.prove()
+        self.assert_verdict(code, verdict, "prove", 1, "box 2", "unproved")
+        self.assertEqual(["proved", "unproved"], self.boxes(record))
+
+    def test_prove_refuses_without_a_passing_check_on_the_head(self):
+        save_mutation(self, "name", 1, "tools/thing_tests.py",
+                      {"tools/thing.py": "print('broken')\n"})
+        code, record, verdict, _ = self.prove()
+        self.assert_unjudged(code, record, verdict, "prove", "check record")
+        self.behave('echo "check: fail: the tests failed."\n')
+        self.tool("check", "7")
+        code, record, verdict, _ = self.prove()
+        self.assert_verdict(code, verdict, "prove", 1, "did not pass")
+        self.assertEqual(("refused", None), (record["state"], record.get("patches")))
+        (self.stub / "behaviour.sh").unlink()
+        commit_files(self, {"tools/thing_tests.py": THING_TESTS + "# mended\n"})
+        self.checked()
+        commit_files(self, {"docs/thing.md": "later\n"})
+        code, record, verdict, _ = self.prove()
+        self.assert_verdict(code, verdict, "prove", 1, "earlier head")
+        self.assertEqual(("refused", None), (record["state"], record.get("patches")))
+        self.assert_no_throwaway()
+
+    def test_a_sidecar_naming_a_project_outside_the_worktree_or_no_kinds_fails_the_step(self):
+        outside = self.base / "outside_tests.py"
+        outside.write_text("import sys\nsys.exit(0)\n")
+        commit_files(self, {"docs/thing.md": "the thing\n"})
+        self.checked()
+        for project, word in (("../outside_tests.py", "outside the worktree"),
+                              (str(outside), "outside the worktree"),
+                              ("docs/thing.md", "no kind's command"),
+                              ("tools/none_tests.py", "does not hold")):
+            with self.subTest(project=project):
+                save_mutation(self, "name", 1, project, {"tools/thing.py": "print('broken')\n"})
+                code, record, verdict, _ = self.prove()
+                self.assert_verdict(code, verdict, "prove", 1, "name", word)
+                self.assertEqual("fail", record["state"])
+                self.assert_no_throwaway()
+
+    def test_a_project_that_hangs_ends_the_call_unjudged_and_the_throwaway_is_gone(self):
+        commit_files(self, {"tools/slow_tests.py": "import time\ntime.sleep(120)\n"})
+        save_mutation(self, "slow", 1, "tools/slow_tests.py",
+                      {"tools/thing.py": "print('broken')\n"})
+        self.checked()
+        began = time.monotonic()
+        code, record, verdict, _ = self.prove(
+            env={"IMPLEMENT_TICKET_WAIT": "3", "IMPLEMENT_TICKET_RESERVE": "2"}, timeout=60)
+        self.assertLess(time.monotonic() - began, 30)
+        self.assert_unjudged(code, record, verdict, "prove", "did not end within")
+        self.assert_no_throwaway()
+
+    def test_a_docs_only_ticket_passes_with_nothing_to_prove(self):
+        touches = BODY.split("\n")[1]
+        self.set_issue(issue(body=BODY.replace(touches, "**Touches:** `docs/thing.md`")))
+        self.read()
+        self.tool("start", "7")
+        self.checked()
+        code, record, verdict, _ = self.prove()
+        self.assert_verdict(code, verdict, "prove", 0, "docs-only")
+        self.assertEqual(("proved", [], []), (record["state"], record["patches"],
+                                              record["boxes"]))
+        self.assert_no_throwaway()
+
+
 class Release(Harness):
     def test_release_unassigns_and_keeps_the_branch_and_the_worktree(self):
         self.read()
@@ -910,7 +1108,9 @@ def run_records(case: Harness) -> dict:
     """Every record one run of the script routes on, by name, from read to release."""
     out = {}
     out["read"] = case.read()[1]
-    out["launch"] = case.tool("launch", "7", "--seams", "implementer")[1]
+    seams = case.base / "seams.json"
+    seams.write_text(json.dumps(CONFIRMED))
+    out["launch"] = case.tool("launch", "7", "--seams", str(seams))[1]
     out["startNew"] = case.tool("start", "7")[1]
     commit(case, "tools/thing.py")
     case.behave('echo "check: fail: the tests failed."\n')
@@ -921,8 +1121,11 @@ def run_records(case: Harness) -> dict:
     case.stop_checks()
     (case.stub / "behaviour.sh").unlink()
     (case.log_dir() / "check.pid").unlink(missing_ok=True)
-    commit(case, "docs/thing.md")
+    commit_files(case, {"docs/thing.md": "the thing\n", "tools/thing.py": THING,
+                        "tools/thing_tests.py": THING_TESTS})
+    save_mutation(case, "name", 1, "tools/thing_tests.py", {"tools/thing.py": "print('broken')\n"})
     out["checkPass"] = case.tool("check", "7")[1]
+    out["prove"] = case.tool("prove", "7")[1]
     out["startFinished"] = case.tool("start", "7")[1]
     out["release"] = case.tool("release", "7")[1]
     case.set_issue(issue(labels=[{"name": "ready-for-human"}]))
