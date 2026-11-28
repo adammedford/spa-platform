@@ -1,10 +1,10 @@
 # The proof cell
 
 The steps that belong to this project's own cell and to no other: its session, its first
-deployment, rotation's Cognito calls and teardown's leftovers. The notes in
-[`docs/runbooks/`](../README.md) are written for any cell built from the reference module; the proof
-cell walks those same notes, and this note holds only what surrounds them, each part naming the
-reference note it goes with. Owner: workstream 6.
+deployment, rotation's Cognito calls, onboarding through its apps root and teardown's leftovers. The
+notes in [`docs/runbooks/`](../README.md) are written for any cell built from the reference module;
+the proof cell walks those same notes, and this note holds only what surrounds them, each part
+naming the reference note it goes with. Owner: workstream 6.
 
 ## Walked
 
@@ -132,6 +132,67 @@ These rest on reading, not on a run, and the first walk settles them:
   although the value is ignored, and that its plan shows nothing else;
 - that a plain `terraform plan` in the apps root after step 7 is empty, with the client's original
   secret deleted.
+
+## Onboarding an app on the proof cell
+
+[onboarding.md](../onboarding.md) holds the steps, and the proof cell runs them as written but for
+three: the client, the secret and the `clients` entry come from the apps root, `infra/envs/poc/apps`,
+in place of an adopter's own tooling. The proof cell's instance is app 3, whose definition is
+`fixtures/onboarding/app3.json`. After "Session setup" above, in the same shell, and before the
+README's operator session, whose `ORIGIN` line then reads app 3's host:
+
+```bash
+APP=app3
+APP_DEFINITION=fixtures/onboarding/app3.json
+RELEASE_DIRECTORY=fixtures/spa/app3
+RELEASE=2026-10-10.1                        # any name app 3 has not published yet
+```
+
+1. **The client, the secret and the `clients` entry come from the apps root**, in place of the
+   reference steps 2, 3 and 4. Copy the definition into `fixtures/apps/`, the directory the root
+   reads, and apply the root, which registers the client and writes the parameter:
+
+   ```bash
+   cp "$APP_DEFINITION" fixtures/apps/
+   terraform -chdir=infra/envs/poc/apps apply
+   ```
+
+   Answer `yes` only when the plan adds app 3's client, its branding style and its parameter, and
+   nothing else (`docs/plan/05-infrastructure-and-cost.md`, Onboarding a third SPA). Then write the
+   outputs document again from the roots' outputs, so that its `clients` entry carries app 3: the
+   `output` calls and `cell_documents.py outputs` of [secret-rotation.md](../secret-rotation.md)
+   step 4, which are what the scripts' `write_outputs` runs, without its refresh, since the apply
+   has already put the new parameter in state. That block's last line, with `APP=app3`, prints the
+   new parameter's version.
+
+   The copy changes `fixtures/apps/`, which is tracked and workstream 5's: it is never committed,
+   and step 3 below takes it out again.
+
+2. **Then the reference steps from `spactl app validate` on**: the reference step 1, whose
+   definition already holds the proof cell's `host` and `oauth.issuer`; the reference step 5, which
+   has no team to grant, so the operator publishes as the reference step 6 allows; the reference
+   step 6, from `$RELEASE_DIRECTORY`; and the reference step 7. A refusal at the reference step 1
+   comes after the client and the parameter exist here: take them out as step 3 below does, from its
+   apps-root apply on.
+
+3. **Removal on the proof cell.** The reference "Removal" step 1, `app remove` and `wait`, as
+   written. In place of its step 2, take the definition out of `fixtures/apps/` and apply the apps
+   root, which deletes the client, its branding style and the parameter:
+
+   ```bash
+   rm fixtures/apps/app3.json
+   terraform -chdir=infra/envs/poc/apps apply
+   ```
+
+   Answer `yes` only when the plan destroys those three and nothing else. Then write the outputs
+   document again, as step 1 above does but without that block's last line, since the document now
+   names no client for app 3, and end as the reference "Removal" ends.
+
+Deployed F-07 (`tests/e2e/Stack/CellOnboarding.cs`) onboards app 3 by these steps with two
+differences, so that its run changes no tracked file: it plans the root with `definition_dirs`
+naming `fixtures/onboarding/` instead of copying the definition, and its onboarding gives `spactl` a
+copy of the outputs document in its own directory. It refuses to start while the outputs document
+names a client for app 3, which is why step 3 above writes the document again.
 
 ## Teardown's leftovers
 
