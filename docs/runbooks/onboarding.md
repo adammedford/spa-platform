@@ -4,7 +4,8 @@ Make a new app servable in a running cell, with any identity provider, and take 
 `GLOSSARY.md` defines both: **Onboarding** ends when every instance reports the registry revision
 that adds the app, and **Removal** is its inverse, registry first. Neither restarts the gateway or
 creates a runtime resource: every step below is the identity provider's, the parameter store's, the
-outputs document's, the bucket's or the registry's.
+outputs document's, the bucket's or the registry's. A fragment added to a live shell is onboarding
+too, scoped under the shell's entry: "A fragment added to a live shell", at the end.
 
 **Onboarding signs no one out.** Adding an entry leaves every other entry and every session as it
 was. **Removal signs out every user of the removed app, and only that app**: its sessions go as the
@@ -269,3 +270,132 @@ claims stay in the bucket, which denies deletes under `apps/`, and the team's gr
 to revoke.
 
 Then `rm -rf "$RUN"`.
+
+## A fragment added to a live shell
+
+Adding a fragment to a shell that is already serving is onboarding, the narrower case scoped under
+the shell's entry. It runs by the same procedure as an app's, with no restart, and it ends when every
+instance reports the revision that adds the fragment. Its lever is `spactl app add` on the shell's
+definition, which signs no one out of the shell; in each open session the new fragment reads
+`loginRequired` until its user signs in to it.
+
+Start with the same operator session, with `APP` set to the shell's id, `APP_DEFINITION` to the
+shell's definition file and `FRAGMENT` to the new fragment's id.
+
+Activating a new release of a fragment the shell already has is fragment activation, not onboarding:
+[fragments.md](fragments.md).
+
+### Preconditions for a fragment
+
+- **The cell runs the fragments build and accepts `schemaVersion: 2`**: the deployment prerequisite
+  [fragments.md](fragments.md) names, before the first fragment reaches a cell.
+- **A fragment never needs an issuer or a host-suffix widening.** Its client belongs to the shell's
+  issuer, and it is served on the shell's host.
+- **A new upstream for the fragment, or a fragment past `Policy:FragmentsPerShell`, needs widening
+  the bounds first** ([widening-the-bounds.md](widening-the-bounds.md)).
+
+### The handoff, through the shell owner
+
+The fragment's team hands its work to the shell's owner, who hands the definition to you:
+
+1. **The fragment team supplies** a draft `fragments[]` item, in the shape of the fragment definition
+   in `contracts/app-definition.schema.json`, and a build: the directory of its built files, with its
+   entry file at the root.
+2. **The shell owner accepts the item** into the shell's definition.
+3. **You then own the definition.** Set the item's `oauth.issuer` to the shell's, and run
+   `spactl app validate` on the shell's definition first, as step 1 of "The steps" has it, before
+   any work at the provider.
+4. **The team publishes its first release** with `spactl fragment publish`
+   ([fragments.md](fragments.md), "1. Publish the release"). Where its right is not yet in place,
+   publish it once yourself from the build it handed over.
+5. **`app add --fragment-release` activates it**, at the end of the next section.
+
+**The fragment team gets back** exactly these:
+
+- **Its `fragmentId`**, as the shell's entry carries it.
+- **The client id, and the audience** when its item sets `oauth.resource`, for its API owners. A
+  `403` with `client_not_admitted` is expected at first, as for an app.
+- **Its release prefix and the right to publish under it**: the bucket, its Region and
+  `apps/{appId}/fragments/{fragmentId}/releases/`, with `apps/{appId}/fragments/{fragmentId}/claims/`
+  beside it (`contracts/s3-layout.md` → "Who reads and writes what"). The grant covers that
+  fragment's prefix alone: never `registry/`, the shell's releases or another fragment's.
+- **The registry revision** that added the fragment.
+
+**It never gets** the client secret, the outputs document or any access to the registry.
+
+### The client, the secret and the entry
+
+1. **Register one confidential client** for the fragment at the shell's issuer, and check it against
+   `contracts/identity-provider-contract.md` → "A fragment's client": its one callback is
+   `https://{shell host}/signin-oidc/{fragmentId}`, on the shell's host exactly as the definition has
+   it. Keep the client id; the secret goes straight to the store.
+
+2. **Put the secret in the store** as a `SecureString` at a pinned version, exactly as step 3 of "The
+   steps" writes an app's. By convention it is kept under the shell's reference path:
+
+   ```bash
+   PARAMETER="/spa-platform/$SPA_CELL/apps/$APP/fragments/$FRAGMENT/client-secret"   # the recommended name
+   SECRET_VERSION="$(aws ssm put-parameter --region "$AWS_REGION" --name "$PARAMETER" --type SecureString \
+     --value "file://$RUN/secret" --query Version --output text)"
+   rm -f "$RUN/secret"
+   echo "parameter version $SECRET_VERSION"
+   ```
+
+   An unreadable fragment secret stalls the cell as an app's does ("The stall", above).
+
+3. **Your tooling writes `clients.{appId}.fragments.{fragmentId}`** into the outputs document, under
+   the shell's own entry and in the same three fields (`contracts/infra-outputs.schema.json` →
+   `clients`). `app add` refuses a definition naming a fragment that has none:
+
+   ```json
+   {
+     "clients": {
+       "ledger": {
+         "clientId": "0a1b2c3d4e5f",
+         "secretParameter": "/spa-platform/prod-eu/apps/ledger/client-secret",
+         "secretVersion": 1,
+         "fragments": {
+           "statements": {
+             "clientId": "6f7e8d9c0b1a",
+             "secretParameter": "/spa-platform/prod-eu/apps/ledger/fragments/statements/client-secret",
+             "secretVersion": 1
+           }
+         }
+       }
+     }
+   }
+   ```
+
+4. **Add the shell's definition with the fragment's first release, then wait:**
+
+   ```bash
+   spactl app add "$APP_DEFINITION" --fragment-release "$FRAGMENT=$RELEASE" --outputs "$SPA_OUTPUTS_FILE" --config "$CONFIG"
+   spactl wait --url "$ORIGIN" --revision N
+   ```
+
+   `app add` replaces the shell's entry in place, prints `Replaced <app>, at release <release>`, and
+   keeps the shell's release and every other fragment's. `--fragment-release` names the new fragment
+   alone ([fragments.md](fragments.md), "2. Activate it", says what activating it checks). On a cell
+   of more than one task, wait with `--instances`. Then hand the team what it gets back.
+
+### Removing a fragment
+
+Registry first, as for an app:
+
+1. **Drop the item from the shell's definition and run `app add`**, then wait for the revision it
+   prints:
+
+   ```bash
+   spactl app add "$APP_DEFINITION" --outputs "$SPA_OUTPUTS_FILE" --config "$CONFIG"
+   spactl wait --url "$ORIGIN" --revision M
+   ```
+
+2. **Then delete the client at the provider and the parameter**, and the fragment's entry under
+   `clients.{appId}.fragments` from the source your tooling writes the outputs document from. A
+   parameter deleted before the revision lands breaks the instances that start later, as "Removal"
+   says of an app's.
+
+Removing a fragment signs no one out of the shell. The fragment's token sets in open sessions are
+dropped at that revision and never revoked: each stays valid at the provider until it expires
+(`docs/gaps.md`, GAP-33). Whether deleting the client cuts them off sooner is the provider's
+behaviour, which this note does not promise.
