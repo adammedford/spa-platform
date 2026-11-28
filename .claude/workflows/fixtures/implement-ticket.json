@@ -1,5 +1,5 @@
 {
- "note": "The records tools/implement_ticket.py writes, for implement-ticket_tests.mjs to serve as its couriers' returns (#1565). Written on 2026-11-27 by running tools/implement_ticket_tests.py's kind_records (a ticket of each of the tool's KINDS: tickets) and run_records (one run, read to release: run) against that companion's throwaway repository, fake gh and stub check, with its temporary directory replaced by /tmp/implement-ticket-fixture. That companion's FixtureKeys fails when a record the tool writes lacks a key held here, so a record's shape changes in the tool, this file and the script together.",
+ "note": "The records tools/implement_ticket.py writes, for implement-ticket_tests.mjs to serve as its couriers' returns (#1565, and prove's record, #1566). Written on 2026-11-27 by running tools/implement_ticket_tests.py's kind_records (a ticket of each of the tool's KINDS: tickets) and run_records (one run, read to release: run) against that companion's throwaway repository, fake gh and stub check, with its temporary directory replaced by /tmp/implement-ticket-fixture. That companion's FixtureKeys fails when a record the tool writes lacks a key held here, so a record's shape changes in the tool, this file and the script together.",
  "tickets": [
   {
    "kind": "dotnet",
@@ -64,7 +64,7 @@
       "detail": "2 open box text(s) read, and overnight_collect.py counts 2"
      }
     ],
-    "base": "5ac4a71beaea23b5d9ce7d96a8ec6a28e15281e7",
+    "base": "dad54b6ee78be42f58e705f2cbd43cd5596c198c",
     "port": 5180,
     "verdict": "pass",
     "exit": 0,
@@ -142,7 +142,7 @@
       "detail": "2 open box text(s) read, and overnight_collect.py counts 2"
      }
     ],
-    "base": "90cbf73c2e25864fb0b1eaca3d17a1335bccafba",
+    "base": "de36906e1d40a691524077f9a7331731a1c4288c",
     "port": 5180,
     "verdict": "pass",
     "exit": 0,
@@ -220,7 +220,7 @@
       "detail": "2 open box text(s) read, and overnight_collect.py counts 2"
      }
     ],
-    "base": "2bd03156802b3b3c1a0614e24f87fd2dc6e1af19",
+    "base": "05cf687b69083425a0ccbbb3138735ed02ce30c2",
     "port": 5180,
     "verdict": "pass",
     "exit": 0,
@@ -298,7 +298,7 @@
       "detail": "2 open box text(s) read, and overnight_collect.py counts 2"
      }
     ],
-    "base": "2126b1893e812e2856680008f62864830e74ea06",
+    "base": "01396df02a8e4d464358750e026b45b30adfee9f",
     "port": 5180,
     "verdict": "pass",
     "exit": 0,
@@ -375,7 +375,7 @@
       "detail": "2 open box text(s) read, and overnight_collect.py counts 2"
      }
     ],
-    "base": "fc0807812b53fcb854438c55b0cd9cae86c3f167",
+    "base": "9fea122eb14b563fe5ce482fe38243382c57013a",
     "port": 5180,
     "verdict": "pass",
     "exit": 0,
@@ -455,7 +455,7 @@
      "detail": "2 open box text(s) read, and overnight_collect.py counts 2"
     }
    ],
-   "base": "fc0807812b53fcb854438c55b0cd9cae86c3f167",
+   "base": "9fea122eb14b563fe5ce482fe38243382c57013a",
    "port": 5180,
    "verdict": "pass",
    "exit": 0,
@@ -473,15 +473,31 @@
   "launch": {
    "step": "launch",
    "issue": 7,
-   "seamsFile": "implementer",
-   "seams": "implementer",
+   "seamsFile": "/tmp/implement-ticket-fixture/seams.json",
+   "seams": {
+    "seams": [
+     {
+      "name": "the command line",
+      "interface": "thing.py's stdout",
+      "boxes": [
+       1
+      ]
+     }
+    ],
+    "noTest": [
+     {
+      "box": 2,
+      "why": "the companion is the test"
+     }
+    ]
+   },
    "boxes": [
     "The thing prints its name.",
     "Its companion fails when the name is wrong."
    ],
    "verdict": "pass",
    "exit": 0,
-   "why": "#7's 2 open box(es) are covered: the implementer's own",
+   "why": "#7's 2 open box(es) are covered: 1 seam(s) and 1 box(es) with no test",
    "launch": {
     "scriptPath": "/tmp/implement-ticket-fixture/checkout/.claude/workflows/implement-ticket.js",
     "args": {
@@ -489,7 +505,23 @@
      "issue": 7,
      "wt": "/tmp/implement-ticket-fixture/worktrees/issue-7",
      "port": 5180,
-     "seams": "implementer"
+     "seams": {
+      "seams": [
+       {
+        "name": "the command line",
+        "interface": "thing.py's stdout",
+        "boxes": [
+         1
+        ]
+       }
+      ],
+      "noTest": [
+       {
+        "box": 2,
+        "why": "the companion is the test"
+       }
+      ]
+     }
     }
    }
   },
@@ -555,24 +587,24 @@
      "detail": "2 open box text(s) read, and overnight_collect.py counts 2"
     }
    ],
-   "base": "fc0807812b53fcb854438c55b0cd9cae86c3f167",
-   "head": "fc0807812b53fcb854438c55b0cd9cae86c3f167",
-   "fork": "fc0807812b53fcb854438c55b0cd9cae86c3f167",
+   "base": "9fea122eb14b563fe5ce482fe38243382c57013a",
+   "head": "9fea122eb14b563fe5ce482fe38243382c57013a",
+   "fork": "9fea122eb14b563fe5ce482fe38243382c57013a",
    "verdict": "pass",
    "exit": 0,
-   "why": "#7 is new on task/issue-7-the-thing-prints-its-name-and-its-companion at fc0807812b53 in /tmp/implement-ticket-fixture/worktrees/issue-7"
+   "why": "#7 is new on task/issue-7-the-thing-prints-its-name-and-its-companion at 9fea122eb14b in /tmp/implement-ticket-fixture/worktrees/issue-7"
   },
   "checkFail": {
    "step": "check",
    "issue": 7,
    "worktree": "/tmp/implement-ticket-fixture/worktrees/issue-7",
-   "head": "f0e21798c5dbc88776e4a7bf733429acec31c14f",
-   "fork": "fc0807812b53fcb854438c55b0cd9cae86c3f167",
+   "head": "61cf39ccae8006431866f81050b1adc9bac645e4",
+   "fork": "9fea122eb14b563fe5ce482fe38243382c57013a",
    "port": 5180,
    "log": "/tmp/implement-ticket-fixture/checkout/.scratch/implement/log/7/check.log",
    "started": true,
-   "pid": 30887,
-   "logHead": "f0e21798c5dbc88776e4a7bf733429acec31c14f",
+   "pid": 59607,
+   "logHead": "61cf39ccae8006431866f81050b1adc9bac645e4",
    "lastLine": "check: fail: the tests failed.",
    "clean": true,
    "uncommitted": [],
@@ -586,8 +618,8 @@
    },
    "outsideTouches": [],
    "tail": [
-    "HEAD=f0e21798c5dbc88776e4a7bf733429acec31c14f",
-    "stub check: --full --base fc0807812b53fcb854438c55b0cd9cae86c3f167 --port 5180",
+    "HEAD=61cf39ccae8006431866f81050b1adc9bac645e4",
+    "stub check: --full --base 9fea122eb14b563fe5ce482fe38243382c57013a --port 5180",
     "check: fail: the tests failed."
    ],
    "testReach": {
@@ -605,9 +637,9 @@
      "--log",
      "/tmp/implement-ticket-fixture/checkout/.scratch/implement/log/7/check.log",
      "--base",
-     "fc0807812b53fcb854438c55b0cd9cae86c3f167",
+     "9fea122eb14b563fe5ce482fe38243382c57013a",
      "--head",
-     "f0e21798c5dbc88776e4a7bf733429acec31c14f"
+     "61cf39ccae8006431866f81050b1adc9bac645e4"
     ]
    },
    "state": "fail",
@@ -619,33 +651,33 @@
    "step": "check",
    "issue": 7,
    "worktree": "/tmp/implement-ticket-fixture/worktrees/issue-7",
-   "head": "49550d4774005dfaf56d9733522f686addc6d18c",
-   "fork": "fc0807812b53fcb854438c55b0cd9cae86c3f167",
+   "head": "8669e2d6e5a9af014d1fa3aa5c15069637b42927",
+   "fork": "9fea122eb14b563fe5ce482fe38243382c57013a",
    "port": 5180,
    "log": "/tmp/implement-ticket-fixture/checkout/.scratch/implement/log/7/check.log",
    "started": true,
-   "pid": 31003,
+   "pid": 59722,
    "state": "running",
-   "logHead": "49550d4774005dfaf56d9733522f686addc6d18c",
+   "logHead": "8669e2d6e5a9af014d1fa3aa5c15069637b42927",
    "tail": [
-    "HEAD=49550d4774005dfaf56d9733522f686addc6d18c",
-    "stub check: --full --base fc0807812b53fcb854438c55b0cd9cae86c3f167 --port 5180"
+    "HEAD=8669e2d6e5a9af014d1fa3aa5c15069637b42927",
+    "stub check: --full --base 9fea122eb14b563fe5ce482fe38243382c57013a --port 5180"
    ],
    "verdict": "fail",
    "exit": 2,
-   "why": "no verdict yet: the check for this head is still running (pid 31003); run check again"
+   "why": "no verdict yet: the check for this head is still running (pid 59722); run check again"
   },
   "checkPass": {
    "step": "check",
    "issue": 7,
    "worktree": "/tmp/implement-ticket-fixture/worktrees/issue-7",
-   "head": "2b393ec49eb9d67bd6aed831bf92ee46412d787d",
-   "fork": "fc0807812b53fcb854438c55b0cd9cae86c3f167",
+   "head": "7c1cc77a338ba6e3ed2fc09d8bfb09f26be518c8",
+   "fork": "9fea122eb14b563fe5ce482fe38243382c57013a",
    "port": 5180,
    "log": "/tmp/implement-ticket-fixture/checkout/.scratch/implement/log/7/check.log",
    "started": true,
-   "pid": 31173,
-   "logHead": "2b393ec49eb9d67bd6aed831bf92ee46412d787d",
+   "pid": 59896,
+   "logHead": "7c1cc77a338ba6e3ed2fc09d8bfb09f26be518c8",
    "lastLine": "check: pass: stub",
    "clean": true,
    "uncommitted": [],
@@ -659,14 +691,67 @@
    },
    "outsideTouches": [],
    "tail": [
-    "HEAD=2b393ec49eb9d67bd6aed831bf92ee46412d787d",
-    "stub check: --full --base fc0807812b53fcb854438c55b0cd9cae86c3f167 --port 5180",
+    "HEAD=7c1cc77a338ba6e3ed2fc09d8bfb09f26be518c8",
+    "stub check: --full --base 9fea122eb14b563fe5ce482fe38243382c57013a --port 5180",
     "check: pass: stub"
    ],
    "state": "pass",
    "verdict": "pass",
    "exit": 0,
-   "why": "the full check passed on 2b393ec49eb9, all integrator's"
+   "why": "the full check passed on 7c1cc77a338b, all integrator's"
+  },
+  "prove": {
+   "step": "prove",
+   "issue": 7,
+   "worktree": "/tmp/implement-ticket-fixture/worktrees/issue-7",
+   "head": "7c1cc77a338ba6e3ed2fc09d8bfb09f26be518c8",
+   "mutations": "/tmp/implement-ticket-fixture/checkout/.scratch/implement/log/7/mutations",
+   "throwaway": "/tmp/implement-ticket-fixture/tmp/implement-prove-7-te_lhc_a",
+   "baselines": [
+    {
+     "project": "tools/thing_tests.py",
+     "kind": "script",
+     "command": [
+      "python3",
+      "-I",
+      "tools/thing_tests.py"
+     ],
+     "exit": 0,
+     "tail": []
+    }
+   ],
+   "patches": [
+    {
+     "patch": "name",
+     "box": 1,
+     "project": "tools/thing_tests.py",
+     "kind": "script",
+     "path": "/tmp/implement-ticket-fixture/checkout/.scratch/implement/log/7/mutations/name.patch",
+     "result": "proved",
+     "exit": 1,
+     "tail": []
+    }
+   ],
+   "boxes": [
+    {
+     "box": 1,
+     "text": "The thing prints its name.",
+     "state": "proved",
+     "patches": [
+      "name"
+     ]
+    },
+    {
+     "box": 2,
+     "text": "Its companion fails when the name is wrong.",
+     "state": "no-test",
+     "patches": []
+    }
+   ],
+   "state": "proved",
+   "verdict": "pass",
+   "exit": 0,
+   "why": "every open box is proved or has no test: 1 patch(es) failed their tests on 7c1cc77a338b"
   },
   "startFinished": {
    "step": "start",
@@ -732,12 +817,12 @@
      "detail": "2 open box text(s) read, and overnight_collect.py counts 2"
     }
    ],
-   "base": "fc0807812b53fcb854438c55b0cd9cae86c3f167",
-   "head": "2b393ec49eb9d67bd6aed831bf92ee46412d787d",
-   "fork": "fc0807812b53fcb854438c55b0cd9cae86c3f167",
+   "base": "9fea122eb14b563fe5ce482fe38243382c57013a",
+   "head": "7c1cc77a338ba6e3ed2fc09d8bfb09f26be518c8",
+   "fork": "9fea122eb14b563fe5ce482fe38243382c57013a",
    "verdict": "pass",
    "exit": 0,
-   "why": "#7 is finished on task/issue-7-the-thing-prints-its-name-and-its-companion at 2b393ec49eb9 in /tmp/implement-ticket-fixture/worktrees/issue-7"
+   "why": "#7 is finished on task/issue-7-the-thing-prints-its-name-and-its-companion at 7c1cc77a338b in /tmp/implement-ticket-fixture/worktrees/issue-7"
   },
   "release": {
    "step": "release",
@@ -812,7 +897,7 @@
      "detail": "2 open box text(s) read, and overnight_collect.py counts 2"
     }
    ],
-   "base": "fc0807812b53fcb854438c55b0cd9cae86c3f167",
+   "base": "9fea122eb14b563fe5ce482fe38243382c57013a",
    "verdict": "fail",
    "exit": 1,
    "why": "#7 fails the gate(s) ready-for-agent (its labels are ready-for-human)"
