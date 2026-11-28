@@ -701,45 +701,160 @@ public sealed class FragmentsObserverTests
 
     private static Step At(string name, int seconds) => new(name, ClientTrace.Fresh().TraceId, SignedIn.AddSeconds(seconds), 200);
 
-    internal static (IReadOnlyList<Step> Steps, SuccessorRecord Record, JsonObject[] Lines) GoodSuccessor(string outcome = "revoked")
+    /// <summary>
+    /// A gateway line on <paramref name="task"/> at <paramref name="at"/> whose <c>msg</c> is
+    /// <paramref name="template"/> filled as the logger fills it, with each placeholder also a field in
+    /// the formatter's snake case, as the gateway's JSON lines carry them.
+    /// </summary>
+    private static JsonObject Logged(string task, DateTimeOffset at, string template, string? outcome = null, int attempts = 1)
     {
-        Step logout = At("logout", 0);
-        Step refresh = At("refresh", 0);
+        (string Placeholder, string Field, string? Value)[] values =
+        [
+            ("AppId", "app_id", "app1"),
+            ("FragmentId", "fragment_id", "orders"),
+            ("SessionRef", "session_ref", SessionRef),
+            ("Outcome", "outcome", outcome),
+            ("StoreAttempts", "store_attempts", attempts.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+        ];
+        JsonObject line = new() { ["ts"] = at.ToString("O") };
+        string msg = template;
+        foreach ((string placeholder, string field, string? value) in values)
+        {
+            if (value is null || !template.Contains("{" + placeholder + "}", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            msg = msg.Replace("{" + placeholder + "}", value, StringComparison.Ordinal);
+            line[field] = value;
+        }
+
+        line["msg"] = msg;
+        return Line(task, at, line);
+    }
+
+    /// <summary>The identity library's templates (src/Platform.Identity), pinned to their source by <see cref="O3_reads_each_line_in_the_wording_the_identity_project_writes"/>.</summary>
+    private const string RefreshedTemplate = GatewayEvent.RefreshedPrefix + " for app {AppId}, fragment {FragmentId}, session {SessionRef}.";
+
+    private const string RevocationTemplate = FragmentsObserver.LogoutRevocationPrefix + "{AppId} is removing session {SessionRef}; revoking the refresh token of fragment {FragmentId}: {Outcome}.";
+
+    private const string ShellRevocationTemplate = FragmentsObserver.LogoutRevocationPrefix + "{AppId} is removing session {SessionRef}; revoking its refresh token: {Outcome}.";
+
+    private const string WriteTemplate = FragmentsLines.RefreshWritePrefix + "{AppId}, fragment {FragmentId}, session {SessionRef}: ended {Outcome} after {StoreAttempts} versioned replaces.";
+
+    /// <summary>FragmentEvents' sign-in write line (src/Platform.Identity/FragmentEvents.cs), its writer filled as <c>chain</c>.</summary>
+    private const string SignInWriteTemplate = FragmentsLines.FragmentWritePrefix + "{AppId}, fragment {FragmentId}, session {SessionRef}: the chain write ended {Outcome} after {StoreAttempts} versioned replaces.";
+
+    private const string OrphanTemplate = FragmentsObserver.OrphanPrefix + "{AppId}, fragment {FragmentId}, session {SessionRef}" + FragmentsObserver.OrphanMarker + "{Outcome}.";
+
+    /// <summary>
+    /// N-38's hit as the gateway writes it: the logout on A revokes the shell's set and orders' and removes the
+    /// record; on B the refresh obtained orders' successor while the logout ran, its write found the record gone
+    /// (<c>missing</c>), and it revoked the successor it orphaned, after the removal.
+    /// </summary>
+    internal static (IReadOnlyList<Step> Steps, SuccessorRecord Record, JsonObject[] Lines) GoodSuccessor(
+        string logoutOutcome = "revoked", string write = "missing", string orphan = "revoked")
+    {
+        Step logout = At("logout", 0) with { Route = "bff" };
+        Step refresh = At("refresh", 0) with { Route = "api" };
         JsonObject[] lines =
         [
             Line(TaskA, logout.At, RequestLine(logout, sessionRef: SessionRef)),
             Line(TaskB, refresh.At, RequestLine(refresh, "api", SessionRef)),
-            Line(TaskB, refresh.At.AddSeconds(1), new JsonObject { ["msg"] = "Refreshed the access token", ["session_ref"] = SessionRef, ["fragment_id"] = "orders", ["ts"] = refresh.At.AddSeconds(1).ToString("O") }),
-            Line(TaskA, logout.At.AddSeconds(2), new JsonObject { ["msg"] = "logout revocation", ["session_ref"] = SessionRef, ["fragment_id"] = "orders", ["outcome"] = outcome, ["ts"] = logout.At.AddSeconds(2).ToString("O") }),
+            Logged(TaskB, refresh.At.AddSeconds(1), RefreshedTemplate),
+            Logged(TaskA, logout.At.AddSeconds(2), ShellRevocationTemplate, "revoked"),
+            Logged(TaskA, logout.At.AddSeconds(2), RevocationTemplate, logoutOutcome),
+            Logged(TaskB, refresh.At.AddSeconds(3), WriteTemplate, write),
+            Logged(TaskB, refresh.At.AddSeconds(4), OrphanTemplate, orphan),
         ];
-        return ([logout, refresh], new SuccessorRecord(SessionRef, "orders", 400, logout.At.AddSeconds(30)), lines);
+        return ([logout, refresh], new SuccessorRecord(SessionRef, "orders"), lines);
     }
 
     [Fact]
-    public async Task O3_a_successor_refused_at_the_provider_after_the_logout_passes()
+    public async Task O3_a_write_that_ends_missing_and_an_orphaned_successor_revoked_after_the_removal_passes()
     {
-        // Mutation: reading any probe status as a refusal (dropping the 2xx return) in FragmentsObserver.Successor passes the 200 case.
+        // Mutation: reading the orphan line by field presence alone (dropping its message head) takes the write line,
+        // outcome missing, as the orphan line, and this fails.
         (IReadOnlyList<Step> steps, SuccessorRecord record, JsonObject[] lines) = GoodSuccessor();
-        GatewayCapture capture = await CaptureAsync(lines);
 
-        Assert.Equal(Verdict.Passed, FragmentsObserver.Successor(steps, record, capture).Verdict);
-        RowResult accepted = FragmentsObserver.Successor(steps, record with { ProbeStatus = 200 }, capture);
-        Assert.Equal(Verdict.Failed, accepted.Verdict);
-        Assert.Contains(TaskA, accepted.Reason, StringComparison.Ordinal);
-        Assert.Contains(TaskB, accepted.Reason, StringComparison.Ordinal);
+        RowResult result = FragmentsObserver.Successor(steps, record, await CaptureAsync(lines));
+
+        Assert.True(result.Verdict == Verdict.Passed, result.Message);
+        Assert.Contains($"orphaned successor on {TaskB}: revoked", result.Observations);
+    }
+
+    [Fact]
+    public async Task O3_a_fragment_sign_in_line_on_the_logouts_task_is_no_logout_revocation_line()
+    {
+        // Mutation: dropping the logout line's message head from FragmentsObserver.Successor takes the earlier
+        // sign-in write line, which carries the same session, fragment and outcome fields, as orders' revocation,
+        // outcome written, and the row fails in place of passing.
+        (IReadOnlyList<Step> steps, SuccessorRecord record, JsonObject[] lines) = GoodSuccessor();
+        JsonObject signIn = Logged(TaskA, steps[0].At.AddSeconds(-20), SignInWriteTemplate, "written");
+
+        RowResult result = FragmentsObserver.Successor(steps, record, await CaptureAsync([signIn, .. lines]));
+
+        Assert.True(result.Verdict == Verdict.Passed, result.Message);
+    }
+
+    [Theory]
+    [InlineData("http_400")]
+    [InlineData("unreachable")]
+    [InlineData("deadline_exceeded")]
+    [InlineData("no_revocation_endpoint")]
+    public async Task O3_an_orphaned_successor_line_with_any_other_outcome_fails_naming_both_tasks(string outcome)
+    {
+        // Mutation: dropping the orphan outcome's Failed return from FragmentsObserver.Successor passes these.
+        (IReadOnlyList<Step> steps, SuccessorRecord record, JsonObject[] lines) = GoodSuccessor(orphan: outcome);
+
+        RowResult result = FragmentsObserver.Successor(steps, record, await CaptureAsync(lines));
+
+        Assert.Equal(Verdict.Failed, result.Verdict);
+        AssertNotPassed(result, $"outcome {outcome}");
+        Assert.Contains(TaskA, result.Reason, StringComparison.Ordinal);
+        Assert.Contains(TaskB, result.Reason, StringComparison.Ordinal);
     }
 
     [Fact]
     public async Task O3_a_successor_that_refreshes_after_the_logout_fails_naming_both_tasks()
     {
-        // Mutation: removing the late-refresh return from FragmentsObserver.Successor reaches the probe, which passes, and
-        // the Failed assertion fails.
+        // Mutation: removing the late-refresh return from FragmentsObserver.Successor reaches the orphan line, which
+        // passes, and the Failed assertion fails.
         (IReadOnlyList<Step> steps, SuccessorRecord record, JsonObject[] lines) = GoodSuccessor();
-        JsonObject late = Line(TaskB, steps[0].At.AddSeconds(10), new JsonObject { ["msg"] = "Refreshed the access token", ["session_ref"] = SessionRef, ["fragment_id"] = "orders", ["ts"] = steps[0].At.AddSeconds(10).ToString("O") });
+        JsonObject late = Logged(TaskB, steps[0].At.AddSeconds(10), RefreshedTemplate);
 
         RowResult result = FragmentsObserver.Successor(steps, record, await CaptureAsync([.. lines, late]));
+
         Assert.Equal(Verdict.Failed, result.Verdict);
         AssertNotPassed(result, $"the successor refreshed on {TaskB} after the logout on {TaskA}");
+    }
+
+    [Theory]
+    [InlineData("written")]
+    [InlineData("superseded")]
+    [InlineData("exhausted")]
+    public async Task O3_a_refresh_write_that_did_not_end_missing_is_the_missed_race_not_proved(string write)
+    {
+        // Mutation: dropping the `missing` check from FragmentsObserver.Successor goes on to the orphan line's search, which
+        // finds none in these lines, so the row is still not proved but for that reason, and the reason assertion fails.
+        (IReadOnlyList<Step> steps, SuccessorRecord record, JsonObject[] lines) = GoodSuccessor(write: write);
+
+        RowResult result = FragmentsObserver.Successor(steps, record, await CaptureAsync(lines[..6]));
+
+        Assert.Equal(Verdict.NotProved, result.Verdict);
+        AssertNotPassed(result, $"the race was missed: the refresh's write on {TaskB} ended {write}, not missing");
+    }
+
+    [Fact]
+    public async Task O3_no_refresh_write_line_is_the_missed_race_and_an_orphan_line_before_the_removal_is_not_proved()
+    {
+        // Mutation: dropping `> removedAt` from the orphan line's search in FragmentsObserver.Successor passes the early case.
+        (IReadOnlyList<Step> steps, SuccessorRecord record, JsonObject[] lines) = GoodSuccessor();
+        AssertNotPassed(FragmentsObserver.Successor(steps, record, await CaptureAsync([.. lines[..5], lines[6]])), $"the race was missed: no refresh write line for fragment orders on {TaskB}");
+        AssertNotPassed(FragmentsObserver.Successor(steps, record, await CaptureAsync(lines[..6])), $"no orphaned successor line for fragment orders on {TaskB} after the logout's removal");
+
+        JsonObject early = Logged(TaskB, steps[0].At.AddSeconds(1), OrphanTemplate, "revoked");
+        AssertNotPassed(FragmentsObserver.Successor(steps, record, await CaptureAsync([.. lines[..6], early])), "after the logout's removal");
     }
 
     [Fact]
@@ -747,20 +862,20 @@ public sealed class FragmentsObserverTests
     {
         // Mutation: taking the first Refreshed line whatever its time (dropping `>= logout.At`) in FragmentsObserver.Successor passes this row.
         (IReadOnlyList<Step> steps, SuccessorRecord record, JsonObject[] lines) = GoodSuccessor();
-        JsonObject early = Line(TaskB, steps[0].At.AddSeconds(-30), new JsonObject { ["msg"] = "Refreshed the access token", ["session_ref"] = SessionRef, ["fragment_id"] = "orders", ["ts"] = steps[0].At.AddSeconds(-30).ToString("O") });
+        JsonObject early = Logged(TaskB, steps[0].At.AddSeconds(-30), RefreshedTemplate);
 
-        AssertNotPassed(FragmentsObserver.Successor(steps, record, await CaptureAsync([lines[0], lines[1], early, lines[3]])), $"no successor was obtained on {TaskB} while the logout ran");
+        AssertNotPassed(FragmentsObserver.Successor(steps, record, await CaptureAsync([lines[0], lines[1], early, .. lines[3..]])), $"no successor was obtained on {TaskB} while the logout ran");
     }
 
     [Fact]
-    public async Task O3_one_task_no_revocation_or_no_probe_is_not_proved_and_an_unrevoked_set_fails()
+    public async Task O3_one_task_no_revocation_or_no_session_is_not_proved_and_an_unrevoked_set_fails()
     {
         // Mutation: removing the `on.TaskId == other.TaskId` clause from FragmentsObserver.Successor passes the one-task case.
         (IReadOnlyList<Step> steps, SuccessorRecord record, JsonObject[] lines) = GoodSuccessor();
         JsonObject[] oneTask = [.. lines.Select(line => (JsonObject)JsonNode.Parse(line.ToJsonString().Replace(TaskB, TaskA, StringComparison.Ordinal))!)];
         AssertNotPassed(FragmentsObserver.Successor(steps, record, await CaptureAsync(oneTask)), "two different tasks");
-        AssertNotPassed(FragmentsObserver.Successor(steps, record, await CaptureAsync(lines[..3])), "no logout revocation line");
-        AssertNotPassed(FragmentsObserver.Successor(steps, record with { ProbeStatus = null }, await CaptureAsync(lines)), "not presented to the provider");
+        AssertNotPassed(FragmentsObserver.Successor(steps, record, await CaptureAsync([.. lines[..4], .. lines[5..]])), "no logout revocation line");
+        AssertNotPassed(FragmentsObserver.Successor(steps, record with { SessionRef = "" }, await CaptureAsync(lines)), "no session reference");
 
         (IReadOnlyList<Step> unrevokedSteps, _, JsonObject[] unrevoked) = GoodSuccessor("gate_timeout");
         RowResult left = FragmentsObserver.Successor(unrevokedSteps, record, await CaptureAsync(unrevoked));
@@ -781,10 +896,25 @@ public sealed class FragmentsObserverTests
         JsonObject fragmentRequest = RequestLine(refresh, "api", SessionRef);
         fragmentRequest["fragment_id"] = "orders";
 
-        RowResult fragments = FragmentsObserver.Successor(steps, record, await CaptureAsync(lines[0], Line(TaskB, refresh.At, fragmentRequest), refreshed, lines[3]));
+        RowResult fragments = FragmentsObserver.Successor(steps, record, await CaptureAsync([lines[0], Line(TaskB, refresh.At, fragmentRequest), refreshed, .. lines[3..]]));
         Assert.True(fragments.Verdict == Verdict.Passed, fragments.Message);
 
-        RowResult shell = FragmentsObserver.Successor(steps, record, await CaptureAsync(lines[0], lines[1], refreshed, lines[3]));
+        RowResult shell = FragmentsObserver.Successor(steps, record, await CaptureAsync([lines[0], lines[1], refreshed, .. lines[3..]]));
         AssertNotPassed(shell, $"no successor was obtained on {TaskB} while the logout ran");
+    }
+
+    [Fact]
+    public async Task O3_reads_each_line_in_the_wording_the_identity_project_writes()
+    {
+        // Mutation: changing FragmentsObserver.OrphanMarker to "found the record gone" fails this test, as a change to
+        // AccessTokenSource.cs's line would; so does a change to the logout's or the write's wording.
+        string tokens = await File.ReadAllTextAsync(Path.Combine(FixtureFiles.RepositoryRoot, "src", "Platform.Identity", "AccessTokenSource.cs"), Ct);
+        string end = await File.ReadAllTextAsync(Path.Combine(FixtureFiles.RepositoryRoot, "src", "Platform.Identity", "SessionEnd.cs"), Ct);
+        Assert.Contains("\"" + RefreshedTemplate + "\"", tokens, StringComparison.Ordinal);
+        Assert.Contains("\"" + WriteTemplate + "\"", tokens, StringComparison.Ordinal);
+        Assert.Contains("\"" + OrphanTemplate + "\"", tokens, StringComparison.Ordinal);
+        Assert.Contains($"LogWrite(refresh, \"{FragmentsObserver.Missing}\", attempts)", tokens, StringComparison.Ordinal);
+        Assert.Contains("\"" + RevocationTemplate + "\"", end, StringComparison.Ordinal);
+        Assert.Contains("\"" + ShellRevocationTemplate + "\"", end, StringComparison.Ordinal);
     }
 }
